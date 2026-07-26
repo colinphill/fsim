@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# This directory is intentionally usable from a root CMakeLists.txt with:
+#   add_subdirectory(tests/runtime)
+# It expects the runtime target to be named fsim_runtime.
+add_executable(fsim_runtime_tests runtime_tests.cpp)
+target_link_libraries(fsim_runtime_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_tests)
+add_test(NAME fsim.runtime COMMAND fsim_runtime_tests)

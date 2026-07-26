@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+
+/build/
+/build-*/
+/.cache/
+.fsim-cache/
+/.idea/
+/.vscode/
+*.user
+*.suo
+*.swp
+*.tmp
+*.vcd
+*.obj
+*.o
+*.so
+*.dll
+*.dylib
+compile_commands.json

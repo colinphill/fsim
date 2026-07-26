@@ -1,0 +1,94 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# Language support
+
+## Reading this document
+
+fsim targets VHDL-2008, Verilog-2005, SystemVerilog-2017, and a documented
+IEEE 1666-2023-inspired SystemC subset. The repository is presently an
+architecture vertical slice. “Parsed” below does not necessarily mean complete
+legality checking or executable lowering.
+
+Unsupported constructs must produce targeted diagnostics. They must never be
+silently discarded.
+
+## Current executable frontend slice
+
+| Area | Parsed now | Executable now | Important limitations |
+|---|---|---|---|
+| VHDL units | `library`/`use`/context-reference clauses retained on their following unit; entities, architectures, ports, signals, direct-entity and component-style instances | Recursively elaborated simple instances with positional/named whole-signal `port map` associations | Context declarations and visibility resolution are not implemented; no packages, generics or `generic map`, configurations, generates, expression/`open` actuals, or declarations in processes |
+| VHDL statements | Concurrent assignment, process sensitivity lists, `if`/`elsif`/`else`, signal/variable assignment, `null`, `after` | Whole-signal assignment, simple conditions, edge-guarded clock process, integer/logic/vector literals, selected operations | No `wait`, case/loop, aggregates, slices/index writes, reports/asserts, inertial/transport/reject semantics, or complete LRM physical-time semantics; bounded integer time units are normalized exactly |
+| VHDL expressions | Identifiers, decimal/logic/string literals, calls, index/slice syntax, common unary/binary syntax | Identifiers/literals, not, and/or/xor, unsigned add, equality | Most parsed calls/operators and indexed values are not lowered |
+| Verilog/SV units | Modules, ANSI and basic non-ANSI ports, nets/variables, packed constant ranges, module instances | Recursive simple hierarchy with named or positional whole-signal connections | No parameters/overrides, interfaces, packages, generates, expression actuals, or unpacked arrays |
+| Verilog/SV statements | `assign`, event-controlled `always`/`always_ff`, `initial`, blocks, `if`/`else`, blocking/NBA assignments, integer delays, `$finish` | Whole-signal forms of the parsed subset; integer `#` delays inherit and scale by the active `` `timescale`` | No fractional delays, loops, case, tasks/functions, fork, events, files, dynamic data, assertions, or procedural force |
+| Verilog/SV expressions | Identifiers, sized literals, strings, unary and common binary syntax, index/part-select/concatenation syntax, call syntax | Identifiers/literals, bitwise complement (`~`), bitwise and/or/xor, unsigned add, equality | Logical not (`!`) and most arithmetic, logical, relational, selection, concatenation, and call forms are not lowered |
+| Directive context | Legal `` `timescale <unit>/<precision>`` forms with magnitudes `1`, `10`, or `100` are associated with subsequent modules; `` `default_nettype`` is recognized | Integer delays are scaled and `auto` selects the finest attached precision | Fractional delays, `timeunit`/`timeprecision` declarations, general preprocessing, and implicit-net/default-nettype semantics are not implemented; `` `default_nettype`` is a targeted error |
+| SystemC | C++ compatibility header and versioned plug-in entry point | Header-local values/signals, dynamic loading, shell-free cached shared-library compilation, and build-time ABI/factory validation | Registered factories are not yet instantiated in the common hierarchy; no process kernel or Boost.Context suspension |
+
+VHDL identifiers are canonicalized case-insensitively. Verilog and
+SystemVerilog identifiers remain case-sensitive. VHDL nine-state scalar and
+vector literals are accepted by executable lowering and collapse into the
+current common four-state representation using the documented mixed-language
+mapping. Preserving the full nine-state domain through signals, resolution, and
+all VHDL operations is still in progress.
+
+For the bounded hierarchy slice, child ports alias parent signal IDs after
+width, signedness, and lossy-2-state checks. Same-language lookup and explicit
+VHDL/SV manifest overrides are implemented. Automated runtime evidence covers
+both hierarchy directions: an SV top driving a VHDL counter and an SV child,
+plus a VHDL top driving a bound SV combinational child. This does not yet
+establish parameters/generics, general vector-direction conversion,
+aggregates/interfaces, runtime SystemC factory instantiation, or resolved
+multi-driver behavior.
+
+## v1 target
+
+### VHDL-2008
+
+Required for v1:
+
+- entities, architectures, configurations, packages and bodies, contexts, and
+  libraries;
+- generics, ports, components/direct instantiation, blocks, and generates;
+- the complete synthesizable sequential and concurrent statement set;
+- arrays, records, access and protected types;
+- overload and resolution rules, attributes, files and TextIO;
+- waits, assertions and reports;
+- inertial, transport, and reject delays; and
+- reviewed Apache-2.0 IEEE logic, numeric, fixed, and floating-point packages.
+
+Deferred beyond v1: PSL, VHPI, VHDL-AMS, VITAL/SDF timing, and proprietary
+package or pragma semantics.
+
+### Verilog-2005 and SystemVerilog-2017
+
+Required for v1:
+
+- the preprocessor, modules, interfaces/modports, packages, parameters, and
+  generates;
+- nets, variables, packed and unpacked types, structs/unions/enums, and
+  memories;
+- gate primitives, continuous/procedural assignments, and all `always` forms;
+- functions/tasks, `initial`/`final`, delays/events, fork/join, and named
+  events;
+- strings, files, dynamic/associative arrays and queues;
+- basic deterministic random functions, `$readmem*`, display/stop tasks; and
+- immediate assertions.
+
+Deferred beyond v1: classes, constraints and UVM; concurrent SVA; covergroups;
+DPI/VPI; program and clocking blocks; UDPs; specify/timing checks; strengths;
+and SDF.
+
+### SystemC
+
+The SystemC v1 target is the signal-level subset described in
+[systemc-subset.md](systemc-subset.md). Arbitrary ordinary C++ may run inside
+registered callbacks, but TLM, AMS, CCI, dynamic processes, arbitrary custom
+primitive channels, and Accellera kernel/ABI compatibility are deferred.
+
+## Release evidence
+
+The promise above becomes v1 only when a checked-in feature matrix maps every
+required construct to positive, negative, elaboration, and runtime tests.
+Every semantic simulation test must run through both the SimIR interpreter and
+LLVM JIT with identical final values, assertions, scheduling observations, and
+trace changes on Ubuntu x86-64/GCC and Windows x86-64/MSVC.

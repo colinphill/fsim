@@ -1,0 +1,84 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/project.hpp"
+
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace fsim::systemc {
+
+enum class HostToolchain : std::uint8_t {
+    gcc_like,
+    msvc,
+};
+
+struct PluginCompileRequest {
+    std::vector<std::filesystem::path> sources;
+    project::SystemCSection settings;
+    std::filesystem::path working_directory;
+    std::filesystem::path cache_directory{".fsim-cache"};
+};
+
+struct CompilerCommand {
+    std::vector<std::string> argv;
+    std::filesystem::path working_directory;
+    HostToolchain toolchain{HostToolchain::gcc_like};
+};
+
+struct PluginCompilePlan {
+    HostToolchain toolchain{HostToolchain::gcc_like};
+    // False when the selected compiler inputs cannot be exhaustively
+    // discovered. GCC-like compilers are queried for their complete dependency
+    // closure, including implicit system headers. The MSVC fallback is
+    // conservative and disables persistent reuse when an include cannot be
+    // resolved from manifest roots. Raw response/options also disable reuse.
+    // Non-cacheable plans use a unique key and are always rebuilt.
+    bool cacheable{true};
+    std::string cache_key;
+    std::filesystem::path library_path;
+    std::filesystem::path build_path;
+    // GCC-like toolchains use one compile/link command. MSVC-compatible
+    // toolchains compile every source to a uniquely named object and then
+    // invoke one link command, preventing same-basename source collisions.
+    std::vector<CompilerCommand> commands;
+    std::vector<std::filesystem::path> intermediate_paths;
+};
+
+struct PluginCompileResult {
+    bool success{};
+    bool cache_hit{};
+    std::filesystem::path library_path;
+    std::string cache_key;
+    int compiler_exit_code{-1};
+    std::string compiler_output;
+};
+
+// Constructs the compiler invocation without invoking a command shell. For a
+// cacheable GCC/Clang plan, this may directly invoke the selected compiler in
+// dependency-only mode to fingerprint the complete transitive include closure.
+// Relative source/include/cache paths are interpreted from working_directory
+// (or the process working directory when it is empty).
+[[nodiscard]] std::optional<PluginCompilePlan> plan_plugin_compile(
+    const PluginCompileRequest& request,
+    diagnostic::Engine& diagnostics);
+
+// Compiles all sources into one cached host shared library. Concurrent
+// processes compiling the same key synchronize through a per-key directory
+// lock. A checksum sidecar prevents reuse of incomplete or corrupt artifacts.
+[[nodiscard]] PluginCompileResult compile_plugin(
+    const PluginCompileRequest& request,
+    diagnostic::Engine& diagnostics);
+
+// Human-readable rendering for diagnostics only. Execution always uses the
+// argv vector directly and never evaluates this string in a shell.
+[[nodiscard]] std::string format_compiler_command(const CompilerCommand& command);
+
+[[nodiscard]] std::string_view to_string(HostToolchain toolchain) noexcept;
+
+} // namespace fsim::systemc

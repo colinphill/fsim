@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+schema = 1
+
+[project]
+name = "vertical-slice"
+top = "sv:work.tb"
+time_resolution = "1ns"
+seed = 1
+
+[[source_set]]
+language = "systemverilog"
+standard = "2017"
+library = "work"
+files = [
+  "tb.sv",
+  "sv_child.sv",
+]
+compilation_unit = "source-set"
+
+[[source_set]]
+language = "vhdl"
+standard = "2008"
+library = "work"
+files = ["counter.vhd"]
+compilation_unit = "source-set"
+
+# Cross-language binding is explicit; these paths are recursively elaborated
+# and share their connected boundary signals in the executable slice.
+[[binding]]
+instance = "tb.u_counter"
+target = "vhdl:work.counter(rtl)"
+
+[[binding]]
+instance = "tb.u_child"
+target = "sv:work.sv_child"
+
+[build]
+optimization = "O2"
+jobs = 0
+cache_path = ".fsim-cache"
+
+[run]
+duration = "10ns"
+max_deltas = 100000
+trace_file = "vertical_slice.vcd"
+trace_filters = ["tb.*"]

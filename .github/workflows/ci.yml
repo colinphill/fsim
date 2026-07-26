@@ -1,0 +1,258 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-gcc:
+    name: Ubuntu / GCC / ${{ matrix.configuration }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - configuration: Debug
+            preset: ci-linux
+          - configuration: Release
+            preset: ci-linux-release
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel 2
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  linux-llvm22:
+    name: Ubuntu / GCC / LLVM 22.1.8 / ${{ matrix.configuration }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - configuration: Debug
+            build_dir: build/ci-linux-llvm22-debug
+          - configuration: Release
+            build_dir: build/ci-linux-llvm22-release
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 22.1.8 development package
+        shell: bash
+        run: |
+          set -euo pipefail
+          wget --quiet https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get install --yes --no-install-recommends llvm-22-dev
+
+          installed_version=$(/usr/lib/llvm-22/bin/llvm-config --version)
+          if [[ "${installed_version}" != "22.1.8" ]]; then
+            echo "Expected LLVM 22.1.8, found ${installed_version}" >&2
+            exit 1
+          fi
+
+      - name: Configure with required LLVM backend
+        run: >
+          cmake -S . -B ${{ matrix.build_dir }} -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_CXX_COMPILER=g++
+          -DFSIM_BUILD_TESTS=ON
+          -DFSIM_LLVM_MODE=ON
+          -DFSIM_WARNINGS_AS_ERRORS=ON
+          -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
+
+      - name: Build
+        run: cmake --build ${{ matrix.build_dir }} --parallel 2
+
+      - name: Test
+        run: ctest --test-dir ${{ matrix.build_dir }} --output-on-failure
+
+  linux-sanitizers:
+    name: Ubuntu / GCC / ASan+UBSan
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset ci-sanitizers
+
+      - name: Build
+        run: cmake --build --preset ci-sanitizers --parallel 2
+
+      - name: Test
+        run: ctest --preset ci-sanitizers
+
+  linux-fuzz:
+    name: Ubuntu / Clang / frontend fuzz smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            clang \
+            libclang-rt-dev
+
+      - name: Configure
+        run: cmake --preset ci-fuzz
+
+      - name: Build
+        run: cmake --build --preset ci-fuzz --parallel 2
+
+      - name: Fuzz lexer and parser
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: >
+          build/ci-fuzz/tests/fuzz/fsim_frontend_fuzz
+          -runs=20000
+          -seed=1
+          -timeout=10
+          -max_len=65536
+          tests/fuzz/corpus/frontend
+
+  windows-msvc:
+    name: Windows / MSVC / ${{ matrix.configuration }}
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - configuration: Debug
+            preset: ci-windows
+          - configuration: Release
+            preset: ci-windows-release
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Initialize MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel 2
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  windows-llvm22:
+    name: Windows / MSVC / LLVM 22.1.8 / ${{ matrix.configuration }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    # The official archive uses the release MSVC STL ABI. CL augments every
+    # compiler invocation without replacing CMake's /EHsc and configuration
+    # flags, including plug-ins compiled by the SystemC source-compiler tests.
+    env:
+      CL: /D_ITERATOR_DEBUG_LEVEL=0
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration:
+          - Debug
+          - Release
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Initialize MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install verified LLVM 22.1.8 development archive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $asset = "clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz"
+          $encodedAsset = "clang%2Bllvm-22.1.8-x86_64-pc-windows-msvc.tar.xz"
+          $base = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8"
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          $bundle = "${archive}.jsonl"
+
+          Invoke-WebRequest -Uri "${base}/${encodedAsset}" -OutFile $archive
+          Invoke-WebRequest -Uri "${base}/${encodedAsset}.jsonl" -OutFile $bundle
+          gh attestation verify --repo llvm/llvm-project $archive --bundle $bundle
+          if ($LASTEXITCODE -ne 0) {
+            throw "LLVM archive attestation verification failed"
+          }
+
+          tar -xf $archive -C $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) {
+            throw "LLVM archive extraction failed"
+          }
+          $llvmRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            "clang+llvm-22.1.8-x86_64-pc-windows-msvc"
+          $llvmConfig = Join-Path $llvmRoot "lib/cmake/llvm/LLVMConfig.cmake"
+          if (-not (Test-Path -PathType Leaf $llvmConfig)) {
+            throw "LLVMConfig.cmake was not present in the development archive"
+          }
+          $installedVersion = (& "$llvmRoot/bin/llvm-config.exe" --version).Trim()
+          if ($installedVersion -ne "22.1.8") {
+            throw "Expected LLVM 22.1.8, found $installedVersion"
+          }
+          "FSIM_CI_LLVM_ROOT=$llvmRoot" >> $env:GITHUB_ENV
+          (Join-Path $llvmRoot "bin") >> $env:GITHUB_PATH
+
+      - name: Configure with required LLVM backend
+        shell: pwsh
+        run: |
+          cmake `
+            -S . `
+            -B "build/ci-windows-llvm22-${{ matrix.configuration }}" `
+            -G Ninja `
+            -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} `
+            -DCMAKE_C_COMPILER=cl `
+            -DCMAKE_CXX_COMPILER=cl `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL `
+            -DFSIM_BUILD_TESTS=ON `
+            -DFSIM_LLVM_MODE=ON `
+            -DFSIM_WARNINGS_AS_ERRORS=ON `
+            "-DLLVM_DIR=$env:FSIM_CI_LLVM_ROOT/lib/cmake/llvm"
+
+      - name: Build
+        run: >
+          cmake --build
+          build/ci-windows-llvm22-${{ matrix.configuration }}
+          --parallel 2
+
+      - name: Test
+        run: >
+          ctest --test-dir
+          build/ci-windows-llvm22-${{ matrix.configuration }}
+          --output-on-failure

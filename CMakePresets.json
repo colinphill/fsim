@@ -1,0 +1,225 @@
+{
+  "version": 6,
+  "vendor": {
+    "fsim.dev/spdx": "SPDX-License-Identifier: Apache-2.0"
+  },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Developer Debug",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "FSIM_BUILD_TESTS": "ON",
+        "FSIM_LLVM_MODE": "AUTO"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "FSIM_BUILD_TESTS": "ON",
+        "FSIM_LLVM_MODE": "AUTO"
+      }
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows MSVC",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-msvc",
+      "cacheVariables": {
+        "FSIM_BUILD_TESTS": "ON",
+        "FSIM_LLVM_MODE": "ON"
+      }
+    },
+    {
+      "name": "ci-linux",
+      "displayName": "CI Linux GCC",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "FSIM_BUILD_TESTS": "ON",
+        "FSIM_LLVM_MODE": "OFF",
+        "FSIM_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "ci-linux-release",
+      "displayName": "CI Linux GCC Release",
+      "inherits": "ci-linux",
+      "binaryDir": "${sourceDir}/build/ci-linux-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "ci-sanitizers",
+      "displayName": "CI Linux ASan and UBSan",
+      "inherits": "ci-linux",
+      "binaryDir": "${sourceDir}/build/ci-sanitizers",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "ci-fuzz",
+      "displayName": "CI Clang frontend fuzz smoke",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-fuzz",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "FSIM_BUILD_TESTS": "OFF",
+        "FSIM_BUILD_FUZZERS": "ON",
+        "FSIM_LLVM_MODE": "OFF",
+        "FSIM_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "ci-windows",
+      "displayName": "CI Windows MSVC",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci-windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "FSIM_BUILD_TESTS": "ON",
+        "FSIM_LLVM_MODE": "OFF",
+        "FSIM_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "ci-windows-release",
+      "displayName": "CI Windows MSVC Release",
+      "inherits": "ci-windows",
+      "binaryDir": "${sourceDir}/build/ci-windows-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "windows-msvc",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-linux",
+      "configurePreset": "ci-linux"
+    },
+    {
+      "name": "ci-linux-release",
+      "configurePreset": "ci-linux-release"
+    },
+    {
+      "name": "ci-sanitizers",
+      "configurePreset": "ci-sanitizers"
+    },
+    {
+      "name": "ci-fuzz",
+      "configurePreset": "ci-fuzz",
+      "targets": [
+        "fsim_frontend_fuzz"
+      ]
+    },
+    {
+      "name": "ci-windows",
+      "configurePreset": "ci-windows"
+    },
+    {
+      "name": "ci-windows-release",
+      "configurePreset": "ci-windows-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-msvc",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-linux",
+      "configurePreset": "ci-linux",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-linux-release",
+      "configurePreset": "ci-linux-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-sanitizers",
+      "configurePreset": "ci-sanitizers",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:strict_string_checks=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-windows",
+      "configurePreset": "ci-windows",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci-windows-release",
+      "configurePreset": "ci-windows-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+FSIM_1.0 {
+  global:
+    fsim_*;
+  local:
+    *;
+};

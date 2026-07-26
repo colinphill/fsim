@@ -1,0 +1,208 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# fsim
+
+`fsim` is a greenfield mixed-language HDL simulator written in C++20. Its
+intended compilation path is:
+
+```text
+VHDL / Verilog / SystemVerilog / SystemC
+                    |
+          typed, source-aware IR
+                    |
+       elaborated design + typed SimIR
+              /                 \
+ reference interpreter       LLVM ORC JIT
+              \                 /
+       deterministic runtime, debugger, VCD
+```
+
+## Project status
+
+This repository is an **internal vertical slice**, not the fsim v1 release.
+It establishes the semantic and platform spine on which the full language
+implementations will be built.
+
+The current tree contains:
+
+- C++20 value kernels for packed 2-, 4-, and 9-state logic;
+- a deterministic, single-thread, phased event scheduler;
+- a typed SimIR and reference interpreter;
+- hand-written VHDL-2008 and Verilog/SystemVerilog tokenizers and parsers for a
+  deliberately small executable subset;
+- bounded Verilog/SystemVerilog `` `timescale`` context, integer-delay scaling,
+  and automatic selection of the finest declared directive precision;
+- recursive VHDL/SV instance elaboration in both hierarchy directions with
+  explicit cross-language bindings, whole-signal port aliasing, and boundary
+  validation;
+- lowering of scalar and common packed operations into SimIR;
+- a narrow LLVM ORC adapter for at-most-64-bit processes, including explicit
+  jumps/branches and caller-owned resumable frames for timed waits, yields,
+  design stop, loops containing suspension points, and a shared checked
+  single-word `Logic4` `aval`/`bval` path into the simulation kernel;
+- a checksummed persistent object-cache primitive with process-aware per-key
+  locking, atomic replacement, stale-lock recovery, and LLVM native-object
+  reuse plus cold/warm activity telemetry beneath the configured application
+  cache;
+- buffered VCD output;
+- a schema-1 project-manifest loader and command-line driver;
+- an executable versioned C session API for build, hierarchy/value access,
+  simulation control, and synchronous callbacks;
+- versioned SystemC plug-in ABI and dynamic-library loading; and
+- an fsim SystemC compatibility header plus a shell-free, cached host compiler
+  for plug-in shared libraries, with build-time entry-point and factory
+  validation.
+
+The full v1 language coverage described in
+[Language support](docs/language-support.md) is not implemented yet. In
+particular, complete semantic analysis, general mixed-boundary conversions and
+multi-driver resolution, parameter/generic specialization, per-specialization
+LLVM module grouping, scheduled-write and sensitivity-wait LLVM lowering,
+instrumented O0 debug execution, broader interpreter/JIT differential
+coverage, SystemC kernel integration and fibers, source/statement/process
+debugging, fractional-delay and declaration-based time semantics, IEEE VHDL
+packages, and most testbench features remain work in progress. Unsupported
+syntax is diagnosed rather than silently accepted.
+
+## Requirements
+
+- Windows or Linux on x86-64
+- A C++20 compiler: GCC or Clang on Linux, or MSVC on Windows
+- CMake 3.28 or newer
+- LLVM **22.1.8** for the supported compiled-code configuration
+
+LLVM is isolated behind one adapter. Frontend, interpreter, and most unit tests
+can be developed without LLVM by configuring `FSIM_LLVM_MODE=OFF`. The
+checked-in CMake configuration accepts only LLVM 22.1.8 when the backend is
+enabled. The checked-in Linux and Windows LLVM CI jobs configure and run the
+adapter tests against that exact version, including its C runtime-table header
+test and O0/O2 ORC tests. Linux GCC and Windows MSVC are also exercised without
+LLVM in Debug and Release configurations; separate Linux jobs run the suite
+with ASan/UBSan and exercise all three HDL lexer/parser entry points with
+Clang/libFuzzer. Adapter developers may manually smoke-test an older LLVM while
+bootstrapping, but that is not a supported project configuration and must not
+be used to claim v1 compatibility.
+
+The planned release dependency pins are CLI11 2.6.2, toml++ 3.4.0,
+Boost.Context 1.91.0, and Catch2 3.15.2. The current slice keeps its core
+bootstrap dependency-light and does not yet require all four packages.
+
+## Build and test
+
+On Linux:
+
+```sh
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
+```
+
+To point CMake at the supported LLVM installation:
+
+```sh
+cmake --preset dev -DFSIM_LLVM_MODE=ON \
+  -DLLVM_DIR=/path/to/llvm-22.1.8/lib/cmake/llvm
+cmake --build --preset dev
+```
+
+An equivalent configuration without a preset is:
+
+```sh
+cmake -S . -B build/llvm -DCMAKE_BUILD_TYPE=Debug \
+  -DFSIM_LLVM_MODE=ON \
+  -DLLVM_DIR=/path/to/llvm-22.1.8/lib/cmake/llvm
+cmake --build build/llvm
+ctest --test-dir build/llvm --output-on-failure
+```
+
+On Windows, install LLVM 22.1.8 for x86-64 and use the checked-in preset:
+
+```powershell
+cmake --preset windows-msvc -DLLVM_DIR=C:\llvm-22.1.8\lib\cmake\llvm
+cmake --build --preset windows-msvc
+ctest --test-dir build\windows-msvc -C Release --output-on-failure
+```
+
+The `ci-sanitizers` preset runs the non-LLVM suite with GCC ASan/UBSan. The
+`ci-fuzz` preset additionally requires Clang and its libFuzzer/compiler-rt
+development package; it recompiles an isolated instrumented copy of the
+frontend, so fuzzers and ordinary tests may be enabled in the same build
+without adding a libFuzzer entry point to normal executables.
+
+## Command-line use
+
+The primary interface is:
+
+```text
+fsim check
+fsim build
+fsim run
+fsim debug
+```
+
+For example:
+
+```sh
+build/dev/fsim check -p examples/vertical_slice/fsim.toml
+build/dev/fsim build -p examples/vertical_slice/fsim.toml
+build/dev/fsim run   -p examples/vertical_slice/fsim.toml
+build/dev/fsim debug -p examples/vertical_slice/fsim.toml
+```
+
+Direct source files are also accepted:
+
+```sh
+build/dev/fsim check --lang systemverilog examples/vertical_slice/tb.sv
+```
+
+`--diagnostics=json` selects structured diagnostics. Manifest values can be
+overridden with options such as `--top`, `--duration`, `--max-deltas`,
+`--trace`, `--seed`, `-O`, and `-j`.
+
+The current debugger supports relative or absolute time runs, delta/time
+stepping, time and signal-change breakpoints, scope/signal navigation, value
+inspection, and deposit/force/release. Statement and process stepping, source
+breakpoints, locals, and trace selection remain future work. A design
+`$finish` is terminal for that simulation; a debugger or Ctrl-C stop remains
+resumable, while a fatal runtime error poisons the simulation and prevents
+further execution.
+
+With LLVM enabled, `fsim build` compiles eligible processes and `fsim run`
+uses a hybrid engine. Supported at-most-64-bit processes execute through LLVM
+at the selected O0/O2 setting—O2 by default—while typed capability misses fall
+back per process to the reference evaluator under the same deterministic
+kernel. Generated callbacks and the reference kernel share a checked
+single-word `Logic4` representation for values up to 64 bits. The configured
+cache stores native objects under `llvm-native`; `fsim build` reports native
+cache hits, misses, stores, and rejected entries. Builds without LLVM execute
+entirely through the reference evaluator. `fsim debug` currently remains
+interpreter-only; scheduled/update and delayed writes, sensitivity waits,
+values wider than 64 bits, per-specialization module grouping, and broader
+differential coverage remain work in progress.
+
+The [vertical-slice example](examples/vertical_slice/README.md) is intentionally
+small. It runs an SV testbench containing an explicitly bound VHDL counter and
+an SV combinational child. The final committed values are `counter_q = 1` and
+`child_y = FE`; those committed top-level signals are recorded in its VCD. The
+LLVM-enabled application test also runs this bounded mixed hierarchy through
+the reference and O2 hybrid engines and compares status, time, delta,
+committed-change callbacks, and final values. Assertion metadata, normalized
+VCD comparison, exhaustive semantic fixtures, and Windows execution evidence
+remain open.
+
+## Design documents
+
+- [Architecture](docs/architecture.md)
+- [Implementation plan and progress](docs/implementation-plan.md)
+- [Deterministic cross-language semantics](docs/cross-language-semantics.md)
+- [Diagnostic code catalog](docs/diagnostics.md)
+- [Language support and feature status](docs/language-support.md)
+- [Feature matrix and test evidence](docs/feature-matrix.md)
+- [SystemC subset and plug-in model](docs/systemc-subset.md)
+
+## Licensing
+
+fsim source code is licensed under the
+[Apache License 2.0](LICENSE). Files use SPDX identifier
+`Apache-2.0`. Third-party sources and dependencies retain their own licenses
+and must pass license review before they are bundled. The planned IEEE VHDL
+package sources are not yet bundled in this vertical slice.
