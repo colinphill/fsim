@@ -23,8 +23,9 @@ Constructor-time native SystemC child members elaborate recursively and may
 bind their ports directly to parent signals or ports. Module lifecycle
 callbacks execute at deterministic common-kernel boundaries. Standard typed
 signal interfaces and exports retain hierarchy metadata while resolving to
-common signals. General custom-interface metadata and fiber-backed thread
-execution are still work in progress.
+common signals. `SC_THREAD` and `SC_CTHREAD` use Boost.Context fibers on the
+single simulation thread. General custom-interface metadata is still work in
+progress.
 
 ## Source inclusion
 
@@ -308,10 +309,22 @@ explicit foreign-child binding. Dynamic module creation after construction,
 non-parent port chains, and arbitrary custom-interface metadata are not yet
 implemented.
 
-`SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
-non-executable until suspension is implemented with Boost.Context 1.91.0
-fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
-the simulation remains single-threaded and deterministic.
+`SC_THREAD` and `SC_CTHREAD` callbacks retain their ordinary C++ stacks in
+Boost.Context 1.91.0 fibers. `wait(sc_time)`, zero-delay wait,
+`wait(sc_event)`, OR/AND event-list waits, and plain `wait()` on static
+sensitivity yield to the common scheduler. A fiber is a suspension mechanism
+only: simulation remains single-threaded and deterministic. Suspended stacks
+are explicitly stopped and completed before module destruction or plug-in
+unload.
+
+CMake accepts `FSIM_SYSTEMC_FIBER_MODE=AUTO`, `ON`, or `OFF`. `AUTO` and `ON`
+use an installed exact Boost.Context 1.91.0 package when present, otherwise
+they fetch Boost's official 1.91.0 release archive and verify its published
+SHA-256 before building only the x86-64 Context sources. `OFF` retains the
+non-fiber developer configuration and emits `FSIM-ELAB-BIND-042` if a design
+selects a thread process. Normal Linux builds use the ELF/GAS fcontext backend
+and Windows uses PE/MASM; fetched Linux AddressSanitizer builds select ucontext
+with Boost's sanitizer fiber-switch hooks.
 
 SystemC work participates in fsim's common phase policy:
 
@@ -330,7 +343,7 @@ aliases. Native child modules use the same recursive hierarchy and runtime
 registry, lifecycle callbacks are root-scoped, and direct-parent port/export
 chains resolve to common signals. It does not yet provide dynamic module
 construction, arbitrary user-defined channel binding semantics, asynchronous
-updates, or fiber suspension.
+updates, thread reset/kill controls, or dynamic process creation.
 
 ## Deliberately outside v1
 

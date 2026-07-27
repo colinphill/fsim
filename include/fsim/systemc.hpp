@@ -489,7 +489,19 @@ inline void wait(const sc_event_and_list& events) {
 }
 
 inline void wait() {
-    throw std::logic_error{"plain wait() requires a statically sensitive fsim SystemC thread"};
+    if (detail::current_host == nullptr
+        || detail::current_host->wait_static == nullptr) {
+        throw std::logic_error{
+            "plain wait() requires an active fsim SystemC thread"};
+    }
+    if (detail::current_process_kind == FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "SC_METHOD cannot call wait; use next_trigger"};
+    }
+    detail::check_status(
+        detail::current_host->wait_static(
+            detail::current_host->context),
+        "wait on static sensitivity");
 }
 
 inline void next_trigger(const sc_time delay) {
@@ -2331,7 +2343,8 @@ template <typename Module>
         || host->register_export == nullptr
         || host->bind_export == nullptr
         || host->register_foreign_child == nullptr
-        || host->connect_foreign_port == nullptr) {
+        || host->connect_foreign_port == nullptr
+        || host->wait_static == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

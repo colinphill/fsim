@@ -48,16 +48,16 @@ using runtime::PackedLogic4;
 using runtime::SimulationTick;
 using runtime::simir::SignalId;
 
-class SystemCMethodExecutor final
+class SystemCProcessExecutor final
     : public runtime::simir::ProcessExecutor {
  public:
-  SystemCMethodExecutor(
+  SystemCProcessExecutor(
       std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
       const std::uint64_t process)
       : hierarchy_(std::move(hierarchy)), process_(process) {
     if (!hierarchy_) {
       throw std::invalid_argument{
-          "SystemC method executor requires a hierarchy registry"};
+          "SystemC process executor requires a hierarchy registry"};
     }
   }
 
@@ -65,7 +65,7 @@ class SystemCMethodExecutor final
       runtime::simir::ProcessExecutionContext& context,
       runtime::simir::InstructionIndex) override {
     const auto suspension =
-        hierarchy_->invoke_method(process_, context);
+        hierarchy_->invoke_process(process_, context);
     runtime::simir::ProcessResumeResult result{0, 1};
     switch (suspension.kind) {
     case systemc::MethodSuspendKind::halt:
@@ -3167,7 +3167,7 @@ struct Simulation::Impl {
          built.design.systemc_processes()) {
       interpreter->set_process_executor(
           process.process,
-          std::make_unique<SystemCMethodExecutor>(
+          std::make_unique<SystemCProcessExecutor>(
               built.systemc_hierarchy,
               process.native_handle));
     }

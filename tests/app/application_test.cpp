@@ -1182,6 +1182,54 @@ SC_MODULE(HdlBridge) {
   }
 };
 
+SC_MODULE(FiberThreads) {
+  sc_core::sc_in<sc_dt::sc_logic> clock{"clock"};
+  sc_core::sc_out<sc_dt::sc_lv<8>> count{"count"};
+  sc_core::sc_out<sc_dt::sc_lv<8>> timed{"timed"};
+  sc_core::sc_out<sc_dt::sc_lv<8>> event_count{"event_count"};
+  sc_core::sc_event pulse{"pulse"};
+
+  SC_CTOR(FiberThreads) {
+    SC_CTHREAD(clocked_run, clock.pos());
+    SC_THREAD(timed_run);
+    SC_METHOD(notify_run);
+    sensitive << clock.pos();
+    dont_initialize();
+    SC_THREAD(event_run);
+  }
+
+  void clocked_run() {
+    unsigned value = 0;
+    while (true) {
+      sc_core::wait();
+      ++value;
+      count.write(
+          value == 1
+              ? sc_dt::sc_lv<8>{"00000001"}
+              : sc_dt::sc_lv<8>{"00000010"});
+    }
+  }
+
+  void timed_run() {
+    timed.write(sc_dt::sc_lv<8>{"00000001"});
+    sc_core::wait(sc_core::sc_time{2, sc_core::SC_NS});
+    timed.write(sc_dt::sc_lv<8>{"00000010"});
+    sc_core::wait(sc_core::SC_ZERO_TIME);
+    timed.write(sc_dt::sc_lv<8>{"00000011"});
+  }
+
+  void notify_run() {
+    pulse.notify();
+  }
+
+  void event_run() {
+    sc_core::wait(pulse);
+    event_count.write(sc_dt::sc_lv<8>{"00000001"});
+    sc_core::wait(pulse);
+    event_count.write(sc_dt::sc_lv<8>{"00000010"});
+  }
+};
+
 extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     const fsim_sc_host_v1* host,
     fsim_sc_registrar_v1* registrar) {
@@ -1208,6 +1256,12 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
           host, registrar, "bridge");
   if (bridge_status != FSIM_SC_OK) {
     return bridge_status;
+  }
+  const auto thread_status =
+      fsim::systemc::register_module_factory<FiberThreads>(
+          host, registrar, "fiber_threads");
+  if (thread_status != FSIM_SC_OK) {
+    return thread_status;
   }
   const auto method_status =
       fsim::systemc::register_module_factory<MethodBridge>(
@@ -1436,6 +1490,25 @@ module systemc_export_host;
   initial begin
     value = 1'b0;
     #1 value = 1'b1;
+    #1 $finish;
+  end
+endmodule
+
+module systemc_thread_host;
+  logic clock;
+  logic [7:0] count;
+  logic [7:0] timed;
+  logic [7:0] event_count;
+  fiber_threads_placeholder u_threads(
+      .clock(clock),
+      .count(count),
+      .timed(timed),
+      .event_count(event_count));
+  initial begin
+    clock = 1'b0;
+    #1 clock = 1'b1;
+    #1 clock = 1'b0;
+    #1 clock = 1'b1;
     #1 $finish;
   end
 endmodule
@@ -2029,6 +2102,57 @@ end architecture rtl;
           ->signal_value(*systemc_root_inverted)
           .to_msb_string()
       == "0");
+
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+  auto systemc_thread_config = hdl_systemc_config;
+  systemc_thread_config.project.top =
+      "sv:work.systemc_thread_host";
+  systemc_thread_config.bindings = {
+      {"systemc_thread_host.u_threads",
+       "systemc:models.fiber_threads",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine systemc_thread_diagnostics;
+  auto systemc_thread_project = fsim::app::build_project(
+      systemc_thread_config, systemc_thread_diagnostics);
+  assert(systemc_thread_project);
+  const auto thread_count =
+      systemc_thread_project->design.find_signal("count");
+  const auto thread_timed =
+      systemc_thread_project->design.find_signal("timed");
+  const auto thread_event_count =
+      systemc_thread_project->design.find_signal("event_count");
+  assert(thread_count && thread_timed && thread_event_count);
+  fsim::app::Simulation systemc_thread_simulation{
+      std::move(*systemc_thread_project),
+      systemc_thread_config.run.max_deltas,
+#if defined(FSIM_HAS_LLVM)
+      fsim::app::SimulationEngine::compiled};
+#else
+      fsim::app::SimulationEngine::interpreter};
+#endif
+  const auto systemc_thread_result =
+      systemc_thread_simulation.run();
+  assert(
+      systemc_thread_result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(systemc_thread_result.time == 4);
+  assert(
+      systemc_thread_simulation
+          .read_signal(*thread_count)
+          .to_msb_string()
+      == "00000010");
+  assert(
+      systemc_thread_simulation
+          .read_signal(*thread_timed)
+          .to_msb_string()
+      == "00000011");
+  assert(
+      systemc_thread_simulation
+          .read_signal(*thread_event_count)
+          .to_msb_string()
+      == "00000010");
+#endif
 
   auto systemc_method_config = hdl_systemc_config;
   systemc_method_config.project.top =

@@ -457,8 +457,11 @@ teardown. Facade-defined `SC_METHOD` callbacks are represented by dense common
 process IDs and an external executor; registered port handles map to dense
 signals, reads observe committed values, and writes enter the common update
 phase. Static sensitivities therefore reuse the same fanout and next-delta
-wakeup path as HDL processes. Dynamic events/channels and fiber-backed thread
-suspension remain planned.
+wakeup path as HDL processes. `SC_THREAD` and `SC_CTHREAD` keep their C++
+stacks in Boost.Context 1.91.0 fibers while every context switch remains on the
+single deterministic simulation thread. Wait callbacks yield a resumable
+external process to the common scheduler; terminal shutdown resumes suspended
+stacks with an explicit stop request before plug-in code is unloaded.
 
 This cache boundary does not yet fingerprint every helper behind the selected
 compiler driver or every environment-injected code-generation setting. The

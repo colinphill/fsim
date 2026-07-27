@@ -271,6 +271,9 @@ typedef struct fsim_sc_host_v1 {
         void* context,
         fsim_sc_handle_v1 export_handle,
         fsim_sc_handle_v1 target);
+
+    /* Append-only fiber suspension extension for plain wait(). */
+    fsim_sc_status_v1 (*wait_static)(void* context);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

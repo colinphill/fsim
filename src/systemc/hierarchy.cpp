@@ -4,6 +4,10 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/systemc/plugin_loader.hpp"
 
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+#include <boost/context/fiber.hpp>
+#endif
+
 #include <algorithm>
 #include <exception>
 #include <limits>
@@ -13,6 +17,16 @@
 #include <utility>
 
 namespace fsim::systemc {
+
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+struct ThreadFiberState {
+    boost::context::fiber process;
+    boost::context::fiber caller;
+    bool started{};
+    bool terminated{};
+    bool stopping{};
+};
+#endif
 
 struct HierarchyRegistry::Impl {
     struct Factory {
@@ -88,6 +102,11 @@ struct HierarchyRegistry::Impl {
         primitive_channels;
     std::unordered_set<fsim_sc_handle_v1> internal_signals;
     std::unordered_map<fsim_sc_handle_v1, std::uint32_t> runtime_objects;
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+    std::unordered_map<
+        fsim_sc_handle_v1, std::unique_ptr<ThreadFiberState>>
+        thread_fibers;
+#endif
     std::vector<LiveModule> live;
     fsim_sc_handle_v1 next_handle{1};
     std::uint64_t femtoseconds_per_tick{1};
@@ -165,6 +184,9 @@ namespace {
 struct ActiveInvocation {
     HierarchyRegistry::Impl* registry{};
     runtime::simir::ProcessExecutionContext* context{};
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+    ThreadFiberState* thread{};
+#endif
     std::vector<std::uint8_t> read_buffer;
     std::string failure;
     std::optional<MethodSuspendResult> suspension;
@@ -182,6 +204,47 @@ public:
     InvocationScope(const InvocationScope&) = delete;
     InvocationScope& operator=(const InvocationScope&) = delete;
 };
+
+[[nodiscard]] fsim_sc_status_v1 suspend_thread() noexcept {
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+    if (active_invocation != nullptr
+        && active_invocation->thread != nullptr) {
+        auto& state = *active_invocation->thread;
+        state.caller = std::move(state.caller).resume();
+        if (state.stopping) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+    }
+#endif
+    return FSIM_SC_OK;
+}
+
+void shutdown_threads(HierarchyRegistry::Impl& registry) noexcept {
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+    for (auto& [handle, state] : registry.thread_fibers) {
+        (void)handle;
+        if (!state || !state->started || state->terminated
+            || !state->process) {
+            continue;
+        }
+        ActiveInvocation invocation{};
+        invocation.registry = &registry;
+        invocation.thread = state.get();
+        InvocationScope scope{invocation};
+        state->stopping = true;
+        try {
+            state->process = std::move(state->process).resume();
+        } catch (...) {
+            // The process facade contains callback exceptions. Reaching this
+            // catch indicates a broken plug-in boundary; retain no further
+            // executable state during best-effort teardown.
+        }
+    }
+    registry.thread_fibers.clear();
+#else
+    (void)registry;
+#endif
+}
 
 [[nodiscard]] bool valid_direction(
     const fsim_sc_port_direction_v1 direction) noexcept {
@@ -238,8 +301,8 @@ void invoke_lifecycle_entry(
         throw std::logic_error{
             "recursive SystemC lifecycle invocation is not supported"};
     }
-    ActiveInvocation invocation{
-        &registry, nullptr, {}, {}, std::nullopt};
+    ActiveInvocation invocation{};
+    invocation.registry = &registry;
     InvocationScope scope{invocation};
     try {
         entry(user);
@@ -1182,7 +1245,7 @@ extern "C" fsim_sc_status_v1 registry_wait_time(
         active_invocation->suspension =
             MethodSuspendResult{
                 MethodSuspendKind::wait_for, ticks, {}, false};
-        return FSIM_SC_OK;
+        return suspend_thread();
     } catch (...) {
         active_invocation->failure =
             "SystemC next time trigger could not be recorded";
@@ -1213,7 +1276,7 @@ extern "C" fsim_sc_status_v1 registry_wait_event(
                 0,
                 {binding->second},
                 false};
-        return FSIM_SC_OK;
+        return suspend_thread();
     } catch (...) {
         active_invocation->failure =
             "SystemC next event trigger could not be recorded";
@@ -1260,10 +1323,31 @@ extern "C" fsim_sc_status_v1 registry_wait_event_list(
                 0,
                 std::move(signals),
                 kind == FSIM_SC_EVENT_AND_LIST};
-        return FSIM_SC_OK;
+        return suspend_thread();
     } catch (...) {
         active_invocation->failure =
             "SystemC event-list trigger could not be recorded";
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_wait_static(
+    void* context) noexcept {
+    if (context == nullptr || active_invocation == nullptr
+        || active_invocation->registry != context) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+    try {
+        active_invocation->suspension =
+            MethodSuspendResult{
+                MethodSuspendKind::static_sensitivity,
+                0,
+                {},
+                false};
+        return suspend_thread();
+    } catch (...) {
+        active_invocation->failure =
+            "SystemC static-sensitivity wait could not be recorded";
         return FSIM_SC_RUNTIME_ERROR;
     }
 }
@@ -1516,6 +1600,10 @@ HierarchyRegistry::~HierarchyRegistry() {
     if (!impl_) {
         return;
     }
+    // Suspended stacks may still hold plug-in code addresses and module
+    // references, so release them before destroying modules or unloading the
+    // dynamic library.
+    shutdown_threads(*impl_);
     for (auto instance = impl_->live.rbegin();
          instance != impl_->live.rend(); ++instance) {
         try {
@@ -1567,6 +1655,7 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.register_lifecycle = registry_register_lifecycle;
     host.register_export = registry_register_export;
     host.bind_export = registry_bind_export;
+    host.wait_static = registry_wait_static;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -1823,6 +1912,7 @@ void HierarchyRegistry::end_simulation(
     if (impl_ == nullptr) {
         throw std::logic_error{"SystemC hierarchy registry is unavailable"};
     }
+    shutdown_threads(*impl_);
     std::exception_ptr failure;
     for (auto root = roots.rbegin(); root != roots.rend(); ++root) {
         auto* module = find_live_module(*impl_, *root);
@@ -1859,7 +1949,7 @@ void HierarchyRegistry::end_simulation(
     }
 }
 
-MethodSuspendResult HierarchyRegistry::invoke_method(
+MethodSuspendResult HierarchyRegistry::invoke_process(
     const fsim_sc_handle_v1 process,
     runtime::simir::ProcessExecutionContext& context) {
     if (impl_ == nullptr) {
@@ -1880,41 +1970,104 @@ MethodSuspendResult HierarchyRegistry::invoke_method(
         description = &owner->processes[found->second.process];
         break;
     }
-    if (description == nullptr
-        || description->kind != FSIM_SC_METHOD
-        || description->entry == nullptr) {
+    if (description == nullptr || description->entry == nullptr) {
         throw std::logic_error{
-            "SystemC process is not an executable SC_METHOD"};
+            "SystemC process has no executable callback"};
     }
     if (active_invocation != nullptr) {
         throw std::logic_error{
             "recursive SystemC process invocation is not supported"};
     }
-    ActiveInvocation invocation{impl_.get(), &context, {}, {}, std::nullopt};
+    if (description->kind == FSIM_SC_METHOD) {
+        ActiveInvocation invocation{};
+        invocation.registry = impl_.get();
+        invocation.context = &context;
+        InvocationScope scope{invocation};
+        try {
+            description->entry(description->user);
+        } catch (const std::exception& exception) {
+            invocation.failure =
+                "SystemC process callback escaped with an exception: "
+                + std::string{exception.what()};
+        } catch (...) {
+            invocation.failure =
+                "SystemC process callback escaped with an "
+                "unknown exception";
+        }
+        if (!invocation.failure.empty()) {
+            throw std::runtime_error{std::move(invocation.failure)};
+        }
+        if (invocation.suspension) {
+            return *invocation.suspension;
+        }
+        return {
+            description->sensitivity.empty()
+                ? MethodSuspendKind::halt
+                : MethodSuspendKind::static_sensitivity,
+            0,
+            {},
+            false};
+    }
+
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+    if (description->kind != FSIM_SC_THREAD
+        && description->kind != FSIM_SC_CTHREAD) {
+        throw std::logic_error{
+            "SystemC process has an invalid process kind"};
+    }
+    auto& state = impl_->thread_fibers[process];
+    if (!state) {
+        state = std::make_unique<ThreadFiberState>();
+    }
+    if (state->terminated) {
+        return {MethodSuspendKind::halt, 0, {}, false};
+    }
+
+    ActiveInvocation invocation{};
+    invocation.registry = impl_.get();
+    invocation.context = &context;
+    invocation.thread = state.get();
     InvocationScope scope{invocation};
     try {
-        description->entry(description->user);
+        if (!state->started) {
+            state->started = true;
+            const auto entry = description->entry;
+            void* const user = description->user;
+            auto* const fiber_state = state.get();
+            state->process = boost::context::fiber{
+                [entry, user, fiber_state](
+                    boost::context::fiber&& caller) mutable {
+                    fiber_state->caller = std::move(caller);
+                    entry(user);
+                    fiber_state->terminated = true;
+                    return std::move(fiber_state->caller);
+                }};
+        }
+        state->process = std::move(state->process).resume();
     } catch (const std::exception& exception) {
         invocation.failure =
-            "SystemC process callback escaped with an exception: "
+            "SystemC thread fiber failed: "
             + std::string{exception.what()};
     } catch (...) {
         invocation.failure =
-            "SystemC process callback escaped with an unknown exception";
+            "SystemC thread fiber failed with an unknown exception";
     }
     if (!invocation.failure.empty()) {
+        state->terminated = true;
         throw std::runtime_error{std::move(invocation.failure)};
     }
     if (invocation.suspension) {
         return *invocation.suspension;
     }
-    return {
-        description->sensitivity.empty()
-            ? MethodSuspendKind::halt
-            : MethodSuspendKind::static_sensitivity,
-        0,
-        {},
-        false};
+    if (state->terminated) {
+        return {MethodSuspendKind::halt, 0, {}, false};
+    }
+    throw std::runtime_error{
+        "SystemC thread yielded without a wait request"};
+#else
+    throw std::logic_error{
+        "SystemC thread execution requires Boost.Context 1.91.0"};
+#endif
 }
 
 void HierarchyRegistry::invoke_primitive_channel(
@@ -1949,7 +2102,9 @@ void HierarchyRegistry::invoke_primitive_channel(
         throw std::logic_error{
             "recursive SystemC callback invocation is not supported"};
     }
-    ActiveInvocation invocation{impl_.get(), &context, {}, {}, std::nullopt};
+    ActiveInvocation invocation{};
+    invocation.registry = impl_.get();
+    invocation.context = &context;
     InvocationScope scope{invocation};
     try {
         description->update(description->user);

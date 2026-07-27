@@ -178,9 +178,9 @@ public:
     void end_simulation(
         std::span<const fsim_sc_handle_v1> roots);
 
-    /// Invoke a registered SC_METHOD with host reads/writes redirected to the
-    /// supplied common-kernel execution context.
-    [[nodiscard]] MethodSuspendResult invoke_method(
+    /// Invoke or resume a registered SystemC process with host reads/writes
+    /// redirected to the supplied common-kernel execution context.
+    [[nodiscard]] MethodSuspendResult invoke_process(
         fsim_sc_handle_v1 process,
         runtime::simir::ProcessExecutionContext& context);
 

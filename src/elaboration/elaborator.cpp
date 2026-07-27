@@ -3336,6 +3336,7 @@ private:
         design_.systemc_instances_.push_back(std::move(info));
 
         for (const auto& external : instance.processes) {
+#if !defined(FSIM_HAS_BOOST_CONTEXT)
             if (external.kind != FSIM_SC_METHOD) {
                 report(
                     "FSIM-ELAB-BIND-042",
@@ -3345,6 +3346,7 @@ private:
                     {});
                 continue;
             }
+#endif
             runtime::simir::Process process;
             process.id = static_cast<ProcessId>(
                 design_.processes_.size());

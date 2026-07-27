@@ -32,6 +32,7 @@ include(GNUInstallDirs)
 include(CTest)
 include(cmake/FsimWarnings.cmake)
 include(cmake/FsimDependencies.cmake)
+include(cmake/FsimBoostContext.cmake)
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
@@ -43,6 +44,13 @@ set(
   "LLVM backend selection: AUTO discovers LLVM 22.1.8, ON requires it, OFF disables it"
 )
 set_property(CACHE FSIM_LLVM_MODE PROPERTY STRINGS AUTO ON OFF)
+set(
+  FSIM_SYSTEMC_FIBER_MODE
+  "AUTO"
+  CACHE STRING
+  "SystemC fiber selection: AUTO discovers Boost.Context 1.91.0, ON requires it, OFF disables it"
+)
+set_property(CACHE FSIM_SYSTEMC_FIBER_MODE PROPERTY STRINGS AUTO ON OFF)
 
 string(TOUPPER "${FSIM_LLVM_MODE}" FSIM_LLVM_MODE_NORMALIZED)
 if(NOT FSIM_LLVM_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
@@ -90,6 +98,72 @@ if(NOT FSIM_LLVM_MODE_NORMALIZED STREQUAL "OFF")
   endif()
 else()
   message(STATUS "fsim LLVM backend disabled by FSIM_LLVM_MODE=OFF")
+endif()
+
+string(
+  TOUPPER
+  "${FSIM_SYSTEMC_FIBER_MODE}"
+  FSIM_SYSTEMC_FIBER_MODE_NORMALIZED
+)
+if(NOT FSIM_SYSTEMC_FIBER_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
+  message(
+    FATAL_ERROR
+    "FSIM_SYSTEMC_FIBER_MODE must be AUTO, ON, or OFF "
+    "(received '${FSIM_SYSTEMC_FIBER_MODE}')"
+  )
+endif()
+
+set(FSIM_WITH_SYSTEMC_FIBERS OFF)
+if(NOT FSIM_SYSTEMC_FIBER_MODE_NORMALIZED STREQUAL "OFF")
+  find_package(
+    Boost ${FSIM_BOOST_VERSION}
+    EXACT
+    CONFIG
+    QUIET
+    COMPONENTS context
+  )
+  if(NOT Boost_FOUND OR NOT TARGET Boost::context)
+    include(FetchContent)
+    string(
+      REPLACE "." "_"
+      FSIM_BOOST_ARCHIVE_VERSION
+      "${FSIM_BOOST_VERSION}"
+    )
+    FetchContent_Declare(
+      fsim_boost
+      URL
+        "https://archives.boost.io/release/${FSIM_BOOST_VERSION}/source/boost_${FSIM_BOOST_ARCHIVE_VERSION}.tar.bz2"
+      URL_HASH
+        "SHA256=${FSIM_BOOST_SOURCE_SHA256}"
+      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    message(
+      STATUS
+      "Boost.Context ${FSIM_BOOST_VERSION} was not found; "
+      "fetching the pinned Boost source archive"
+    )
+    FetchContent_MakeAvailable(fsim_boost)
+    if(WIN32)
+      enable_language(ASM_MASM)
+    else()
+      enable_language(ASM)
+    endif()
+    fsim_add_fetched_boost_context("${fsim_boost_SOURCE_DIR}")
+  endif()
+  if(TARGET Boost::context)
+    set(FSIM_WITH_SYSTEMC_FIBERS ON)
+    message(
+      STATUS
+      "fsim SystemC fibers: Boost.Context ${FSIM_BOOST_VERSION}"
+    )
+  else()
+    message(
+      FATAL_ERROR
+      "Boost.Context ${FSIM_BOOST_VERSION} did not provide Boost::context"
+    )
+  endif()
+else()
+  message(STATUS "fsim SystemC fibers disabled by FSIM_SYSTEMC_FIBER_MODE=OFF")
 endif()
 
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -206,6 +280,17 @@ target_link_libraries(
     fsim_object_cache
     fsim_runtime
 )
+if(FSIM_WITH_SYSTEMC_FIBERS)
+  target_link_libraries(fsim_systemc PRIVATE Boost::context)
+  target_compile_definitions(
+    fsim_systemc
+    PUBLIC FSIM_HAS_BOOST_CONTEXT=1
+  )
+  target_compile_definitions(
+    fsim_elaboration
+    PUBLIC FSIM_HAS_BOOST_CONTEXT=1
+  )
+endif()
 
 add_library(fsim_api SHARED src/api/api.cpp)
 add_library(fsim::api ALIAS fsim_api)

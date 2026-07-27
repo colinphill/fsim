@@ -492,15 +492,20 @@ endmodule
         {},
         true});
     const std::array thread_systemc_instances{thread_systemc};
-    const auto rejected_systemc_thread =
+    const auto systemc_thread =
         fsim::elaboration::elaborate(
             parsed_systemc_boundary.design,
             "systemc:models.bridge",
             std::span<const fsim::elaboration::Binding>{},
             thread_systemc_instances);
-    assert(!rejected_systemc_thread.ok());
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+    assert(systemc_thread.ok());
+    assert(systemc_thread.design->systemc_processes().size() == 1);
+#else
+    assert(!systemc_thread.ok());
     assert(has_diagnostic(
-        rejected_systemc_thread, "FSIM-ELAB-BIND-042"));
+        systemc_thread, "FSIM-ELAB-BIND-042"));
+#endif
 
     constexpr std::string_view systemc_boundary_vhdl = R"(
 entity systemc_vhdl_parent is

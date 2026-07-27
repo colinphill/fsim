@@ -109,8 +109,9 @@ SystemC child members now elaborate recursively with stable hierarchy handles
 and direct-parent signal or port binding. The four standard module lifecycle
 callbacks run at deterministic build/start/terminal boundaries. Standard
 `sc_signal_in_if`/`sc_signal_inout_if` exports retain hierarchy metadata while
-resolving to common signals. General custom interfaces and fiber-backed
-`SC_THREAD`/`SC_CTHREAD` suspension remain planned.
+resolving to common signals. `SC_THREAD` and `SC_CTHREAD` use single-threaded
+Boost.Context fibers for timed, event, and static-sensitivity suspension.
+General custom interfaces remain planned.
 Facade modules declare VHDL/SV children with the typed
 `fsim::systemc::hdl_instance` extension; the full child path in `fsim.toml`
 selects the implementation, so mixed hierarchy remains explicit in both
@@ -121,8 +122,8 @@ The full v1 language coverage described in
 particular, complete semantic analysis, general mixed-boundary conversions and
 multi-driver resolution, parameter/generic specialization identity beyond the
 current instance-specific records, complete scoped/local type coverage and call
-safe points, broader interpreter/JIT differential coverage, SystemC kernel
-integration and fibers, fractional-delay and declaration-based time semantics,
+safe points, broader interpreter/JIT differential coverage, remaining SystemC
+kernel behavior, fractional-delay and declaration-based time semantics,
 IEEE VHDL packages, complete HDL event controls, and most testbench features
 remain work in progress. Unsupported syntax is diagnosed rather than silently
 accepted.
@@ -133,6 +134,7 @@ accepted.
 - A C++20 compiler: GCC or Clang on Linux, or MSVC on Windows
 - CMake 3.28 or newer
 - LLVM **22.1.8** for the supported compiled-code configuration
+- Boost.Context **1.91.0** for executable SystemC threads
 
 LLVM is isolated behind one adapter. Frontend, interpreter, and most unit tests
 can be developed without LLVM by configuring `FSIM_LLVM_MODE=OFF`. The
@@ -147,8 +149,11 @@ bootstrapping, but that is not a supported project configuration and must not
 be used to claim v1 compatibility.
 
 The planned release dependency pins are CLI11 2.6.2, toml++ 3.4.0,
-Boost.Context 1.91.0, and Catch2 3.15.2. The current slice keeps its core
-bootstrap dependency-light and does not yet require all four packages.
+Boost.Context 1.91.0, and Catch2 3.15.2. CMake first uses an installed exact
+Boost.Context 1.91.0 package and otherwise fetches Boost's official pinned
+source archive with SHA-256 verification. Set
+`FSIM_SYSTEMC_FIBER_MODE=OFF` only for a dependency-free build that
+intentionally diagnoses `SC_THREAD`/`SC_CTHREAD` as non-executable.
 
 ## Build and test
 

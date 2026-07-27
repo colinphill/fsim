@@ -334,7 +334,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-039` | error | A preconstructed SystemC instance target differs from its manifest binding. |
 | `FSIM-ELAB-BIND-040` | error | A SystemC foreign child lacks its required explicit HDL binding. |
 | `FSIM-ELAB-BIND-041` | error | A SystemC foreign child is bound to a non-HDL target. |
-| `FSIM-ELAB-BIND-042` | error | A registered SystemC thread process requires unsupported fiber suspension. |
+| `FSIM-ELAB-BIND-042` | error | A registered SystemC thread process requires fiber support, but this build configured `FSIM_SYSTEMC_FIBER_MODE=OFF`. |
 | `FSIM-ELAB-BIND-043` | error | A SystemC process sensitivity references an unknown registered object. |
 | `FSIM-ELAB-BIND-044` | error | A SystemC process registered an invalid sensitivity edge. |
 | `FSIM-ELAB-BIND-045` | error | A SystemC edge sensitivity references a non-scalar object. |

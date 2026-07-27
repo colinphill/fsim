@@ -145,6 +145,9 @@ The following foundation is implemented:
   the selected top;
 - a typed `fsim::systemc::hdl_instance` facade extension for constructor-time
   SystemC-to-VHDL/SV child declaration, with manifest-selected implementation;
+- exact Boost.Context 1.91.0 discovery or checksum-verified source fetching,
+  plus fiber-backed `SC_THREAD`/`SC_CTHREAD` timed, delta, and static waits on
+  the common scheduler;
 - statically sensitive facade-defined `SC_METHOD` callbacks using common
   scheduler/update semantics and contained native exceptions;
 - dynamic `SC_METHOD` time/event `next_trigger`, opaque named-event
@@ -178,6 +181,7 @@ Current Linux validation:
 | LLVM 22.1.8 Release, warnings-as-errors | 14/14 tests pass |
 | Concurrent LLVM Debug and Release suites | Both pass; cache-test paths are isolated |
 | GCC ASan/UBSan | 13/13 tests pass with no findings |
+| Boost.Context 1.91.0 fibers | Checksum-verified fetch/configure/build; GCC Debug full suite 13/13, ASan/UBSan focused application, and LLVM 22 compiled-SV/SystemC application tests pass |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -203,7 +207,8 @@ Completed:
   configuration checks;
 - exact LLVM 22.1.8 discovery behind a narrow adapter target;
 - central version policy for CLI11 2.6.2, toml++ 3.4.0, Boost.Context 1.91.0,
-  and Catch2 3.15.2;
+  and Catch2 3.15.2, with exact installed-or-fetched Boost.Context
+  consumption;
 - source spans, structured diagnostics, schema-1 manifest loading, glob/order
   handling, and a diagnostic catalog consistency test;
 - versioned C API and SystemC plug-in ABI skeletons;
@@ -399,8 +404,9 @@ Planned implementation sequence:
    `sc_signal`, primitive-channel update dispatch, `notify_delayed`, dynamic
    method sensitivity, OR/AND event expressions, pending-notification rules,
    and cancellation now use the common scheduler.
-4. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
-   suspension on Linux and Windows x86-64.
+4. Complete Windows execution evidence and broader event/list/error tests for
+   the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
+   timed, delta, and static-wait execution is implemented.
 5. Complete nested/scoped debug locals and add call safe points.
 6. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
