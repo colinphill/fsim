@@ -139,11 +139,10 @@ using SpecializationId = std::uint32_t;
 
 /// One elaborated design-unit occurrence and its directly owned processes.
 ///
-/// The current frontend subset has no generic/parameter actuals, so each
-/// instance is its own specialization record. The dense ID and explicit
-/// process membership provide the stable grouping contract that later
-/// parameterized specialization can refine without recovering ownership from
-/// process-name strings.
+/// Parameterized Verilog/SystemVerilog occurrences carry canonical parameter
+/// values after constant evaluation. Each occurrence remains an explicit
+/// specialization record so process ownership and cache identity never depend
+/// on recovering hierarchy from process-name strings.
 struct SpecializationInfo {
     SpecializationId id{};
     std::string unit;
@@ -153,8 +152,9 @@ struct SpecializationInfo {
     frontend::Language language{frontend::Language::SystemVerilog2017};
     std::string library{"work"};
     bool is_cell{};
-    // Canonical name/value pairs once frontend parameters and generics are
-    // represented. Empty for the current bounded frontend subset.
+    // Canonical name/value pairs after frontend parameter evaluation. Empty
+    // for unparameterized units and languages whose generics are not yet
+    // implemented.
     std::vector<std::pair<std::string, std::string>> parameter_values;
 };
 

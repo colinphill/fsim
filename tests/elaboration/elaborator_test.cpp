@@ -144,6 +144,147 @@ endmodule
         implicit_interpreter->signal_value(*created).to_msb_string()
         == "1");
 
+    const auto parameterized_parsed = fsim::frontend::parse_text(
+        "parameterized.sv",
+        R"(
+module parameterized #(
+  parameter int WIDTH = 8,
+  parameter int INCREMENT = 1,
+  localparam int LAST = WIDTH - 1
+) (
+  input logic clk,
+  output logic [WIDTH - 1:0] q
+);
+  logic [WIDTH - 1:0] next;
+  assign next = q + INCREMENT;
+  always_ff @(posedge clk) q <= next;
+endmodule
+
+module parameterized_top(
+  input logic clk,
+  output logic [3:0] q4,
+  output logic [7:0] q8
+);
+  parameterized #(.WIDTH(4), .INCREMENT(2)) four(
+    .clk(clk), .q(q4)
+  );
+  parameterized #(8, 3) eight(
+    .clk(clk), .q(q8)
+  );
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parameterized_parsed.ok());
+    const auto parameterized_elaborated =
+        fsim::elaboration::elaborate(
+            parameterized_parsed.design,
+            "sv:work.parameterized_top");
+    if (!parameterized_elaborated.ok()) {
+        for (const auto& diagnostic :
+             parameterized_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(parameterized_elaborated.ok());
+    assert(
+        parameterized_elaborated.design->specializations().size() == 3);
+    const auto& parameter_specializations =
+        parameterized_elaborated.design->specializations();
+    assert(parameter_specializations[0].parameter_values.empty());
+    assert((
+        parameter_specializations[1].parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"WIDTH", "4"},
+            {"INCREMENT", "2"},
+            {"LAST", "3"}}));
+    assert((
+        parameter_specializations[2].parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"WIDTH", "8"},
+            {"INCREMENT", "3"},
+            {"LAST", "7"}}));
+    const auto parameter_clock =
+        parameterized_elaborated.design->find_signal("clk");
+    const auto parameter_q4 =
+        parameterized_elaborated.design->find_signal("q4");
+    const auto parameter_q8 =
+        parameterized_elaborated.design->find_signal("q8");
+    const auto parameter_next4 =
+        parameterized_elaborated.design->find_signal(
+            "parameterized_top.four.next");
+    const auto parameter_next8 =
+        parameterized_elaborated.design->find_signal(
+            "parameterized_top.eight.next");
+    assert(
+        parameter_clock && parameter_q4 && parameter_q8
+        && parameter_next4 && parameter_next8);
+    assert(
+        parameterized_elaborated.design->signals()
+            .at(*parameter_q4).width
+        == 4);
+    assert(
+        parameterized_elaborated.design->signals()
+            .at(*parameter_q8).width
+        == 8);
+    assert(
+        parameterized_elaborated.design->signals()
+            .at(*parameter_next4).width
+        == 4);
+    assert(
+        parameterized_elaborated.design->signals()
+            .at(*parameter_next8).width
+        == 8);
+    auto parameter_interpreter =
+        parameterized_elaborated.design->create_interpreter();
+    parameter_interpreter->deposit_signal(
+        *parameter_clock,
+        fsim::runtime::PackedLogic4::from_msb_string("0"));
+    parameter_interpreter->deposit_signal(
+        *parameter_q4,
+        fsim::runtime::PackedLogic4::from_msb_string("0000"));
+    parameter_interpreter->deposit_signal(
+        *parameter_q8,
+        fsim::runtime::PackedLogic4::from_msb_string("00000000"));
+    parameter_interpreter->start();
+    (void)parameter_interpreter->run();
+    parameter_interpreter->deposit_signal(
+        *parameter_clock,
+        fsim::runtime::PackedLogic4::from_msb_string("1"));
+    (void)parameter_interpreter->run();
+    assert(
+        parameter_interpreter->signal_value(*parameter_q4).to_msb_string()
+        == "0010");
+    assert(
+        parameter_interpreter->signal_value(*parameter_q8).to_msb_string()
+        == "00000011");
+
+    const auto invalid_parameters = fsim::frontend::parse_text(
+        "invalid-parameter-elaboration.sv",
+        R"(
+module invalid_parameter_target #(
+  parameter int WIDTH = 4,
+  localparam int LOCAL_WIDTH = WIDTH,
+  parameter int BROKEN = 1 / 0
+) ();
+endmodule
+module invalid_parameter_top;
+  invalid_parameter_target #(.MISSING(2)) unknown();
+  invalid_parameter_target #(.LOCAL_WIDTH(2)) local_override();
+  invalid_parameter_target #(1, 2, 3) excessive();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_parameters.ok());
+    const auto rejected_parameters = fsim::elaboration::elaborate(
+        invalid_parameters.design,
+        "sv:work.invalid_parameter_top");
+    assert(!rejected_parameters.ok());
+    assert(has_diagnostic(
+        rejected_parameters, "FSIM-ELAB-PARAM-001"));
+    assert(has_diagnostic(
+        rejected_parameters, "FSIM-ELAB-PARAM-005"));
+
     constexpr std::string_view vhdl_source = R"(
 entity counter_vhdl is
   port (

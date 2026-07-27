@@ -1119,6 +1119,112 @@ endmodule
       "malformed directive forms have stable targeted diagnostics");
 }
 
+void test_systemverilog_parameters() {
+  const auto result = parse_text(
+      "parameters.sv",
+      R"(
+module parameterized #(
+  parameter int WIDTH = 8,
+  parameter logic [1:0] MODE = 2'b01,
+  localparam int LAST = WIDTH - 1
+) (
+  input logic [WIDTH - 1:0] data,
+  output logic [WIDTH - 1:0] result
+);
+  localparam int DOUBLE_WIDTH = WIDTH * 2;
+  assign result = data;
+endmodule
+
+module parameter_top;
+  logic [3:0] input_value;
+  logic [3:0] named_value;
+  logic [1:0] positional_value;
+  parameterized #(.WIDTH(4), .MODE(2'b10)) named_instance(
+    .data(input_value),
+    .result(named_value)
+  );
+  parameterized #(2, 2'b11) positional_instance(
+    .data(input_value[1:0]),
+    .result(positional_value)
+  );
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(result.ok(), "module parameters and overrides must parse");
+  require(result.design.units.size() == 2, "parameterized unit count");
+  const auto* parameterized =
+      result.design.find(UnitKind::VerilogModule, "parameterized");
+  require(
+      parameterized != nullptr && parameterized->parameters.size() == 4,
+      "parameter and localparam declarations are retained in source order");
+  require(
+      parameterized->parameters[0].name == "WIDTH"
+          && parameterized->parameters[0].type.spelling == "int"
+          && !parameterized->parameters[0].local
+          && parameterized->parameters[1].name == "MODE"
+          && parameterized->parameters[1].type.packed_range
+          && parameterized->parameters[1].type.packed_range->width() == 2
+          && parameterized->parameters[2].name == "LAST"
+          && parameterized->parameters[2].local
+          && parameterized->parameters[3].name == "DOUBLE_WIDTH"
+          && parameterized->parameters[3].local,
+      "typed parameter metadata");
+  require(
+      parameterized->ports.size() == 2
+          && !parameterized->ports.front().type.packed_range
+          && parameterized->ports.front().type.packed_range_expression
+          && parameterized->ports.front()
+                 .type.packed_range_expression->left.kind
+              == ExpressionKind::Binary,
+      "symbolic packed range remains in typed HIR");
+  const auto* top =
+      result.design.find(UnitKind::VerilogModule, "parameter_top");
+  require(
+      top != nullptr && top->instances.size() == 2
+          && top->instances[0].parameter_overrides.size() == 2
+          && top->instances[0].parameter_overrides[0].name
+              == std::optional<std::string>{"WIDTH"}
+          && top->instances[1].parameter_overrides.size() == 2
+          && !top->instances[1].parameter_overrides[0].name,
+      "named and positional parameter overrides are represented");
+
+  const auto invalid = parse_text(
+      "invalid-parameters.sv",
+      R"(
+module invalid_parameters #(
+  parameter WIDTH,
+  parameter WIDTH = 2
+);
+endmodule
+module invalid_parameter_top;
+  invalid_parameters #(.WIDTH(1), .WIDTH(2)) duplicate();
+  invalid_parameters #(.WIDTH(1), 2) mixed();
+endmodule
+module parameter_object_conflict #(
+  parameter CLASH = 1
+) (
+  input logic CLASH
+);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto has_code = [&](const std::string_view code) {
+    return std::any_of(
+        invalid.diagnostics.begin(),
+        invalid.diagnostics.end(),
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !invalid.ok() && has_code("FSIM-SV-PARSE-050")
+          && has_code("FSIM-SV-SEM-017")
+          && has_code("FSIM-SV-SEM-018")
+          && has_code("FSIM-SV-SEM-019")
+          && has_code("FSIM-SV-SEM-020"),
+      "parameter declaration and override diagnostics are targeted");
+}
+
 void test_immediate_assertions() {
   const auto vhdl = parse_text(
       "assertions.vhd",
@@ -1947,6 +2053,7 @@ int main() {
     test_duplicate_declarations_are_rejected();
     test_systemverilog_timescale_context();
     test_systemverilog_compiler_directives();
+    test_systemverilog_parameters();
     test_immediate_assertions();
     test_process_variable_declarations();
     test_procedural_wait_statements();

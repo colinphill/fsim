@@ -65,6 +65,9 @@ std::optional<std::uint64_t> Type::width() const noexcept {
   if (packed_range) {
     return packed_range->width();
   }
+  if (packed_range_expression) {
+    return std::nullopt;
+  }
   switch (domain) {
     case ValueDomain::Bit2:
     case ValueDomain::Logic4:

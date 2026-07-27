@@ -24,6 +24,30 @@ struct VerilogTypeSpec {
   PortDirection direction{PortDirection::Unknown};
 };
 
+[[nodiscard]] std::optional<std::int64_t> simple_integer_constant(
+    const Expression& expression) {
+  if (expression.kind == ExpressionKind::IntegerLiteral) {
+    return decimal_i64(expression.text);
+  }
+  if (expression.kind == ExpressionKind::Unary
+      && expression.operands.size() == 1
+      && (expression.text == "+" || expression.text == "-")) {
+    const auto magnitude =
+        simple_integer_constant(expression.operands.front());
+    if (!magnitude) {
+      return std::nullopt;
+    }
+    if (expression.text == "+") {
+      return magnitude;
+    }
+    if (*magnitude == std::numeric_limits<std::int64_t>::min()) {
+      return std::nullopt;
+    }
+    return -*magnitude;
+  }
+  return std::nullopt;
+}
+
 enum class KeywordSet {
   Verilog1995,
   Verilog2001,
@@ -572,6 +596,9 @@ class VerilogParser final : private detail::ParserBase {
 
   void resolve_implicit_nets(DesignUnit& unit) {
     std::unordered_set<std::string> known;
+    for (const auto& parameter : unit.parameters) {
+      known.insert(parameter.name);
+    }
     for (const auto& port : unit.ports) {
       known.insert(port.name);
     }
@@ -634,12 +661,7 @@ class VerilogParser final : private detail::ParserBase {
     unit.name = name.text;
 
     if (match(TokenKind::Hash)) {
-      error(previous(), "FSIM-SV-UNSUPPORTED-003",
-            "parameter port lists are not implemented in this frontend "
-            "slice");
-      if (at(TokenKind::LeftParen)) {
-        skip_balanced(TokenKind::LeftParen, TokenKind::RightParen);
-      }
+      parse_parameter_port_list(unit, previous());
     }
 
     if (match(TokenKind::LeftParen)) {
@@ -651,7 +673,11 @@ class VerilogParser final : private detail::ParserBase {
            "FSIM-SV-PARSE-003");
 
     while (!at_end() && !keyword("endmodule")) {
-      if (is_declaration_start()) {
+      if (match_keyword("parameter")) {
+        parse_parameter_group(unit, false, false, previous());
+      } else if (match_keyword("localparam")) {
+        parse_parameter_group(unit, true, false, previous());
+      } else if (is_declaration_start()) {
         parse_declaration(unit);
       } else if (match_keyword("assign")) {
         if (auto assignment = parse_continuous_assignment(previous())) {
@@ -669,8 +695,11 @@ class VerilogParser final : private detail::ParserBase {
       } else if (keyword("initial")) {
         unit.processes.push_back(parse_initial());
       } else if (
-          at(TokenKind::Identifier) && at(TokenKind::Identifier, 1)
-          && at(TokenKind::LeftParen, 2)) {
+          at(TokenKind::Identifier)
+          && ((at(TokenKind::Identifier, 1)
+               && at(TokenKind::LeftParen, 2))
+              || (at(TokenKind::Hash, 1)
+                  && at(TokenKind::LeftParen, 2)))) {
         unit.instances.push_back(parse_instance());
       } else if (at(TokenKind::Backtick)) {
         parse_directive();
@@ -691,11 +720,180 @@ class VerilogParser final : private detail::ParserBase {
     return unit;
   }
 
+  Type parse_parameter_type() {
+    Type type{
+        ValueDomain::Integer,
+        "implicit",
+        std::nullopt,
+        true};
+    if (keyword("type")) {
+      const auto unsupported = advance();
+      error(
+          unsupported,
+          "FSIM-SV-UNSUPPORTED-019",
+          "type parameters are not implemented; use an integral value "
+          "parameter");
+      return type;
+    }
+    if (keyword("string") || keyword("byte")
+        || keyword("shortint") || keyword("longint")) {
+      const auto unsupported = advance();
+      error(
+          unsupported,
+          "FSIM-SV-UNSUPPORTED-020",
+          "this parameter data type is parsed but integral constant "
+          "specialization currently supports int/integer/bit/logic/reg");
+      return type;
+    }
+    if (keyword("integer") || keyword("int")) {
+      const auto token = advance();
+      type.spelling = token.text;
+      type.domain = ValueDomain::Integer;
+      type.is_signed = true;
+    } else if (
+        keyword("logic") || keyword("reg") || keyword("bit")) {
+      const auto token = advance();
+      type.spelling = token.text;
+      type.domain =
+          token.text == "bit"
+              ? ValueDomain::Bit2
+              : ValueDomain::Logic4;
+      type.is_signed = false;
+    } else if (
+        keyword("signed") || keyword("unsigned")
+        || at(TokenKind::LeftBracket)) {
+      type.spelling = "logic";
+      type.domain = ValueDomain::Logic4;
+      type.is_signed = false;
+    }
+    parse_optional_signedness(type);
+    parse_optional_range(type);
+    return type;
+  }
+
+  void add_parameter(
+      DesignUnit& unit,
+      ParameterDeclaration parameter,
+      const Token& name) {
+    const auto object_conflict =
+        std::any_of(
+            unit.ports.begin(),
+            unit.ports.end(),
+            [&](const SignalDeclaration& declaration) {
+              return declaration.name == parameter.name;
+            })
+        || std::any_of(
+            unit.signals.begin(),
+            unit.signals.end(),
+            [&](const SignalDeclaration& declaration) {
+              return declaration.name == parameter.name;
+            });
+    if (object_conflict) {
+      error(
+          name,
+          "FSIM-SV-SEM-020",
+          "parameter '" + parameter.name
+              + "' conflicts with a port or signal declaration");
+      return;
+    }
+    if (std::any_of(
+            unit.parameters.begin(),
+            unit.parameters.end(),
+            [&](const ParameterDeclaration& existing) {
+              return existing.name == parameter.name;
+            })) {
+      error(
+          name,
+          "FSIM-SV-SEM-017",
+          "duplicate parameter declaration '" + parameter.name + "'");
+      return;
+    }
+    unit.parameters.push_back(std::move(parameter));
+  }
+
+  void parse_parameter_group(
+      DesignUnit& unit,
+      const bool local,
+      const bool port_list,
+      const Token& start) {
+    const auto type = parse_parameter_type();
+    for (;;) {
+      const auto name = expect_identifier(
+          local ? "localparam name" : "parameter name");
+      Expression value;
+      if (match(TokenKind::Assign)) {
+        value = parse_expression();
+      } else {
+        error(
+            current(),
+            "FSIM-SV-PARSE-050",
+            "value parameters require a default constant expression");
+      }
+      add_parameter(
+          unit,
+          ParameterDeclaration{
+              name.text,
+              type,
+              std::move(value),
+              local,
+              cover(start.span, previous().span)},
+          name);
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+      if (port_list
+          && (keyword("parameter") || keyword("localparam"))) {
+        break;
+      }
+    }
+    if (!port_list) {
+      expect(
+          TokenKind::Semicolon,
+          "';' after parameter declaration",
+          "FSIM-SV-PARSE-051");
+    }
+  }
+
+  void parse_parameter_port_list(
+      DesignUnit& unit,
+      const Token& hash) {
+    expect(
+        TokenKind::LeftParen,
+        "'(' after module parameter '#'",
+        "FSIM-SV-PARSE-052");
+    while (!at_end() && !at(TokenKind::RightParen)) {
+      if (match_keyword("parameter")) {
+        parse_parameter_group(unit, false, true, previous());
+      } else if (match_keyword("localparam")) {
+        parse_parameter_group(unit, true, true, previous());
+      } else {
+        error(
+            current(),
+            "FSIM-SV-PARSE-053",
+            "a module parameter port list item must begin with parameter "
+            "or localparam");
+        while (!at_end() && !at(TokenKind::Comma)
+               && !at(TokenKind::RightParen)) {
+          advance();
+        }
+        (void)match(TokenKind::Comma);
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after module parameter port list",
+        "FSIM-SV-PARSE-054");
+    (void)hash;
+  }
+
   Instance parse_instance() {
     const auto start = expect_identifier("instantiated module name");
-    const auto name = expect_identifier("instance name");
     Instance instance;
     instance.unit_name = start.text;
+    if (match(TokenKind::Hash)) {
+      parse_parameter_overrides(instance, previous());
+    }
+    const auto name = expect_identifier("instance name");
     instance.name = name.text;
     instance.unconnected_drive = current_unconnected_drive_;
     expect(
@@ -731,6 +929,64 @@ class VerilogParser final : private detail::ParserBase {
         "FSIM-SV-PARSE-038");
     instance.span = span_from(start, previous());
     return instance;
+  }
+
+  void parse_parameter_overrides(
+      Instance& instance,
+      const Token& hash) {
+    expect(
+        TokenKind::LeftParen,
+        "'(' after instance parameter '#'",
+        "FSIM-SV-PARSE-055");
+    bool saw_named = false;
+    bool saw_positional = false;
+    while (!at_end() && !at(TokenKind::RightParen)) {
+      const auto start = current();
+      ParameterOverride override;
+      if (match(TokenKind::Dot)) {
+        saw_named = true;
+        const auto name = expect_identifier("overridden parameter name");
+        override.name = name.text;
+        expect(
+            TokenKind::LeftParen,
+            "'(' after named parameter override",
+            "FSIM-SV-PARSE-056");
+        override.value = parse_expression();
+        expect(
+            TokenKind::RightParen,
+            "')' after named parameter override",
+            "FSIM-SV-PARSE-057");
+        if (std::any_of(
+                instance.parameter_overrides.begin(),
+                instance.parameter_overrides.end(),
+                [&](const ParameterOverride& existing) {
+                  return existing.name == override.name;
+                })) {
+          error(
+              name,
+              "FSIM-SV-SEM-018",
+              "duplicate named parameter override '" + name.text + "'");
+        }
+      } else {
+        saw_positional = true;
+        override.value = parse_expression();
+      }
+      override.span = cover(start.span, previous().span);
+      instance.parameter_overrides.push_back(std::move(override));
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after instance parameter overrides",
+        "FSIM-SV-PARSE-058");
+    if (saw_named && saw_positional) {
+      error(
+          hash,
+          "FSIM-SV-SEM-019",
+          "named and positional parameter overrides cannot be mixed");
+    }
   }
 
   void parse_module_ports(DesignUnit& unit) {
@@ -794,6 +1050,18 @@ class VerilogParser final : private detail::ParserBase {
               port_name,
               "FSIM-SV-SEM-003",
               "duplicate module port declaration '" + port_name.text + "'");
+        } else if (
+            std::any_of(
+                unit.parameters.begin(),
+                unit.parameters.end(),
+                [&](const ParameterDeclaration& parameter) {
+                  return parameter.name == port_name.text;
+                })) {
+          error(
+              port_name,
+              "FSIM-SV-SEM-020",
+              "port '" + port_name.text
+                  + "' conflicts with a parameter declaration");
         } else {
           unit.ports.push_back(std::move(declaration));
         }
@@ -908,25 +1176,20 @@ class VerilogParser final : private detail::ParserBase {
       return;
     }
     const auto start = previous();
-    const auto left = parse_signed_decimal();
+    auto left_expression = parse_expression();
     expect(TokenKind::Colon, "':' in packed range", "FSIM-SV-PARSE-005");
-    const auto right = parse_signed_decimal();
+    auto right_expression = parse_expression();
     expect(TokenKind::RightBracket, "']' after packed range",
            "FSIM-SV-PARSE-006");
+    const auto left = simple_integer_constant(left_expression);
+    const auto right = simple_integer_constant(right_expression);
     if (left && right) {
       type.packed_range = PackedRange{*left, *right, *left >= *right};
-    } else {
-      error(start, "FSIM-SV-SEM-001",
-            "packed range bounds must be decimal literals in this frontend "
-            "slice");
     }
-  }
-
-  std::optional<std::int64_t> parse_signed_decimal() {
-    const bool negative = match(TokenKind::Minus);
-    const auto number =
-        expect(TokenKind::Number, "integer literal", "FSIM-SV-PARSE-007");
-    return decimal_i64(number.text, negative);
+    type.packed_range_expression = PackedRangeExpression{
+        std::move(left_expression),
+        std::move(right_expression),
+        cover(start.span, previous().span)};
   }
 
   [[nodiscard]] bool is_declaration_start() const {
@@ -971,6 +1234,23 @@ class VerilogParser final : private detail::ParserBase {
           name.text, spec.type, spec.direction,
           spec.direction != PortDirection::Unknown,
           span_from(start, previous())};
+      const auto parameter_conflict = std::any_of(
+          unit.parameters.begin(),
+          unit.parameters.end(),
+          [&](const ParameterDeclaration& parameter) {
+            return parameter.name == declaration.name;
+          });
+      if (parameter_conflict) {
+        error(
+            name,
+            "FSIM-SV-SEM-020",
+            "object '" + declaration.name
+                + "' conflicts with a parameter declaration");
+        if (!match(TokenKind::Comma)) {
+          break;
+        }
+        continue;
+      }
       const auto existing_port = std::find_if(
           unit.ports.begin(),
           unit.ports.end(),

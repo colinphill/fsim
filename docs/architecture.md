@@ -24,7 +24,7 @@ The architectural invariants are:
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots plus include/macro ancestry are current for Verilog/SV; VHDL source spans are current |
 | Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers plus a bounded multi-root SV preprocessor are current; typed semantic HIR is partial |
-| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive simple VHDL/SV hierarchy, dense instance-specific specialization records, explicit mixed bindings, port aliasing, and boundary checks are current; parameter/generic specialization and complete driver semantics are planned |
+| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, dense instance-specific specialization records, bounded integral SV parameter specialization, explicit mixed bindings, port aliasing, and boundary checks are current; VHDL generics, SystemC construction-parameter transfer, and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
@@ -39,9 +39,11 @@ layers are still compacted together in parts of the current slice.
 
 The compact elaborated design now assigns a dense specialization ID to every
 instantiated unit occurrence and records its canonical unit identity, instance
-path, and directly owned process IDs. The current frontends do not yet expose
-generic or parameter values, so distinct parameterizations and reusable
-specialization identities are not represented yet.
+path, directly owned process IDs, and canonical bounded SystemVerilog integral
+parameter/localparam values. Those values distinguish occurrence and native
+cache identity. VHDL generics, complete SystemVerilog constant typing,
+reusable code-specialization deduplication, and typed construction-parameter
+transfer through SystemC factories remain planned.
 
 The current hierarchy builder recursively follows simple VHDL or SV instance
 nodes. Same-language children resolve within the parsed units. A manifest
@@ -50,9 +52,10 @@ the builder then connects named or positional whole-signal actuals by aliasing
 the child port ID to the parent signal ID. It diagnoses missing or duplicate
 connections, width and signedness mismatches, implicit loss into a 2-state
 destination, recursive hierarchy, unused bindings, and unresolved multiple
-boundary drivers. Generic/parameter specialization, expression actuals,
-unpacked/record boundaries, and actual multi-driver resolution remain outside
-this slice.
+boundary drivers. Bounded SystemVerilog parameters are specialized before
+port checks; VHDL generics, cross-SystemC construction parameters, expression
+actuals, unpacked/record boundaries, and actual multi-driver resolution remain
+outside this slice.
 
 The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
@@ -392,7 +395,9 @@ file is associated with its root compilation unit. The native module identity
 includes this key. A comment-only owning-source or included-header change
 therefore invalidates the module even when SimIR is identical, while changing
 an unrelated, uninstantiated root retains the module object. Actual
-generic/parameter values are still pending frontend support. The cache has no
+SystemVerilog integral parameter/localparam values are now constant-evaluated,
+canonicalized in declaration order, and included per instance; VHDL generics
+and complete SystemVerilog parameter typing remain pending. The cache has no
 age/size eviction policy. O0
 exposes source-bearing statement, wait, assertion, process-entry, and
 process-suspension points plus addressable ≤64-bit packed process locals. Call

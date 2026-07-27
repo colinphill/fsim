@@ -8,6 +8,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -263,6 +264,598 @@ std::optional<LoweredLiteral> literal_value(
               unsigned_value(*value, expected_width),
               frontend::ValueDomain::Bit2}}
         : std::nullopt;
+}
+
+using ConstantEnvironment =
+    std::unordered_map<std::string, std::int64_t>;
+
+std::optional<std::int64_t> constant_literal_integer(
+    const Expression& expression,
+    std::string& error) {
+    if (expression.kind == ExpressionKind::IntegerLiteral
+        && expression.text.find('\'') == std::string::npos) {
+        const auto value = unsigned_decimal(expression.text);
+        if (!value
+            || *value
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max())) {
+            error = "decimal literal is outside fsim's signed 64-bit "
+                    "constant range";
+            return std::nullopt;
+        }
+        return static_cast<std::int64_t>(*value);
+    }
+    if (expression.kind != ExpressionKind::LogicLiteral) {
+        error = "constant expression contains a non-integral literal";
+        return std::nullopt;
+    }
+    const auto lowered = literal_value(
+        expression, 64, frontend::Language::SystemVerilog2017);
+    if (!lowered || lowered->value.width() > 64) {
+        error = "literal is malformed or wider than 64 bits";
+        return std::nullopt;
+    }
+    std::uint64_t bits = 0;
+    for (std::size_t bit = 0; bit < lowered->value.width(); ++bit) {
+        const auto value = lowered->value.get(bit);
+        if (value == Logic4::x || value == Logic4::z) {
+            error = "X and Z digits are not valid in an elaboration "
+                    "constant";
+            return std::nullopt;
+        }
+        if (value == Logic4::one) {
+            bits |= std::uint64_t{1} << bit;
+        }
+    }
+    const auto quote = expression.text.find('\'');
+    const bool is_signed =
+        quote != std::string::npos
+        && quote + 1 < expression.text.size()
+        && (expression.text[quote + 1] == 's'
+            || expression.text[quote + 1] == 'S');
+    const auto width = lowered->value.width();
+    if (is_signed && width != 0
+        && lowered->value.get(width - 1) == Logic4::one) {
+        if (width < 64) {
+            bits |= ~std::uint64_t{0} << width;
+        }
+        const auto magnitude = (~bits) + 1U;
+        if (magnitude
+            == (std::uint64_t{1} << 63U)) {
+            return std::numeric_limits<std::int64_t>::min();
+        }
+        if (magnitude
+            > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max())) {
+            error = "signed literal is outside fsim's signed 64-bit "
+                    "constant range";
+            return std::nullopt;
+        }
+        return -static_cast<std::int64_t>(magnitude);
+    }
+    if (bits
+        > static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max())) {
+        error = "unsigned literal is outside fsim's signed 64-bit "
+                "constant range";
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(bits);
+}
+
+bool checked_add(
+    const std::int64_t left,
+    const std::int64_t right,
+    std::int64_t& result) {
+    if ((right > 0
+         && left
+             > std::numeric_limits<std::int64_t>::max() - right)
+        || (right < 0
+            && left
+                < std::numeric_limits<std::int64_t>::min() - right)) {
+        return false;
+    }
+    result = left + right;
+    return true;
+}
+
+bool checked_subtract(
+    const std::int64_t left,
+    const std::int64_t right,
+    std::int64_t& result) {
+    if ((right < 0
+         && left
+             > std::numeric_limits<std::int64_t>::max() + right)
+        || (right > 0
+            && left
+                < std::numeric_limits<std::int64_t>::min() + right)) {
+        return false;
+    }
+    result = left - right;
+    return true;
+}
+
+bool checked_multiply(
+    const std::int64_t left,
+    const std::int64_t right,
+    std::int64_t& result) {
+    if (left == 0 || right == 0) {
+        result = 0;
+        return true;
+    }
+    if ((left == -1
+         && right == std::numeric_limits<std::int64_t>::min())
+        || (right == -1
+            && left == std::numeric_limits<std::int64_t>::min())) {
+        return false;
+    }
+    if (left > 0) {
+        if ((right > 0
+             && left
+                 > std::numeric_limits<std::int64_t>::max() / right)
+            || (right < 0
+                && right
+                    < std::numeric_limits<std::int64_t>::min() / left)) {
+            return false;
+        }
+    } else if (
+        (right > 0
+         && left
+             < std::numeric_limits<std::int64_t>::min() / right)
+        || (right < 0
+            && left
+                < std::numeric_limits<std::int64_t>::max() / right)) {
+        return false;
+    }
+    result = left * right;
+    return true;
+}
+
+std::optional<std::int64_t> evaluate_constant_expression(
+    const Expression& expression,
+    const ConstantEnvironment& environment,
+    std::string& error) {
+    if (expression.kind == ExpressionKind::IntegerLiteral
+        || expression.kind == ExpressionKind::LogicLiteral) {
+        return constant_literal_integer(expression, error);
+    }
+    if (expression.kind == ExpressionKind::Identifier) {
+        const auto found = environment.find(expression.text);
+        if (found == environment.end()) {
+            error =
+                "unknown or forward parameter reference '"
+                + expression.text + "'";
+            return std::nullopt;
+        }
+        return found->second;
+    }
+    if (expression.kind == ExpressionKind::Unary
+        && expression.operands.size() == 1) {
+        const auto operand = evaluate_constant_expression(
+            expression.operands.front(), environment, error);
+        if (!operand) {
+            return std::nullopt;
+        }
+        if (expression.text == "+") {
+            return operand;
+        }
+        if (expression.text == "-") {
+            if (*operand
+                == std::numeric_limits<std::int64_t>::min()) {
+                error = "constant unary negation overflows signed 64-bit "
+                        "range";
+                return std::nullopt;
+            }
+            return -*operand;
+        }
+        if (expression.text == "~") {
+            return ~*operand;
+        }
+        if (expression.text == "!") {
+            return *operand == 0 ? 1 : 0;
+        }
+        error =
+            "unsupported unary constant operator '"
+            + expression.text + "'";
+        return std::nullopt;
+    }
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "?:"
+        && expression.operands.size() == 3) {
+        const auto condition = evaluate_constant_expression(
+            expression.operands[0], environment, error);
+        if (!condition) {
+            return std::nullopt;
+        }
+        return evaluate_constant_expression(
+            expression.operands[*condition != 0 ? 1 : 2],
+            environment,
+            error);
+    }
+    if (expression.kind != ExpressionKind::Binary
+        || expression.operands.size() != 2) {
+        error = "expression form is not an integral constant expression";
+        return std::nullopt;
+    }
+    const auto left = evaluate_constant_expression(
+        expression.operands[0], environment, error);
+    if (!left) {
+        return std::nullopt;
+    }
+    if (expression.text == "&&" && *left == 0) {
+        return 0;
+    }
+    if (expression.text == "||" && *left != 0) {
+        return 1;
+    }
+    const auto right = evaluate_constant_expression(
+        expression.operands[1], environment, error);
+    if (!right) {
+        return std::nullopt;
+    }
+    std::int64_t result = 0;
+    if (expression.text == "+") {
+        if (!checked_add(*left, *right, result)) {
+            error = "constant addition overflows signed 64-bit range";
+            return std::nullopt;
+        }
+        return result;
+    }
+    if (expression.text == "-") {
+        if (!checked_subtract(*left, *right, result)) {
+            error = "constant subtraction overflows signed 64-bit range";
+            return std::nullopt;
+        }
+        return result;
+    }
+    if (expression.text == "*") {
+        if (!checked_multiply(*left, *right, result)) {
+            error = "constant multiplication overflows signed 64-bit range";
+            return std::nullopt;
+        }
+        return result;
+    }
+    if (expression.text == "/" || expression.text == "%") {
+        if (*right == 0) {
+            error = "constant division by zero";
+            return std::nullopt;
+        }
+        if (*left == std::numeric_limits<std::int64_t>::min()
+            && *right == -1) {
+            error = "constant division overflows signed 64-bit range";
+            return std::nullopt;
+        }
+        return expression.text == "/"
+            ? *left / *right
+            : *left % *right;
+    }
+    if (expression.text == "<<" || expression.text == ">>") {
+        if (*left < 0 || *right < 0 || *right >= 63) {
+            error = "constant shifts require a nonnegative value and an "
+                    "amount from 0 through 62";
+            return std::nullopt;
+        }
+        if (expression.text == "<<") {
+            if (*left
+                > (std::numeric_limits<std::int64_t>::max()
+                   >> static_cast<unsigned>(*right))) {
+                error = "constant left shift overflows signed 64-bit range";
+                return std::nullopt;
+            }
+            return *left << static_cast<unsigned>(*right);
+        }
+        return *left >> static_cast<unsigned>(*right);
+    }
+    if (expression.text == "&") {
+        return *left & *right;
+    }
+    if (expression.text == "|") {
+        return *left | *right;
+    }
+    if (expression.text == "^") {
+        return *left ^ *right;
+    }
+    if (expression.text == "&&") {
+        return *right != 0 ? 1 : 0;
+    }
+    if (expression.text == "||") {
+        return *right != 0 ? 1 : 0;
+    }
+    if (expression.text == "==" || expression.text == "=") {
+        return *left == *right ? 1 : 0;
+    }
+    if (expression.text == "!=" || expression.text == "/=") {
+        return *left != *right ? 1 : 0;
+    }
+    if (expression.text == "<") {
+        return *left < *right ? 1 : 0;
+    }
+    if (expression.text == "<=") {
+        return *left <= *right ? 1 : 0;
+    }
+    if (expression.text == ">") {
+        return *left > *right ? 1 : 0;
+    }
+    if (expression.text == ">=") {
+        return *left >= *right ? 1 : 0;
+    }
+    error =
+        "unsupported binary constant operator '" + expression.text + "'";
+    return std::nullopt;
+}
+
+Expression constant_expression(
+    const std::int64_t value,
+    const frontend::SourceSpan& span) {
+    if (value >= 0) {
+        return {
+            ExpressionKind::IntegerLiteral,
+            std::to_string(value),
+            {},
+            span};
+    }
+    const auto magnitude =
+        value == std::numeric_limits<std::int64_t>::min()
+            ? std::uint64_t{1} << 63U
+            : static_cast<std::uint64_t>(-value);
+    return {
+        ExpressionKind::Unary,
+        "-",
+        {
+            Expression{
+                ExpressionKind::IntegerLiteral,
+                std::to_string(magnitude),
+                {},
+                span}},
+        span};
+}
+
+void substitute_parameters(
+    Expression& expression,
+    const ConstantEnvironment& environment) {
+    if (expression.kind == ExpressionKind::Identifier) {
+        if (const auto found = environment.find(expression.text);
+            found != environment.end()) {
+            expression = constant_expression(found->second, expression.span);
+            return;
+        }
+    }
+    for (auto& operand : expression.operands) {
+        substitute_parameters(operand, environment);
+    }
+}
+
+void substitute_parameters(
+    frontend::Type& type,
+    const ConstantEnvironment& environment,
+    std::vector<Diagnostic>& diagnostics) {
+    if (!type.packed_range_expression) {
+        return;
+    }
+    std::string error;
+    const auto left = evaluate_constant_expression(
+        type.packed_range_expression->left, environment, error);
+    const auto right = left
+        ? evaluate_constant_expression(
+              type.packed_range_expression->right,
+              environment,
+              error)
+        : std::nullopt;
+    if (!left || !right) {
+        diagnostics.push_back({
+            "FSIM-ELAB-PARAM-006",
+            "cannot evaluate packed range: " + error,
+            type.packed_range_expression->span});
+        return;
+    }
+    const frontend::PackedRange range{
+        *left, *right, *left >= *right};
+    if (range.width() == 0) {
+        diagnostics.push_back({
+            "FSIM-ELAB-PARAM-007",
+            "packed range width overflows fsim's 64-bit range",
+            type.packed_range_expression->span});
+        return;
+    }
+    type.packed_range = range;
+    type.packed_range_expression.reset();
+}
+
+void substitute_parameters(
+    frontend::VariableDeclaration& declaration,
+    const ConstantEnvironment& environment,
+    std::vector<Diagnostic>& diagnostics) {
+    substitute_parameters(declaration.type, environment, diagnostics);
+    if (declaration.initializer) {
+        substitute_parameters(*declaration.initializer, environment);
+    }
+}
+
+void substitute_parameters(
+    std::vector<Statement>& statements,
+    const ConstantEnvironment& environment,
+    std::vector<Diagnostic>& diagnostics) {
+    for (auto& statement : statements) {
+        substitute_parameters(statement.target, environment);
+        substitute_parameters(statement.value, environment);
+        substitute_parameters(statement.condition, environment);
+        for (auto& declaration : statement.declarations) {
+            substitute_parameters(declaration, environment, diagnostics);
+        }
+        for (auto& alternative : statement.case_alternatives) {
+            for (auto& choice : alternative.choices) {
+                substitute_parameters(choice, environment);
+            }
+            substitute_parameters(
+                alternative.statements, environment, diagnostics);
+        }
+        substitute_parameters(
+            statement.statements, environment, diagnostics);
+        substitute_parameters(
+            statement.else_statements, environment, diagnostics);
+    }
+}
+
+struct SpecializedUnit {
+    DesignUnit unit;
+    ConstantEnvironment environment;
+    std::vector<std::pair<std::string, std::string>> values;
+    bool valid{true};
+};
+
+SpecializedUnit specialize_unit(
+    const DesignUnit& source,
+    const std::vector<frontend::ParameterOverride>& overrides,
+    const ConstantEnvironment& parent_environment,
+    std::vector<Diagnostic>& diagnostics) {
+    SpecializedUnit result;
+    result.unit = source;
+    if (source.language != frontend::Language::SystemVerilog2017
+        && source.language != frontend::Language::Verilog2005) {
+        if (!overrides.empty()) {
+            diagnostics.push_back({
+                "FSIM-ELAB-PARAM-001",
+                "Verilog parameter overrides cannot target a non-Verilog "
+                "design unit",
+                overrides.front().span});
+            result.valid = false;
+        }
+        return result;
+    }
+
+    std::vector<const frontend::ParameterDeclaration*> overridable;
+    for (const auto& parameter : source.parameters) {
+        if (!parameter.local) {
+            overridable.push_back(&parameter);
+        }
+    }
+    std::unordered_map<std::string, std::int64_t> named_overrides;
+    std::vector<std::int64_t> positional_overrides;
+    bool saw_named = false;
+    bool saw_positional = false;
+    for (const auto& override : overrides) {
+        std::string error;
+        const auto value = evaluate_constant_expression(
+            override.value, parent_environment, error);
+        if (!value) {
+            diagnostics.push_back({
+                "FSIM-ELAB-PARAM-004",
+                "cannot evaluate parameter override: " + error,
+                override.span});
+            result.valid = false;
+            continue;
+        }
+        if (override.name) {
+            saw_named = true;
+            const auto declared = std::find_if(
+                overridable.begin(),
+                overridable.end(),
+                [&](const frontend::ParameterDeclaration* parameter) {
+                  return parameter->name == *override.name;
+                });
+            if (declared == overridable.end()) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-PARAM-001",
+                    "unknown or local parameter override '"
+                        + *override.name + "' on module '"
+                        + source.name + "'",
+                    override.span});
+                result.valid = false;
+            }
+            if (!named_overrides.emplace(*override.name, *value).second) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-PARAM-002",
+                    "duplicate parameter override '" + *override.name + "'",
+                    override.span});
+                result.valid = false;
+            }
+        } else {
+            saw_positional = true;
+            positional_overrides.push_back(*value);
+        }
+    }
+    if (saw_named && saw_positional) {
+        diagnostics.push_back({
+            "FSIM-ELAB-PARAM-003",
+            "named and positional parameter overrides cannot be mixed",
+            overrides.front().span});
+        result.valid = false;
+    }
+
+    if (positional_overrides.size() > overridable.size()) {
+        diagnostics.push_back({
+            "FSIM-ELAB-PARAM-001",
+            "too many positional parameter overrides for module '"
+                + source.name + "'",
+            overrides.empty() ? source.span : overrides.back().span});
+        result.valid = false;
+    }
+    std::size_t positional = 0;
+    for (const auto& parameter : source.parameters) {
+        std::optional<std::int64_t> value;
+        if (!parameter.local) {
+            if (saw_named) {
+                if (const auto found =
+                        named_overrides.find(parameter.name);
+                    found != named_overrides.end()) {
+                    value = found->second;
+                }
+            } else if (positional < positional_overrides.size()) {
+                value = positional_overrides[positional++];
+            }
+        }
+        if (!value) {
+            std::string error;
+            value = evaluate_constant_expression(
+                parameter.default_value, result.environment, error);
+            if (!value) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-PARAM-005",
+                    "cannot evaluate default for parameter '"
+                        + parameter.name + "': " + error,
+                    parameter.span});
+                result.valid = false;
+                value = 0;
+            }
+        }
+        result.environment[parameter.name] = *value;
+        result.values.emplace_back(
+            parameter.name, std::to_string(*value));
+    }
+
+    for (auto& parameter : result.unit.parameters) {
+        substitute_parameters(
+            parameter.type, result.environment, diagnostics);
+        substitute_parameters(
+            parameter.default_value, result.environment);
+    }
+    for (auto& port : result.unit.ports) {
+        substitute_parameters(port.type, result.environment, diagnostics);
+    }
+    for (auto& signal : result.unit.signals) {
+        substitute_parameters(signal.type, result.environment, diagnostics);
+    }
+    substitute_parameters(
+        result.unit.concurrent_statements,
+        result.environment,
+        diagnostics);
+    for (auto& process : result.unit.processes) {
+        for (auto& variable : process.variables) {
+            substitute_parameters(
+                variable, result.environment, diagnostics);
+        }
+        substitute_parameters(
+            process.statements, result.environment, diagnostics);
+    }
+    for (auto& instance : result.unit.instances) {
+        for (auto& override : instance.parameter_overrides) {
+            substitute_parameters(override.value, result.environment);
+        }
+        for (auto& connection : instance.connections) {
+            substitute_parameters(connection.value, result.environment);
+        }
+    }
+    return result;
 }
 
 } // namespace
@@ -2453,7 +3046,14 @@ public:
     }
 
     void build(const DesignUnit& root) {
-        instantiate(root, design_.top_, {});
+        auto specialized = specialize_unit(
+            root, {}, {}, diagnostics_);
+        instantiate(
+            specialized.unit,
+            design_.top_,
+            {},
+            std::move(specialized.environment),
+            std::move(specialized.values));
         finish();
     }
 
@@ -3537,8 +4137,14 @@ private:
             }
             auto child_aliases = connect_foreign_child(
                 child, *selected, child_path, objects);
+            auto specialized = specialize_unit(
+                *selected, {}, {}, diagnostics_);
             instantiate(
-                *selected, child_path, std::move(child_aliases));
+                specialized.unit,
+                child_path,
+                std::move(child_aliases),
+                std::move(specialized.environment),
+                std::move(specialized.values));
         }
         stack_.pop_back();
     }
@@ -3546,7 +4152,10 @@ private:
     void instantiate(
         const DesignUnit& unit,
         const std::string& path,
-        SignalMap aliases) {
+        SignalMap aliases,
+        ConstantEnvironment parameter_environment,
+        std::vector<std::pair<std::string, std::string>>
+            parameter_values) {
         if (!instance_paths_.insert(path).second) {
             report(
                 "FSIM-ELAB-HIER-001",
@@ -3601,6 +4210,7 @@ private:
         specialization.library =
             unit.library.empty() ? "work" : unit.library;
         specialization.is_cell = unit.is_cell;
+        specialization.parameter_values = std::move(parameter_values);
 
         Lowerer lowerer{design_, local, diagnostics_};
         for (std::size_t index = 0;
@@ -3628,6 +4238,14 @@ private:
                 const auto target = parse_target(binding->target);
                 if (target
                     && target->language == "systemc") {
+                    if (!instance.parameter_overrides.empty()) {
+                        report(
+                            "FSIM-ELAB-PARAM-001",
+                            "Verilog parameter overrides cannot target a "
+                            "SystemC factory",
+                            instance.parameter_overrides.front().span);
+                        continue;
+                    }
                     const auto* description =
                         systemc_description(
                             child_path,
@@ -3656,14 +4274,24 @@ private:
             if (target == nullptr) {
                 continue;
             }
+            auto child_specialized = specialize_unit(
+                *target,
+                instance.parameter_overrides,
+                parameter_environment,
+                diagnostics_);
             auto child_aliases = connect_instance(
                 instance,
-                *target,
+                child_specialized.unit,
                 child_path,
                 local,
                 binding,
                 target->language != unit.language);
-            instantiate(*target, child_path, std::move(child_aliases));
+            instantiate(
+                child_specialized.unit,
+                child_path,
+                std::move(child_aliases),
+                std::move(child_specialized.environment),
+                std::move(child_specialized.values));
         }
         stack_.pop_back();
     }

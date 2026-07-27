@@ -128,8 +128,8 @@ directions.
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
 particular, complete semantic analysis, general mixed-boundary conversions and
-multi-driver resolution, parameter/generic specialization identity beyond the
-current instance-specific records, complete scoped/local type coverage and call
+multi-driver resolution, VHDL generic specialization and complete
+SystemVerilog parameter typing, complete scoped/local type coverage and call
 safe points, broader interpreter/JIT differential coverage, remaining SystemC
 kernel behavior, fractional-delay and declaration-based time semantics,
 IEEE VHDL packages, complete HDL event controls, and most testbench features

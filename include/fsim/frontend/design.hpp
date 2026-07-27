@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::frontend {
@@ -43,23 +44,6 @@ struct PackedRange {
   [[nodiscard]] std::uint64_t width() const noexcept;
 };
 
-struct Type {
-  ValueDomain domain{ValueDomain::Unknown};
-  std::string spelling;
-  std::optional<PackedRange> packed_range;
-  bool is_signed{};
-
-  [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
-};
-
-struct SignalDeclaration {
-  std::string name;
-  Type type;
-  PortDirection direction{PortDirection::Unknown};
-  bool is_port{};
-  SourceSpan span;
-};
-
 enum class ExpressionKind {
   Invalid,
   Identifier,
@@ -75,8 +59,9 @@ enum class ExpressionKind {
   Concatenation,
 };
 
-// `text` contains the identifier/literal/operator/callee. Operands retain source
-// order, so this compact tree can be lowered without language-specific nodes.
+// `text` contains the identifier/literal/operator/callee. Operands retain
+// source order, so this compact tree can be lowered without
+// language-specific nodes.
 struct Expression {
   ExpressionKind kind{ExpressionKind::Invalid};
   std::string text;
@@ -86,6 +71,45 @@ struct Expression {
   [[nodiscard]] bool valid() const noexcept {
     return kind != ExpressionKind::Invalid;
   }
+};
+
+struct PackedRangeExpression {
+  Expression left;
+  Expression right;
+  SourceSpan span;
+};
+
+struct Type {
+  ValueDomain domain{ValueDomain::Unknown};
+  std::string spelling;
+  std::optional<PackedRange> packed_range;
+  bool is_signed{};
+  // Retained until elaboration even when packed_range is already known, so a
+  // parameterized unit can be specialized independently at every instance.
+  std::optional<PackedRangeExpression> packed_range_expression;
+
+  Type() = default;
+  Type(
+      ValueDomain domain_value,
+      std::string spelling_value,
+      std::optional<PackedRange> range_value,
+      bool signed_value,
+      std::optional<PackedRangeExpression> range_expression = {})
+      : domain(domain_value),
+        spelling(std::move(spelling_value)),
+        packed_range(std::move(range_value)),
+        is_signed(signed_value),
+        packed_range_expression(std::move(range_expression)) {}
+
+  [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
+};
+
+struct SignalDeclaration {
+  std::string name;
+  Type type;
+  PortDirection direction{PortDirection::Unknown};
+  bool is_port{};
+  SourceSpan span;
 };
 
 struct VariableDeclaration {
@@ -102,6 +126,21 @@ struct PortConnection {
   SourceSpan span;
 };
 
+struct ParameterDeclaration {
+  std::string name;
+  Type type;
+  Expression default_value;
+  bool local{};
+  SourceSpan span;
+};
+
+struct ParameterOverride {
+  // Empty for a positional override.
+  std::optional<std::string> name;
+  Expression value;
+  SourceSpan span;
+};
+
 enum class VerilogUnconnectedDrive {
   None,
   Pull0,
@@ -113,6 +152,7 @@ struct Instance {
   // cross-language manifest binding overrides it.
   std::string unit_name;
   std::string name;
+  std::vector<ParameterOverride> parameter_overrides;
   std::vector<PortConnection> connections;
   // Compilation-directive state at the instance declaration. Pull values
   // apply only to omitted input ports.
@@ -247,6 +287,7 @@ struct DesignUnit {
   // declarations and semantic visibility resolution are not part of the
   // current frontend slice.
   std::vector<VhdlContextItem> vhdl_context;
+  std::vector<ParameterDeclaration> parameters;
   std::vector<SignalDeclaration> ports;
   std::vector<SignalDeclaration> signals;
   std::vector<Statement> concurrent_statements;

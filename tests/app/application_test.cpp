@@ -613,6 +613,39 @@ endmodule
       };
   write_provenance_source("top revision 1");
   write_unused_source("unused revision 1");
+  const auto parameter_child_source =
+      directory / "parameter_child.sv";
+  {
+    std::ofstream output(parameter_child_source);
+    output << R"(
+module parameter_child #(
+  parameter WIDTH = 1,
+  parameter VALUE = 1,
+  localparam LAST = WIDTH - 1
+) (
+  output logic [LAST:0] q
+);
+  initial q = VALUE;
+endmodule
+)";
+  }
+  const auto parameter_top_source =
+      directory / "parameter_top.sv";
+  const auto write_parameter_top =
+      [&](const std::uint64_t narrow_value) {
+        std::ofstream output(parameter_top_source);
+        output
+            << "module parameter_top;\n"
+            << "  logic [3:0] narrow;\n"
+            << "  logic [7:0] wide;\n"
+            << "  parameter_child #(.WIDTH(4), .VALUE("
+            << narrow_value
+            << ")) u_narrow(.q(narrow));\n"
+            << "  parameter_child #(8, 3) u_wide(.q(wide));\n"
+            << "  initial #1 $finish;\n"
+            << "endmodule\n";
+      };
+  write_parameter_top(2);
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -3933,6 +3966,159 @@ end architecture rtl;
   assert(provenance_changed_standard.simulation.native_cache.hits == 0);
   assert(provenance_changed_standard.simulation.native_cache.misses == 1);
   assert(provenance_changed_standard.simulation.native_cache.stores == 1);
+#endif
+
+  auto parameter_config = config;
+  parameter_config.project.name = "parameter-specialization-test";
+  parameter_config.project.top = "sv:work.parameter_top";
+  parameter_config.build.optimization =
+      fsim::project::Optimization::o2;
+  parameter_config.build.cache_path =
+      directory / "parameter-specialization-cache";
+  parameter_config.source_sets.clear();
+  fsim::project::SourceSet parameter_sources;
+  parameter_sources.language =
+      fsim::project::Language::system_verilog;
+  parameter_sources.standard = "2017";
+  parameter_sources.library = "work";
+  parameter_sources.compilation_unit = "file";
+  parameter_sources.files = {
+      parameter_child_source,
+      parameter_top_source,
+  };
+  parameter_config.source_sets.push_back(
+      std::move(parameter_sources));
+  struct ParameterRun {
+    std::vector<std::pair<std::string, std::string>> keys;
+    CapturedSimulation simulation;
+  };
+  const auto run_parameter_specializations =
+      [&](const fsim::app::SimulationEngine engine,
+          const std::string_view narrow_value) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            parameter_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 3);
+        assert(project->specialization_cache_keys.size() == 3);
+        ParameterRun result;
+        for (std::size_t index = 0;
+             index < project->design.specializations().size();
+             ++index) {
+          const auto& specialization =
+              project->design.specializations()[index];
+          result.keys.emplace_back(
+              specialization.instance,
+              project->specialization_cache_keys[index]);
+          if (specialization.instance
+              == "parameter_top.u_narrow") {
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"WIDTH", "4"},
+                    {"VALUE", std::string{narrow_value}},
+                    {"LAST", "3"}}));
+          } else if (
+              specialization.instance
+              == "parameter_top.u_wide") {
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"WIDTH", "8"},
+                    {"VALUE", "3"},
+                    {"LAST", "7"}}));
+          }
+        }
+        result.simulation =
+            capture_simulation(std::move(*project), engine);
+        return result;
+      };
+  const auto key_for_instance =
+      [](const ParameterRun& run,
+         const std::string_view instance) -> const std::string& {
+        const auto found = std::find_if(
+            run.keys.begin(),
+            run.keys.end(),
+            [&](const auto& entry) {
+              return entry.first == instance;
+            });
+        assert(found != run.keys.end());
+        return found->second;
+      };
+
+  const auto parameter_reference =
+      run_parameter_specializations(
+          fsim::app::SimulationEngine::interpreter, "2");
+  const auto parameter_cold =
+      run_parameter_specializations(
+          fsim::app::SimulationEngine::compiled, "2");
+  compare_captures(
+      parameter_reference.simulation,
+      parameter_cold.simulation);
+  assert((
+      parameter_cold.simulation.final_values
+      == std::vector<std::string>{"0010", "00000011"}));
+  assert(parameter_cold.simulation.process_count == 3);
+  assert(
+      key_for_instance(
+          parameter_cold, "parameter_top.u_narrow")
+      != key_for_instance(
+          parameter_cold, "parameter_top.u_wide"));
+#if defined(FSIM_HAS_LLVM)
+  assert(parameter_cold.simulation.compiled_processes == 3);
+  assert(parameter_cold.simulation.compiled_modules == 3);
+  assert(parameter_cold.simulation.native_cache.hits == 0);
+  assert(parameter_cold.simulation.native_cache.misses == 3);
+  assert(parameter_cold.simulation.native_cache.stores == 3);
+#endif
+
+  const auto parameter_warm =
+      run_parameter_specializations(
+          fsim::app::SimulationEngine::compiled, "2");
+  assert(parameter_warm.keys == parameter_cold.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(parameter_warm.simulation.native_cache.hits == 3);
+  assert(parameter_warm.simulation.native_cache.misses == 0);
+#endif
+
+  write_parameter_top(5);
+  const auto parameter_changed_reference =
+      run_parameter_specializations(
+          fsim::app::SimulationEngine::interpreter, "5");
+  const auto parameter_changed =
+      run_parameter_specializations(
+          fsim::app::SimulationEngine::compiled, "5");
+  compare_captures(
+      parameter_changed_reference.simulation,
+      parameter_changed.simulation);
+  assert((
+      parameter_changed.simulation.final_values
+      == std::vector<std::string>{"0101", "00000011"}));
+  assert(
+      key_for_instance(
+          parameter_changed, "parameter_top")
+      != key_for_instance(
+          parameter_cold, "parameter_top"));
+  assert(
+      key_for_instance(
+          parameter_changed, "parameter_top.u_narrow")
+      != key_for_instance(
+          parameter_cold, "parameter_top.u_narrow"));
+  assert(
+      key_for_instance(
+          parameter_changed, "parameter_top.u_wide")
+      == key_for_instance(
+          parameter_cold, "parameter_top.u_wide"));
+#if defined(FSIM_HAS_LLVM)
+  assert(parameter_changed.simulation.native_cache.hits == 1);
+  assert(parameter_changed.simulation.native_cache.misses == 2);
+  assert(parameter_changed.simulation.native_cache.stores == 2);
 #endif
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit

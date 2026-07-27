@@ -198,7 +198,6 @@ therefore excluded.
 | `FSIM-SV-PARSE-004` | error | Expected `endmodule`. |
 | `FSIM-SV-PARSE-005` | error | Expected `:` in a packed range. |
 | `FSIM-SV-PARSE-006` | error | Expected `]` after a packed range. |
-| `FSIM-SV-PARSE-007` | error | Expected an integer literal in a signed decimal bound. |
 | `FSIM-SV-PARSE-008` | error | Expected `;` after a declaration. |
 | `FSIM-SV-PARSE-009` | error | Expected a continuous-assignment target. |
 | `FSIM-SV-PARSE-010` | error | Expected `=` in a continuous assignment. |
@@ -241,6 +240,15 @@ therefore excluded.
 | `FSIM-SV-PARSE-047` | error | Expected `)` after a `case` selector expression. |
 | `FSIM-SV-PARSE-048` | error | Expected `:` after a `case` item. |
 | `FSIM-SV-PARSE-049` | error | Expected `endcase`. |
+| `FSIM-SV-PARSE-050` | error | A value parameter has no default constant expression. |
+| `FSIM-SV-PARSE-051` | error | Expected `;` after a body parameter declaration. |
+| `FSIM-SV-PARSE-052` | error | Expected `(` after a module parameter `#`. |
+| `FSIM-SV-PARSE-053` | error | A module parameter-port item does not begin with `parameter` or `localparam`. |
+| `FSIM-SV-PARSE-054` | error | Expected `)` after a module parameter-port list. |
+| `FSIM-SV-PARSE-055` | error | Expected `(` after an instance parameter `#`. |
+| `FSIM-SV-PARSE-056` | error | Expected `(` after a named parameter override. |
+| `FSIM-SV-PARSE-057` | error | Expected `)` after a named parameter override. |
+| `FSIM-SV-PARSE-058` | error | Expected `)` after instance parameter overrides. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -254,7 +262,6 @@ therefore excluded.
 | `FSIM-VERILOG-SEM-001` | error | `always_ff` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-002` | error | `always_comb` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-003` | error | `always_latch` was used in Verilog-2005 rather than SystemVerilog. |
-| `FSIM-SV-SEM-001` | error | A packed range bound is not a supported decimal integer literal. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal integer literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |
@@ -270,9 +277,12 @@ therefore excluded.
 | `FSIM-SV-SEM-014` | error | A `case` statement contains more than one `default` item. |
 | `FSIM-SV-SEM-015` | error | An undeclared implicit net is forbidden by `` `default_nettype none``. |
 | `FSIM-SV-SEM-016` | error | An untyped ANSI or non-ANSI port is forbidden by `` `default_nettype none``. |
+| `FSIM-SV-SEM-017` | error | A parameter name is declared more than once in a module. |
+| `FSIM-SV-SEM-018` | error | A named parameter override is repeated on one instance. |
+| `FSIM-SV-SEM-019` | error | Named and positional parameter overrides are mixed on one instance. |
+| `FSIM-SV-SEM-020` | error | A parameter conflicts with a port or signal declaration in the same module namespace. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
-| `FSIM-SV-UNSUPPORTED-003` | error | Parameter port lists are not implemented. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
 | `FSIM-SV-UNSUPPORTED-005` | error | A named port connection was used where a module-header declaration is required. |
 | `FSIM-SV-UNSUPPORTED-006` | error | Unpacked port dimensions are not implemented. |
@@ -287,6 +297,8 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-016` | error | `casez` or `casex` requires unsupported wildcard matching. |
 | `FSIM-SV-UNSUPPORTED-017` | error | A `case` statement uses an unsupported `unique`, `unique0`, or `priority` qualifier. |
 | `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
+| `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
+| `FSIM-SV-UNSUPPORTED-020` | error | A parameter data type is outside the supported integral subset. |
 
 ## Elaboration and SimIR lowering
 
@@ -338,6 +350,13 @@ therefore excluded.
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
+| `FSIM-ELAB-PARAM-001` | error | A parameter override has an unknown/local target, has too many positional values, crosses into a non-Verilog target, or is applied to a SystemC factory. |
+| `FSIM-ELAB-PARAM-002` | error | A parameter override is duplicated during elaboration. |
+| `FSIM-ELAB-PARAM-003` | error | Named and positional parameter overrides are mixed during elaboration. |
+| `FSIM-ELAB-PARAM-004` | error | A parameter override constant expression cannot be evaluated. |
+| `FSIM-ELAB-PARAM-005` | error | A parameter default constant expression cannot be evaluated. |
+| `FSIM-ELAB-PARAM-006` | error | A parameterized packed range cannot be evaluated. |
+| `FSIM-ELAB-PARAM-007` | error | A parameterized packed range width overflows the supported range. |
 | `FSIM-ELAB-TYPE-001` | error | A signal type cannot be represented by the packed runtime. |
 
 ### Bindings and mixed-language boundaries

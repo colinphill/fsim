@@ -36,6 +36,12 @@ interfaces or test scaffolding exist.
   simulation-boundary shortcut. It may register typed factories and foreign
   child placeholders during elaboration, but cannot create HDL hierarchy after
   simulation starts.
+- Construction-time generic/parameter actuals must work across a SystemC
+  boundary in both directions. HDL overrides/generic maps will be validated
+  against a typed factory schema, while `hdl_instance` will supply canonical
+  actuals for an HDL child through an append-only C ABI extension. These values
+  become ordinary specialization/cache identity; they are never mutable
+  runtime configuration.
 - Cross-language selection remains explicit through `fsim.toml`; fsim never
   guesses a SystemC, VHDL, or Verilog/SystemVerilog target by name.
 
@@ -69,6 +75,9 @@ The following foundation is implemented:
 - dense bounded specialization records and one LLVM module/native cache object
   per specialization's eligible process group, with per-process interpreter
   fallback;
+- ordered Verilog/SystemVerilog integral value parameters and localparams,
+  named/positional overrides, dependent constant evaluation, parameterized
+  packed ranges, and canonical per-instance specialization values;
 - a persistent LLVM native-object cache selected beneath the configured
   application cache, with application-visible cold/warm telemetry and
   identity for scheduled-write kind/delay and wait kind, operands, widths, and
@@ -310,9 +319,9 @@ Remaining before the architecture gate passes:
 - extend the bounded mixed-language differential to O0 and mixed-language
   assertion failures, broaden normalized trace coverage across semantic
   fixtures, and validate it on LLVM 22.1.8 Windows; and
-- complete actual generic/parameter values once those frontend features
-  exist; transitive Verilog/SystemVerilog include-content provenance is now
-  part of both analysis and specialization cache identity.
+- complete VHDL generics and the remaining SystemVerilog parameter type/sizing
+  rules; bounded integral SystemVerilog values already participate in both
+  analysis and per-specialization native-cache identity.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
 
@@ -322,7 +331,8 @@ Early groundwork:
 - VHDL entity/architecture/port/signal/process nodes and represented
   library/use/context-reference clauses;
 - SV modules, common declarations, simple hierarchy, basic procedural and
-  continuous statements, and bounded `` `timescale`` handling;
+  continuous statements, bounded integral parameter specialization, and
+  bounded `` `timescale`` handling;
 - domain, width, signedness, duplicate-declaration, driver, and binding checks;
   and
 - a checked-in feature matrix with positive, negative, elaboration, and
@@ -466,15 +476,16 @@ Remaining before v1 release:
 The next development iterations should occur in this order:
 
 1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   call instrumentation and complete scoped locals, complete actual
-   generic/parameter cache identity, and broaden the
+   call instrumentation and complete scoped locals, add VHDL generic and
+   remaining SystemVerilog parameter semantics, and broaden the
    interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.
 3. **Expand synthesizable coverage:** packages/parameters/generics, generates,
    full types and expressions, drivers, and resolution.
 4. **Complete mixed-language semantics:** ordinal vector mapping, state-domain
-   conversions, explicit resolvers, and delay/delta/NBA matrices.
+   conversions, explicit resolvers, construction-parameter transfer in both
+   SystemC hierarchy directions, and delay/delta/NBA matrices.
 5. **Implement procedural testbenches and the SystemC kernel:** dynamic data,
    files/random/events, factories, channels, methods, and fibers.
 6. **Complete visibility:** source-level debugger behavior, trace selection,
