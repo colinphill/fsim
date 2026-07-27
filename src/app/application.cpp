@@ -368,6 +368,25 @@ extern "C" void handle_interrupt(int) {
   interrupt_requested.store(true, std::memory_order_relaxed);
 }
 
+class InterruptSignalGuard final {
+ public:
+  InterruptSignalGuard() noexcept
+      : previous_(std::signal(SIGINT, handle_interrupt)) {}
+
+  ~InterruptSignalGuard() {
+    if (previous_ != SIG_ERR) {
+      (void)std::signal(SIGINT, previous_);
+    }
+  }
+
+  InterruptSignalGuard(const InterruptSignalGuard&) = delete;
+  InterruptSignalGuard& operator=(const InterruptSignalGuard&) = delete;
+
+ private:
+  using Handler = void (*)(int);
+  Handler previous_{SIG_ERR};
+};
+
 diagnostic::SourcePosition position(const frontend::SourceLocation& source) {
   const auto clamp = [](const std::size_t value) {
     return static_cast<std::uint32_t>(
@@ -1209,7 +1228,7 @@ int handle_run(
     return 1;
   }
   install_interrupt_hook(simulation);
-  std::signal(SIGINT, handle_interrupt);
+  const InterruptSignalGuard interrupt_signal;
   try {
     const auto result = simulation.run(duration);
     if (trace) {
@@ -2218,7 +2237,7 @@ int handle_debug(
     return 1;
   }
   install_interrupt_hook(simulation);
-  std::signal(SIGINT, handle_interrupt);
+  const InterruptSignalGuard interrupt_signal;
   simulation.start();
   output << "fsim debugger: " << simulation.design().top();
   if (simulation.compiled_process_count() == 0) {

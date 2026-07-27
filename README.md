@@ -175,7 +175,9 @@ configured, `trace add`, `trace remove`, `trace all`, `trace clear`, and
 `trace list` change the live committed-value selection. Call instrumentation
 and locals remain future work. A design `$finish` is terminal for that
 simulation; a debugger or Ctrl-C stop remains resumable, while a fatal runtime
-error poisons the simulation and prevents further execution.
+error poisons the simulation and prevents further execution. The CLI installs
+its SIGINT handler only for the active run/debug command and restores the
+host's previous handler on exit.
 
 The native C session API also exposes tested statement/process/delta/time
 stepping and an asynchronous stop request that may be issued from a synchronous

@@ -287,7 +287,11 @@ Run-mode VCD continues to declare only manifest-selected signals. A design
 `$finish` marks the simulation finished, an external stop may be resumed, and a
 fatal runtime exception poisons the simulation so later execution commands are
 refused. Ctrl-C only sets an atomic stop request; the simulation thread observes
-it at a safe point. Locals and complete Ctrl-C tests remain planned.
+it at a safe point. The command-scoped signal-handler guard restores the host's
+previous handler on every exit path. Tests raise SIGINT through the real handler
+and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
+to terminal completion, and restore a preinstalled handler. Debug locals remain
+planned.
 
 ## Platform boundary
 

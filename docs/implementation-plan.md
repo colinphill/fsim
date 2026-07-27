@@ -78,6 +78,9 @@ The following foundation is implemented:
   C safe-point callbacks;
 - exact-state conditional signal breakpoints and live add/remove/all/clear/list
   selection for configured debug VCD output;
+- command-scoped SIGINT handler installation/restoration and real-handler
+  interpreter/O0 tests proving safe-point stop at tick 0 and resumable
+  completion;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
 - a stable catalog covering 248 current production diagnostic codes.
@@ -278,7 +281,7 @@ Planned implementation sequence:
    notification in the common scheduler.
 5. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
-6. Add debug locals, call safe points, and complete Ctrl-C testing.
+6. Add debug locals and call safe points.
 7. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
    process, severity, source location, and message.

@@ -5,6 +5,7 @@
 #include <cassert>
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -16,6 +17,33 @@
 #include <system_error>
 #include <tuple>
 #include <vector>
+
+namespace {
+
+volatile std::sig_atomic_t restored_interrupt_count = 0;
+
+extern "C" void record_restored_interrupt(int) {
+  restored_interrupt_count = 1;
+}
+
+class InterruptingOutputBuffer final : public std::stringbuf {
+ protected:
+  std::streamsize xsputn(
+      const char* value,
+      const std::streamsize count) override {
+    const auto written = std::stringbuf::xsputn(value, count);
+    if (!raised_ && str().find("(fsim) ") != std::string::npos) {
+      raised_ = true;
+      (void)std::raise(SIGINT);
+    }
+    return written;
+  }
+
+ private:
+  bool raised_{};
+};
+
+}  // namespace
 
 int main() {
   const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -1185,6 +1213,43 @@ trace_filters = ["__none__"]
   assert(
       debug_vcd.find("\n1" + q_identifier + "\n")
       == std::string::npos);
+
+  restored_interrupt_count = 0;
+  const auto previous_interrupt_handler =
+      std::signal(SIGINT, record_restored_interrupt);
+  assert(previous_interrupt_handler != SIG_ERR);
+  std::istringstream interrupted_cli_input{
+      "continue\n"
+      "continue\n"
+      "quit\n"};
+  InterruptingOutputBuffer interrupted_output_buffer;
+  std::ostream interrupted_cli_output{&interrupted_output_buffer};
+  std::ostringstream interrupted_cli_error;
+  auto interrupted_services =
+      fsim::app::make_cli_services(interrupted_cli_input);
+  assert(
+      fsim::cli::run(
+          static_cast<int>(arguments.size()),
+          arguments.data(),
+          interrupted_services,
+          interrupted_cli_output,
+          interrupted_cli_error)
+      == 0);
+  assert(interrupted_cli_error.str().empty());
+  const auto interrupted_transcript =
+      interrupted_output_buffer.str();
+  assert(
+      interrupted_transcript.find("process ")
+      != std::string::npos);
+  assert(
+      interrupted_transcript.find("stopped at time 0")
+      != std::string::npos);
+  assert(
+      interrupted_transcript.find("simulation finished at time 3")
+      != std::string::npos);
+  (void)std::raise(SIGINT);
+  assert(restored_interrupt_count == 1);
+  assert(std::signal(SIGINT, previous_interrupt_handler) != SIG_ERR);
 
   const auto differently_named = directory / "different_filename.sv";
   {
