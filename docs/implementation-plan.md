@@ -89,11 +89,12 @@ The following foundation is implemented:
   resumable `WaitFor`/`WaitOn`, with interpreter/O2 timing and filtered-wakeup
   differentials;
 - deterministic simple-expression dependency inference for `always @*` and
-  time-zero `always_comb`, with a three-process interpreter/O2 delta
+  time-zero `always_comb`/`always_latch`, plus dynamic `@*`, with a
+  four-process interpreter/O2 delta
   differential;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 272 current production diagnostic codes.
+- a stable catalog covering 273 current production diagnostic codes.
 
 Current Linux validation:
 
@@ -268,7 +269,8 @@ Completed groundwork:
   and bounded LLVM compiled subset;
 - bounded VHDL timed/any-change waits with implicit process repetition and
   SystemVerilog any-change/scalar-edge procedural event controls;
-- inferred wildcard sensitivities for bounded `always @*` and `always_comb`;
+- inferred wildcard sensitivities for bounded `always @*`, `always_comb`,
+  `always_latch`, and dynamic `@*`;
 - deterministic project seed handling;
 - scope/signal navigation, source/time/signal-change breakpoints including
   exact-state signal conditions, all four step modes, live debug-trace

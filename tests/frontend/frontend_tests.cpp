@@ -768,24 +768,29 @@ end architecture;
               }),
       "nested VHDL wait diagnostic");
 
-  const auto invalid_sv = parse_text(
-      "bad_event.sv",
+  const auto wildcard_sv = parse_text(
+      "wildcard_event.sv",
       R"(
-module bad_event;
+module wildcard_event;
   logic trigger;
-  initial @*;
+  logic observed;
+  initial @* observed = trigger;
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      !invalid_sv.ok()
-          && std::any_of(
-              invalid_sv.diagnostics.begin(),
-              invalid_sv.diagnostics.end(),
-              [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-UNSUPPORTED-017";
-              }),
-      "wildcard procedural event diagnostic");
+      wildcard_sv.ok(),
+      "dynamic wildcard procedural event must parse");
+  const auto& wildcard_wait =
+      wildcard_sv.design.units.front()
+          .processes.front()
+          .statements.front();
+  require(
+      wildcard_wait.kind == StatementKind::WaitOn
+          && wildcard_wait.sensitivities.size() == 1
+          && wildcard_wait.sensitivities.front().signal == "*"
+          && wildcard_wait.statements.size() == 1,
+      "dynamic wildcard event metadata");
 }
 
 void test_wildcard_and_always_comb_processes() {
@@ -796,8 +801,10 @@ module combinational;
   logic a;
   logic q;
   logic y;
+  logic latch_q;
   always @* q = a;
   always_comb y = ~q;
+  always_latch if (a) latch_q = q;
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -806,14 +813,18 @@ endmodule
       "wildcard always and bounded always_comb must parse");
   const auto& processes = result.design.units.front().processes;
   require(
-      processes.size() == 2
+      processes.size() == 3
           && processes[0].kind == ProcessKind::VerilogAlways
           && processes[0].sensitivities.size() == 1
           && processes[0].sensitivities.front().signal == "*"
           && processes[1].kind
               == ProcessKind::SystemVerilogAlwaysComb
           && processes[1].sensitivities.size() == 1
-          && processes[1].sensitivities.front().signal == "*",
+          && processes[1].sensitivities.front().signal == "*"
+          && processes[2].kind
+              == ProcessKind::SystemVerilogAlwaysLatch
+          && processes[2].sensitivities.size() == 1
+          && processes[2].sensitivities.front().signal == "*",
       "wildcard process metadata");
 
   const auto invalid_system_verilog = parse_text(
@@ -849,6 +860,7 @@ endmodule
 module bad_comb;
   reg q;
   always_comb q = 1'b0;
+  always_latch q = 1'b0;
 endmodule
 )",
       Language::Verilog2005);
@@ -860,8 +872,15 @@ endmodule
               [](const Diagnostic& diagnostic) {
                 return diagnostic.code
                     == "FSIM-VERILOG-SEM-002";
+              })
+          && std::any_of(
+              invalid_verilog.diagnostics.begin(),
+              invalid_verilog.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-003";
               }),
-      "always_comb language-version diagnostic");
+      "always_comb/always_latch language-version diagnostics");
 }
 
 }  // namespace

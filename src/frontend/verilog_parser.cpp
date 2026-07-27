@@ -225,7 +225,7 @@ class VerilogParser final : private detail::ParserBase {
         }
       } else if (
           keyword("always") || keyword("always_ff")
-          || keyword("always_comb")) {
+          || keyword("always_comb") || keyword("always_latch")) {
         unit.processes.push_back(parse_always());
       } else if (keyword("initial")) {
         unit.processes.push_back(parse_initial());
@@ -647,6 +647,8 @@ class VerilogParser final : private detail::ParserBase {
       process.kind = ProcessKind::SystemVerilogAlwaysFF;
     } else if (start.text == "always_comb") {
       process.kind = ProcessKind::SystemVerilogAlwaysComb;
+    } else if (start.text == "always_latch") {
+      process.kind = ProcessKind::SystemVerilogAlwaysLatch;
     } else {
       process.kind = ProcessKind::VerilogAlways;
     }
@@ -660,13 +662,21 @@ class VerilogParser final : private detail::ParserBase {
       error(start, "FSIM-VERILOG-SEM-002",
             "always_comb requires SystemVerilog");
     }
-    if (process.kind == ProcessKind::SystemVerilogAlwaysComb) {
+    if (process.kind == ProcessKind::SystemVerilogAlwaysLatch
+        && language_ == Language::Verilog2005) {
+      error(start, "FSIM-VERILOG-SEM-003",
+            "always_latch requires SystemVerilog");
+    }
+    const bool implicit_sensitivity =
+        process.kind == ProcessKind::SystemVerilogAlwaysComb
+        || process.kind == ProcessKind::SystemVerilogAlwaysLatch;
+    if (implicit_sensitivity) {
       if (match(TokenKind::At)) {
         error(
             previous(),
             "FSIM-SV-SEM-011",
-            "always_comb supplies its own implicit sensitivity and cannot "
-            "have an explicit event control");
+            "always_comb/always_latch supplies its own implicit sensitivity "
+            "and cannot have an explicit event control");
         (void)parse_sensitivity();
       }
       process.sensitivities.push_back(
@@ -687,7 +697,7 @@ class VerilogParser final : private detail::ParserBase {
         process.statements.push_back(std::move(*body));
       }
     }
-    if (process.kind == ProcessKind::SystemVerilogAlwaysComb) {
+    if (implicit_sensitivity) {
       const auto inspect =
           [&](const auto& self,
               const std::vector<Statement>& statements,
@@ -720,14 +730,14 @@ class VerilogParser final : private detail::ParserBase {
         error(
             start,
             "FSIM-SV-SEM-012",
-            "always_comb cannot contain timing controls");
+            "always_comb/always_latch cannot contain timing controls");
       }
       if (has_nonblocking) {
         error(
             start,
             "FSIM-SV-SEM-013",
-            "always_comb assignments must be blocking in this executable "
-            "slice");
+            "always_comb/always_latch assignments must be blocking in this "
+            "executable slice");
       }
     }
     process.span = span_from(start, previous());
@@ -894,15 +904,6 @@ class VerilogParser final : private detail::ParserBase {
       Statement statement;
       statement.kind = StatementKind::WaitOn;
       statement.sensitivities = parse_sensitivity();
-      for (const auto& sensitivity : statement.sensitivities) {
-        if (sensitivity.signal == "*") {
-          error(
-              start,
-              "FSIM-SV-UNSUPPORTED-017",
-              "wildcard procedural event controls require expression "
-              "dependency analysis not implemented in this frontend slice");
-        }
-      }
       if (!match(TokenKind::Semicolon)) {
         if (auto controlled = parse_statement()) {
           statement.statements.push_back(std::move(*controlled));

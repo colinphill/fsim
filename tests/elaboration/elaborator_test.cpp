@@ -972,8 +972,10 @@ module wildcard;
   logic a;
   logic q;
   logic y;
+  logic latched;
   always @* q = a;
   always_comb y = ~q;
+  always_latch if (a) latched = q;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
@@ -982,14 +984,18 @@ endmodule
         fsim::elaboration::elaborate(
             wildcard_processes.design, "sv:work.wildcard");
     assert(elaborated_wildcard.ok());
-    assert(elaborated_wildcard.design->processes().size() == 2);
+    assert(elaborated_wildcard.design->processes().size() == 3);
     const auto wildcard_a =
         elaborated_wildcard.design->find_signal("a");
     const auto wildcard_q =
         elaborated_wildcard.design->find_signal("q");
     const auto wildcard_y =
         elaborated_wildcard.design->find_signal("y");
-    assert(wildcard_a && wildcard_q && wildcard_y);
+    const auto wildcard_latched =
+        elaborated_wildcard.design->find_signal("latched");
+    assert(
+        wildcard_a && wildcard_q && wildcard_y
+        && wildcard_latched);
     assert((
         elaborated_wildcard.design->processes()[0]
             .static_sensitivity
@@ -1000,6 +1006,14 @@ endmodule
         elaborated_wildcard.design->processes()[1]
             .static_sensitivity
         == std::vector<fsim::runtime::simir::Sensitivity>{
+            {*wildcard_q,
+             fsim::runtime::simir::EdgeKind::any}}));
+    assert((
+        elaborated_wildcard.design->processes()[2]
+            .static_sensitivity
+        == std::vector<fsim::runtime::simir::Sensitivity>{
+            {*wildcard_a,
+             fsim::runtime::simir::EdgeKind::any},
             {*wildcard_q,
              fsim::runtime::simir::EdgeKind::any}}));
     auto wildcard_interpreter =
@@ -1033,6 +1047,11 @@ endmodule
             ->signal_value(*wildcard_y)
             .to_msb_string()
         == "0");
+    assert(
+        wildcard_interpreter
+            ->signal_value(*wildcard_latched)
+            .to_msb_string()
+        == "1");
 
     const auto empty_wildcard = fsim::frontend::parse_text(
         "empty_wildcard.sv",
@@ -1050,6 +1069,74 @@ endmodule
     assert(!rejected_empty_wildcard.ok());
     assert(has_diagnostic(
         rejected_empty_wildcard, "FSIM-ELAB-061"));
+
+    const auto dynamic_wildcard = fsim::frontend::parse_text(
+        "dynamic_wildcard.sv",
+        R"(
+module dynamic_wildcard;
+  logic trigger;
+  logic observed;
+  initial @* observed = trigger;
+  initial begin
+    trigger = 1'b0;
+    #1 trigger = 1'b1;
+    #1 $finish;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_wildcard.ok());
+    const auto elaborated_dynamic_wildcard =
+        fsim::elaboration::elaborate(
+            dynamic_wildcard.design, "sv:work.dynamic_wildcard");
+    assert(elaborated_dynamic_wildcard.ok());
+    const auto& dynamic_wait_process =
+        elaborated_dynamic_wildcard.design->processes().front();
+    const auto dynamic_wait = std::find_if(
+        dynamic_wait_process.operations.begin(),
+        dynamic_wait_process.operations.end(),
+        [](const fsim::runtime::simir::Operation& operation) {
+          return std::holds_alternative<
+              fsim::runtime::simir::WaitOn>(operation);
+        });
+    assert(dynamic_wait != dynamic_wait_process.operations.end());
+    assert(
+        std::get<fsim::runtime::simir::WaitOn>(*dynamic_wait)
+            .signals.size()
+        == 1);
+    auto dynamic_wildcard_interpreter =
+        elaborated_dynamic_wildcard.design->create_interpreter();
+    const auto dynamic_observed =
+        elaborated_dynamic_wildcard.design->find_signal("observed");
+    assert(dynamic_observed);
+    const auto dynamic_wildcard_run =
+        dynamic_wildcard_interpreter->run();
+    assert(
+        dynamic_wildcard_run.status
+        == fsim::runtime::RunStatus::stopped);
+    assert(
+        dynamic_wildcard_interpreter
+            ->signal_value(*dynamic_observed)
+            .to_msb_string()
+        == "0");
+
+    const auto empty_dynamic_wildcard =
+        fsim::frontend::parse_text(
+            "empty_dynamic_wildcard.sv",
+            R"(
+module empty_dynamic_wildcard;
+  initial @*;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(empty_dynamic_wildcard.ok());
+    const auto rejected_empty_dynamic_wildcard =
+        fsim::elaboration::elaborate(
+            empty_dynamic_wildcard.design,
+            "sv:work.empty_dynamic_wildcard");
+    assert(!rejected_empty_dynamic_wildcard.ok());
+    assert(has_diagnostic(
+        rejected_empty_dynamic_wildcard, "FSIM-ELAB-062"));
 
     std::cout << "elaborator tests passed\n";
 }

@@ -206,6 +206,7 @@ therefore excluded.
 |---|---|---|
 | `FSIM-VERILOG-SEM-001` | error | `always_ff` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-002` | error | `always_comb` was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-003` | error | `always_latch` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-SV-SEM-001` | error | A packed range bound is not a supported decimal integer literal. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal integer literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
@@ -216,9 +217,9 @@ therefore excluded.
 | `FSIM-SV-SEM-008` | error | A `` `timescale`` value exceeds fsim's 64-bit time range. |
 | `FSIM-SV-SEM-009` | error | `` `timescale`` precision is coarser than its time unit. |
 | `FSIM-SV-SEM-010` | error | A delay overflows after applying the module `` `timescale``. |
-| `FSIM-SV-SEM-011` | error | An `always_comb` has an explicit event control. |
-| `FSIM-SV-SEM-012` | error | An `always_comb` contains a timing control. |
-| `FSIM-SV-SEM-013` | error | An `always_comb` contains a nonblocking assignment. |
+| `FSIM-SV-SEM-011` | error | An `always_comb` or `always_latch` has an explicit event control. |
+| `FSIM-SV-SEM-012` | error | An `always_comb` or `always_latch` contains a timing control. |
+| `FSIM-SV-SEM-013` | error | An `always_comb` or `always_latch` contains a nonblocking assignment. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A directive requires the unimplemented preprocessing stage. |
 | `FSIM-SV-UNSUPPORTED-003` | error | Parameter port lists are not implemented. |
@@ -234,7 +235,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-013` | error | `` `default_nettype`` is recognized but implicit-net legality is not implemented. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-015` | error | A nested procedural block declaration requires unsupported local-scope semantics. |
-| `FSIM-SV-UNSUPPORTED-017` | error | A dynamic procedural event control uses wildcard dependency inference. |
 
 ## Elaboration and SimIR lowering
 
@@ -275,6 +275,7 @@ therefore excluded.
 | `FSIM-ELAB-059` | error | A dynamic wait names an unknown signal. |
 | `FSIM-ELAB-060` | error | An edge-qualified dynamic wait names a nonscalar signal. |
 | `FSIM-ELAB-061` | error | A wildcard process has no readable signal dependency. |
+| `FSIM-ELAB-062` | error | A dynamic wildcard event control has no readable signal dependency. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

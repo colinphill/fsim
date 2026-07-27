@@ -180,6 +180,7 @@ enum class ProcessKind {
   VerilogAlways,
   SystemVerilogAlwaysFF,
   SystemVerilogAlwaysComb,
+  SystemVerilogAlwaysLatch,
   Initial,
 };
 

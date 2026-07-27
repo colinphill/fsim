@@ -289,6 +289,8 @@ public:
             && source.kind != ProcessKind::Initial
             && source.kind
                 != ProcessKind::SystemVerilogAlwaysComb
+            && source.kind
+                != ProcessKind::SystemVerilogAlwaysLatch
             && !process_.static_sensitivity.empty();
         const Statement* vhdl_edge_guard =
             language == frontend::Language::Vhdl2008
@@ -570,6 +572,31 @@ private:
             signals.reserve(statement.sensitivities.size());
             edges.reserve(statement.sensitivities.size());
             for (const auto& sensitivity : statement.sensitivities) {
+                if (sensitivity.signal == "*") {
+                    std::set<std::string> dependencies;
+                    collect_statement_identifiers(
+                        statement.statements, dependencies);
+                    for (const auto& dependency : dependencies) {
+                        if (locals_.contains(dependency)) {
+                            continue;
+                        }
+                        if (const auto found =
+                                signals_.find(dependency);
+                            found != signals_.end()) {
+                            signals.push_back(found->second);
+                            edges.push_back(
+                                runtime::simir::EdgeKind::any);
+                        }
+                    }
+                    if (dependencies.empty() || signals.empty()) {
+                        report(
+                            "FSIM-ELAB-062",
+                            "dynamic wildcard event control has no readable "
+                            "signal dependencies",
+                            sensitivity.span);
+                    }
+                    continue;
+                }
                 const auto found = signals_.find(sensitivity.signal);
                 if (found == signals_.end()) {
                     report(

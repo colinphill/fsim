@@ -146,8 +146,10 @@ module wildcard_app;
   logic a;
   logic q;
   logic y;
+  logic latched;
   always @* q = a;
   always_comb y = ~q;
+  always_latch if (a) latched = q;
   initial begin
     a = 1'b0;
     #1 a = 1'b1;
@@ -853,7 +855,12 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   const auto wildcard_y =
       wildcard_reference_project->design.find_signal(
           "wildcard_app.y");
-  assert(wildcard_a && wildcard_q && wildcard_y);
+  const auto wildcard_latched =
+      wildcard_reference_project->design.find_signal(
+          "wildcard_app.latched");
+  assert(
+      wildcard_a && wildcard_q && wildcard_y
+      && wildcard_latched);
   const auto wildcard_reference = capture_simulation(
       std::move(*wildcard_reference_project),
       fsim::app::SimulationEngine::interpreter);
@@ -865,9 +872,9 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       wildcard_hybrid.result.status
       == fsim::runtime::RunStatus::stopped);
   assert(wildcard_hybrid.result.time == 2);
-  assert(wildcard_hybrid.process_count == 3);
+  assert(wildcard_hybrid.process_count == 4);
 #if defined(FSIM_HAS_LLVM)
-  assert(wildcard_hybrid.compiled_processes == 3);
+  assert(wildcard_hybrid.compiled_processes == 4);
   assert(wildcard_hybrid.compiled_modules == 1);
 #endif
   const decltype(wildcard_reference.changes)
@@ -877,6 +884,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
           {*wildcard_y, "1", 0, 2},
           {*wildcard_a, "1", 1, 0},
           {*wildcard_q, "1", 1, 1},
+          {*wildcard_latched, "1", 1, 1},
           {*wildcard_y, "0", 1, 2},
       };
   assert(
@@ -887,7 +895,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       == expected_wildcard_changes);
   assert((
       wildcard_hybrid.final_values
-      == std::vector<std::string>{"1", "1", "0"}));
+      == std::vector<std::string>{"1", "1", "0", "1"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =
