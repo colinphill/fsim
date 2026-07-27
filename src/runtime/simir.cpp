@@ -143,6 +143,99 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return result;
 }
 
+[[nodiscard]] bool has_unknown(const PackedLogic4& value) {
+  for (std::size_t index = 0; index < value.width(); ++index) {
+    const auto bit = value.get(index);
+    if (bit == Logic4::x || bit == Logic4::z) {
+      return true;
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] bool is_zero(const PackedLogic4& value) {
+  for (std::size_t index = 0; index < value.width(); ++index) {
+    if (value.get(index) == Logic4::one) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] int compare_known_unsigned(
+    const PackedLogic4& lhs,
+    const PackedLogic4& rhs) {
+  for (std::size_t index = lhs.width(); index-- > 0;) {
+    if (lhs.get(index) == rhs.get(index)) {
+      continue;
+    }
+    return lhs.get(index) == Logic4::one ? 1 : -1;
+  }
+  return 0;
+}
+
+[[nodiscard]] PackedLogic4 subtract_known(
+    const PackedLogic4& lhs,
+    const PackedLogic4& rhs) {
+  PackedLogic4 result(lhs.width(), Logic4::zero);
+  bool borrow = false;
+  for (std::size_t index = 0; index < lhs.width(); ++index) {
+    const bool left = lhs.get(index) == Logic4::one;
+    const bool right = rhs.get(index) == Logic4::one;
+    result.set(
+        index,
+        (left != right) != borrow ? Logic4::one : Logic4::zero);
+    borrow = (!left && (right || borrow)) || (right && borrow);
+  }
+  return result;
+}
+
+[[nodiscard]] PackedLogic4 multiply_known(
+    const PackedLogic4& lhs,
+    const PackedLogic4& rhs) {
+  PackedLogic4 result(lhs.width(), Logic4::zero);
+  for (std::size_t rhs_bit = 0; rhs_bit < rhs.width(); ++rhs_bit) {
+    if (rhs.get(rhs_bit) != Logic4::one) {
+      continue;
+    }
+    bool carry = false;
+    for (std::size_t bit = rhs_bit; bit < result.width(); ++bit) {
+      const bool accumulated = result.get(bit) == Logic4::one;
+      const bool multiplicand =
+          lhs.get(bit - rhs_bit) == Logic4::one;
+      result.set(
+          bit,
+          (accumulated != multiplicand) != carry
+              ? Logic4::one
+              : Logic4::zero);
+      carry =
+          (accumulated && multiplicand)
+          || (carry && (accumulated || multiplicand));
+    }
+  }
+  return result;
+}
+
+[[nodiscard]] PackedLogic4 divide_known(
+    const PackedLogic4& dividend,
+    const PackedLogic4& divisor,
+    const bool return_remainder) {
+  PackedLogic4 quotient(dividend.width(), Logic4::zero);
+  PackedLogic4 remainder(dividend.width(), Logic4::zero);
+  for (std::size_t dividend_bit = dividend.width();
+       dividend_bit-- > 0;) {
+    for (std::size_t bit = remainder.width(); bit-- > 1;) {
+      remainder.set(bit, remainder.get(bit - 1));
+    }
+    remainder.set(0, dividend.get(dividend_bit));
+    if (compare_known_unsigned(remainder, divisor) >= 0) {
+      remainder = subtract_known(remainder, divisor);
+      quotient.set(dividend_bit, Logic4::one);
+    }
+  }
+  return return_remainder ? remainder : quotient;
+}
+
 [[nodiscard]] PackedLogic4 binary_value(BinaryOperator operation,
                                         const PackedLogic4 &lhs,
                                         const PackedLogic4 &rhs) {
@@ -221,6 +314,10 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     case BinaryOperator::bit_or:
     case BinaryOperator::bit_xor:
     case BinaryOperator::add_unsigned:
+    case BinaryOperator::subtract_unsigned:
+    case BinaryOperator::multiply_unsigned:
+    case BinaryOperator::divide_unsigned:
+    case BinaryOperator::modulo_unsigned:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
       break;
@@ -230,17 +327,40 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   }
 
   PackedLogic4 result(lhs.width(), Logic4::zero);
+  const bool arithmetic =
+      operation == BinaryOperator::add_unsigned
+      || operation == BinaryOperator::subtract_unsigned
+      || operation == BinaryOperator::multiply_unsigned
+      || operation == BinaryOperator::divide_unsigned
+      || operation == BinaryOperator::modulo_unsigned;
+  if (arithmetic && (has_unknown(lhs) || has_unknown(rhs))) {
+    return PackedLogic4(lhs.width(), Logic4::x);
+  }
   if (operation == BinaryOperator::add_unsigned) {
-    auto carry = Logic4::zero;
+    bool carry = false;
     for (std::size_t index = 0; index < lhs.width(); ++index) {
-      const auto left = lhs.get(index);
-      const auto right = rhs.get(index);
-      result.set(index,
-                 logic_xor(logic_xor(left, right), carry));
-      carry = logic_or(logic_and(left, right),
-                       logic_and(carry, logic_or(left, right)));
+      const bool left = lhs.get(index) == Logic4::one;
+      const bool right = rhs.get(index) == Logic4::one;
+      result.set(
+          index,
+          (left != right) != carry ? Logic4::one : Logic4::zero);
+      carry = (left && right) || (carry && (left || right));
     }
     return result;
+  }
+  if (operation == BinaryOperator::subtract_unsigned) {
+    return subtract_known(lhs, rhs);
+  }
+  if (operation == BinaryOperator::multiply_unsigned) {
+    return multiply_known(lhs, rhs);
+  }
+  if (operation == BinaryOperator::divide_unsigned
+      || operation == BinaryOperator::modulo_unsigned) {
+    if (is_zero(rhs)) {
+      return PackedLogic4(lhs.width(), Logic4::x);
+    }
+    return divide_known(
+        lhs, rhs, operation == BinaryOperator::modulo_unsigned);
   }
 
   for (std::size_t index = 0; index < lhs.width(); ++index) {
@@ -255,6 +375,10 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
       result.set(index, logic_xor(lhs.get(index), rhs.get(index)));
       break;
     case BinaryOperator::add_unsigned:
+    case BinaryOperator::subtract_unsigned:
+    case BinaryOperator::multiply_unsigned:
+    case BinaryOperator::divide_unsigned:
+    case BinaryOperator::modulo_unsigned:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
     case BinaryOperator::not_equal:

@@ -113,7 +113,8 @@ callbacks are not yet complete.
 SimIR processes are explicit state machines. The current operation set includes:
 
 - constant loads and signal reads;
-- unary not and typed binary bitwise, addition, and equality operations;
+- unary/logical/reduction operations plus typed bitwise, fixed-width
+  arithmetic, shift, conditional-select, and comparison operations;
 - blocking writes, update-phase writes, and delayed writes;
 - timed, dynamic-signal, and static-sensitivity waits;
 - next-delta yields;
@@ -175,6 +176,15 @@ four-state data independently of the shift-amount width. A known amount at
 least as large as the value width produces zero; any `X` or `Z` bit in the
 amount produces an all-`X` result. These rules are implemented identically in
 the interpreter and the LLVM single-word path.
+
+Fixed-width unsigned arithmetic supports addition, subtraction,
+multiplication, division, and remainder, with overflow truncated to the
+operand width. Any `X` or `Z` operand bit makes the complete arithmetic result
+unknown. Division and remainder by zero likewise produce an all-`X` result;
+the LLVM path selects a safe internal divisor before its native operation, so
+the generated code cannot execute LLVM's undefined integer divide-by-zero
+case. Unary plus preserves its operand and unary minus lowers to width-matched
+zero minus the operand.
 
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes

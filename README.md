@@ -51,6 +51,9 @@ The current tree contains:
 - SystemVerilog unary reductions and mixed-width logical shifts, including
   four-state reduction rules and deterministic unknown/oversized shift
   handling;
+- SystemVerilog unary `+/-` and fixed-width unsigned subtraction,
+  multiplication, division, and remainder with deterministic `X/Z` and
+  divide-by-zero semantics;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

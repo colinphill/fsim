@@ -1548,6 +1548,111 @@ endmodule
     run_reduction_shift(
         "Z001", "100", "0", "1", "X", "0000", "0000");
 
+    const auto arithmetic_process =
+        fsim::frontend::parse_text(
+            "arithmetic_process.sv",
+            R"(
+module arithmetic_process;
+  logic [7:0] lhs;
+  logic [7:0] rhs;
+  logic [7:0] difference;
+  logic [7:0] product;
+  logic [7:0] quotient;
+  logic [7:0] remainder;
+  logic [7:0] positive;
+  logic [7:0] negative;
+  always_comb begin
+    difference = lhs - rhs;
+    product = lhs * rhs;
+    quotient = lhs / rhs;
+    remainder = lhs % rhs;
+    positive = +lhs;
+    negative = -lhs;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(arithmetic_process.ok());
+    const auto elaborated_arithmetic =
+        fsim::elaboration::elaborate(
+            arithmetic_process.design,
+            "sv:work.arithmetic_process");
+    assert(elaborated_arithmetic.ok());
+    const auto arithmetic_lhs =
+        elaborated_arithmetic.design->find_signal("lhs");
+    const auto arithmetic_rhs =
+        elaborated_arithmetic.design->find_signal("rhs");
+    const std::array arithmetic_outputs{
+        elaborated_arithmetic.design->find_signal("difference"),
+        elaborated_arithmetic.design->find_signal("product"),
+        elaborated_arithmetic.design->find_signal("quotient"),
+        elaborated_arithmetic.design->find_signal("remainder"),
+        elaborated_arithmetic.design->find_signal("positive"),
+        elaborated_arithmetic.design->find_signal("negative")};
+    assert(arithmetic_lhs && arithmetic_rhs);
+    assert(std::ranges::all_of(
+        arithmetic_outputs,
+        [](const auto& signal) {
+          return signal.has_value();
+        }));
+    auto arithmetic_interpreter =
+        elaborated_arithmetic.design->create_interpreter();
+    const auto run_arithmetic =
+        [&](const std::string_view lhs,
+            const std::string_view rhs,
+            const std::array<std::string_view, 6>& expected) {
+          arithmetic_interpreter->deposit_signal(
+              *arithmetic_lhs,
+              fsim::runtime::PackedLogic4::from_msb_string(lhs));
+          arithmetic_interpreter->deposit_signal(
+              *arithmetic_rhs,
+              fsim::runtime::PackedLogic4::from_msb_string(rhs));
+          (void)arithmetic_interpreter->run();
+          for (std::size_t index = 0;
+               index < arithmetic_outputs.size(); ++index) {
+            assert(
+                arithmetic_interpreter
+                    ->signal_value(*arithmetic_outputs[index])
+                    .to_msb_string()
+                == expected[index]);
+          }
+        };
+    run_arithmetic(
+        "11001000",
+        "00000111",
+        {"11000001", "01111000", "00011100",
+         "00000100", "11001000", "00111000"});
+    run_arithmetic(
+        "10X01000",
+        "00000111",
+        {"XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
+         "XXXXXXXX", "10X01000", "XXXXXXXX"});
+    run_arithmetic(
+        "11001000",
+        "00000000",
+        {"11001000", "00000000", "XXXXXXXX",
+         "XXXXXXXX", "11001000", "00111000"});
+
+    const auto signed_arithmetic = fsim::frontend::parse_text(
+        "signed_arithmetic.sv",
+        R"(
+module signed_arithmetic;
+  logic signed [7:0] lhs;
+  logic signed [7:0] rhs;
+  logic signed [7:0] result;
+  always_comb result = lhs * rhs;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(signed_arithmetic.ok());
+    const auto rejected_signed_arithmetic =
+        fsim::elaboration::elaborate(
+            signed_arithmetic.design,
+            "sv:work.signed_arithmetic");
+    assert(!rejected_signed_arithmetic.ok());
+    assert(has_diagnostic(
+        rejected_signed_arithmetic, "FSIM-ELAB-067"));
+
     const auto empty_wildcard = fsim::frontend::parse_text(
         "empty_wildcard.sv",
         R"(

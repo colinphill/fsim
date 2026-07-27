@@ -1062,6 +1062,48 @@ endmodule
       "logical-shift expression nodes");
 }
 
+void test_systemverilog_arithmetic_expressions() {
+  const auto result = parse_text(
+      "arithmetic.sv",
+      R"(
+module arithmetic;
+  logic [7:0] lhs;
+  logic [7:0] rhs;
+  logic [7:0] result;
+  always_comb begin
+    result = +lhs;
+    result = -lhs;
+    result = lhs - rhs;
+    result = lhs * rhs;
+    result = lhs / rhs;
+    result = lhs % rhs;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(), "SystemVerilog arithmetic expressions must parse");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 6
+          && statements[0].value.kind == ExpressionKind::Unary
+          && statements[0].value.text == "+"
+          && statements[1].value.kind == ExpressionKind::Unary
+          && statements[1].value.text == "-",
+      "unary arithmetic expression nodes");
+  const std::array<std::string_view, 4> operators{
+      "-", "*", "/", "%"};
+  for (std::size_t index = 0; index < operators.size(); ++index) {
+    require(
+        statements[index + 2].value.kind
+                == ExpressionKind::Binary
+            && statements[index + 2].value.text
+                == operators[index],
+        "binary arithmetic expression node");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -1090,6 +1132,7 @@ int main() {
     test_systemverilog_case_statements();
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
+    test_systemverilog_arithmetic_expressions();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

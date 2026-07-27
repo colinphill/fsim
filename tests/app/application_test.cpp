@@ -281,6 +281,39 @@ module logical_app;
 endmodule
 )";
   }
+  const auto arithmetic_source = directory / "arithmetic.sv";
+  {
+    std::ofstream output(arithmetic_source);
+    output << R"(
+module arithmetic_app;
+  logic [7:0] lhs;
+  logic [7:0] rhs;
+  logic [7:0] difference;
+  logic [7:0] product;
+  logic [7:0] quotient;
+  logic [7:0] remainder;
+  logic [7:0] positive;
+  logic [7:0] negative;
+  always_comb begin
+    difference = lhs - rhs;
+    product = lhs * rhs;
+    quotient = lhs / rhs;
+    remainder = lhs % rhs;
+    positive = +lhs;
+    negative = -lhs;
+  end
+  initial begin
+    lhs = 8'b11001000;
+    rhs = 8'b00000111;
+    #1 lhs = 8'b10x01000;
+    #1 lhs = 8'b11001000;
+    rhs = 8'b00000000;
+    #1 rhs = 8'b00000111;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
   const auto partial_group_source = directory / "partial_group.sv";
   {
     std::ofstream output(partial_group_source);
@@ -1226,6 +1259,53 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       == std::vector<std::string>{
           "0010", "01", "001", "1", "1",
           "0", "1", "1", "0100", "0001"}));
+
+  auto arithmetic_config = config;
+  arithmetic_config.project.name = "arithmetic-expression-test";
+  arithmetic_config.project.top = "sv:work.arithmetic_app";
+  arithmetic_config.build.optimization =
+      fsim::project::Optimization::o2;
+  arithmetic_config.build.cache_path =
+      directory / "arithmetic-cache";
+  arithmetic_config.source_sets.clear();
+  fsim::project::SourceSet arithmetic_sources;
+  arithmetic_sources.language =
+      fsim::project::Language::system_verilog;
+  arithmetic_sources.standard = "2017";
+  arithmetic_sources.library = "work";
+  arithmetic_sources.files.push_back(arithmetic_source);
+  arithmetic_config.source_sets.push_back(
+      std::move(arithmetic_sources));
+  fsim::diagnostic::Engine arithmetic_diagnostics;
+  auto arithmetic_reference_project =
+      fsim::app::build_project(
+          arithmetic_config, arithmetic_diagnostics);
+  auto arithmetic_hybrid_project =
+      fsim::app::build_project(
+          arithmetic_config, arithmetic_diagnostics);
+  assert(arithmetic_reference_project);
+  assert(arithmetic_hybrid_project);
+  const auto arithmetic_reference = capture_simulation(
+      std::move(*arithmetic_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto arithmetic_hybrid = capture_simulation(
+      std::move(*arithmetic_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(arithmetic_reference, arithmetic_hybrid);
+  assert(
+      arithmetic_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(arithmetic_hybrid.result.time == 4);
+  assert(arithmetic_hybrid.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(arithmetic_hybrid.compiled_processes == 2);
+  assert(arithmetic_hybrid.compiled_modules == 1);
+#endif
+  assert((
+      arithmetic_hybrid.final_values
+      == std::vector<std::string>{
+          "11001000", "00000111", "11000001", "01111000",
+          "00011100", "00000100", "11001000", "00111000"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =

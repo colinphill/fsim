@@ -1050,6 +1050,35 @@ private:
                 Reduction{operation, destination, *source});
             return destination;
         }
+        if (language_ != frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Unary
+            && expression.operands.size() == 1
+            && (expression.text == "+"
+                || expression.text == "-")) {
+            const auto source_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            const auto source =
+                lower_expression(
+                    expression.operands[0], source_width);
+            if (!source || expression.text == "+") {
+                return source;
+            }
+            const auto zero = allocate_register(
+                register_width(*source), register_domain(*source));
+            process_.operations.emplace_back(LoadConstant{
+                zero,
+                PackedLogic4(
+                    register_width(*source), Logic4::zero)});
+            const auto destination = allocate_register(
+                register_width(*source), register_domain(*source));
+            process_.operations.emplace_back(Binary{
+                BinaryOperator::subtract_unsigned,
+                destination,
+                zero,
+                *source});
+            return destination;
+        }
         if (expression.kind == ExpressionKind::Unary
             && expression.operands.size() == 1
             && (expression.text == "not" || expression.text == "~")) {
@@ -1239,6 +1268,22 @@ private:
             } else if (expression.text == "+") {
                 operation = BinaryOperator::add_unsigned;
             } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "-") {
+                operation = BinaryOperator::subtract_unsigned;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "*") {
+                operation = BinaryOperator::multiply_unsigned;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "/") {
+                operation = BinaryOperator::divide_unsigned;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "%") {
+                operation = BinaryOperator::modulo_unsigned;
+            } else if (
                 expression.text == "=" || expression.text == "==") {
                 operation = BinaryOperator::equal;
             } else if (
@@ -1276,6 +1321,21 @@ private:
                 || *operation == BinaryOperator::greater_unsigned
                 || *operation
                     == BinaryOperator::greater_equal_unsigned;
+            const auto unsigned_arithmetic =
+                *operation == BinaryOperator::subtract_unsigned
+                || *operation == BinaryOperator::multiply_unsigned
+                || *operation == BinaryOperator::divide_unsigned
+                || *operation == BinaryOperator::modulo_unsigned;
+            if (unsigned_arithmetic
+                && (is_signed_expression(expression.operands[0])
+                    || is_signed_expression(expression.operands[1]))) {
+                report(
+                    "FSIM-ELAB-067",
+                    "signed arithmetic is not executable until signed "
+                    "SimIR arithmetic semantics are implemented",
+                    expression.span);
+                return std::nullopt;
+            }
             if (relational
                 && (is_signed_expression(expression.operands[0])
                     || is_signed_expression(expression.operands[1]))) {

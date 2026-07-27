@@ -298,7 +298,7 @@ void run_at_level(const JitOptimizationLevel optimization,
   assert((runtime.signals[2] == EncodedSignal{0x05, 0x01}));
   assert((runtime.signals[3] == EncodedSignal{0x3f, 0}));
   assert((runtime.signals[4] == EncodedSignal{0x3b, 0x01}));
-  assert((runtime.signals[5] == EncodedSignal{0x47, 0x07}));
+  assert((runtime.signals[5] == EncodedSignal{0xff, 0xff}));
   assert((runtime.signals[6] == EncodedSignal{0xcb, 0x01}));
   assert((runtime.signals[7] == EncodedSignal{1, 1}));
 
@@ -1098,8 +1098,18 @@ void test_scalar_truth_tables_and_64_bits() {
       assert(runtime.signals[2] == encode(fsim::runtime::logic_and(lhs, rhs)));
       assert(runtime.signals[3] == encode(fsim::runtime::logic_or(lhs, rhs)));
       assert(runtime.signals[4] == encode(fsim::runtime::logic_xor(lhs, rhs)));
-      // The carry is discarded for a one-bit unsigned addition.
-      assert(runtime.signals[5] == encode(fsim::runtime::logic_xor(lhs, rhs)));
+      // The carry is discarded for a one-bit unsigned addition, while any
+      // arithmetic X/Z operand makes the complete result unknown.
+      const auto known =
+          [](const Logic4 value) {
+            return value == Logic4::zero || value == Logic4::one;
+          };
+      assert(
+          runtime.signals[5]
+          == encode(
+              known(lhs) && known(rhs)
+                  ? fsim::runtime::logic_xor(lhs, rhs)
+                  : Logic4::x));
       assert(runtime.signals[6] == encode(fsim::runtime::logic_not(lhs)));
       assert(runtime.signals[7] == encode(equality(lhs, rhs)));
       assert(
@@ -1383,6 +1393,85 @@ void test_reduction_and_shift_at_level(
          ++index) {
       const auto encoded =
           PackedLogic4::from_msb_string(expected[index]).low_word();
+      assert((
+          runtime.signals[index + 2]
+          == EncodedSignal{encoded.aval, encoded.bval}));
+    }
+  }
+}
+
+void test_unsigned_arithmetic_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 7;
+  process.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      Binary{BinaryOperator::add_unsigned, 2, 0, 1},
+      WriteBlocking{2, 2},
+      Binary{BinaryOperator::subtract_unsigned, 3, 0, 1},
+      WriteBlocking{3, 3},
+      Binary{BinaryOperator::multiply_unsigned, 4, 0, 1},
+      WriteBlocking{4, 4},
+      Binary{BinaryOperator::divide_unsigned, 5, 0, 1},
+      WriteBlocking{5, 5},
+      Binary{BinaryOperator::modulo_unsigned, 6, 0, 1},
+      WriteBlocking{6, 6},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 7> widths{
+      8, 8, 8, 8, 8, 8, 8};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  struct TestCase {
+    std::string_view lhs;
+    std::string_view rhs;
+    std::array<std::string_view, 5> expected;
+  };
+  const std::array cases{
+      TestCase{
+          "11001000",
+          "00000111",
+          {"11001111", "11000001", "01111000",
+           "00011100", "00000100"}},
+      TestCase{
+          "00000000",
+          "00000000",
+          {"00000000", "00000000", "00000000",
+           "XXXXXXXX", "XXXXXXXX"}},
+      TestCase{
+          "10X01000",
+          "00000111",
+          {"XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
+           "XXXXXXXX", "XXXXXXXX"}},
+      TestCase{
+          "11001000",
+          "00000Z11",
+          {"XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
+           "XXXXXXXX", "XXXXXXXX"}},
+  };
+  for (const auto& test : cases) {
+    TestRuntime runtime;
+    const auto lhs =
+        PackedLogic4::from_msb_string(test.lhs).low_word();
+    const auto rhs =
+        PackedLogic4::from_msb_string(test.rhs).low_word();
+    runtime.signals[0] = {lhs.aval, lhs.bval};
+    runtime.signals[1] = {rhs.aval, rhs.bval};
+    auto descriptor = abi(runtime);
+    assert(
+        jit.execute(handle, descriptor)
+        == JitExecutionStatus::completed);
+    for (std::size_t index = 0; index < test.expected.size();
+         ++index) {
+      const auto encoded =
+          PackedLogic4::from_msb_string(
+              test.expected[index]).low_word();
       assert((
           runtime.signals[index + 2]
           == EncodedSignal{encoded.aval, encoded.bval}));
@@ -2571,6 +2660,10 @@ int main() {
       JitOptimizationLevel::o0, "reduction_shift_o0");
   test_reduction_and_shift_at_level(
       JitOptimizationLevel::o2, "reduction_shift_o2");
+  test_unsigned_arithmetic_at_level(
+      JitOptimizationLevel::o0, "unsigned_arithmetic_o0");
+  test_unsigned_arithmetic_at_level(
+      JitOptimizationLevel::o2, "unsigned_arithmetic_o2");
   test_initialized_bval_slot(JitOptimizationLevel::o0, "initialized_bval_o0");
   test_initialized_bval_slot(JitOptimizationLevel::o2, "initialized_bval_o2");
   test_debug_point_instrumentation();

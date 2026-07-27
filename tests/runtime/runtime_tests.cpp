@@ -517,6 +517,73 @@ void test_simir_wide_reduction_and_shift() {
       "wide oversized shift produces zero");
 }
 
+void test_simir_wide_unsigned_arithmetic() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  std::array<SignalId, 7> outputs{};
+  for (std::size_t index = 0; index < outputs.size(); ++index) {
+    outputs[index] = interpreter.add_signal({
+        "top.arithmetic_" + std::to_string(index),
+        PackedLogic4(65, Logic4::zero)});
+  }
+
+  const auto lhs =
+      "1" + std::string(64, '0');
+  const auto rhs =
+      std::string(63, '0') + "11";
+  Process process;
+  process.id = 0;
+  process.name = "wide_unsigned_arithmetic";
+  process.register_count = 11;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string(lhs)},
+      LoadConstant{1, PackedLogic4::from_msb_string(rhs)},
+      Binary{BinaryOperator::add_unsigned, 2, 0, 1},
+      WriteBlocking{outputs[0], 2},
+      Binary{BinaryOperator::subtract_unsigned, 3, 0, 1},
+      WriteBlocking{outputs[1], 3},
+      Binary{BinaryOperator::multiply_unsigned, 4, 0, 1},
+      WriteBlocking{outputs[2], 4},
+      Binary{BinaryOperator::divide_unsigned, 5, 0, 1},
+      WriteBlocking{outputs[3], 5},
+      Binary{BinaryOperator::modulo_unsigned, 6, 0, 1},
+      WriteBlocking{outputs[4], 6},
+      LoadConstant{
+          7,
+          PackedLogic4::from_msb_string(
+              "X" + std::string(64, '0'))},
+      Binary{BinaryOperator::add_unsigned, 8, 7, 1},
+      WriteBlocking{outputs[5], 8},
+      LoadConstant{9, PackedLogic4(65, Logic4::zero)},
+      Binary{BinaryOperator::divide_unsigned, 10, 0, 9},
+      WriteBlocking{outputs[6], 10},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "wide unsigned arithmetic process completes");
+  const std::array expected{
+      "1" + std::string(62, '0') + "11",
+      "0" + std::string(62, '1') + "01",
+      lhs,
+      "0" + std::string{"01010101010101010101010101010101"
+                        "01010101010101010101010101010101"},
+      std::string(64, '0') + "1",
+      std::string(65, 'X'),
+      std::string(65, 'X')};
+  for (std::size_t index = 0; index < outputs.size(); ++index) {
+    require(
+        interpreter.signal_value(outputs[index]).to_msb_string()
+            == expected[index],
+        "wide unsigned arithmetic result");
+  }
+}
+
 void test_simir_force_release() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1450,6 +1517,7 @@ int main() {
     test_simir_expressions_and_edges();
     test_simir_wide_truth_and_comparison();
     test_simir_wide_reduction_and_shift();
+    test_simir_wide_unsigned_arithmetic();
     test_simir_force_release();
     test_simir_design_stop_identity();
     test_simir_alternate_executor_context_and_boundaries();

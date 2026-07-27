@@ -106,9 +106,12 @@ The following foundation is implemented:
 - SystemVerilog unary reductions and mixed-width logical left/right shifts
   with four-state unknown and oversized-amount semantics tested across the
   interpreter and LLVM O0/O2 paths;
+- SystemVerilog unary plus/minus and equal-width unsigned subtraction,
+  multiplication, division, and remainder with arbitrary-width interpreter
+  algorithms, guarded LLVM lowering, and differential source tests;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 281 unique current production diagnostic codes.
+- a stable catalog covering 282 unique current production diagnostic codes.
 
 Current Linux validation:
 

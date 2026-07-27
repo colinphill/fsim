@@ -574,6 +574,10 @@ validate_process(const Process &process,
               case BinaryOperator::bit_or:
               case BinaryOperator::bit_xor:
               case BinaryOperator::add_unsigned:
+              case BinaryOperator::subtract_unsigned:
+              case BinaryOperator::multiply_unsigned:
+              case BinaryOperator::divide_unsigned:
+              case BinaryOperator::modulo_unsigned:
               case BinaryOperator::equal:
               case BinaryOperator::case_equal:
               case BinaryOperator::not_equal:
@@ -1388,8 +1392,11 @@ struct EncodedBit {
     return {builder.CreateOr(known_value, unknown), unknown, lhs.width};
   }
   case BinaryOperator::add_unsigned: {
+    auto *unknown = builder.CreateICmpNE(
+        builder.CreateAnd(
+            builder.CreateOr(lhs.bval, rhs.bval), mask),
+        constant_i64(context, 0));
     llvm::Value *result_aval = constant_i64(context, 0);
-    llvm::Value *result_bval = constant_i64(context, 0);
     EncodedBit carry{llvm::ConstantInt::getFalse(context),
                      llvm::ConstantInt::getFalse(context)};
     for (std::uint32_t bit = 0; bit < lhs.width; ++bit) {
@@ -1406,13 +1413,53 @@ struct EncodedBit {
       auto *aval = builder.CreateShl(
           builder.CreateZExt(sum.aval, llvm::Type::getInt64Ty(context)),
           shift);
-      auto *bval = builder.CreateShl(
-          builder.CreateZExt(sum.bval, llvm::Type::getInt64Ty(context)),
-          shift);
       result_aval = builder.CreateOr(result_aval, aval);
-      result_bval = builder.CreateOr(result_bval, bval);
     }
-    return {result_aval, result_bval, lhs.width};
+    return {
+        builder.CreateSelect(
+            unknown, mask, builder.CreateAnd(result_aval, mask)),
+        builder.CreateSelect(
+            unknown, mask, constant_i64(context, 0)),
+        lhs.width};
+  }
+  case BinaryOperator::subtract_unsigned:
+  case BinaryOperator::multiply_unsigned:
+  case BinaryOperator::divide_unsigned:
+  case BinaryOperator::modulo_unsigned: {
+    auto *unknown = builder.CreateICmpNE(
+        builder.CreateAnd(
+            builder.CreateOr(lhs.bval, rhs.bval), mask),
+        constant_i64(context, 0));
+    auto *left = builder.CreateAnd(lhs.aval, mask);
+    auto *right = builder.CreateAnd(rhs.aval, mask);
+    auto *invalid = unknown;
+    if (operation == BinaryOperator::divide_unsigned
+        || operation == BinaryOperator::modulo_unsigned) {
+      invalid = builder.CreateOr(
+          invalid,
+          builder.CreateICmpEQ(
+              right, constant_i64(context, 0)));
+      right = builder.CreateSelect(
+          invalid, constant_i64(context, 1), right);
+    }
+    llvm::Value* known_result = nullptr;
+    if (operation == BinaryOperator::subtract_unsigned) {
+      known_result = builder.CreateSub(left, right);
+    } else if (
+        operation == BinaryOperator::multiply_unsigned) {
+      known_result = builder.CreateMul(left, right);
+    } else if (
+        operation == BinaryOperator::divide_unsigned) {
+      known_result = builder.CreateUDiv(left, right);
+    } else {
+      known_result = builder.CreateURem(left, right);
+    }
+    return {
+        builder.CreateSelect(
+            invalid, mask, builder.CreateAnd(known_result, mask)),
+        builder.CreateSelect(
+            invalid, mask, constant_i64(context, 0)),
+        lhs.width};
   }
   case BinaryOperator::equal: {
     auto *unknown_bits =
@@ -1473,6 +1520,10 @@ struct EncodedBit {
     case BinaryOperator::bit_or:
     case BinaryOperator::bit_xor:
     case BinaryOperator::add_unsigned:
+    case BinaryOperator::subtract_unsigned:
+    case BinaryOperator::multiply_unsigned:
+    case BinaryOperator::divide_unsigned:
+    case BinaryOperator::modulo_unsigned:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
       llvm_unreachable("not a comparison operator");
