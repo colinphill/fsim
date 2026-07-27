@@ -252,9 +252,15 @@ Optimized `run` and instrumented `debug` are required to have identical
 simulation semantics. Debug code will use addressable process frames and safe
 points at statements, waits, calls, process boundaries, assertion failures,
 delta boundaries, and time boundaries. The default LLVM-enabled `run` path is
-the O2 hybrid engine. The current `debug` path deliberately remains
-interpreter-only, so instrumented O0 JIT debugging and run/debug equivalence
-are still release-gate work. The current REPL implements
+the O2 hybrid engine. The current bounded `debug` path forces O0 for eligible
+process groups and retains per-process interpreter fallback. It shares
+scheduler delta/time safe points with the interpreter. An application test
+runs the same breakpoint/step/mutation command script through the interpreter
+and O0 hybrid debugger and requires an identical transcript, lifecycle,
+committed-change callback count, and final state. Distinct cold objects beside
+the already populated O2 cache verify that the debug path actually selected
+O0. Statement/call instrumentation and the complete run/debug differential
+remain release-gate work. The current REPL implements
 `continue`/relative `run`, `run-until`, delta/time stepping, time and
 signal-change breakpoints with list/delete/clear operations, hierarchy/scope
 navigation, signal examination, and deposit/force/release. A design `$finish`

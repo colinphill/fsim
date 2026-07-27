@@ -618,20 +618,10 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   const auto value = fsim::app::parse_value("10xz", 4, error);
   assert(value && value->to_msb_string() == "10XZ");
 
-  fsim::app::Simulation debug_simulation(
-      std::move(*second),
-      config.run.max_deltas,
-      fsim::app::SimulationEngine::interpreter);
-  assert(debug_simulation.compiled_process_count() == 0);
-  std::size_t observed_changes = 0;
-  debug_simulation.set_signal_change_hook(
-      [&observed_changes](
-          fsim::runtime::simir::SignalId,
-          const fsim::runtime::PackedLogic4&,
-          fsim::runtime::SimulationTick,
-          std::uint64_t) { ++observed_changes; });
-  debug_simulation.start();
-  std::istringstream debug_input{
+  auto compiled_debug_project =
+      fsim::app::build_project(config, diagnostics);
+  assert(compiled_debug_project);
+  const std::string debug_commands =
       "scope\n"
       "scopes\n"
       "scope u_child\n"
@@ -654,7 +644,21 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       "continue\n"
       "continue\n"
       "step delta\n"
-      "quit\n"};
+      "quit\n";
+  fsim::app::Simulation debug_simulation(
+      std::move(*second),
+      config.run.max_deltas,
+      fsim::app::SimulationEngine::interpreter);
+  assert(debug_simulation.compiled_process_count() == 0);
+  std::size_t observed_changes = 0;
+  debug_simulation.set_signal_change_hook(
+      [&observed_changes](
+          fsim::runtime::simir::SignalId,
+          const fsim::runtime::PackedLogic4&,
+          fsim::runtime::SimulationTick,
+          std::uint64_t) { ++observed_changes; });
+  debug_simulation.start();
+  std::istringstream debug_input{debug_commands};
   std::ostringstream debug_output;
   std::ostringstream debug_error;
   assert(
@@ -695,6 +699,53 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert(debug_simulation.finished());
   assert(!debug_simulation.poisoned());
   assert(observed_changes > 0);
+
+  fsim::app::Simulation compiled_debug_simulation(
+      std::move(*compiled_debug_project),
+      config.run.max_deltas,
+      fsim::app::SimulationEngine::debug);
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled_debug_simulation.compiled_process_count() == 2);
+  assert(compiled_debug_simulation.compiled_module_count() == 2);
+  const auto debug_native_cache =
+      compiled_debug_simulation.native_cache_statistics();
+  // The same specialization modules were already cached at the configured O2
+  // run setting. Cold objects here therefore prove that debug forces O0.
+  assert(debug_native_cache.hits == 0);
+  assert(debug_native_cache.misses == 2);
+  assert(debug_native_cache.stores == 2);
+#else
+  assert(compiled_debug_simulation.compiled_process_count() == 0);
+  assert(compiled_debug_simulation.compiled_module_count() == 0);
+#endif
+  std::size_t compiled_observed_changes = 0;
+  compiled_debug_simulation.set_signal_change_hook(
+      [&compiled_observed_changes](
+          fsim::runtime::simir::SignalId,
+          const fsim::runtime::PackedLogic4&,
+          fsim::runtime::SimulationTick,
+          std::uint64_t) { ++compiled_observed_changes; });
+  compiled_debug_simulation.start();
+  std::istringstream compiled_debug_input{debug_commands};
+  std::ostringstream compiled_debug_output;
+  std::ostringstream compiled_debug_error;
+  assert(
+      fsim::app::run_debug_repl(
+          compiled_debug_simulation,
+          compiled_debug_input,
+          compiled_debug_output,
+          compiled_debug_error)
+      == 0);
+  assert(compiled_debug_error.str().empty());
+  assert(compiled_debug_output.str() == transcript);
+  assert(compiled_debug_simulation.finished());
+  assert(!compiled_debug_simulation.poisoned());
+  assert(compiled_observed_changes == observed_changes);
+  for (const auto& signal : debug_simulation.design().signals()) {
+    assert(
+        compiled_debug_simulation.read_signal(signal.id)
+        == debug_simulation.read_signal(signal.id));
+  }
 
   auto poisoned_project = fsim::app::build_project(config, diagnostics);
   assert(poisoned_project);
@@ -784,6 +835,17 @@ max_deltas = 1000
       == 0);
   assert(
       cli_output.str().find("fsim debugger: tb") != std::string::npos);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      cli_output.str().find(
+          "(O0 hybrid, 2 compiled process(es) in "
+          "2 specialization module(s))")
+      != std::string::npos);
+#else
+  assert(
+      cli_output.str().find("(reference evaluator)")
+      != std::string::npos);
+#endif
   assert(
       cli_output.str().find("time 0, delta 0, scope tb")
       != std::string::npos);

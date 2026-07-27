@@ -38,7 +38,8 @@ The following foundation is implemented:
 - an LLVM 22.1.8 ORC adapter with caller-owned resumable process frames for
   processes whose value-bearing operations are up to 64 bits, with O0/O2
   lowering for update-phase/delayed writes plus dynamic/static sensitivity
-  waits, integrated as a hybrid per-process engine for `build`/`run`;
+  waits, integrated as a hybrid per-process engine for `build`/`run` and a
+  forced-O0 hybrid engine for the bounded `debug` path;
 - dense bounded specialization records and one LLVM module/native cache object
   per specialization's eligible process group, with per-process interpreter
   fallback;
@@ -64,6 +65,9 @@ The following foundation is implemented:
   overflow;
 - an exact interpreter/O2-hybrid positive-edge test covering tick 0, tick
   1/delta 1, and tick 2 with both application processes compiled;
+- a bounded `fsim debug` path that forces O0 hybrid execution and exactly
+  matches the interpreter REPL transcript, lifecycle, callback count, and final
+  state at the currently supported scheduler safe points;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
 - a stable catalog covering 239 current production diagnostic codes.
@@ -167,12 +171,14 @@ Completed:
 - O0/O2 grouped-module cache tests proving two functions share one native
   object, a changed group member invalidates that object, and the unchanged
   member retains its per-process frame identity;
+- forced-O0 hybrid debugger selection with per-process fallback and exact
+  interpreter equivalence for the bounded REPL/scheduler-safe-point script;
 - checked-in SV-testbench/VHDL-counter/SV-child example.
 
 Remaining before the architecture gate passes:
 
-- replace the interpreter-only debugger with an instrumented O0 JIT path and
-  demonstrate semantic equivalence with the default O2 hybrid run;
+- add generated statement/wait/call/process/assertion safe points, addressable
+  debug frames, and source metadata to the current O0 hybrid debugger;
 - run every supported semantic test through interpreter and JIT and compare
   final state, assertions, scheduler observations, and trace events;
 - extend the bounded mixed-language differential to O0, assertion metadata,
@@ -225,7 +231,8 @@ Completed groundwork:
   and bounded LLVM compiled subset;
 - deterministic project seed handling;
 - scope/signal navigation, time and signal-change breakpoints, delta/time
-  stepping, and value mutation in the CLI debugger;
+  stepping, value mutation, and forced-O0 hybrid execution in the CLI
+  debugger, with bounded interpreter-equivalence evidence;
 - hierarchy/value/control/callback operations in `include/fsim/api.h`;
 - buffered committed-change VCD with packed and nine-state mapping;
 - SystemC values, signals, ports, exports, time/event/process declarations in
@@ -286,9 +293,10 @@ Remaining before v1 release:
 
 The next development iterations should occur in this order:
 
-1. **Close the architecture gate:** integrate instrumented O0 debugging,
-   complete source/include and generic/parameter specialization cache identity,
-   and broaden the interpreter/JIT differential harness.
+1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
+   generated statement/call/source instrumentation, complete source/include
+   and generic/parameter specialization cache identity, and broaden the
+   interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.
 3. **Expand synthesizable coverage:** packages/parameters/generics, generates,

@@ -54,6 +54,13 @@ enum class SimulationEngine : std::uint8_t {
   /// Compile supported processes when the LLVM backend is available and use
   /// the reference evaluator for explicitly unsupported processes.
   compiled,
+  /// Compile supported processes at O0 for debugger use, retaining the
+  /// reference evaluator for explicitly unsupported processes.
+  ///
+  /// This mode currently shares scheduler delta/time safe points with the
+  /// interpreter. Statement/call safe points require future source maps and
+  /// generated instrumentation.
+  debug,
 };
 
 struct NativeCacheStatistics {

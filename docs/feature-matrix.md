@@ -108,7 +108,7 @@ targeted rejection, not implemented `` `default_nettype`` semantics.
 | CM-017 | Application check/build/cache path, per-specialization LLVM module grouping and native-cache telemetry, O0/O2 interpreter-versus-hybrid execution for a bounded SystemVerilog hierarchy, O2 differential execution for the bounded SV/VHDL/SV hierarchy, exact fully compiled O2 scheduled writes, and a two-process/one-module O2 positive-edge comparison at tick 0, tick 1/delta 1, and tick 2; typed capability misses remain on the reference evaluator without blocking supported siblings | execute | [application test](../tests/app/application_test.cpp) | — | [dense specialization ownership test](../tests/elaboration/elaborator_test.cpp) | [O0/O2 application differential, partial specialization-group fallback, O2 mixed-language/scheduled-write/posedge differentials, overflow containment, and per-module cold/warm telemetry test](../tests/app/application_test.cpp) |
 | CM-018 | C ABI session lifecycle, generation-checked object handles, bounded hierarchy/value access, deposit/force/release/run, synchronous callbacks, and callback re-entry guards | execute | [C API test](../tests/api/api_test.cpp) | [stale-handle and callback-mutation rejection](../tests/api/api_test.cpp) | [C API test](../tests/api/api_test.cpp) | [C API test](../tests/api/api_test.cpp) |
 | CM-019 | Bounded command driver for `check`, `build`, `run`, `debug`, direct sources, and traditional aliases | execute | [CLI/application test](../tests/app/application_test.cpp) | [JSON argument and standard rejection](../tests/app/application_test.cpp) | [CLI/application test](../tests/app/application_test.cpp) | [CLI/application test](../tests/app/application_test.cpp) |
-| CM-020 | Full interactive debugger command set and statement/process/delta/time semantics | v1 target | [bounded REPL commands only](../tests/app/application_test.cpp) | — | — | [bounded REPL lifecycle only](../tests/app/application_test.cpp) |
+| CM-020 | Full interactive debugger command set and statement/process/delta/time semantics | v1 target | [bounded REPL commands and forced-O0 hybrid mode](../tests/app/application_test.cpp) | — | [O0 cache-mode identity](../tests/app/application_test.cpp) | [interpreter/O0 transcript, lifecycle, callback-count, and final-state equivalence](../tests/app/application_test.cpp) |
 | CM-021 | Ctrl-C handoff through an atomic request to the next safe point | v1 target | — | — | — | — |
 | CM-022 | C ABI delta/time stepping and asynchronous stop request | v1 target | [implementation; automated API test missing](../src/api/api.cpp) | — | — | — |
 | CM-023 | REPL relative/absolute time runs, delta/time stepping, time/signal breakpoints, scope/signal navigation, value mutation, and finished/poisoned lifecycle | execute | [application REPL test](../tests/app/application_test.cpp) | [unsupported source stepping and poisoned-session checks](../tests/app/application_test.cpp) | — | [application REPL test](../tests/app/application_test.cpp) |
@@ -130,14 +130,16 @@ specialization share an LLVM module and native cache object. O0/O2 tests verify
 group execution, warm reuse, whole-object invalidation after one member
 changes, and stable frame identity for an unchanged process. LLVM-enabled
 build/run selects the adapter cache and falls back only for typed capability
-misses. The current `fsim debug` path remains
-interpreter-only. CM-015, CM-017, and CM-024 provide bounded differential
-evidence, including the exact tick-0/tick-1-delta-1/tick-2 positive-edge case
-with two of two processes compiled, but do not satisfy CM-016 or complete HDL
-event-control requirements: the full semantic fixture set, assertion metadata,
-normalized VCD, O0 application wait coverage, and Windows execution evidence
-remain open. The release build must use LLVM 22.1.8; a test compiled against
-another LLVM version is development evidence only.
+misses. The bounded `fsim debug` path forces O0 for eligible groups and uses
+the same fallback rule. CM-015, CM-017, CM-020, and CM-024 provide bounded
+differential evidence, including an identical interpreter/O0 debugger
+transcript and the exact tick-0/tick-1-delta-1/tick-2 positive-edge case with
+two of two processes compiled, but do not satisfy CM-016 or complete HDL
+event-control/debug requirements: statement/call instrumentation, the full
+semantic fixture set, assertion metadata, normalized VCD, O0 application wait
+coverage, and Windows execution evidence remain open. The release build must
+use LLVM 22.1.8; a test compiled against another LLVM version is development
+evidence only.
 
 ## SystemC source subset and plug-in boundary
 
@@ -220,11 +222,11 @@ They do not become supported when a permissive parser happens to consume them.
 | ID | Required feature group | Status | P+ | P- | E | R |
 |---|---|---|---|---|---|---|
 | V1-CM-01 | Typed language HIR and elaborated DesignIR with dense stable IDs and retained source/debug metadata | v1 target | — | — | — | — |
-| V1-CM-02 | Per-specialization resumable LLVM state machines with O2 run/O0 debug semantic equivalence | v1 target | [bounded caller-owned frame ABI and grouped-module API](../tests/compiler/llvm_jit_test.cpp) | [frame/layout/group/capability checks](../tests/compiler/llvm_jit_test.cpp) | [dense instance-specific specialization ownership](../tests/elaboration/elaborator_test.cpp) | [bounded O0/O2 resume/interpreter differential](../tests/compiler/llvm_jit_test.cpp), [bounded application interpreter/hybrid and two-process/one-module differential](../tests/app/application_test.cpp) |
+| V1-CM-02 | Per-specialization resumable LLVM state machines with O2 run/O0 debug semantic equivalence | v1 target | [bounded caller-owned frame ABI, grouped-module API, and forced-O0 debug engine](../tests/compiler/llvm_jit_test.cpp) | [frame/layout/group/capability checks](../tests/compiler/llvm_jit_test.cpp) | [dense instance-specific specialization ownership](../tests/elaboration/elaborator_test.cpp), [O0 cache-mode identity](../tests/app/application_test.cpp) | [bounded O0/O2 resume/interpreter differential](../tests/compiler/llvm_jit_test.cpp), [bounded application interpreter/hybrid, two-process/one-module, and interpreter/O0 REPL differentials](../tests/app/application_test.cpp) |
 | V1-CM-03 | Complete native-object cache key, corruption recovery, per-key concurrency, and compatibility eviction | v1 target | [hardened cache primitive and canonical LLVM adapter key](../tests/compiler/cache_test.cpp) | [live-lock and LLVM corrupt/incompatible-object rejection](../tests/compiler/llvm_jit_test.cpp) | — | [LLVM O0/O2 cold/warm/corrupt/referenced-width, scheduled-write, and wait-kind/operand/width/static-edge tests](../tests/compiler/llvm_jit_test.cpp), [application cold/warm telemetry test](../tests/app/application_test.cpp) |
 | V1-CM-04 | Global time-resolution selection, SV rounding, exact VHDL/SystemC conversion, and overflow diagnosis | v1 target | [bounded integer conversion, timescale auto precision, and scaled VCD](../tests/app/application_test.cpp) | [inexact conversion](../tests/app/application_test.cpp), [coarse precision](../tests/frontend/frontend_tests.cpp) | — | [integer timescale delay only](../tests/app/application_test.cpp) |
 | V1-CM-05 | Driver transactions, multi-driver resolution, update fanout, and committed-change visibility | v1 target | [bounded update/delayed-write scheduling and single-signal coalescing](../tests/runtime/runtime_tests.cpp) | [unimplemented resolver rejection](../tests/elaboration/elaborator_test.cpp) | — | [tick-0/tick-2 committed writes and tick-1/delta-1 posedge fanout comparisons only](../tests/app/application_test.cpp) |
-| V1-CM-06 | Full debugger REPL, safe points, stepping, breakpoints, scope/local inspection, trace selection, and Ctrl-C | v1 target | [bounded signal/time REPL only](../tests/app/application_test.cpp) | [unsupported source stepping and poisoned lifecycle](../tests/app/application_test.cpp) | — | [bounded REPL runtime test](../tests/app/application_test.cpp) |
+| V1-CM-06 | Full debugger REPL, safe points, stepping, breakpoints, scope/local inspection, trace selection, and Ctrl-C | v1 target | [bounded signal/time REPL with forced-O0 hybrid execution](../tests/app/application_test.cpp) | [unsupported source stepping and poisoned lifecycle](../tests/app/application_test.cpp) | [O0 cache-mode identity](../tests/app/application_test.cpp) | [interpreter/O0 transcript, lifecycle, callback-count, and final-state equivalence](../tests/app/application_test.cpp) |
 | V1-CM-07 | Selective buffered VCD, flattening rules, normalized goldens, and trace/debug overhead checks | v1 target | [VCD core and scaled-timescale tests](../tests/runtime/runtime_tests.cpp) | — | — | [bounded application trace test](../tests/app/application_test.cpp) |
 | V1-CM-08 | Unicode/path behavior, sanitizer/fuzz jobs, diagnostic catalog, benchmarks, and source-build documentation | v1 target | [ASan/UBSan and bounded frontend libFuzzer jobs](../.github/workflows/ci.yml), [diagnostic catalog](diagnostics.md), and [catalog consistency gate](../cmake/CheckDiagnosticCatalog.cmake) | — | — | [frontend fuzz harness](../tests/fuzz/frontend_fuzz.cpp) |
 | V1-CM-09 | Ubuntu x86-64/GCC and Windows x86-64/MSVC Debug/Release CI with LLVM 22.1.8 | v1 target | [Linux/Windows Debug+Release and exact-LLVM workflow definitions](../.github/workflows/ci.yml) | — | — | — |

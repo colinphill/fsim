@@ -1690,7 +1690,8 @@ int handle_debug(
   Simulation simulation(
       std::move(*built),
       config.run.max_deltas,
-      SimulationEngine::interpreter);
+      SimulationEngine::debug);
+  report_native_cache_failures(simulation, diagnostics);
   auto trace = attach_trace(simulation, config, diagnostics);
   if (config.run.trace_file && !trace) {
     return 1;
@@ -1698,7 +1699,16 @@ int handle_debug(
   install_interrupt_hook(simulation);
   std::signal(SIGINT, handle_interrupt);
   simulation.start();
-  output << "fsim debugger: " << simulation.design().top() << '\n';
+  output << "fsim debugger: " << simulation.design().top();
+  if (simulation.compiled_process_count() == 0) {
+    output << " (reference evaluator)\n";
+  } else {
+    output << " (O0 hybrid, "
+           << simulation.compiled_process_count()
+           << " compiled process(es) in "
+           << simulation.compiled_module_count()
+           << " specialization module(s))\n";
+  }
   print_debug_help(output);
   const auto status =
       run_debug_repl(simulation, input, output, error_output);
@@ -2101,9 +2111,12 @@ struct Simulation::Impl {
         interpreter(built.design.create_interpreter(
             runtime::SchedulerOptions{max_deltas, 32})) {
 #if defined(FSIM_HAS_LLVM)
-    if (engine == SimulationEngine::compiled) {
+    if (engine != SimulationEngine::interpreter) {
       compiler::LlvmJitOptions options;
-      options.optimization = jit_optimization(built.optimization);
+      options.optimization =
+          engine == SimulationEngine::debug
+              ? compiler::JitOptimizationLevel::o0
+              : jit_optimization(built.optimization);
       if (!built.cache_path.empty()) {
         options.cache_directory = built.cache_path / "llvm-native";
       }

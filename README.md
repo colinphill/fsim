@@ -60,8 +60,9 @@ The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
 particular, complete semantic analysis, general mixed-boundary conversions and
 multi-driver resolution, parameter/generic specialization identity beyond the
-current instance-specific records, instrumented O0 debug execution, broader
-interpreter/JIT differential coverage, SystemC kernel integration and fibers,
+current instance-specific records, full statement-instrumented O0 debug
+execution, broader interpreter/JIT differential coverage, SystemC kernel
+integration and fibers,
 source/statement/process debugging, fractional-delay and declaration-based
 time semantics, IEEE VHDL packages, complete HDL event controls, and most
 testbench features remain work in progress. Unsupported syntax is diagnosed
@@ -164,11 +165,14 @@ overridden with options such as `--top`, `--duration`, `--max-deltas`,
 
 The current debugger supports relative or absolute time runs, delta/time
 stepping, time and signal-change breakpoints, scope/signal navigation, value
-inspection, and deposit/force/release. Statement and process stepping, source
-breakpoints, locals, and trace selection remain future work. A design
-`$finish` is terminal for that simulation; a debugger or Ctrl-C stop remains
-resumable, while a fatal runtime error poisons the simulation and prevents
-further execution.
+inspection, and deposit/force/release. With LLVM enabled, `fsim debug` forces
+O0 compilation for eligible processes and retains per-process interpreter
+fallback; builds without LLVM use the interpreter. The current safe points are
+at scheduler delta/time phase boundaries. Statement and process stepping,
+source breakpoints, statement/call instrumentation, locals, and trace selection
+remain future work. A design `$finish` is terminal for that simulation; a
+debugger or Ctrl-C stop remains resumable, while a fatal runtime error poisons
+the simulation and prevents further execution.
 
 With LLVM enabled, `fsim build` compiles eligible processes and `fsim run`
 uses a hybrid engine. Processes whose supported value-bearing operations are
@@ -193,9 +197,11 @@ identifies the boundary instruction; immutable SimIR retains the dynamic
 signal list and static edge rules for the kernel. Consequently,
 sensitivity-only signals may exceed 64 bits because no signal value crosses
 the generated ABI. Builds without LLVM execute entirely through the reference
-evaluator. `fsim debug` currently remains interpreter-only; value-bearing
-operations wider than 64 bits, full parameter/generic specialization identity,
-and broader differential coverage remain work in progress.
+evaluator. The bounded O0 debug path is differentially tested against the
+interpreter for its existing REPL and scheduler safe-point behavior.
+Value-bearing operations wider than 64 bits, full statement/call debug
+instrumentation, full parameter/generic specialization identity, and broader
+differential coverage remain work in progress.
 
 The application suite also compares a bounded scheduled-write design exactly
 between the interpreter and O2 hybrid engine. It checks an update commit at
