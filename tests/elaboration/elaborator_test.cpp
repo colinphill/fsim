@@ -1785,6 +1785,115 @@ endmodule
     assert(has_diagnostic(
         rejected_empty_concatenation, "FSIM-ELAB-069"));
 
+    const auto vhdl_select_concat =
+        fsim::frontend::parse_text(
+            "vhdl_select_concat.vhd",
+            R"(
+entity vhdl_select_concat is
+  port (
+    descending : in std_logic_vector(7 downto 4);
+    ascending : in std_logic_vector(2 to 5);
+    selected_descending : out std_logic;
+    selected_ascending : out std_logic;
+    selected_local : out std_logic;
+    descending_part : out std_logic_vector(1 downto 0);
+    ascending_part : out std_logic_vector(1 downto 0);
+    joined : out std_logic_vector(5 downto 0)
+  );
+end entity;
+
+architecture rtl of vhdl_select_concat is
+begin
+  observe: process(descending, ascending)
+    variable local_copy : std_logic_vector(9 downto 8);
+  begin
+    local_copy := descending(7 downto 6);
+    selected_descending <= descending(5);
+    selected_ascending <= ascending(4);
+    selected_local <= local_copy(8);
+    descending_part <= descending(7 downto 6);
+    ascending_part <= ascending(3 to 4);
+    joined <= descending(7 downto 6) & "10" & ascending(4 to 5);
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_select_concat.ok());
+    const auto elaborated_vhdl_select_concat =
+        fsim::elaboration::elaborate(
+            vhdl_select_concat.design,
+            "vhdl:work.vhdl_select_concat(rtl)");
+    assert(elaborated_vhdl_select_concat.ok());
+    const auto vhdl_descending =
+        elaborated_vhdl_select_concat.design->find_signal(
+            "descending");
+    const auto vhdl_ascending =
+        elaborated_vhdl_select_concat.design->find_signal(
+            "ascending");
+    const std::array vhdl_select_concat_outputs{
+        elaborated_vhdl_select_concat.design->find_signal(
+            "selected_descending"),
+        elaborated_vhdl_select_concat.design->find_signal(
+            "selected_ascending"),
+        elaborated_vhdl_select_concat.design->find_signal(
+            "selected_local"),
+        elaborated_vhdl_select_concat.design->find_signal(
+            "descending_part"),
+        elaborated_vhdl_select_concat.design->find_signal(
+            "ascending_part"),
+        elaborated_vhdl_select_concat.design->find_signal("joined")};
+    assert(vhdl_descending && vhdl_ascending);
+    assert(std::ranges::all_of(
+        vhdl_select_concat_outputs,
+        [](const auto& signal) {
+          return signal.has_value();
+        }));
+    auto vhdl_select_concat_interpreter =
+        elaborated_vhdl_select_concat.design->create_interpreter();
+    vhdl_select_concat_interpreter->deposit_signal(
+        *vhdl_descending,
+        fsim::runtime::PackedLogic4::from_msb_string("1XZ0"));
+    vhdl_select_concat_interpreter->deposit_signal(
+        *vhdl_ascending,
+        fsim::runtime::PackedLogic4::from_msb_string("01Z1"));
+    (void)vhdl_select_concat_interpreter->run();
+    const std::array<std::string_view, 6>
+        expected_vhdl_select_concat{
+            "Z", "Z", "X", "1X", "1Z", "1X10Z1"};
+    for (std::size_t index = 0;
+         index < vhdl_select_concat_outputs.size(); ++index) {
+      assert(
+          vhdl_select_concat_interpreter
+              ->signal_value(*vhdl_select_concat_outputs[index])
+              .to_msb_string()
+          == expected_vhdl_select_concat[index]);
+    }
+
+    const auto reversed_vhdl_select =
+        fsim::frontend::parse_text(
+            "reversed_vhdl_select.vhd",
+            R"(
+entity reversed_vhdl_select is
+  port (
+    value : in std_logic_vector(2 to 5);
+    result : out std_logic_vector(1 downto 0)
+  );
+end entity;
+architecture rtl of reversed_vhdl_select is
+begin
+  result <= value(4 downto 3);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(reversed_vhdl_select.ok());
+    const auto rejected_reversed_vhdl_select =
+        fsim::elaboration::elaborate(
+            reversed_vhdl_select.design,
+            "vhdl:work.reversed_vhdl_select(rtl)");
+    assert(!rejected_reversed_vhdl_select.ok());
+    assert(has_diagnostic(
+        rejected_reversed_vhdl_select, "FSIM-ELAB-068"));
+
     const auto empty_wildcard = fsim::frontend::parse_text(
         "empty_wildcard.sv",
         R"(

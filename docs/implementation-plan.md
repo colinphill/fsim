@@ -112,6 +112,10 @@ The following foundation is implemented:
 - declared-range-aware constant SystemVerilog bit/part selects and packed
   concatenations with arbitrary-width interpreter operations, LLVM
   single-word lowering, and ascending/non-zero-based range tests;
+- VHDL constant indexed names/slices and correct `&` concatenation reuse the
+  same range-aware SimIR operations, including packed procedural locals,
+  ascending ranges, nine-state source typing, and interpreter/O2 differential
+  evidence;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
 - a stable catalog covering 284 unique current production diagnostic codes.

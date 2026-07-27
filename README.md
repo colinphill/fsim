@@ -56,6 +56,8 @@ The current tree contains:
   divide-by-zero semantics;
 - declared-range-aware SystemVerilog constant bit/part selects and packed
   concatenations, including ascending and non-zero-based source ranges;
+- declared-range-aware VHDL indexed names/slices and correct width-summing
+  VHDL `&` concatenation for packed scalar/vector operands;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

@@ -350,6 +350,43 @@ module select_concat_app;
 endmodule
 )";
   }
+  const auto vhdl_select_concat_source =
+      directory / "vhdl_select_concat.vhd";
+  {
+    std::ofstream output(vhdl_select_concat_source);
+    output << R"(
+entity vhdl_select_concat_app is
+end entity;
+
+architecture rtl of vhdl_select_concat_app is
+  signal descending : std_logic_vector(7 downto 4);
+  signal ascending : std_logic_vector(2 to 5);
+  signal selected_descending : std_logic;
+  signal selected_concurrent : std_logic;
+  signal selected_ascending : std_logic;
+  signal selected_local : std_logic;
+  signal descending_part : std_logic_vector(1 downto 0);
+  signal ascending_part : std_logic_vector(1 downto 0);
+  signal joined : std_logic_vector(5 downto 0);
+begin
+  descending <= "1XZ0";
+  ascending <= "01Z1";
+  selected_concurrent <= descending(5);
+
+  observe: process(descending, ascending)
+    variable local_copy : std_logic_vector(9 downto 8);
+  begin
+    local_copy := descending(7 downto 6);
+    selected_descending <= descending(5);
+    selected_ascending <= ascending(4);
+    selected_local <= local_copy(8);
+    descending_part <= descending(7 downto 6);
+    ascending_part <= ascending(3 to 4);
+    joined <= descending(7 downto 6) & "10" & ascending(4 to 5);
+  end process;
+end architecture;
+)";
+  }
   const auto partial_group_source = directory / "partial_group.sv";
   {
     std::ofstream output(partial_group_source);
@@ -1391,6 +1428,62 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       == std::vector<std::string>{
           "Z10100X1", "1100XZ01", "0", "0", "0",
           "Z101", "00XZ", "Z1010XZ01"}));
+
+  auto vhdl_select_concat_config = config;
+  vhdl_select_concat_config.project.name =
+      "vhdl-select-concat-test";
+  vhdl_select_concat_config.project.top =
+      "vhdl:work.vhdl_select_concat_app(rtl)";
+  vhdl_select_concat_config.build.optimization =
+      fsim::project::Optimization::o2;
+  vhdl_select_concat_config.build.cache_path =
+      directory / "vhdl-select-concat-cache";
+  vhdl_select_concat_config.source_sets.clear();
+  fsim::project::SourceSet vhdl_select_concat_sources;
+  vhdl_select_concat_sources.language =
+      fsim::project::Language::vhdl;
+  vhdl_select_concat_sources.standard = "2008";
+  vhdl_select_concat_sources.library = "work";
+  vhdl_select_concat_sources.files.push_back(
+      vhdl_select_concat_source);
+  vhdl_select_concat_config.source_sets.push_back(
+      std::move(vhdl_select_concat_sources));
+  fsim::diagnostic::Engine vhdl_select_concat_diagnostics;
+  auto vhdl_select_concat_reference_project =
+      fsim::app::build_project(
+          vhdl_select_concat_config,
+          vhdl_select_concat_diagnostics);
+  auto vhdl_select_concat_hybrid_project =
+      fsim::app::build_project(
+          vhdl_select_concat_config,
+          vhdl_select_concat_diagnostics);
+  assert(vhdl_select_concat_reference_project);
+  assert(vhdl_select_concat_hybrid_project);
+  const auto vhdl_select_concat_reference =
+      capture_simulation(
+          std::move(*vhdl_select_concat_reference_project),
+          fsim::app::SimulationEngine::interpreter);
+  const auto vhdl_select_concat_hybrid =
+      capture_simulation(
+          std::move(*vhdl_select_concat_hybrid_project),
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      vhdl_select_concat_reference,
+      vhdl_select_concat_hybrid);
+  assert(
+      vhdl_select_concat_hybrid.result.status
+      == fsim::runtime::RunStatus::completed);
+  assert(vhdl_select_concat_hybrid.result.time == 0);
+  assert(vhdl_select_concat_hybrid.process_count == 4);
+#if defined(FSIM_HAS_LLVM)
+  assert(vhdl_select_concat_hybrid.compiled_processes == 4);
+  assert(vhdl_select_concat_hybrid.compiled_modules == 1);
+#endif
+  assert((
+      vhdl_select_concat_hybrid.final_values
+      == std::vector<std::string>{
+          "1XZ0", "01Z1", "Z", "Z", "Z", "X",
+          "1X", "1Z", "1X10Z1"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =

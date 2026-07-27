@@ -1019,11 +1019,31 @@ class VhdlParser final : private detail::ParserBase {
         canonical += vhdl_name(expect_identifier("selected name").text);
       }
       if (match(TokenKind::LeftParen)) {
+        const auto base =
+            Expression{
+                ExpressionKind::Identifier,
+                canonical,
+                {},
+                name.span};
         std::vector<Expression> arguments;
         if (!at(TokenKind::RightParen)) {
-          do {
+          auto first = parse_expression();
+          if (match_keyword("downto", true)
+              || match_keyword("to", true)) {
+            const auto direction = previous();
+            auto second = parse_expression();
+            expect(TokenKind::RightParen, "')' after slice",
+                   "FSIM-VHDL-PARSE-033");
+            return Expression{
+                ExpressionKind::Slice,
+                detail::ascii_lower(direction.text),
+                {base, std::move(first), std::move(second)},
+                cover(name.span, previous().span)};
+          }
+          arguments.push_back(std::move(first));
+          while (match(TokenKind::Comma)) {
             arguments.push_back(parse_expression());
-          } while (match(TokenKind::Comma));
+          }
         }
         expect(TokenKind::RightParen, "')' after arguments",
                "FSIM-VHDL-PARSE-033");

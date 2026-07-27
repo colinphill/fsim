@@ -1042,8 +1042,26 @@ private:
                 LoadConstant{destination, std::move(literal->value)});
             return destination;
         }
-        if (language_ != frontend::Language::Vhdl2008
-            && expression.kind == ExpressionKind::Index
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Call
+            && expression.operands.size() == 1
+            && (locals_.contains(expression.text)
+                || signals_.contains(expression.text))) {
+            return lower_expression(
+                Expression{
+                    ExpressionKind::Index,
+                    "index",
+                    {
+                        Expression{
+                            ExpressionKind::Identifier,
+                            expression.text,
+                            {},
+                            expression.span},
+                        expression.operands[0]},
+                    expression.span},
+                expected_width);
+        }
+        if (expression.kind == ExpressionKind::Index
             && expression.operands.size() == 2) {
             const auto source_width =
                 infer_width(expression.operands[0]);
@@ -1085,8 +1103,7 @@ private:
                 1});
             return destination;
         }
-        if (language_ != frontend::Language::Vhdl2008
-            && expression.kind == ExpressionKind::Slice
+        if (expression.kind == ExpressionKind::Slice
             && expression.operands.size() == 3) {
             const auto source_width =
                 infer_width(expression.operands[0]);
@@ -1200,6 +1217,67 @@ private:
                     "FSIM-ELAB-069",
                     "concatenation result width is outside the supported "
                     "range",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(width, result_domain);
+            process_.operations.emplace_back(Concatenate{
+                destination,
+                std::move(operands),
+                static_cast<std::uint32_t>(width)});
+            return destination;
+        }
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Binary
+            && expression.text == "&"
+            && expression.operands.size() == 2) {
+            std::vector<RegisterId> operands;
+            operands.reserve(2);
+            std::size_t width = 0;
+            auto result_domain = frontend::ValueDomain::Bit2;
+            for (const auto& operand_expression : expression.operands) {
+                const auto operand_width =
+                    infer_width(operand_expression);
+                if (!operand_width || *operand_width == 0
+                    || *operand_width
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || *operand_width
+                        > std::numeric_limits<std::size_t>::max()
+                            - width) {
+                    report(
+                        "FSIM-ELAB-069",
+                        "VHDL concatenation operand width is not "
+                        "statically inferable or the total width "
+                        "overflows",
+                        operand_expression.span);
+                    return std::nullopt;
+                }
+                const auto operand = lower_expression(
+                    operand_expression, *operand_width);
+                if (!operand) {
+                    return std::nullopt;
+                }
+                operands.push_back(*operand);
+                width += register_width(*operand);
+                const auto domain = register_domain(*operand);
+                if (domain == frontend::ValueDomain::Logic9) {
+                    result_domain = frontend::ValueDomain::Logic9;
+                } else if (
+                    domain != frontend::ValueDomain::Bit2
+                    && domain != frontend::ValueDomain::Boolean
+                    && result_domain
+                        != frontend::ValueDomain::Logic9) {
+                    result_domain = frontend::ValueDomain::Logic4;
+                }
+            }
+            if (width == 0
+                || width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-069",
+                    "VHDL concatenation result width is outside the "
+                    "supported range",
                     expression.span);
                 return std::nullopt;
             }
@@ -1607,6 +1685,13 @@ private:
     }
 
     std::optional<std::size_t> infer_width(const Expression& expression) const {
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Call
+            && expression.operands.size() == 1
+            && (locals_.contains(expression.text)
+                || signals_.contains(expression.text))) {
+            return std::size_t{1};
+        }
         if (expression.kind == ExpressionKind::Index
             && expression.operands.size() == 2) {
             return std::size_t{1};
@@ -1639,6 +1724,29 @@ private:
             return width == 0
                 ? std::nullopt
                 : std::optional<std::size_t>{width};
+        }
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Binary
+            && expression.text == "&"
+            && expression.operands.size() == 2) {
+            const auto lhs = infer_width(expression.operands[0]);
+            const auto rhs = infer_width(expression.operands[1]);
+            if (!lhs || !rhs
+                || *rhs
+                    > std::numeric_limits<std::size_t>::max()
+                        - *lhs) {
+                return std::nullopt;
+            }
+            return *lhs + *rhs;
+        }
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::LogicLiteral) {
+            return std::size_t{1};
+        }
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::StringLiteral
+            && expression.text.size() >= 2) {
+            return expression.text.size() - 2;
         }
         if (expression.kind == ExpressionKind::LogicLiteral) {
             const auto quote = expression.text.find('\'');
@@ -1756,9 +1864,17 @@ private:
             });
     }
 
-    static void collect_identifiers(
-        const Expression& expression, std::set<std::string>& output) {
+    void collect_identifiers(
+        const Expression& expression,
+        std::set<std::string>& output) const {
         if (expression.kind == ExpressionKind::Identifier) {
+            output.insert(expression.text);
+        } else if (
+            language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Call
+            && expression.operands.size() == 1
+            && (signals_.contains(expression.text)
+                || locals_.contains(expression.text))) {
             output.insert(expression.text);
         }
         for (const auto& operand : expression.operands) {
@@ -1766,9 +1882,9 @@ private:
         }
     }
 
-    static void collect_statement_identifiers(
+    void collect_statement_identifiers(
         const std::vector<Statement>& statements,
-        std::set<std::string>& output) {
+        std::set<std::string>& output) const {
         for (const auto& statement : statements) {
             switch (statement.kind) {
             case StatementKind::Assignment:

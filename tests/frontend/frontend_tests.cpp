@@ -189,6 +189,70 @@ end architecture;
           "unsupported actuals must not appear as valid expressions");
 }
 
+void test_vhdl_select_and_concatenation_expressions() {
+  const auto result = parse_text(
+      "select_concat.vhd",
+      R"(
+entity select_concat is
+  port (
+    descending : in std_logic_vector(7 downto 4);
+    ascending : in std_logic_vector(2 to 5);
+    selected : out std_logic;
+    part : out std_logic_vector(1 downto 0);
+    joined : out std_logic_vector(5 downto 0)
+  );
+end entity;
+
+architecture rtl of select_concat is
+begin
+  observe: process(descending, ascending)
+  begin
+    selected <= descending(5);
+    part <= ascending(3 to 4);
+    joined <= descending(7 downto 6) & "10" & ascending(4 to 5);
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      result.ok(),
+      "VHDL indexed, slice, and concatenation expressions must parse");
+  const auto* entity =
+      result.design.find(UnitKind::VhdlEntity, "select_concat");
+  require(
+      entity != nullptr
+          && entity->ports[0].type.packed_range
+          && entity->ports[0].type.packed_range->descending
+          && entity->ports[1].type.packed_range
+          && !entity->ports[1].type.packed_range->descending,
+      "VHDL port range directions");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->processes.front().statements.size() == 3,
+      "VHDL select/concatenation process");
+  const auto& statements =
+      architecture->processes.front().statements;
+  require(
+      statements[0].value.kind == ExpressionKind::Call
+          && statements[0].value.text == "descending"
+          && statements[0].value.operands.size() == 1,
+      "ambiguous VHDL indexed-name syntax retained for semantic resolution");
+  require(
+      statements[1].value.kind == ExpressionKind::Slice
+          && statements[1].value.text == "to"
+          && statements[1].value.operands.size() == 3,
+      "VHDL ascending slice expression");
+  require(
+      statements[2].value.kind == ExpressionKind::Binary
+          && statements[2].value.text == "&"
+          && statements[2].value.operands[0].kind
+              == ExpressionKind::Binary,
+      "left-associated VHDL concatenation expression");
+}
+
 void test_systemverilog_vertical_slice() {
   constexpr std::string_view source = R"(
 module counter(
@@ -1180,6 +1244,7 @@ int main() {
         "unrepresentable 2^64-element range must not overflow");
     test_vhdl_vertical_slice();
     test_vhdl_instance_diagnostics();
+    test_vhdl_select_and_concatenation_expressions();
     test_systemverilog_vertical_slice();
     test_non_ansi_verilog_ports();
     test_diagnostics_and_spans();
