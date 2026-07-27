@@ -86,6 +86,10 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.assert_failed = assert_failed;
     runtime.write_update = write_update;
     runtime.write_after = write_after;
+    runtime.flags =
+        context.execution_points_enabled()
+            ? FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS
+            : 0;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -170,6 +174,10 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       case compiler::JitResumeStatus::yielded:
         require_boundary<runtime::simir::Yield>(
             result.instruction, "yield");
+        break;
+      case compiler::JitResumeStatus::debug_point:
+        require_boundary<runtime::simir::DebugPoint>(
+            result.instruction, "debug point");
         break;
       case compiler::JitResumeStatus::stopped:
         require_boundary<runtime::simir::Stop>(
@@ -1268,8 +1276,10 @@ int handle_run(
 void print_debug_help(std::ostream& output) {
   output
       << "Commands: continue|run [DURATION], run-until TIME, "
-         "step delta|time,\n"
-      << "          break time TIME, break signal SIGNAL, breakpoints,\n"
+         "step statement|process|delta|time,\n"
+      << "          break source [PATH:]LINE, break time TIME, "
+         "break signal SIGNAL,\n"
+      << "          breakpoints,\n"
       << "          delete ID, clear, scope [PATH], scopes [PATH], "
          "signals [PATH],\n"
       << "          show SIGNAL,\n"
@@ -1289,6 +1299,7 @@ std::vector<std::string> words(const std::string& line) {
 enum class DebugBreakpointKind {
   time,
   signal,
+  source,
 };
 
 struct DebugBreakpoint {
@@ -1297,6 +1308,7 @@ struct DebugBreakpoint {
   SimulationTick time{};
   SignalId signal{};
   std::string path;
+  std::uint32_t line{};
 };
 
 struct DebugBreakpointHit {
@@ -1344,6 +1356,7 @@ class DebuggerSession final {
 
   ~DebuggerSession() {
     simulation_.remove_signal_change_hook(observer_);
+    simulation_.set_execution_point_hook({});
     install_interrupt_hook(simulation_);
   }
 
@@ -1440,13 +1453,16 @@ class DebuggerSession final {
       return;
     }
     if (command[0] == "step" && command.size() == 2) {
-      if (command[1] != "delta" && command[1] != "time") {
-        output_
-            << "statement and process stepping require debug SimIR source "
-               "maps; use step delta or step time\n";
+      if (command[1] == "statement") {
+        step_execution(false);
+      } else if (command[1] == "process") {
+        step_execution(true);
+      } else if (command[1] == "delta" || command[1] == "time") {
+        step(command[1] == "delta");
+      } else {
+        output_ << "usage: step statement|process|delta|time\n";
         return;
       }
-      step(command[1] == "delta");
       return;
     }
     output_ << "unknown or malformed command; type help\n";
@@ -1670,7 +1686,38 @@ class DebuggerSession final {
               << breakpoint.path << '\n';
       return;
     }
-    output_ << "usage: break time TIME | break signal SIGNAL\n";
+    if (kind == "source") {
+      const auto separator = location.rfind(':');
+      const auto line_text =
+          separator == std::string_view::npos
+              ? location
+              : location.substr(separator + 1);
+      std::uint64_t line{};
+      const auto [end, conversion_error] = std::from_chars(
+          line_text.data(), line_text.data() + line_text.size(), line);
+      if (conversion_error != std::errc{}
+          || end != line_text.data() + line_text.size()
+          || line == 0
+          || line > std::numeric_limits<std::uint32_t>::max()) {
+        output_ << "source breakpoint must be LINE or PATH:LINE\n";
+        return;
+      }
+      breakpoint.kind = DebugBreakpointKind::source;
+      breakpoint.id = next_breakpoint_++;
+      breakpoint.line = static_cast<std::uint32_t>(line);
+      if (separator != std::string_view::npos) {
+        breakpoint.path = std::string(location.substr(0, separator));
+      }
+      breakpoints_.push_back(breakpoint);
+      output_ << "breakpoint " << breakpoint.id << " set at ";
+      if (!breakpoint.path.empty()) {
+        output_ << breakpoint.path << ':';
+      }
+      output_ << breakpoint.line << '\n';
+      return;
+    }
+    output_ << "usage: break time TIME | break signal SIGNAL | "
+               "break source [PATH:]LINE\n";
   }
 
   void list_breakpoints() const {
@@ -1685,8 +1732,14 @@ class DebuggerSession final {
         if (!breakpoint.path.empty()) {
           output_ << " (" << breakpoint.path << ")";
         }
-      } else {
+      } else if (breakpoint.kind == DebugBreakpointKind::signal) {
         output_ << "signal " << breakpoint.path;
+      } else {
+        output_ << "source ";
+        if (!breakpoint.path.empty()) {
+          output_ << breakpoint.path << ':';
+        }
+        output_ << breakpoint.line;
       }
       output_ << '\n';
     }
@@ -1733,10 +1786,29 @@ class DebuggerSession final {
     return result;
   }
 
+  [[nodiscard]] static bool source_path_matches(
+      const std::string_view requested,
+      const std::string_view actual) {
+    if (requested.empty() || requested == actual) {
+      return true;
+    }
+    return std::filesystem::path{actual}.filename()
+        == std::filesystem::path{requested}.filename();
+  }
+
+  [[nodiscard]] static bool is_statement_point(
+      const runtime::simir::ExecutionPointKind kind) noexcept {
+    return kind == runtime::simir::ExecutionPointKind::statement
+        || kind == runtime::simir::ExecutionPointKind::wait
+        || kind == runtime::simir::ExecutionPointKind::assertion;
+  }
+
   void install_execution_hook(
       const std::optional<DebugBreakpoint>& time_breakpoint,
       const std::function<bool(runtime::Scheduler&, runtime::SchedulerPhase)>&
-          additional_stop = {}) {
+          additional_stop = {},
+      const std::function<bool(const runtime::simir::ExecutionPoint&)>&
+          additional_execution_stop = {}) {
     simulation_.set_safe_point_hook(
         [this, time_breakpoint, additional_stop](
             runtime::Scheduler& scheduler,
@@ -1757,6 +1829,52 @@ class DebuggerSession final {
             scheduler.request_stop();
           }
         });
+    simulation_.set_execution_point_hook(
+        [this, additional_execution_stop](
+            runtime::Scheduler& scheduler,
+            const runtime::simir::ExecutionPoint& point) {
+          if (interrupt_requested.exchange(false, std::memory_order_relaxed)) {
+            current_execution_point_ = point;
+            scheduler.request_stop();
+            return;
+          }
+          if (!hit_ && is_statement_point(point.kind)) {
+            const auto found = std::find_if(
+                breakpoints_.begin(), breakpoints_.end(),
+                [&](const DebugBreakpoint& breakpoint) {
+                  return breakpoint.kind == DebugBreakpointKind::source
+                      && breakpoint.line == point.source.line
+                      && source_path_matches(
+                          breakpoint.path, point.source.path);
+                });
+            if (found != breakpoints_.end()) {
+              hit_ = DebugBreakpointHit{
+                  found->id,
+                  point.source.path + ":"
+                      + std::to_string(point.source.line) + ":"
+                      + std::to_string(point.source.column)};
+              current_execution_point_ = point;
+              scheduler.request_stop();
+              return;
+            }
+          }
+          if (additional_execution_stop
+              && additional_execution_stop(point)) {
+            current_execution_point_ = point;
+            scheduler.request_stop();
+          }
+        });
+  }
+
+  void report_execution_point() {
+    if (!current_execution_point_) {
+      return;
+    }
+    const auto& point = *current_execution_point_;
+    output_ << "process "
+            << simulation_.design().processes().at(point.process).name
+            << " at " << point.source.path << ':' << point.source.line
+            << ':' << point.source.column << '\n';
   }
 
   void report_result(const runtime::RunResult& result) {
@@ -1764,6 +1882,7 @@ class DebuggerSession final {
       output_ << "hit breakpoint " << hit_->id << ": "
               << hit_->description << '\n';
     }
+    report_execution_point();
     output_
         << (simulation_.finished() ? "simulation finished" : "stopped")
         << " at time " << result.time << ", delta " << result.delta << '\n';
@@ -1794,6 +1913,7 @@ class DebuggerSession final {
       effective_limit = time_breakpoint->time;
     }
     hit_.reset();
+    current_execution_point_.reset();
     install_execution_hook(time_breakpoint);
     try {
       simulation_.clear_stop();
@@ -1821,6 +1941,7 @@ class DebuggerSession final {
     const auto time_breakpoint =
         earliest_time_breakpoint(start_time, std::nullopt);
     hit_.reset();
+    current_execution_point_.reset();
     install_execution_hook(
         time_breakpoint,
         [start_time, delta_step](
@@ -1851,6 +1972,55 @@ class DebuggerSession final {
     install_interrupt_hook(simulation_);
   }
 
+  void step_execution(const bool process_step) {
+    if (!can_execute()) {
+      return;
+    }
+    auto selected_process =
+        std::make_shared<std::optional<runtime::simir::ProcessId>>(
+            current_execution_point_
+                ? std::optional{current_execution_point_->process}
+                : std::nullopt);
+    hit_.reset();
+    current_execution_point_.reset();
+    install_execution_hook(
+        std::nullopt,
+        {},
+        [process_step, selected_process](
+            const runtime::simir::ExecutionPoint& point) {
+          if (!process_step) {
+            if (!is_statement_point(point.kind)) {
+              return false;
+            }
+            if (!*selected_process) {
+              *selected_process = point.process;
+              return true;
+            }
+            return point.process == **selected_process;
+          }
+          if (!*selected_process) {
+            if (point.kind
+                == runtime::simir::ExecutionPointKind::process_entry) {
+              *selected_process = point.process;
+            }
+            return false;
+          }
+          return point.process == **selected_process
+              && point.kind
+                  == runtime::simir::ExecutionPointKind::process_suspend;
+        });
+    try {
+      simulation_.clear_stop();
+      executing_ = true;
+      ExecutionGuard guard{executing_};
+      const auto result = simulation_.run();
+      report_result(result);
+    } catch (const std::exception& exception) {
+      error_ << exception.what() << '\n';
+    }
+    install_interrupt_hook(simulation_);
+  }
+
   Simulation& simulation_;
   std::ostream& output_;
   std::ostream& error_;
@@ -1858,6 +2028,7 @@ class DebuggerSession final {
   std::vector<std::pair<std::string, SignalId>> signal_paths_;
   std::vector<DebugBreakpoint> breakpoints_;
   std::optional<DebugBreakpointHit> hit_;
+  std::optional<runtime::simir::ExecutionPoint> current_execution_point_;
   std::uint64_t next_breakpoint_{1};
   std::uint64_t observer_{};
   bool executing_{};
@@ -2608,6 +2779,10 @@ void Simulation::remove_signal_change_hook(const std::uint64_t token) noexcept {
 
 void Simulation::set_safe_point_hook(runtime::Scheduler::SafePointHook hook) {
   impl_->interpreter->scheduler().set_safe_point_hook(std::move(hook));
+}
+
+void Simulation::set_execution_point_hook(ExecutionPointHook hook) {
+  impl_->interpreter->set_execution_point_hook(std::move(hook));
 }
 
 int run_debug_repl(

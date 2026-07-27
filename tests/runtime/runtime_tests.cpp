@@ -1188,6 +1188,65 @@ void test_simir_assertion_metadata() {
   }
 }
 
+void test_simir_execution_point_ordering() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto signal = interpreter.add_signal(
+      {"value", PackedLogic4::from_msb_string("X")});
+  for (ProcessId id = 0; id < 2; ++id) {
+    Process process;
+    process.id = id;
+    process.name = "process_" + std::to_string(id);
+    process.register_count = 1;
+    process.operations = {
+        DebugPoint{
+            DebugPointKind::statement,
+            SourceLocation{
+                "execution_points.sv",
+                static_cast<std::uint32_t>(10 + id),
+                3}},
+        LoadConstant{
+            0,
+            PackedLogic4::from_msb_string(id == 0 ? "0" : "1")},
+        WriteBlocking{signal, 0},
+        Halt{},
+    };
+    (void)interpreter.add_process(std::move(process));
+  }
+  std::vector<ProcessId> points;
+  interpreter.set_execution_point_hook(
+      [&](Scheduler& scheduler, const ExecutionPoint& point) {
+        if (point.kind == ExecutionPointKind::statement) {
+          points.push_back(point.process);
+          scheduler.request_stop();
+        }
+      });
+  interpreter.start();
+  const auto first = interpreter.run();
+  require(first.status == RunStatus::stopped,
+          "first statement safe point must stop");
+  require(interpreter.signal_value(signal).to_msb_string() == "X",
+          "a source stop occurs before its statement");
+
+  interpreter.scheduler().clear_stop();
+  const auto second = interpreter.run();
+  require(second.status == RunStatus::stopped,
+          "second statement safe point must stop");
+  require(interpreter.signal_value(signal).to_msb_string() == "0",
+          "the lower-ID process must finish before the next process stops");
+
+  interpreter.scheduler().clear_stop();
+  const auto third = interpreter.run();
+  require(third.status == RunStatus::completed,
+          "execution-point continuation must complete");
+  require(interpreter.signal_value(signal).to_msb_string() == "1",
+          "the later process must resume after the earlier process");
+  require(points == std::vector<ProcessId>{0, 1},
+          "execution-point process ordering");
+}
+
 void test_vcd() {
   using namespace fsim::runtime;
 
@@ -1238,6 +1297,7 @@ int main() {
     test_simir_alternate_executor_cpp_exception_containment();
     test_simir_alternate_executor_validation();
     test_simir_assertion_metadata();
+    test_simir_execution_point_ordering();
     test_vcd();
   } catch (const std::exception &error) {
     std::cerr << "runtime test failure: " << error.what() << '\n';

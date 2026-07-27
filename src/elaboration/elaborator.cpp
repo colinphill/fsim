@@ -267,6 +267,7 @@ public:
         if (waits_before_first_execution) {
             process_.operations.emplace_back(WaitSensitivity{});
         }
+        emit_debug_point(DebugPointKind::process_entry, source.span);
         if (vhdl_edge_guard != nullptr) {
             // The frontend refines the sensitivity edge from this canonical
             // idiom. The scheduler now enforces the predicate, so lower only
@@ -310,6 +311,7 @@ public:
         register_domains_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = name + ".concurrent_" + std::to_string(order);
+        emit_debug_point(DebugPointKind::process_entry, statement.span);
 
         std::set<std::string> dependencies;
         collect_identifiers(statement.value, dependencies);
@@ -374,6 +376,15 @@ private:
     }
 
     void lower_statement(const Statement& statement) {
+        if (statement.kind != StatementKind::Block) {
+            auto kind = DebugPointKind::statement;
+            if (statement.kind == StatementKind::Assert) {
+                kind = DebugPointKind::assertion;
+            } else if (statement.kind == StatementKind::Delay) {
+                kind = DebugPointKind::wait;
+            }
+            emit_debug_point(kind, statement.span);
+        }
         switch (statement.kind) {
         case StatementKind::Assignment:
             lower_assignment(statement);
@@ -401,6 +412,17 @@ private:
         case StatementKind::Null:
             break;
         }
+    }
+
+    void emit_debug_point(
+        const DebugPointKind kind,
+        const frontend::SourceSpan& span) {
+        process_.operations.emplace_back(DebugPoint{
+            kind,
+            SourceLocation{
+                span.source_name,
+                static_cast<std::uint32_t>(span.begin.line),
+                static_cast<std::uint32_t>(span.begin.column)}});
     }
 
     void lower_assert(const Statement& statement) {

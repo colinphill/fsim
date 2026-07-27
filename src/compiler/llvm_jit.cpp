@@ -48,6 +48,7 @@ using runtime::simir::Assert;
 using runtime::simir::Binary;
 using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
+using runtime::simir::DebugPoint;
 using runtime::simir::EdgeKind;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
@@ -86,7 +87,9 @@ static_assert(offsetof(fsim_jit_runtime_v1, write_signal) == 24);
 static_assert(offsetof(fsim_jit_runtime_v1, assert_failed) == 32);
 static_assert(offsetof(fsim_jit_runtime_v1, write_update) == 40);
 static_assert(offsetof(fsim_jit_runtime_v1, write_after) == 48);
-static_assert(sizeof(fsim_jit_runtime_v1) == 56);
+static_assert(offsetof(fsim_jit_runtime_v1, flags) == 56);
+static_assert(offsetof(fsim_jit_runtime_v1, reserved) == 60);
+static_assert(sizeof(fsim_jit_runtime_v1) == 64);
 static_assert(sizeof(fsim_jit_frame_v1) == 56);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -283,6 +286,7 @@ struct ValidatedProcess {
   bool requires_resume{};
   bool uses_write_update{};
   bool uses_write_after{};
+  bool uses_debug_points{};
 };
 
 [[nodiscard]] ValidatedProcess
@@ -529,6 +533,9 @@ validate_process(const Process &process,
             [&](const Assert &operation) {
               record_use(operation.condition, index);
               constrain_width(operation.condition, 1U, index);
+            },
+            [&](const DebugPoint&) {
+              result.uses_debug_points = true;
             },
             [&](const Jump &operation) {
               validate_target(operation.target, index, "jump");
@@ -907,6 +914,16 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "source-line", value.source.line);
               add_key_u64(builder, "source-column", value.source.column);
             },
+            [&](const DebugPoint& value) {
+              builder.add("operation", "DebugPoint");
+              add_key_u64(
+                  builder, "kind",
+                  static_cast<std::underlying_type_t<
+                      runtime::simir::DebugPointKind>>(value.kind));
+              builder.add("source-path", value.source.path);
+              add_key_u64(builder, "source-line", value.source.line);
+              add_key_u64(builder, "source-column", value.source.column);
+            },
             [&](const Jump &value) {
               builder.add("operation", "Jump");
               add_key_u64(builder, "target", value.target);
@@ -1252,14 +1269,16 @@ void optimize_module(llvm::Module &module,
 void lower_process(llvm::Module &module, const std::string &symbol,
                    const Process &process,
                    const std::span<const std::uint32_t> signal_widths,
-                   const ValidatedProcess &validated) {
+                   const ValidatedProcess &validated,
+                   const bool debug_instrumentation) {
   auto &context = module.getContext();
   auto *i32 = llvm::Type::getInt32Ty(context);
   auto *i64 = llvm::Type::getInt64Ty(context);
   auto *pointer = llvm::PointerType::getUnqual(context);
   auto *runtime_type = llvm::StructType::create(
       context,
-      {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer},
+      {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
+       i32, i32},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -1305,6 +1324,12 @@ void lower_process(llvm::Module &module, const std::string &symbol,
     write_after_callback = builder.CreateLoad(
         pointer, builder.CreateStructGEP(runtime_type, runtime_argument, 7),
         "write_after");
+  }
+  llvm::Value* runtime_flags = nullptr;
+  if (validated.uses_debug_points) {
+    runtime_flags = builder.CreateLoad(
+        i32, builder.CreateStructGEP(runtime_type, runtime_argument, 8),
+        "runtime.flags");
   }
 
   auto *read_type =
@@ -1517,6 +1542,31 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED, instruction, 0,
                   FSIM_JIT_FRAME_STATE_ASSERTION_FAILED, instruction);
             },
+            [&](const DebugPoint&) {
+              if (debug_instrumentation) {
+                return_result(
+                    FSIM_JIT_RESUME_STATUS_DEBUG_POINT, instruction, 0,
+                    FSIM_JIT_FRAME_STATE_READY, next_instruction);
+              } else {
+                auto* enabled = builder.CreateICmpNE(
+                    builder.CreateAnd(
+                        runtime_flags,
+                        llvm::ConstantInt::get(
+                            i32, FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS)),
+                    llvm::ConstantInt::get(i32, 0));
+                auto* enabled_block = llvm::BasicBlock::Create(
+                    context,
+                    "debug.enabled." + std::to_string(index),
+                    function);
+                builder.CreateCondBr(
+                    enabled, enabled_block,
+                    instruction_blocks[index + 1]);
+                builder.SetInsertPoint(enabled_block);
+                return_result(
+                    FSIM_JIT_RESUME_STATUS_DEBUG_POINT, instruction, 0,
+                    FSIM_JIT_FRAME_STATE_READY, next_instruction);
+              }
+            },
             [&](const Jump &operation) {
               builder.CreateBr(instruction_blocks[operation.target]);
             },
@@ -1627,6 +1677,7 @@ struct LlvmJit::Impl {
     bool requires_resume{};
     bool uses_write_update{};
     bool uses_write_after{};
+    bool uses_debug_points{};
   };
 
   struct NativeEntry {
@@ -1760,6 +1811,7 @@ void LlvmJit::add_process_module(
         validated.requires_resume,
         validated.uses_write_update,
         validated.uses_write_after,
+        validated.uses_debug_points,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -1782,7 +1834,8 @@ void LlvmJit::add_process_module(
   for (const auto& item : prepared) {
     lower_process(
         *module, item.symbol, *item.process, signal_widths,
-        item.validated);
+        item.validated,
+        impl_->options.optimization == JitOptimizationLevel::o0);
   }
   if (auto message = verify_error(*module); !message.empty()) {
     throw LlvmJitError(
@@ -1943,7 +1996,7 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_write_after) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size < offsetof(fsim_jit_runtime_v1, flags)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include write_after");
     }
@@ -1951,6 +2004,12 @@ LlvmJit::resume(const JitProcessHandle process,
       throw LlvmJitError(
           "JIT runtime ABI requires write_after for this process");
     }
+  }
+  if (entry.info.uses_debug_points
+      && runtime.struct_size
+          < offsetof(fsim_jit_runtime_v1, reserved)) {
+    throw LlvmJitError(
+        "JIT runtime ABI structure does not include debug-point flags");
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {
     throw LlvmJitError("JIT frame ABI version mismatch");
@@ -2033,6 +2092,11 @@ LlvmJit::resume(const JitProcessHandle process,
       throw LlvmJitError("generated process returned an invalid frame state");
     }
     return JitResumeStatus::wait_sensitivity;
+  case FSIM_JIT_RESUME_STATUS_DEBUG_POINT:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::debug_point;
   case FSIM_JIT_RESUME_STATUS_YIELDED:
     if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
       throw LlvmJitError("generated process returned an invalid frame state");
@@ -2094,6 +2158,7 @@ LlvmJit::execute(const JitProcessHandle process,
   case JitResumeStatus::wait_on:
   case JitResumeStatus::wait_sensitivity:
   case JitResumeStatus::yielded:
+  case JitResumeStatus::debug_point:
     throw LlvmJitError(
         "compiled process suspended during one-shot execution");
   default:

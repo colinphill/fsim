@@ -112,6 +112,10 @@ typedef struct fsim_object_info {
   fsim_string_view_t type_name;
 } fsim_object_info_t;
 
+/*
+ * Executable source safe points carry an FSIM_OBJECT_PROCESS handle.
+ * Scheduler-only delta/time boundaries use FSIM_INVALID_OBJECT.
+ */
 typedef void (*fsim_safe_point_callback_t)(
     fsim_session_t session,
     fsim_object_t process,

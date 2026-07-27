@@ -44,6 +44,8 @@ struct Session {
   std::uint32_t design_generation{1};
   std::uint64_t max_deltas{100'000};
   std::uint64_t seed{1};
+  std::optional<fsim::runtime::simir::ProcessId>
+      current_execution_process;
   bool finished{};
 };
 
@@ -223,7 +225,8 @@ void lifecycle(Session& session, const fsim_lifecycle_event_t event) {
 
 void invoke_safe_point(
     Session& session,
-    fsim::runtime::Scheduler& scheduler) {
+    fsim::runtime::Scheduler& scheduler,
+    const fsim_object_t process = FSIM_INVALID_OBJECT) {
   if (session.stop_requested.exchange(false, std::memory_order_relaxed)) {
     session.external_stop_seen.store(true, std::memory_order_relaxed);
     scheduler.request_stop();
@@ -232,7 +235,7 @@ void invoke_safe_point(
     CallbackGuard guard{session};
     session.callbacks.safe_point(
         session.handle,
-        FSIM_INVALID_OBJECT,
+        process,
         scheduler.now(),
         scheduler.delta(),
         session.callbacks.user_data);
@@ -263,6 +266,17 @@ void attach_callbacks(Session& session) {
           fsim::runtime::SchedulerPhase) {
         invoke_safe_point(*state, scheduler);
       });
+  if (session.callbacks.safe_point) {
+    session.simulation->set_execution_point_hook(
+        [state](
+            fsim::runtime::Scheduler& scheduler,
+            const fsim::runtime::simir::ExecutionPoint& point) {
+          invoke_safe_point(
+              *state, scheduler, process_handle(*state, point.process));
+        });
+  } else {
+    session.simulation->set_execution_point_hook({});
+  }
 }
 
 fsim_status_t runtime_failure(Session& session, const std::exception& error) {
@@ -505,6 +519,7 @@ fsim_status_t fsim_session_load_project(
     value.simulation.reset();
     advance_design_generation(value);
     value.finished = false;
+    value.current_execution_process.reset();
     auto loaded = fsim::project::load(
         std::filesystem::path(manifest_path), value.diagnostics);
     if (!loaded) {
@@ -545,6 +560,7 @@ fsim_status_t fsim_session_build(const fsim_session_t session) {
     value.simulation.reset();
     advance_design_generation(value);
     value.finished = false;
+    value.current_execution_process.reset();
     if (!value.project) {
       value.diagnostics.error(
           "FSIM-API-0002", "load a project before building it");
@@ -855,10 +871,51 @@ fsim_status_t fsim_session_step(
       return FSIM_STATUS_INVALID_ARGUMENT;
     }
     if (kind == FSIM_STEP_STATEMENT || kind == FSIM_STEP_PROCESS) {
-      value.diagnostics.error(
-          "FSIM-API-STEP-0001",
-          "statement and process stepping require debug source maps");
-      return FSIM_STATUS_UNAVAILABLE;
+      auto* state = &value;
+      value.simulation->set_execution_point_hook(
+          [state, kind](
+              fsim::runtime::Scheduler& scheduler,
+              const fsim::runtime::simir::ExecutionPoint& point) {
+            invoke_safe_point(
+                *state, scheduler,
+                process_handle(*state, point.process));
+            bool stop = false;
+            if (kind == FSIM_STEP_STATEMENT) {
+              const auto statement =
+                  point.kind
+                      == fsim::runtime::simir::ExecutionPointKind::statement
+                  || point.kind
+                      == fsim::runtime::simir::ExecutionPointKind::wait
+                  || point.kind
+                      == fsim::runtime::simir::ExecutionPointKind::assertion;
+              stop =
+                  statement
+                  && (!state->current_execution_process
+                      || point.process
+                          == *state->current_execution_process);
+            } else if (!state->current_execution_process) {
+              if (point.kind
+                  == fsim::runtime::simir::ExecutionPointKind::
+                      process_entry) {
+                state->current_execution_process = point.process;
+              }
+            } else {
+              stop =
+                  point.process == *state->current_execution_process
+                  && point.kind
+                      == fsim::runtime::simir::ExecutionPointKind::
+                          process_suspend;
+            }
+            if (stop) {
+              state->current_execution_process = point.process;
+              state->external_stop_seen.store(
+                  true, std::memory_order_relaxed);
+              scheduler.request_stop();
+            }
+          });
+      const auto status = run_session(value, std::nullopt);
+      attach_callbacks(value);
+      return status == FSIM_STATUS_STOPPED ? FSIM_STATUS_OK : status;
     }
     const auto start_time = value.simulation->now();
     auto* state = &value;

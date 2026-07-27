@@ -143,6 +143,8 @@ extern "C" void write_after(void *opaque, const std::uint32_t signal,
       &assert_failed,
       &write_update,
       &write_after,
+      0,
+      0,
   };
 }
 
@@ -1143,6 +1145,76 @@ void test_initialized_bval_slot(const JitOptimizationLevel optimization,
   assert((runtime.signals[1] == EncodedSignal{UINT64_C(0xa5), 0}));
 }
 
+void test_debug_point_instrumentation() {
+  Process process;
+  process.id = 0;
+  process.name = "debug_point";
+  process.operations = {
+      DebugPoint{
+          DebugPointKind::statement,
+          SourceLocation{"debug_point.sv", 7, 3}},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto run =
+      [&](const JitOptimizationLevel optimization,
+          const std::string_view symbol) {
+        LlvmJit jit{LlvmJitOptions{optimization, {}}};
+        jit.add_process(symbol, process, no_signals);
+        const auto handle = jit.lookup(symbol);
+        std::array<std::uint64_t, 0> aval{};
+        std::array<std::uint64_t, 0> bval{};
+        fsim_jit_frame_v1 frame{};
+        jit.initialize_frame(handle, frame, aval, bval);
+        fsim_jit_resume_result_v1 result{
+            FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1,
+            static_cast<std::uint32_t>(
+                sizeof(fsim_jit_resume_result_v1)),
+            0,
+            FSIM_JIT_INVALID_INSTRUCTION,
+            0,
+        };
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        auto short_descriptor = descriptor;
+        short_descriptor.struct_size =
+            static_cast<std::uint32_t>(
+                offsetof(fsim_jit_runtime_v1, flags));
+        expect_error(
+            [&] {
+              (void)jit.resume(
+                  handle, short_descriptor, frame, result);
+            },
+            "does not include debug-point flags");
+        if (optimization == JitOptimizationLevel::o0) {
+          assert(
+              jit.resume(handle, descriptor, frame, result)
+              == JitResumeStatus::debug_point);
+          assert(result.instruction == 0);
+          assert(frame.program_counter == 1);
+          assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+        }
+        assert(
+            jit.resume(handle, descriptor, frame, result)
+            == JitResumeStatus::completed);
+        assert(result.instruction == 1);
+        if (optimization == JitOptimizationLevel::o2) {
+          jit.initialize_frame(handle, frame, aval, bval);
+          descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS;
+          assert(
+              jit.resume(handle, descriptor, frame, result)
+              == JitResumeStatus::debug_point);
+          assert(result.instruction == 0);
+          assert(frame.program_counter == 1);
+          assert(
+              jit.resume(handle, descriptor, frame, result)
+              == JitResumeStatus::completed);
+        }
+      };
+  run(JitOptimizationLevel::o0, "debug_point_o0");
+  run(JitOptimizationLevel::o2, "debug_point_o2");
+}
+
 [[nodiscard]] Process make_cached_process(const std::string_view value) {
   Process process;
   process.id = 11;
@@ -1216,6 +1288,21 @@ make_cached_wait_process(const bool static_wait,
           "cached assertion",
           severity,
           SourceLocation{"cache_assertion.sv", source_line, 3}},
+      Halt{},
+  };
+  return process;
+}
+
+[[nodiscard]] Process make_cached_debug_point_process(
+    const DebugPointKind kind,
+    const std::uint32_t source_line) {
+  Process process;
+  process.id = 16;
+  process.name = "cached_debug_point_process";
+  process.operations = {
+      DebugPoint{
+          kind,
+          SourceLocation{"cache_debug_point.sv", source_line, 5}},
       Halt{},
   };
   return process;
@@ -1752,6 +1839,41 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     expect_cache_statistics(changed_metadata, 0, 1, 1);
   }
   assert(cached_object_paths(cache_directory).size() == 15);
+
+  constexpr std::string_view debug_symbol =
+      "persistent_cache_debug_point_process";
+  {
+    LlvmJit cold{options};
+    cold.add_process(
+        debug_symbol,
+        make_cached_debug_point_process(DebugPointKind::statement, 11),
+        no_signals);
+    assert(cold.lookup(debug_symbol));
+    expect_cache_statistics(cold, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 16);
+  {
+    LlvmJit warm{options};
+    warm.add_process(
+        debug_symbol,
+        make_cached_debug_point_process(DebugPointKind::statement, 11),
+        no_signals);
+    assert(warm.lookup(debug_symbol));
+    expect_cache_statistics(warm, 1, 0, 0);
+  }
+
+  // Debug-point kind and source location are generated behavior because the
+  // returned instruction indexes immutable SimIR metadata.
+  {
+    LlvmJit changed_metadata{options};
+    changed_metadata.add_process(
+        debug_symbol,
+        make_cached_debug_point_process(DebugPointKind::wait, 12),
+        no_signals);
+    assert(changed_metadata.lookup(debug_symbol));
+    expect_cache_statistics(changed_metadata, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 17);
 }
 
 void test_optimization_cache_invalidation(
@@ -2112,6 +2234,7 @@ int main() {
   test_scalar_truth_tables_and_64_bits();
   test_initialized_bval_slot(JitOptimizationLevel::o0, "initialized_bval_o0");
   test_initialized_bval_slot(JitOptimizationLevel::o2, "initialized_bval_o2");
+  test_debug_point_instrumentation();
   test_control_flow_at_level(JitOptimizationLevel::o0, "control_flow_o0");
   test_control_flow_at_level(JitOptimizationLevel::o2, "control_flow_o2");
   test_scheduled_callbacks_at_level(

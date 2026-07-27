@@ -913,12 +913,16 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       "delete 1\n"
       "continue\n"
       "delete 2\n"
+      "break source tb.sv:13\n"
+      "breakpoints\n"
       "run-until 2ns\n"
+      "delete 3\n"
+      "step statement\n"
+      "step process\n"
       "where\n"
       "break signal child_y\n"
       "clear\n"
       "breakpoints\n"
-      "step statement\n"
       "continue\n"
       "continue\n"
       "step delta\n"
@@ -957,14 +961,20 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       != std::string::npos);
   assert(
       transcript.find("hit breakpoint 2: time 1") != std::string::npos);
+  assert(
+      transcript.find("breakpoint 3 set at tb.sv:13")
+      != std::string::npos);
+  assert(
+      transcript.find(
+          "hit breakpoint 3: " + source.string() + ":13:")
+      != std::string::npos);
+  assert(
+      transcript.find(" at " + source.string() + ":14:")
+      != std::string::npos);
   assert(transcript.find("stopped at time 2") != std::string::npos);
   assert(transcript.find("time 2, delta") != std::string::npos);
   assert(transcript.find("cleared all breakpoints") != std::string::npos);
   assert(transcript.find("no breakpoints") != std::string::npos);
-  assert(
-      transcript.find(
-          "statement and process stepping require debug SimIR source maps")
-      != std::string::npos);
   assert(
       transcript.find("simulation finished at time 3")
       != std::string::npos);

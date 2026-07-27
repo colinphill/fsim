@@ -16,6 +16,7 @@ struct CallbackCounts {
   int lifecycle{};
   int values{};
   int safe_points{};
+  fsim_object_t last_safe_point_process{FSIM_INVALID_OBJECT};
   bool reentry_attempted{};
   fsim_status_t reentry_status{FSIM_STATUS_OK};
   bool callback_mutation_attempted{};
@@ -59,12 +60,15 @@ void value_change(
 
 void safe_point(
     fsim_session_t session,
-    fsim_object_t,
+    fsim_object_t process,
     fsim_time_t,
     std::uint64_t,
     void* user_data) {
   auto& state = *static_cast<CallbackCounts*>(user_data);
   ++state.safe_points;
+  if (process != FSIM_INVALID_OBJECT) {
+    state.last_safe_point_process = process;
+  }
   if (!state.reentry_attempted) {
     state.reentry_attempted = true;
     state.reentry_status =
@@ -295,6 +299,38 @@ max_deltas = 1000
   assert(rebuilt_q != old_q);
 
   assert(
+      fsim_session_step(session, FSIM_STEP_STATEMENT)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, rebuilt_q, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "X");
+  assert(counts.last_safe_point_process != FSIM_INVALID_OBJECT);
+  fsim_object_info_t safe_process_info{};
+  safe_process_info.struct_size = sizeof(safe_process_info);
+  safe_process_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session,
+          counts.last_safe_point_process,
+          &safe_process_info)
+      == FSIM_STATUS_OK);
+  assert(safe_process_info.kind == FSIM_OBJECT_PROCESS);
+  assert(
+      fsim_session_step(session, FSIM_STEP_PROCESS)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, rebuilt_q, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "0");
+
+  assert(fsim_session_build(session) == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(session, text("q"), &rebuilt_q)
+      == FSIM_STATUS_OK);
+  assert(
       fsim_session_step(session, FSIM_STEP_DELTA)
       == FSIM_STATUS_OK);
   assert(
@@ -333,7 +369,7 @@ max_deltas = 1000
       fsim_session_read_value(
           session, stopped_q, value, sizeof(value), &required)
       == FSIM_STATUS_OK);
-  assert(std::string(value) == "0");
+  assert(std::string(value) == "X");
   assert(fsim_session_run(session, 10) == FSIM_STATUS_STOPPED);
   assert(
       fsim_session_read_value(

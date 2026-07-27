@@ -25,7 +25,6 @@ therefore excluded.
 | `FSIM-API-0003` | error | A C API operation requires a successfully built design. |
 | `FSIM-API-ASSERT-0001` | assertion severity | A false HDL assertion stopped simulation through the C API; the diagnostic carries its process, source location, severity, and message. |
 | `FSIM-API-RUN-0001` | error | Simulation invoked through the C API failed at runtime. |
-| `FSIM-API-STEP-0001` | error | Statement or process stepping was requested without debug source maps. |
 | `FSIM-API-VALUE-0001` | error | A C API deposit or force value is invalid for the selected signal. |
 
 ## Project manifest

@@ -26,8 +26,10 @@ extern "C" {
 #define FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR UINT32_C(5)
 #define FSIM_JIT_RESUME_STATUS_WAIT_ON UINT32_C(6)
 #define FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY UINT32_C(7)
+#define FSIM_JIT_RESUME_STATUS_DEBUG_POINT UINT32_C(8)
 
 #define FSIM_JIT_INVALID_INSTRUCTION UINT32_MAX
+#define FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS UINT32_C(1)
 
 /*
  * Versioned plain-C boundary used by generated process functions.
@@ -71,6 +73,14 @@ typedef struct fsim_jit_runtime_v1 {
       uint64_t aval,
       uint64_t bval,
       uint64_t delay);
+
+  /*
+   * Append-only v1 execution controls. Generated O2 code tests the debug-point
+   * flag before returning a source boundary; the zero default has no callback
+   * or suspension overhead beyond that predictable branch.
+   */
+  uint32_t flags;
+  uint32_t reserved;
 } fsim_jit_runtime_v1;
 
 /*
@@ -95,6 +105,7 @@ typedef struct fsim_jit_frame_v1 {
  * Caller-owned result for one invocation. status mirrors the generated
  * function's return value. delay is meaningful only for WAIT_FOR. WAIT_ON and
  * WAIT_SENSITIVITY identify their immutable SimIR operands through instruction.
+ * DEBUG_POINT identifies its immutable source boundary the same way.
  */
 typedef struct fsim_jit_resume_result_v1 {
   uint32_t abi_version;

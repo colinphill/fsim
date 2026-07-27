@@ -115,6 +115,21 @@ struct SourceLocation {
   std::string path;
   std::uint32_t line{1};
   std::uint32_t column{1};
+
+  friend bool operator==(const SourceLocation&,
+                         const SourceLocation&) = default;
+};
+
+enum class DebugPointKind : std::uint8_t {
+  statement,
+  wait,
+  assertion,
+  process_entry,
+};
+
+struct DebugPoint {
+  DebugPointKind kind{DebugPointKind::statement};
+  SourceLocation source;
 };
 
 struct Assert {
@@ -133,7 +148,7 @@ struct Halt {};
 using Operation =
     std::variant<LoadConstant, ReadSignal, UnaryNot, Binary, WriteBlocking,
                  WriteUpdate, WriteAfter, WaitFor, WaitOn, WaitSensitivity,
-                 Yield, Jump, Branch, Assert, Stop, Halt>;
+                 Yield, Jump, Branch, DebugPoint, Assert, Stop, Halt>;
 
 struct Signal {
   std::string name;
@@ -210,6 +225,11 @@ public:
             value.width, value.aval, value.bval),
         delay);
   }
+
+  /// True when an embedding debugger currently requests source boundaries.
+  [[nodiscard]] virtual bool execution_points_enabled() const noexcept {
+    return false;
+  }
 };
 
 /// Describes the boundary at which an alternate executor returned control.
@@ -220,6 +240,21 @@ public:
 struct ProcessResumeResult {
   InstructionIndex instruction{};
   InstructionIndex next_instruction{};
+};
+
+enum class ExecutionPointKind : std::uint8_t {
+  statement,
+  wait,
+  assertion,
+  process_entry,
+  process_suspend,
+};
+
+struct ExecutionPoint {
+  ProcessId process{};
+  InstructionIndex instruction{};
+  ExecutionPointKind kind{ExecutionPointKind::statement};
+  SourceLocation source;
 };
 
 class ProcessExecutor {
@@ -273,6 +308,8 @@ class Interpreter {
 public:
   using SignalChangeHook =
       std::function<void(SignalId, const PackedLogic4 &, SimulationTick)>;
+  using ExecutionPointHook =
+      std::function<void(Scheduler&, const ExecutionPoint&)>;
 
   explicit Interpreter(SchedulerOptions options = {});
   ~Interpreter();
@@ -319,6 +356,7 @@ public:
   [[nodiscard]] Scheduler &scheduler() noexcept;
   [[nodiscard]] const Scheduler &scheduler() const noexcept;
   void set_signal_change_hook(SignalChangeHook hook);
+  void set_execution_point_hook(ExecutionPointHook hook);
 
 private:
   struct Impl;

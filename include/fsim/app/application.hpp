@@ -66,9 +66,9 @@ enum class SimulationEngine : std::uint8_t {
   /// Compile supported processes at O0 for debugger use, retaining the
   /// reference evaluator for explicitly unsupported processes.
   ///
-  /// This mode currently shares scheduler delta/time safe points with the
-  /// interpreter. Statement/call safe points require future source maps and
-  /// generated instrumentation.
+  /// Executable statement, wait, assertion, and process-boundary points retain
+  /// source locations. Call safe points and addressable locals remain future
+  /// work.
   debug,
 };
 
@@ -92,6 +92,8 @@ class Simulation final {
       const runtime::PackedLogic4&,
       runtime::SimulationTick,
       std::uint64_t)>;
+  using ExecutionPointHook =
+      runtime::simir::Interpreter::ExecutionPointHook;
 
   Simulation(
       BuiltProject project,
@@ -147,6 +149,7 @@ class Simulation final {
   [[nodiscard]] std::uint64_t add_signal_change_hook(SignalChangeHook hook);
   void remove_signal_change_hook(std::uint64_t token) noexcept;
   void set_safe_point_hook(runtime::Scheduler::SafePointHook hook);
+  void set_execution_point_hook(ExecutionPointHook hook);
 
  private:
   struct Impl;
@@ -172,8 +175,6 @@ class Simulation final {
 [[nodiscard]] cli::Services make_cli_services(std::istream& input);
 
 /// Run the command-line debugger against an already-started simulation.
-/// This is intentionally limited to delta/time stepping and signal-level
-/// visibility; source/statement/process stepping requires future source maps.
 int run_debug_repl(
     Simulation& simulation,
     std::istream& input,

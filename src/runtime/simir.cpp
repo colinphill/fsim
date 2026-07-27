@@ -139,6 +139,7 @@ struct Interpreter::Impl {
     std::vector<PackedLogic4> registers;
     std::unique_ptr<ProcessExecutor> executor;
     std::vector<SignalId> dynamic_sensitivity;
+    SourceLocation current_source;
     bool queued{};
     bool waiting_on_static{};
     bool waiting_on_signal{};
@@ -161,6 +162,7 @@ struct Interpreter::Impl {
   std::vector<std::vector<ProcessId>> dynamic_fanout;
   std::unordered_map<SignalId, PackedLogic4> pending_updates;
   SignalChangeHook signal_change_hook;
+  ExecutionPointHook execution_point_hook;
   bool update_commit_scheduled{};
   bool started{};
   bool stopped_by_design{};
@@ -245,6 +247,36 @@ struct Interpreter::Impl {
           remove_dynamic_wait(state);
           execute(id);
         });
+  }
+
+  void queue_current(ProcessId id) {
+    auto& process = get_process(id);
+    if (process.halted || process.queued) {
+      return;
+    }
+    process.queued = true;
+    const auto phase =
+        scheduler.current_phase().value_or(SchedulerPhase::active);
+    scheduler.schedule(
+        phase, id,
+        [this, id](Scheduler&) {
+          auto& state = get_process(id);
+          state.queued = false;
+          execute(id);
+        });
+  }
+
+  void notify_execution_point(
+      ProcessState& process,
+      const InstructionIndex instruction,
+      const ExecutionPointKind kind,
+      const SourceLocation& source) {
+    if (execution_point_hook) {
+      execution_point_hook(
+          scheduler,
+          ExecutionPoint{
+              process.program.id, instruction, kind, source});
+    }
   }
 
   void publish(SignalId signal_id, PackedLogic4 value) {
@@ -350,6 +382,30 @@ void Interpreter::Impl::handle_boundary(
 
   const auto& operation = process.program.operations[instruction];
   process.pc = next_instruction;
+  if (const auto* point = std::get_if<DebugPoint>(&operation)) {
+    process.current_source = point->source;
+    auto kind = ExecutionPointKind::statement;
+    switch (point->kind) {
+    case DebugPointKind::statement:
+      kind = ExecutionPointKind::statement;
+      break;
+    case DebugPointKind::wait:
+      kind = ExecutionPointKind::wait;
+      break;
+    case DebugPointKind::assertion:
+      kind = ExecutionPointKind::assertion;
+      break;
+    case DebugPointKind::process_entry:
+      kind = ExecutionPointKind::process_entry;
+      break;
+    }
+    notify_execution_point(
+        process, instruction, kind, process.current_source);
+    if (scheduler.stop_requested()) {
+      queue_current(process.program.id);
+    }
+    return;
+  }
   if (const auto* wait = std::get_if<WaitFor>(&operation)) {
     if (wait->delay == 0) {
       process.queued = true;
@@ -361,6 +417,9 @@ void Interpreter::Impl::handle_boundary(
             state.queued = false;
             execute(id);
           });
+      notify_execution_point(
+          process, instruction, ExecutionPointKind::process_suspend,
+          process.current_source);
       return;
     }
     if (wait->delay
@@ -369,6 +428,9 @@ void Interpreter::Impl::handle_boundary(
       fail(process, "simulation time overflow in WaitFor");
     }
     queue_at(process.program.id, scheduler.now() + wait->delay);
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
     return;
   }
   if (const auto* wait = std::get_if<WaitOn>(&operation)) {
@@ -390,6 +452,9 @@ void Interpreter::Impl::handle_boundary(
       (void)get_signal(signal);
       dynamic_fanout[signal].push_back(process.program.id);
     }
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
     return;
   }
   if (std::holds_alternative<WaitSensitivity>(operation)) {
@@ -398,20 +463,32 @@ void Interpreter::Impl::handle_boundary(
       fail(process, "WaitSensitivity requires a static sensitivity list");
     }
     process.waiting_on_static = true;
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
     return;
   }
   if (std::holds_alternative<Yield>(operation)) {
     queue_next_delta(process.program.id);
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
     return;
   }
   if (std::holds_alternative<Stop>(operation)) {
     process.halted = true;
     stopped_by_design = true;
     scheduler.request_stop();
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
     return;
   }
   if (std::holds_alternative<Halt>(operation)) {
     process.halted = true;
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
     return;
   }
 
@@ -498,12 +575,24 @@ void Interpreter::Impl::execute(ProcessId id) {
               owner.stage_update(signal, std::move(value));
             });
       }
+
+      [[nodiscard]] bool
+      execution_points_enabled() const noexcept override {
+        return static_cast<bool>(owner.execution_point_hook);
+      }
     };
 
     ExecutionContext context{*this, id};
-    const auto boundary = process.executor->resume(context, process.pc);
-    handle_boundary(
-        process, boundary.instruction, boundary.next_instruction);
+    while (!process.halted) {
+      const auto boundary = process.executor->resume(context, process.pc);
+      handle_boundary(
+          process, boundary.instruction, boundary.next_instruction);
+      if (!std::holds_alternative<DebugPoint>(
+              process.program.operations[boundary.instruction])
+          || scheduler.stop_requested()) {
+        return;
+      }
+    }
     return;
   }
 
@@ -606,6 +695,9 @@ void Interpreter::Impl::execute(ProcessId id) {
               }
               process.pc = target;
             },
+            [&](const DebugPoint&) {
+              boundary = true;
+            },
             [&](const Assert &op) {
               const auto &condition = get_register(process, op.condition);
               if (condition.width() != 1 ||
@@ -626,7 +718,10 @@ void Interpreter::Impl::execute(ProcessId id) {
 
     if (boundary) {
       handle_boundary(process, instruction, instruction + 1);
-      return;
+      if (!std::holds_alternative<DebugPoint>(operation)
+          || scheduler.stop_requested()) {
+        return;
+      }
     }
   }
 }
@@ -782,6 +877,10 @@ const Scheduler &Interpreter::scheduler() const noexcept {
 
 void Interpreter::set_signal_change_hook(SignalChangeHook hook) {
   impl_->signal_change_hook = std::move(hook);
+}
+
+void Interpreter::set_execution_point_hook(ExecutionPointHook hook) {
+  impl_->execution_point_hook = std::move(hook);
 }
 
 } // namespace fsim::runtime::simir

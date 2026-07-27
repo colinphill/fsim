@@ -29,7 +29,7 @@ The architectural invariants are:
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
 | Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, value changes, deposit, and a force/release mask are current; full driver/resolution model is planned |
-| Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with time/signal breakpoints are current; source/statement/process debugging and locals are planned |
+| Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with source/time/signal breakpoints plus all four step modes are current; locals are planned |
 
 The language-specific HIR will retain resolved symbols, types, overload choices,
 constant values, and legality results. The common `DesignIR` will own dense
@@ -239,9 +239,10 @@ when SimIR is identical, while changing an unrelated, uninstantiated source
 retains the module object. The current HDL preprocessor rejects include
 directories and macros, so transitive HDL include-content closure remains open
 until preprocessing exists. Actual generic/parameter values are likewise
-pending frontend support. The cache has no age/size eviction policy, and O0
-does not yet provide the full debug metadata or statement/call safe-point
-model. The application analysis cache remains separate.
+pending frontend support. The cache has no age/size eviction policy. O0
+exposes source-bearing statement, wait, assertion, process-entry, and
+process-suspension points, but call points, addressable locals, and complete
+source metadata remain open. The application analysis cache remains separate.
 
 ## Debug and public API
 
@@ -251,35 +252,39 @@ run/step/stop calls, and synchronous callbacks. It deliberately exposes no C++
 layout and no exception may cross it. Sessions can currently load, check, and
 build projects; enumerate the bounded signal/process object view; look up
 hierarchical signal paths; read, deposit, force, and release values; run; step
-by delta or time; request stop; and receive lifecycle, safe-point, and
-value-change callbacks. Object handles carry a build generation so a rebuild
+by statement, process, delta, or time; request stop; and receive lifecycle,
+safe-point, and value-change callbacks. Executable safe-point callbacks include
+a valid process handle. Object handles carry a build generation so a rebuild
 invalidates stale hierarchy handles, and mutating/rebuilding re-entry from a
 synchronous callback is rejected. False assertions invoke the assertion
 callback with the originating process handle plus severity, source
-path/line/column, and message. Statement/process stepping, scope objects,
-locals, and complete non-assertion source/debug metadata are not yet wired.
+path/line/column, and message. Scope objects, locals, and complete
+non-assertion source/debug metadata are not yet wired.
 
 Optimized `run` and instrumented `debug` are required to have identical
 simulation semantics. Debug code will use addressable process frames and safe
 points at statements, waits, calls, process boundaries, assertion failures,
 delta boundaries, and time boundaries. The default LLVM-enabled `run` path is
 the O2 hybrid engine. The current bounded `debug` path forces O0 for eligible
-process groups and retains per-process interpreter fallback. It shares
-scheduler delta/time safe points with the interpreter. An application test
-runs the same breakpoint/step/mutation command script through the interpreter
-and O0 hybrid debugger and requires an identical transcript, lifecycle,
-committed-change callback count, and final state. Distinct cold objects beside
-the already populated O2 cache verify that the debug path actually selected
-O0. Statement/call instrumentation and the complete run/debug differential
-remain release-gate work. The current REPL implements
-`continue`/relative `run`, `run-until`, delta/time stepping, time and
-signal-change breakpoints with list/delete/clear operations, hierarchy/scope
-navigation, signal examination, and deposit/force/release. A design `$finish`
-marks the simulation finished, an external stop may be resumed, and a fatal
-runtime exception poisons the simulation so later execution commands are
-refused. Ctrl-C only sets an atomic stop request; the simulation thread observes
-it at a safe point. Source breakpoints, statement/process stepping, locals, and
-trace selection remain planned.
+process groups and retains per-process interpreter fallback. SimIR carries
+source-bearing statement, wait, assertion, process-entry, and
+process-suspension points; O0 always returns them and O2 returns them only when
+the size-gated runtime flag is enabled. A stable process-ID continuation
+requeues an interrupted process at the same scheduler phase. An application
+test runs the same source breakpoint/step/mutation command script through the
+interpreter and O0 hybrid debugger and requires an identical transcript,
+lifecycle, committed-change callback count, and final state. Distinct cold
+objects beside the already populated O2 cache verify that the debug path
+actually selected O0. Call instrumentation and the complete run/debug
+differential remain release-gate work. The current REPL implements
+`continue`/relative `run`, `run-until`, statement/process/delta/time stepping,
+source/time/signal-change breakpoints with list/delete/clear operations,
+hierarchy/scope navigation, signal examination, and deposit/force/release. A
+design `$finish` marks the simulation finished, an external stop may be
+resumed, and a fatal runtime exception poisons the simulation so later
+execution commands are refused. Ctrl-C only sets an atomic stop request; the
+simulation thread observes it at a safe point. Locals, conditional breakpoints,
+trace selection, and complete Ctrl-C tests remain planned.
 
 ## Platform boundary
 

@@ -21,6 +21,8 @@ _Static_assert(FSIM_JIT_RESUME_STATUS_WAIT_ON == UINT32_C(6),
                "WaitOn resume status was not appended");
 _Static_assert(FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY == UINT32_C(7),
                "WaitSensitivity resume status was not appended");
+_Static_assert(FSIM_JIT_RESUME_STATUS_DEBUG_POINT == UINT32_C(8),
+               "debug-point resume status was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, abi_version) == 0,
                "runtime ABI version offset changed");
 _Static_assert(offsetof(fsim_jit_runtime_v1, struct_size) == 4,
@@ -37,7 +39,11 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, write_update) == 40,
                "runtime update callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, write_after) == 48,
                "runtime delayed-write callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 56,
+_Static_assert(offsetof(fsim_jit_runtime_v1, flags) == 56,
+               "runtime execution flags were not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, reserved) == 60,
+               "runtime reserved flags tail changed");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 64,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -120,7 +126,9 @@ int main(void) {
       write_signal,
       assert_failed,
       write_update,
-      write_after};
+      write_after,
+      0,
+      0};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);

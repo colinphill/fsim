@@ -69,10 +69,16 @@ The following foundation is implemented:
   1/delta 1, and tick 2 with both application processes compiled;
 - a bounded `fsim debug` path that forces O0 hybrid execution and exactly
   matches the interpreter REPL transcript, lifecycle, callback count, and final
-  state at the currently supported scheduler safe points;
+  state for a source breakpoint plus statement/process/scheduler stepping;
+- source-bearing SimIR statement, wait, assertion, process-entry, and
+  process-suspension points, with stable process-ID continuation requeueing;
+- append-only runtime debug-point controls: O0 always exposes executable
+  points, while O2 uses a size-gated runtime flag;
+- statement/process stepping in the REPL and C API, including process-bearing
+  C safe-point callbacks;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 239 current production diagnostic codes.
+- a stable catalog covering 248 current production diagnostic codes.
 
 Current Linux validation:
 
@@ -190,8 +196,8 @@ Completed:
 
 Remaining before the architecture gate passes:
 
-- add generated statement/wait/call/process/assertion safe points, addressable
-  debug frames, and source metadata to the current O0 hybrid debugger;
+- add call safe points, addressable debug locals/frames, and complete source
+  metadata to the current O0 hybrid debugger;
 - run every supported semantic test through interpreter and JIT and compare
   final state, assertions, scheduler observations, and trace events;
 - extend the bounded mixed-language differential to O0 and mixed-language
@@ -244,13 +250,13 @@ Completed groundwork:
 - delayed/update and dynamic/static wait operations in the SimIR interpreter
   and bounded LLVM compiled subset;
 - deterministic project seed handling;
-- scope/signal navigation, time and signal-change breakpoints, delta/time
-  stepping, value mutation, and forced-O0 hybrid execution in the CLI
-  debugger, with bounded interpreter-equivalence evidence;
+- scope/signal navigation, source/time/signal-change breakpoints, all four step
+  modes, value mutation, and forced-O0 hybrid execution in the CLI debugger,
+  with bounded interpreter-equivalence evidence;
 - hierarchy/value/control/callback operations in `include/fsim/api.h`;
-- automated C API delta/time stepping and callback-issued asynchronous
-  stop/resume coverage, including terminal `$finish` precedence when it
-  coincides with an external step stop;
+- automated C API statement/process/delta/time stepping and callback-issued
+  asynchronous stop/resume coverage, including terminal `$finish` precedence
+  when it coincides with an external step stop;
 - buffered committed-change VCD with packed and nine-state mapping;
 - SystemC values, signals, ports, exports, time/event/process declarations in
   the compatibility facade;
@@ -269,8 +275,8 @@ Planned implementation sequence:
    notification in the common scheduler.
 5. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
-6. Add statement/process stepping, source breakpoints, locals, trace
-   selection, conditional breakpoints, and complete Ctrl-C testing.
+6. Add debug locals, trace selection, conditional breakpoints, call safe
+   points, and complete Ctrl-C testing.
 7. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
    process, severity, source location, and message.
@@ -312,8 +318,8 @@ Remaining before v1 release:
 The next development iterations should occur in this order:
 
 1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   generated statement/call/source instrumentation, complete transitive
-   include and actual generic/parameter cache identity, and broaden the
+   call instrumentation and addressable locals, complete transitive include
+   and actual generic/parameter cache identity, and broaden the
    interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.

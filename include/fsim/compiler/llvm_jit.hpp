@@ -59,6 +59,7 @@ enum class JitResumeStatus : std::uint32_t {
   stopped = FSIM_JIT_RESUME_STATUS_STOPPED,
   wait_on = FSIM_JIT_RESUME_STATUS_WAIT_ON,
   wait_sensitivity = FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY,
+  debug_point = FSIM_JIT_RESUME_STATUS_DEBUG_POINT,
 };
 
 struct JitProcessFrameLayout {
@@ -126,10 +127,12 @@ private:
 ///
 /// Supported processes may use LoadConstant, ReadSignal, UnaryNot, Binary,
 /// WriteBlocking, WriteUpdate, WriteAfter, Assert, Jump, Branch, WaitFor,
-/// WaitOn, WaitSensitivity, Yield, Stop, and Halt. Control flow is lowered to
-/// LLVM basic blocks backed by a versioned caller-owned frame. Values crossing
-/// the native ABI must be between 1 and 64 bits; sensitivity-only signals may
-/// be wider. Control-flow cycles without a suspension safe point are rejected
+/// WaitOn, WaitSensitivity, Yield, Stop, Halt, and source-bearing DebugPoint
+/// operations. Control flow is lowered to LLVM basic blocks backed by a
+/// versioned caller-owned frame. O0 always returns DebugPoint boundaries; O2
+/// returns them only when the runtime enables debug points. Values crossing the
+/// native ABI must be between 1 and 64 bits; sensitivity-only signals may be
+/// wider. Control-flow cycles without a suspension safe point are rejected
 /// during module addition.
 ///
 /// Persistent caching is opt-in through LlvmJitOptions::cache_directory.
