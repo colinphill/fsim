@@ -198,6 +198,19 @@ the generated code cannot execute LLVM's undefined integer divide-by-zero
 case. Unary plus preserves its operand and unary minus lowers to width-matched
 zero minus the operand.
 
+Signed packed arithmetic uses two's-complement values at the same fixed width.
+Addition, subtraction, and multiplication retain their signed SimIR type while
+sharing the modulo-\(2^N\) bit result. Signed division truncates toward zero;
+remainder has the dividend's sign, while VHDL `mod` adjusts a nonzero remainder
+to the divisor's sign. The minimum value divided by negative one wraps to the
+minimum bit pattern without exposing LLVM signed-division overflow. Signed
+comparisons sign-extend the declared width. Any unknown operand bit and every
+zero divisor produce the same all-`X` result in the arbitrary-width interpreter
+and LLVM single-word path. SystemVerilog chooses signed arithmetic only when
+both operands are signed; an unsigned operand makes the operation unsigned.
+The bounded VHDL path rejects explicitly mixed signed/unsigned operands while
+allowing an integer literal to take its surrounding numeric context.
+
 DesignIR retains each signal's optional declared packed range in addition to
 its normalized storage width. Constant SystemVerilog bit/part selects and VHDL
 indexed names/slices map source indices to storage offsets by distance from

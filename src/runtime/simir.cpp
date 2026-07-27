@@ -252,6 +252,28 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return result;
 }
 
+[[nodiscard]] PackedLogic4 add_known(
+    const PackedLogic4& lhs,
+    const PackedLogic4& rhs) {
+  PackedLogic4 result(lhs.width(), Logic4::zero);
+  bool carry = false;
+  for (std::size_t index = 0; index < lhs.width(); ++index) {
+    const bool left = lhs.get(index) == Logic4::one;
+    const bool right = rhs.get(index) == Logic4::one;
+    result.set(
+        index,
+        (left != right) != carry ? Logic4::one : Logic4::zero);
+    carry = (left && right) || (carry && (left || right));
+  }
+  return result;
+}
+
+[[nodiscard]] PackedLogic4 negate_known(
+    const PackedLogic4& value) {
+  return subtract_known(
+      PackedLogic4(value.width(), Logic4::zero), value);
+}
+
 [[nodiscard]] PackedLogic4 multiply_known(
     const PackedLogic4& lhs,
     const PackedLogic4& rhs) {
@@ -298,11 +320,43 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return return_remainder ? remainder : quotient;
 }
 
+struct SignedDivision {
+  PackedLogic4 quotient;
+  PackedLogic4 remainder;
+};
+
+[[nodiscard]] SignedDivision divide_known_signed(
+    const PackedLogic4& dividend,
+    const PackedLogic4& divisor) {
+  const bool dividend_negative =
+      dividend.get(dividend.width() - 1) == Logic4::one;
+  const bool divisor_negative =
+      divisor.get(divisor.width() - 1) == Logic4::one;
+  const auto dividend_magnitude =
+      dividend_negative ? negate_known(dividend) : dividend;
+  const auto divisor_magnitude =
+      divisor_negative ? negate_known(divisor) : divisor;
+  auto quotient =
+      divide_known(dividend_magnitude, divisor_magnitude, false);
+  auto remainder =
+      divide_known(dividend_magnitude, divisor_magnitude, true);
+  if (dividend_negative != divisor_negative) {
+    quotient = negate_known(quotient);
+  }
+  if (dividend_negative) {
+    remainder = negate_known(remainder);
+  }
+  return {std::move(quotient), std::move(remainder)};
+}
+
 [[nodiscard]] PackedLogic4 binary_value(BinaryOperator operation,
                                         const PackedLogic4 &lhs,
                                         const PackedLogic4 &rhs) {
   if (lhs.width() != rhs.width()) {
     throw std::invalid_argument("binary operands have different widths");
+  }
+  if (lhs.empty()) {
+    throw std::invalid_argument("binary operands must not be empty");
   }
   if (operation == BinaryOperator::equal) {
     auto result = PackedLogic4(1, Logic4::one);
@@ -336,7 +390,11 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
       || operation == BinaryOperator::less_unsigned
       || operation == BinaryOperator::less_equal_unsigned
       || operation == BinaryOperator::greater_unsigned
-      || operation == BinaryOperator::greater_equal_unsigned) {
+      || operation == BinaryOperator::greater_equal_unsigned
+      || operation == BinaryOperator::less_signed
+      || operation == BinaryOperator::less_equal_signed
+      || operation == BinaryOperator::greater_signed
+      || operation == BinaryOperator::greater_equal_signed) {
     for (std::size_t index = 0; index < lhs.width(); ++index) {
       const auto left = lhs.get(index);
       const auto right = rhs.get(index);
@@ -345,16 +403,23 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
         return PackedLogic4(1, Logic4::x);
       }
     }
-    bool less = false;
-    bool greater = false;
-    for (std::size_t index = lhs.width(); index-- > 0;) {
-      if (lhs.get(index) == rhs.get(index)) {
-        continue;
-      }
-      less = lhs.get(index) == Logic4::zero;
-      greater = !less;
-      break;
+    const bool signed_comparison =
+        operation == BinaryOperator::less_signed
+        || operation == BinaryOperator::less_equal_signed
+        || operation == BinaryOperator::greater_signed
+        || operation == BinaryOperator::greater_equal_signed;
+    const bool lhs_negative =
+        lhs.get(lhs.width() - 1) == Logic4::one;
+    const bool rhs_negative =
+        rhs.get(rhs.width() - 1) == Logic4::one;
+    auto comparison = 0;
+    if (signed_comparison && lhs_negative != rhs_negative) {
+      comparison = lhs_negative ? -1 : 1;
+    } else {
+      comparison = compare_known_unsigned(lhs, rhs);
     }
+    const bool less = comparison < 0;
+    const bool greater = comparison > 0;
     bool result = false;
     switch (operation) {
     case BinaryOperator::not_equal:
@@ -372,6 +437,18 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     case BinaryOperator::greater_equal_unsigned:
       result = greater || !less;
       break;
+    case BinaryOperator::less_signed:
+      result = less;
+      break;
+    case BinaryOperator::less_equal_signed:
+      result = less || !greater;
+      break;
+    case BinaryOperator::greater_signed:
+      result = greater;
+      break;
+    case BinaryOperator::greater_equal_signed:
+      result = greater || !less;
+      break;
     case BinaryOperator::bit_and:
     case BinaryOperator::bit_or:
     case BinaryOperator::bit_xor:
@@ -380,6 +457,12 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     case BinaryOperator::multiply_unsigned:
     case BinaryOperator::divide_unsigned:
     case BinaryOperator::modulo_unsigned:
+    case BinaryOperator::add_signed:
+    case BinaryOperator::subtract_signed:
+    case BinaryOperator::multiply_signed:
+    case BinaryOperator::divide_signed:
+    case BinaryOperator::remainder_signed:
+    case BinaryOperator::modulo_signed:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
       break;
@@ -394,26 +477,26 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
       || operation == BinaryOperator::subtract_unsigned
       || operation == BinaryOperator::multiply_unsigned
       || operation == BinaryOperator::divide_unsigned
-      || operation == BinaryOperator::modulo_unsigned;
+      || operation == BinaryOperator::modulo_unsigned
+      || operation == BinaryOperator::add_signed
+      || operation == BinaryOperator::subtract_signed
+      || operation == BinaryOperator::multiply_signed
+      || operation == BinaryOperator::divide_signed
+      || operation == BinaryOperator::remainder_signed
+      || operation == BinaryOperator::modulo_signed;
   if (arithmetic && (has_unknown(lhs) || has_unknown(rhs))) {
     return PackedLogic4(lhs.width(), Logic4::x);
   }
-  if (operation == BinaryOperator::add_unsigned) {
-    bool carry = false;
-    for (std::size_t index = 0; index < lhs.width(); ++index) {
-      const bool left = lhs.get(index) == Logic4::one;
-      const bool right = rhs.get(index) == Logic4::one;
-      result.set(
-          index,
-          (left != right) != carry ? Logic4::one : Logic4::zero);
-      carry = (left && right) || (carry && (left || right));
-    }
-    return result;
+  if (operation == BinaryOperator::add_unsigned
+      || operation == BinaryOperator::add_signed) {
+    return add_known(lhs, rhs);
   }
-  if (operation == BinaryOperator::subtract_unsigned) {
+  if (operation == BinaryOperator::subtract_unsigned
+      || operation == BinaryOperator::subtract_signed) {
     return subtract_known(lhs, rhs);
   }
-  if (operation == BinaryOperator::multiply_unsigned) {
+  if (operation == BinaryOperator::multiply_unsigned
+      || operation == BinaryOperator::multiply_signed) {
     return multiply_known(lhs, rhs);
   }
   if (operation == BinaryOperator::divide_unsigned
@@ -423,6 +506,24 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     }
     return divide_known(
         lhs, rhs, operation == BinaryOperator::modulo_unsigned);
+  }
+  if (operation == BinaryOperator::divide_signed
+      || operation == BinaryOperator::remainder_signed
+      || operation == BinaryOperator::modulo_signed) {
+    if (is_zero(rhs)) {
+      return PackedLogic4(lhs.width(), Logic4::x);
+    }
+    auto divided = divide_known_signed(lhs, rhs);
+    if (operation == BinaryOperator::divide_signed) {
+      return divided.quotient;
+    }
+    if (operation == BinaryOperator::modulo_signed
+        && !is_zero(divided.remainder)
+        && (lhs.get(lhs.width() - 1)
+            != rhs.get(rhs.width() - 1))) {
+      return add_known(divided.remainder, rhs);
+    }
+    return divided.remainder;
   }
 
   for (std::size_t index = 0; index < lhs.width(); ++index) {
@@ -441,6 +542,12 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     case BinaryOperator::multiply_unsigned:
     case BinaryOperator::divide_unsigned:
     case BinaryOperator::modulo_unsigned:
+    case BinaryOperator::add_signed:
+    case BinaryOperator::subtract_signed:
+    case BinaryOperator::multiply_signed:
+    case BinaryOperator::divide_signed:
+    case BinaryOperator::remainder_signed:
+    case BinaryOperator::modulo_signed:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
     case BinaryOperator::not_equal:
@@ -448,6 +555,10 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     case BinaryOperator::less_equal_unsigned:
     case BinaryOperator::greater_unsigned:
     case BinaryOperator::greater_equal_unsigned:
+    case BinaryOperator::less_signed:
+    case BinaryOperator::less_equal_signed:
+    case BinaryOperator::greater_signed:
+    case BinaryOperator::greater_equal_signed:
       break;
     }
   }

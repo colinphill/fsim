@@ -123,6 +123,12 @@ enum class BinaryOperator : std::uint8_t {
   multiply_unsigned,
   divide_unsigned,
   modulo_unsigned,
+  add_signed,
+  subtract_signed,
+  multiply_signed,
+  divide_signed,
+  remainder_signed,
+  modulo_signed,
   equal,
   case_equal,
   not_equal,
@@ -130,6 +136,10 @@ enum class BinaryOperator : std::uint8_t {
   less_equal_unsigned,
   greater_unsigned,
   greater_equal_unsigned,
+  less_signed,
+  less_equal_signed,
+  greater_signed,
+  greater_equal_signed,
 };
 
 struct Binary {

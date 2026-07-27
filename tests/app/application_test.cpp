@@ -294,6 +294,14 @@ module arithmetic_app;
   logic [7:0] remainder;
   logic [7:0] positive;
   logic [7:0] negative;
+  logic signed [7:0] signed_lhs;
+  logic signed [7:0] signed_rhs;
+  logic signed [7:0] signed_sum;
+  logic signed [7:0] signed_difference;
+  logic signed [7:0] signed_product;
+  logic signed [7:0] signed_quotient;
+  logic signed [7:0] signed_remainder;
+  logic signed_less;
   always_comb begin
     difference = lhs - rhs;
     product = lhs * rhs;
@@ -301,11 +309,21 @@ module arithmetic_app;
     remainder = lhs % rhs;
     positive = +lhs;
     negative = -lhs;
+    signed_sum = signed_lhs + signed_rhs;
+    signed_difference = signed_lhs - signed_rhs;
+    signed_product = signed_lhs * signed_rhs;
+    signed_quotient = signed_lhs / signed_rhs;
+    signed_remainder = signed_lhs % signed_rhs;
+    signed_less = signed_lhs < signed_rhs;
   end
   initial begin
     lhs = 8'b11001000;
     rhs = 8'b00000111;
+    signed_lhs = 8'b11111011;
+    signed_rhs = 8'b00000011;
     #1 lhs = 8'b10x01000;
+    signed_lhs = 8'b00000101;
+    signed_rhs = 8'b11111101;
     #1 lhs = 8'b11001000;
     rhs = 8'b00000000;
     #1 rhs = 8'b00000111;
@@ -406,6 +424,40 @@ begin
     assignment_local(3) := '1';
     assignment_local(5 downto 4) := "XZ";
     local_assigned <= assignment_local;
+  end process;
+end architecture;
+)";
+  }
+  const auto vhdl_signed_source =
+      directory / "vhdl_signed.vhd";
+  {
+    std::ofstream output(vhdl_signed_source);
+    output << R"(
+entity vhdl_signed_app is
+end entity;
+
+architecture rtl of vhdl_signed_app is
+  signal lhs : signed(7 downto 0);
+  signal rhs : signed(7 downto 0);
+  signal sum : signed(7 downto 0);
+  signal difference : signed(7 downto 0);
+  signal product : signed(7 downto 0);
+  signal quotient : signed(7 downto 0);
+  signal remainder : signed(7 downto 0);
+  signal modulo : signed(7 downto 0);
+  signal less : std_logic;
+begin
+  lhs <= "11111011";
+  rhs <= "00000011";
+  calculate: process(lhs, rhs)
+  begin
+    sum <= lhs + rhs;
+    difference <= lhs - rhs;
+    product <= lhs * rhs;
+    quotient <= lhs / rhs;
+    remainder <= lhs rem rhs;
+    modulo <= lhs mod rhs;
+    less <= lhs < rhs;
   end process;
 end architecture;
 )";
@@ -1401,7 +1453,9 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       arithmetic_hybrid.final_values
       == std::vector<std::string>{
           "11001000", "00000111", "11000001", "01111000",
-          "00011100", "00000100", "11001000", "00111000"}));
+          "00011100", "00000100", "11001000", "00111000",
+          "00000101", "11111101", "00000010", "00001000",
+          "11110001", "11111111", "00000010", "0"}));
 
   auto select_concat_config = config;
   select_concat_config.project.name = "select-concat-test";
@@ -1509,6 +1563,56 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
           "1XZ0", "01Z1", "Z", "Z", "Z", "X",
           "1X", "1Z", "1X10Z1", "10XZ1110",
           "XZ10"}));
+
+  auto vhdl_signed_config = config;
+  vhdl_signed_config.project.name = "vhdl-signed-test";
+  vhdl_signed_config.project.top =
+      "vhdl:work.vhdl_signed_app(rtl)";
+  vhdl_signed_config.build.optimization =
+      fsim::project::Optimization::o2;
+  vhdl_signed_config.build.cache_path =
+      directory / "vhdl-signed-cache";
+  vhdl_signed_config.source_sets.clear();
+  fsim::project::SourceSet vhdl_signed_sources;
+  vhdl_signed_sources.language =
+      fsim::project::Language::vhdl;
+  vhdl_signed_sources.standard = "2008";
+  vhdl_signed_sources.library = "work";
+  vhdl_signed_sources.files.push_back(vhdl_signed_source);
+  vhdl_signed_config.source_sets.push_back(
+      std::move(vhdl_signed_sources));
+  fsim::diagnostic::Engine vhdl_signed_diagnostics;
+  auto vhdl_signed_reference_project =
+      fsim::app::build_project(
+          vhdl_signed_config, vhdl_signed_diagnostics);
+  auto vhdl_signed_hybrid_project =
+      fsim::app::build_project(
+          vhdl_signed_config, vhdl_signed_diagnostics);
+  assert(vhdl_signed_reference_project);
+  assert(vhdl_signed_hybrid_project);
+  const auto vhdl_signed_reference = capture_simulation(
+      std::move(*vhdl_signed_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto vhdl_signed_hybrid = capture_simulation(
+      std::move(*vhdl_signed_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      vhdl_signed_reference, vhdl_signed_hybrid);
+  assert(
+      vhdl_signed_hybrid.result.status
+      == fsim::runtime::RunStatus::completed);
+  assert(vhdl_signed_hybrid.result.time == 0);
+  assert(vhdl_signed_hybrid.process_count == 3);
+#if defined(FSIM_HAS_LLVM)
+  assert(vhdl_signed_hybrid.compiled_processes == 3);
+  assert(vhdl_signed_hybrid.compiled_modules == 1);
+#endif
+  assert((
+      vhdl_signed_hybrid.final_values
+      == std::vector<std::string>{
+          "11111011", "00000011", "11111110", "11111000",
+          "11110001", "11111111", "11111110", "00000001",
+          "1"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =

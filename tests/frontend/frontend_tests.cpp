@@ -262,6 +262,84 @@ end architecture;
       "VHDL selected assignment target nodes");
 }
 
+void test_signed_type_and_expression_nodes() {
+  const auto vhdl = parse_text(
+      "signed_ops.vhd",
+      R"(
+entity signed_ops is
+  port (
+    lhs : in signed(7 downto 0);
+    rhs : in signed(7 downto 0);
+    quotient : out signed(7 downto 0);
+    remainder : out signed(7 downto 0);
+    modulo : out signed(7 downto 0)
+  );
+end entity;
+architecture rtl of signed_ops is
+begin
+  quotient <= lhs / rhs;
+  remainder <= lhs rem rhs;
+  modulo <= lhs mod rhs;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(vhdl.ok(), "VHDL signed arithmetic source must parse");
+  const auto* entity =
+      vhdl.design.find(UnitKind::VhdlEntity, "signed_ops");
+  const auto* architecture =
+      vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      entity != nullptr && entity->ports.size() == 5
+          && std::ranges::all_of(
+              entity->ports,
+              [](const SignalDeclaration& port) {
+                return port.type.is_signed;
+              }),
+      "VHDL signed subtype metadata");
+  require(
+      architecture != nullptr
+          && architecture->concurrent_statements.size() == 3
+          && architecture->concurrent_statements[0].value.text == "/"
+          && architecture->concurrent_statements[1].value.text
+              == "rem"
+          && architecture->concurrent_statements[2].value.text
+              == "mod",
+      "VHDL signed division/remainder/modulo expression nodes");
+
+  const auto systemverilog = parse_text(
+      "signed_ops.sv",
+      R"(
+module signed_ops;
+  logic signed [7:0] lhs;
+  logic signed [7:0] rhs;
+  logic unsigned [7:0] mixed;
+  logic signed [7:0] quotient;
+  logic comparison;
+  always_comb begin
+    quotient = lhs / rhs;
+    comparison = lhs < rhs;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "SystemVerilog signed arithmetic source must parse");
+  const auto& unit = systemverilog.design.units.front();
+  require(
+      unit.signals.size() == 5
+          && unit.signals[0].type.is_signed
+          && unit.signals[1].type.is_signed
+          && !unit.signals[2].type.is_signed,
+      "SystemVerilog explicit signedness metadata");
+  require(
+      unit.processes.size() == 1
+          && unit.processes.front().statements.size() == 2
+          && unit.processes.front().statements[0].value.text == "/"
+          && unit.processes.front().statements[1].value.text == "<",
+      "SystemVerilog signed arithmetic expression nodes");
+}
+
 void test_systemverilog_vertical_slice() {
   constexpr std::string_view source = R"(
 module counter(
@@ -1263,6 +1341,7 @@ int main() {
     test_vhdl_vertical_slice();
     test_vhdl_instance_diagnostics();
     test_vhdl_select_and_concatenation_expressions();
+    test_signed_type_and_expression_nodes();
     test_systemverilog_vertical_slice();
     test_non_ansi_verilog_ports();
     test_diagnostics_and_spans();

@@ -1468,8 +1468,7 @@ private:
                 Reduction{operation, destination, *source});
             return destination;
         }
-        if (language_ != frontend::Language::Vhdl2008
-            && expression.kind == ExpressionKind::Unary
+        if (expression.kind == ExpressionKind::Unary
             && expression.operands.size() == 1
             && (expression.text == "+"
                 || expression.text == "-")) {
@@ -1491,7 +1490,9 @@ private:
             const auto destination = allocate_register(
                 register_width(*source), register_domain(*source));
             process_.operations.emplace_back(Binary{
-                BinaryOperator::subtract_unsigned,
+                is_signed_expression(expression.operands[0])
+                    ? BinaryOperator::subtract_signed
+                    : BinaryOperator::subtract_unsigned,
                 destination,
                 zero,
                 *source});
@@ -1685,21 +1686,20 @@ private:
                 operation = BinaryOperator::bit_xor;
             } else if (expression.text == "+") {
                 operation = BinaryOperator::add_unsigned;
-            } else if (
-                language_ != frontend::Language::Vhdl2008
-                && expression.text == "-") {
+            } else if (expression.text == "-") {
                 operation = BinaryOperator::subtract_unsigned;
-            } else if (
-                language_ != frontend::Language::Vhdl2008
-                && expression.text == "*") {
+            } else if (expression.text == "*") {
                 operation = BinaryOperator::multiply_unsigned;
-            } else if (
-                language_ != frontend::Language::Vhdl2008
-                && expression.text == "/") {
+            } else if (expression.text == "/") {
                 operation = BinaryOperator::divide_unsigned;
             } else if (
                 language_ != frontend::Language::Vhdl2008
                 && expression.text == "%") {
+                operation = BinaryOperator::modulo_unsigned;
+            } else if (
+                language_ == frontend::Language::Vhdl2008
+                && (expression.text == "mod"
+                    || expression.text == "rem")) {
                 operation = BinaryOperator::modulo_unsigned;
             } else if (
                 expression.text == "=" || expression.text == "==") {
@@ -1708,21 +1708,13 @@ private:
                 language_ != frontend::Language::Vhdl2008
                 && expression.text == "!=") {
                 operation = BinaryOperator::not_equal;
-            } else if (
-                language_ != frontend::Language::Vhdl2008
-                && expression.text == "<") {
+            } else if (expression.text == "<") {
                 operation = BinaryOperator::less_unsigned;
-            } else if (
-                language_ != frontend::Language::Vhdl2008
-                && expression.text == "<=") {
+            } else if (expression.text == "<=") {
                 operation = BinaryOperator::less_equal_unsigned;
-            } else if (
-                language_ != frontend::Language::Vhdl2008
-                && expression.text == ">") {
+            } else if (expression.text == ">") {
                 operation = BinaryOperator::greater_unsigned;
-            } else if (
-                language_ != frontend::Language::Vhdl2008
-                && expression.text == ">=") {
+            } else if (expression.text == ">=") {
                 operation = BinaryOperator::greater_equal_unsigned;
             }
             if (!operation) {
@@ -1739,30 +1731,78 @@ private:
                 || *operation == BinaryOperator::greater_unsigned
                 || *operation
                     == BinaryOperator::greater_equal_unsigned;
-            const auto unsigned_arithmetic =
-                *operation == BinaryOperator::subtract_unsigned
+            const auto arithmetic =
+                *operation == BinaryOperator::add_unsigned
+                || *operation == BinaryOperator::subtract_unsigned
                 || *operation == BinaryOperator::multiply_unsigned
                 || *operation == BinaryOperator::divide_unsigned
                 || *operation == BinaryOperator::modulo_unsigned;
-            if (unsigned_arithmetic
-                && (is_signed_expression(expression.operands[0])
-                    || is_signed_expression(expression.operands[1]))) {
+            const bool lhs_signed =
+                is_signed_expression(expression.operands[0]);
+            const bool rhs_signed =
+                is_signed_expression(expression.operands[1]);
+            const bool signed_operation =
+                lhs_signed && rhs_signed;
+            const bool contextual_integer =
+                expression.operands[0].kind
+                    == ExpressionKind::IntegerLiteral
+                || expression.operands[1].kind
+                    == ExpressionKind::IntegerLiteral;
+            if (language_ == frontend::Language::Vhdl2008
+                && (arithmetic || relational)
+                && lhs_signed != rhs_signed
+                && !contextual_integer) {
                 report(
-                    "FSIM-ELAB-067",
-                    "signed arithmetic is not executable until signed "
-                    "SimIR arithmetic semantics are implemented",
+                    relational ? "FSIM-ELAB-066"
+                               : "FSIM-ELAB-067",
+                    "mixed signed/unsigned VHDL operands require an "
+                    "explicit conversion",
                     expression.span);
                 return std::nullopt;
             }
-            if (relational
-                && (is_signed_expression(expression.operands[0])
-                    || is_signed_expression(expression.operands[1]))) {
-                report(
-                    "FSIM-ELAB-066",
-                    "signed relational comparison is not executable until "
-                    "signed SimIR comparison semantics are implemented",
-                    expression.span);
-                return std::nullopt;
+            if (signed_operation) {
+                if (*operation == BinaryOperator::add_unsigned) {
+                    operation = BinaryOperator::add_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::subtract_unsigned) {
+                    operation = BinaryOperator::subtract_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::multiply_unsigned) {
+                    operation = BinaryOperator::multiply_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::divide_unsigned) {
+                    operation = BinaryOperator::divide_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::modulo_unsigned) {
+                    operation =
+                        language_
+                                    == frontend::Language::Vhdl2008
+                                && expression.text == "mod"
+                            ? BinaryOperator::modulo_signed
+                            : BinaryOperator::remainder_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::less_unsigned) {
+                    operation = BinaryOperator::less_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::less_equal_unsigned) {
+                    operation =
+                        BinaryOperator::less_equal_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::greater_unsigned) {
+                    operation = BinaryOperator::greater_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::greater_equal_unsigned) {
+                    operation =
+                        BinaryOperator::greater_equal_signed;
+                }
             }
             const auto scalar_result =
                 *operation == BinaryOperator::equal
@@ -1772,7 +1812,13 @@ private:
                     == BinaryOperator::less_equal_unsigned
                 || *operation == BinaryOperator::greater_unsigned
                 || *operation
-                    == BinaryOperator::greater_equal_unsigned;
+                    == BinaryOperator::greater_equal_unsigned
+                || *operation == BinaryOperator::less_signed
+                || *operation
+                    == BinaryOperator::less_equal_signed
+                || *operation == BinaryOperator::greater_signed
+                || *operation
+                    == BinaryOperator::greater_equal_signed;
             const auto result_width =
                 scalar_result ? std::size_t{1}
                               : register_width(*lhs);
@@ -1959,30 +2005,80 @@ private:
 
     [[nodiscard]] bool is_signed_expression(
         const Expression& expression) const {
-        if (expression.kind == ExpressionKind::Identifier) {
+        switch (expression.kind) {
+        case ExpressionKind::Identifier:
             if (const auto local =
                     local_signed_.find(expression.text);
                 local != local_signed_.end()) {
                 return local->second;
             }
             if (const auto signal = signals_.find(expression.text);
-                signal != signals_.end()) {
+                    signal != signals_.end()) {
                 return design_.signal_info_[signal->second].is_signed;
             }
-        }
-        if (expression.kind == ExpressionKind::IntegerLiteral) {
+            return false;
+        case ExpressionKind::IntegerLiteral:
             return true;
-        }
-        if (expression.kind == ExpressionKind::LogicLiteral) {
+        case ExpressionKind::LogicLiteral:
             return expression.text.find("'s") != std::string::npos
                 || expression.text.find("'S") != std::string::npos;
+        case ExpressionKind::StringLiteral:
+        case ExpressionKind::Concatenation:
+        case ExpressionKind::Invalid:
+            return false;
+        case ExpressionKind::Index:
+            return false;
+        case ExpressionKind::Slice:
+            return language_ == frontend::Language::Vhdl2008
+                && !expression.operands.empty()
+                && is_signed_expression(expression.operands[0]);
+        case ExpressionKind::Unary:
+            if (expression.operands.size() != 1
+                || expression.text == "!"
+                || expression.text == "&"
+                || expression.text == "|"
+                || expression.text == "^") {
+                return false;
+            }
+            return is_signed_expression(expression.operands[0]);
+        case ExpressionKind::Call:
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.operands.size() == 1
+                && (locals_.contains(expression.text)
+                    || signals_.contains(expression.text))) {
+                return false;
+            }
+            if (expression.text == "?:"
+                && expression.operands.size() == 3) {
+                return is_signed_expression(expression.operands[1])
+                    && is_signed_expression(expression.operands[2]);
+            }
+            return false;
+        case ExpressionKind::Binary:
+            if (expression.operands.size() != 2) {
+                return false;
+            }
+            if (expression.text == "<<"
+                || expression.text == ">>") {
+                return is_signed_expression(expression.operands[0]);
+            }
+            if (expression.text == "=="
+                || expression.text == "!="
+                || expression.text == "="
+                || expression.text == "<"
+                || expression.text == "<="
+                || expression.text == ">"
+                || expression.text == ">="
+                || expression.text == "&&"
+                || expression.text == "||"
+                || (language_ == frontend::Language::Vhdl2008
+                    && expression.text == "&")) {
+                return false;
+            }
+            return is_signed_expression(expression.operands[0])
+                && is_signed_expression(expression.operands[1]);
         }
-        return std::any_of(
-            expression.operands.begin(),
-            expression.operands.end(),
-            [&](const Expression& operand) {
-                return is_signed_expression(operand);
-            });
+        return false;
     }
 
     void collect_identifiers(

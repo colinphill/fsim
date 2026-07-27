@@ -51,9 +51,10 @@ The current tree contains:
 - SystemVerilog unary reductions and mixed-width logical shifts, including
   four-state reduction rules and deterministic unknown/oversized shift
   handling;
-- SystemVerilog unary `+/-` and fixed-width unsigned subtraction,
-  multiplication, division, and remainder with deterministic `X/Z` and
-  divide-by-zero semantics;
+- fixed-width signed and unsigned packed arithmetic/comparison for VHDL and
+  SystemVerilog, including distinct VHDL `rem`/`mod`, SystemVerilog
+  mixed-signedness rules, deterministic `X/Z`/zero-divisor behavior, and
+  fixed-width signed-overflow wrapping;
 - declared-range-aware SystemVerilog constant bit/part selects and packed
   concatenations, including ascending and non-zero-based source ranges;
 - declared-range-aware VHDL indexed names/slices and correct width-summing

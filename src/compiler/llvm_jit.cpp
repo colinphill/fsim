@@ -626,6 +626,12 @@ validate_process(const Process &process,
               case BinaryOperator::multiply_unsigned:
               case BinaryOperator::divide_unsigned:
               case BinaryOperator::modulo_unsigned:
+              case BinaryOperator::add_signed:
+              case BinaryOperator::subtract_signed:
+              case BinaryOperator::multiply_signed:
+              case BinaryOperator::divide_signed:
+              case BinaryOperator::remainder_signed:
+              case BinaryOperator::modulo_signed:
               case BinaryOperator::equal:
               case BinaryOperator::case_equal:
               case BinaryOperator::not_equal:
@@ -633,6 +639,10 @@ validate_process(const Process &process,
               case BinaryOperator::less_equal_unsigned:
               case BinaryOperator::greater_unsigned:
               case BinaryOperator::greater_equal_unsigned:
+              case BinaryOperator::less_signed:
+              case BinaryOperator::less_equal_signed:
+              case BinaryOperator::greater_signed:
+              case BinaryOperator::greater_equal_signed:
                 break;
               default:
                 reject(process, index,
@@ -652,7 +662,15 @@ validate_process(const Process &process,
                   || operation.operation
                       == BinaryOperator::greater_unsigned
                   || operation.operation
-                      == BinaryOperator::greater_equal_unsigned) {
+                      == BinaryOperator::greater_equal_unsigned
+                  || operation.operation
+                      == BinaryOperator::less_signed
+                  || operation.operation
+                      == BinaryOperator::less_equal_signed
+                  || operation.operation
+                      == BinaryOperator::greater_signed
+                  || operation.operation
+                      == BinaryOperator::greater_equal_signed) {
                 constrain_width(operation.destination, 1U, index);
               } else {
                 unify_registers(operation.destination, operation.lhs, index);
@@ -1568,7 +1586,8 @@ struct EncodedBit {
         builder.CreateAnd(builder.CreateXor(lhs.aval, rhs.aval), known);
     return {builder.CreateOr(known_value, unknown), unknown, lhs.width};
   }
-  case BinaryOperator::add_unsigned: {
+  case BinaryOperator::add_unsigned:
+  case BinaryOperator::add_signed: {
     auto *unknown = builder.CreateICmpNE(
         builder.CreateAnd(
             builder.CreateOr(lhs.bval, rhs.bval), mask),
@@ -1602,7 +1621,12 @@ struct EncodedBit {
   case BinaryOperator::subtract_unsigned:
   case BinaryOperator::multiply_unsigned:
   case BinaryOperator::divide_unsigned:
-  case BinaryOperator::modulo_unsigned: {
+  case BinaryOperator::modulo_unsigned:
+  case BinaryOperator::subtract_signed:
+  case BinaryOperator::multiply_signed:
+  case BinaryOperator::divide_signed:
+  case BinaryOperator::remainder_signed:
+  case BinaryOperator::modulo_signed: {
     auto *unknown = builder.CreateICmpNE(
         builder.CreateAnd(
             builder.CreateOr(lhs.bval, rhs.bval), mask),
@@ -1610,8 +1634,13 @@ struct EncodedBit {
     auto *left = builder.CreateAnd(lhs.aval, mask);
     auto *right = builder.CreateAnd(rhs.aval, mask);
     auto *invalid = unknown;
-    if (operation == BinaryOperator::divide_unsigned
-        || operation == BinaryOperator::modulo_unsigned) {
+    const bool division =
+        operation == BinaryOperator::divide_unsigned
+        || operation == BinaryOperator::modulo_unsigned
+        || operation == BinaryOperator::divide_signed
+        || operation == BinaryOperator::remainder_signed
+        || operation == BinaryOperator::modulo_signed;
+    if (division) {
       invalid = builder.CreateOr(
           invalid,
           builder.CreateICmpEQ(
@@ -1620,16 +1649,67 @@ struct EncodedBit {
           invalid, constant_i64(context, 1), right);
     }
     llvm::Value* known_result = nullptr;
-    if (operation == BinaryOperator::subtract_unsigned) {
+    if (operation == BinaryOperator::subtract_unsigned
+        || operation == BinaryOperator::subtract_signed) {
       known_result = builder.CreateSub(left, right);
     } else if (
-        operation == BinaryOperator::multiply_unsigned) {
+        operation == BinaryOperator::multiply_unsigned
+        || operation == BinaryOperator::multiply_signed) {
       known_result = builder.CreateMul(left, right);
     } else if (
         operation == BinaryOperator::divide_unsigned) {
       known_result = builder.CreateUDiv(left, right);
-    } else {
+    } else if (
+        operation == BinaryOperator::modulo_unsigned) {
       known_result = builder.CreateURem(left, right);
+    } else {
+      const auto sign_extend =
+          [&](llvm::Value* value) -> llvm::Value* {
+        if (lhs.width == 64) {
+          return value;
+        }
+        auto* narrow_type =
+            llvm::IntegerType::get(context, lhs.width);
+        return builder.CreateSExt(
+            builder.CreateTrunc(value, narrow_type),
+            llvm::Type::getInt64Ty(context));
+      };
+      auto* signed_left = sign_extend(left);
+      auto* signed_right = sign_extend(right);
+      const auto sign_bit =
+          std::uint64_t{1} << (lhs.width - 1U);
+      auto* overflow = builder.CreateAnd(
+          builder.CreateICmpEQ(
+              left, constant_i64(context, sign_bit)),
+          builder.CreateICmpEQ(
+              right, mask));
+      auto* safe_right = builder.CreateSelect(
+          builder.CreateOr(invalid, overflow),
+          constant_i64(context, 1),
+          signed_right);
+      if (operation == BinaryOperator::divide_signed) {
+        auto* divided =
+            builder.CreateSDiv(signed_left, safe_right);
+        known_result = builder.CreateSelect(
+            overflow, signed_left, divided);
+      } else {
+        auto* remainder =
+            builder.CreateSRem(signed_left, safe_right);
+        if (operation == BinaryOperator::modulo_signed) {
+          auto* nonzero = builder.CreateICmpNE(
+              remainder, constant_i64(context, 0));
+          auto* signs_differ = builder.CreateICmpNE(
+              builder.CreateICmpSLT(
+                  signed_left, constant_i64(context, 0)),
+              builder.CreateICmpSLT(
+                  signed_right, constant_i64(context, 0)));
+          remainder = builder.CreateSelect(
+              builder.CreateAnd(nonzero, signs_differ),
+              builder.CreateAdd(remainder, signed_right),
+              remainder);
+        }
+        known_result = remainder;
+      }
     }
     return {
         builder.CreateSelect(
@@ -1669,13 +1749,32 @@ struct EncodedBit {
   case BinaryOperator::less_unsigned:
   case BinaryOperator::less_equal_unsigned:
   case BinaryOperator::greater_unsigned:
-  case BinaryOperator::greater_equal_unsigned: {
+  case BinaryOperator::greater_equal_unsigned:
+  case BinaryOperator::less_signed:
+  case BinaryOperator::less_equal_signed:
+  case BinaryOperator::greater_signed:
+  case BinaryOperator::greater_equal_signed: {
     auto *unknown_bits = builder.CreateAnd(
         builder.CreateOr(lhs.bval, rhs.bval), mask);
     auto *unknown = builder.CreateICmpNE(
         unknown_bits, constant_i64(context, 0));
     auto *left = builder.CreateAnd(lhs.aval, mask);
     auto *right = builder.CreateAnd(rhs.aval, mask);
+    const bool signed_comparison =
+        operation == BinaryOperator::less_signed
+        || operation == BinaryOperator::less_equal_signed
+        || operation == BinaryOperator::greater_signed
+        || operation == BinaryOperator::greater_equal_signed;
+    if (signed_comparison && lhs.width < 64) {
+      auto* narrow_type =
+          llvm::IntegerType::get(context, lhs.width);
+      left = builder.CreateSExt(
+          builder.CreateTrunc(left, narrow_type),
+          llvm::Type::getInt64Ty(context));
+      right = builder.CreateSExt(
+          builder.CreateTrunc(right, narrow_type),
+          llvm::Type::getInt64Ty(context));
+    }
     llvm::CmpInst::Predicate predicate = llvm::CmpInst::ICMP_NE;
     switch (operation) {
     case BinaryOperator::not_equal:
@@ -1693,6 +1792,18 @@ struct EncodedBit {
     case BinaryOperator::greater_equal_unsigned:
       predicate = llvm::CmpInst::ICMP_UGE;
       break;
+    case BinaryOperator::less_signed:
+      predicate = llvm::CmpInst::ICMP_SLT;
+      break;
+    case BinaryOperator::less_equal_signed:
+      predicate = llvm::CmpInst::ICMP_SLE;
+      break;
+    case BinaryOperator::greater_signed:
+      predicate = llvm::CmpInst::ICMP_SGT;
+      break;
+    case BinaryOperator::greater_equal_signed:
+      predicate = llvm::CmpInst::ICMP_SGE;
+      break;
     case BinaryOperator::bit_and:
     case BinaryOperator::bit_or:
     case BinaryOperator::bit_xor:
@@ -1701,6 +1812,12 @@ struct EncodedBit {
     case BinaryOperator::multiply_unsigned:
     case BinaryOperator::divide_unsigned:
     case BinaryOperator::modulo_unsigned:
+    case BinaryOperator::add_signed:
+    case BinaryOperator::subtract_signed:
+    case BinaryOperator::multiply_signed:
+    case BinaryOperator::divide_signed:
+    case BinaryOperator::remainder_signed:
+    case BinaryOperator::modulo_signed:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
       llvm_unreachable("not a comparison operator");

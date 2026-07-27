@@ -71,7 +71,7 @@ struct ObservedWrite {
 };
 
 struct TestRuntime {
-  std::array<EncodedSignal, 9> signals{};
+  std::array<EncodedSignal, 16> signals{};
   std::uint32_t assertion_count{};
   std::uint32_t failed_process{};
   std::uint32_t failed_instruction{};
@@ -1477,6 +1477,7 @@ void test_reduction_and_shift_at_level(
           == EncodedSignal{encoded.aval, encoded.bval}));
     }
   }
+
 }
 
 void test_unsigned_arithmetic_at_level(
@@ -1556,6 +1557,143 @@ void test_unsigned_arithmetic_at_level(
           == EncodedSignal{encoded.aval, encoded.bval}));
     }
   }
+}
+
+void test_signed_arithmetic_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 12;
+  process.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      Binary{BinaryOperator::add_signed, 2, 0, 1},
+      WriteBlocking{2, 2},
+      Binary{BinaryOperator::subtract_signed, 3, 0, 1},
+      WriteBlocking{3, 3},
+      Binary{BinaryOperator::multiply_signed, 4, 0, 1},
+      WriteBlocking{4, 4},
+      Binary{BinaryOperator::divide_signed, 5, 0, 1},
+      WriteBlocking{5, 5},
+      Binary{BinaryOperator::remainder_signed, 6, 0, 1},
+      WriteBlocking{6, 6},
+      Binary{BinaryOperator::modulo_signed, 7, 0, 1},
+      WriteBlocking{7, 7},
+      Binary{BinaryOperator::less_signed, 8, 0, 1},
+      WriteBlocking{8, 8},
+      Binary{BinaryOperator::less_equal_signed, 9, 0, 1},
+      WriteBlocking{9, 9},
+      Binary{BinaryOperator::greater_signed, 10, 0, 1},
+      WriteBlocking{10, 10},
+      Binary{
+          BinaryOperator::greater_equal_signed, 11, 0, 1},
+      WriteBlocking{11, 11},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 12> widths{
+      8, 8, 8, 8, 8, 8, 8, 8, 1, 1, 1, 1};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  struct TestCase {
+    std::string_view lhs;
+    std::string_view rhs;
+    std::array<std::string_view, 10> expected;
+  };
+  const std::array cases{
+      TestCase{
+          "11111011",
+          "00000011",
+          {"11111110", "11111000", "11110001",
+           "11111111", "11111110", "00000001",
+           "1", "1", "0", "0"}},
+      TestCase{
+          "00000101",
+          "11111101",
+          {"00000010", "00001000", "11110001",
+           "11111111", "00000010", "11111111",
+           "0", "0", "1", "1"}},
+      TestCase{
+          "10000000",
+          "11111111",
+          {"01111111", "10000001", "10000000",
+           "10000000", "00000000", "00000000",
+           "1", "1", "0", "0"}},
+      TestCase{
+          "10X01000",
+          "00000111",
+          {"XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
+           "XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
+           "X", "X", "X", "X"}},
+      TestCase{
+          "00000101",
+          "00000000",
+          {"00000101", "00000101", "00000000",
+           "XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
+           "0", "0", "1", "1"}},
+  };
+  for (const auto& test : cases) {
+    TestRuntime runtime;
+    const auto lhs =
+        PackedLogic4::from_msb_string(test.lhs).low_word();
+    const auto rhs =
+        PackedLogic4::from_msb_string(test.rhs).low_word();
+    runtime.signals[0] = {lhs.aval, lhs.bval};
+    runtime.signals[1] = {rhs.aval, rhs.bval};
+    auto descriptor = abi(runtime);
+    assert(
+        jit.execute(handle, descriptor)
+        == JitExecutionStatus::completed);
+    for (std::size_t index = 0; index < test.expected.size();
+         ++index) {
+      const auto encoded =
+          PackedLogic4::from_msb_string(
+              test.expected[index]).low_word();
+      assert((
+          runtime.signals[index + 2]
+          == EncodedSignal{encoded.aval, encoded.bval}));
+    }
+  }
+
+  Process full_width;
+  full_width.id = 1;
+  full_width.name = std::string{symbol} + "_64";
+  full_width.register_count = 6;
+  full_width.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      Binary{BinaryOperator::divide_signed, 2, 0, 1},
+      WriteBlocking{2, 2},
+      Binary{BinaryOperator::remainder_signed, 3, 0, 1},
+      WriteBlocking{3, 3},
+      Binary{BinaryOperator::modulo_signed, 4, 0, 1},
+      WriteBlocking{4, 4},
+      Binary{BinaryOperator::less_signed, 5, 0, 1},
+      WriteBlocking{5, 5},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 6> full_widths{
+      64, 64, 64, 64, 64, 1};
+  const auto full_symbol = std::string{symbol} + "_64";
+  jit.add_process(full_symbol, full_width, full_widths);
+  TestRuntime full_runtime;
+  full_runtime.signals[0] = {
+      UINT64_C(0x8000000000000000), 0};
+  full_runtime.signals[1] = {
+      std::numeric_limits<std::uint64_t>::max(), 0};
+  auto full_descriptor = abi(full_runtime);
+  assert(
+      jit.execute(jit.lookup(full_symbol), full_descriptor)
+      == JitExecutionStatus::completed);
+  assert((
+      full_runtime.signals[2]
+      == EncodedSignal{UINT64_C(0x8000000000000000), 0}));
+  assert((full_runtime.signals[3] == EncodedSignal{0, 0}));
+  assert((full_runtime.signals[4] == EncodedSignal{0, 0}));
+  assert((full_runtime.signals[5] == EncodedSignal{1, 0}));
 }
 
 void test_extract_and_concatenate_at_level(
@@ -2959,6 +3097,10 @@ int main() {
       JitOptimizationLevel::o0, "unsigned_arithmetic_o0");
   test_unsigned_arithmetic_at_level(
       JitOptimizationLevel::o2, "unsigned_arithmetic_o2");
+  test_signed_arithmetic_at_level(
+      JitOptimizationLevel::o0, "signed_arithmetic_o0");
+  test_signed_arithmetic_at_level(
+      JitOptimizationLevel::o2, "signed_arithmetic_o2");
   test_extract_and_concatenate_at_level(
       JitOptimizationLevel::o0, "extract_concatenate_o0");
   test_extract_and_concatenate_at_level(

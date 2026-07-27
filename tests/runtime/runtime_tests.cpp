@@ -584,6 +584,110 @@ void test_simir_wide_unsigned_arithmetic() {
   }
 }
 
+void test_simir_wide_signed_arithmetic() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto signed_value =
+      [](const std::int64_t value, const std::size_t width) {
+        PackedLogic4 result(width, Logic4::zero);
+        const auto encoded = static_cast<std::uint64_t>(value);
+        for (std::size_t bit = 0; bit < width; ++bit) {
+          const bool one =
+              bit < 64
+                  ? ((encoded >> bit) & UINT64_C(1)) != 0
+                  : value < 0;
+          result.set(bit, one ? Logic4::one : Logic4::zero);
+        }
+        return result;
+      };
+
+  Interpreter interpreter;
+  std::array<SignalId, 10> outputs{};
+  for (std::size_t index = 0; index < 6; ++index) {
+    outputs[index] = interpreter.add_signal(
+        {"top.signed_" + std::to_string(index),
+         PackedLogic4(65, Logic4::zero)});
+  }
+  outputs[6] = interpreter.add_signal(
+      {"top.signed_less", PackedLogic4(1, Logic4::zero)});
+  outputs[7] = interpreter.add_signal(
+      {"top.signed_greater", PackedLogic4(1, Logic4::zero)});
+  outputs[8] = interpreter.add_signal(
+      {"top.signed_overflow", PackedLogic4(65, Logic4::zero)});
+  outputs[9] = interpreter.add_signal(
+      {"top.signed_unknown", PackedLogic4(65, Logic4::zero)});
+
+  auto minimum = PackedLogic4(65, Logic4::zero);
+  minimum.set(64, Logic4::one);
+  auto unknown = PackedLogic4(65, Logic4::zero);
+  unknown.set(37, Logic4::x);
+
+  Process process;
+  process.id = 0;
+  process.name = "wide_signed_arithmetic";
+  process.register_count = 15;
+  process.operations = {
+      LoadConstant{0, signed_value(-5, 65)},
+      LoadConstant{1, signed_value(3, 65)},
+      Binary{BinaryOperator::add_signed, 2, 0, 1},
+      WriteBlocking{outputs[0], 2},
+      Binary{BinaryOperator::subtract_signed, 3, 0, 1},
+      WriteBlocking{outputs[1], 3},
+      Binary{BinaryOperator::multiply_signed, 4, 0, 1},
+      WriteBlocking{outputs[2], 4},
+      Binary{BinaryOperator::divide_signed, 5, 0, 1},
+      WriteBlocking{outputs[3], 5},
+      Binary{BinaryOperator::remainder_signed, 6, 0, 1},
+      WriteBlocking{outputs[4], 6},
+      Binary{BinaryOperator::modulo_signed, 7, 0, 1},
+      WriteBlocking{outputs[5], 7},
+      Binary{BinaryOperator::less_signed, 8, 0, 1},
+      WriteBlocking{outputs[6], 8},
+      Binary{BinaryOperator::greater_signed, 9, 0, 1},
+      WriteBlocking{outputs[7], 9},
+      LoadConstant{10, std::move(minimum)},
+      LoadConstant{11, signed_value(-1, 65)},
+      Binary{BinaryOperator::divide_signed, 12, 10, 11},
+      WriteBlocking{outputs[8], 12},
+      LoadConstant{13, std::move(unknown)},
+      Binary{BinaryOperator::divide_signed, 14, 13, 1},
+      WriteBlocking{outputs[9], 14},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "wide signed arithmetic process completes");
+  const std::array expected{
+      signed_value(-2, 65),
+      signed_value(-8, 65),
+      signed_value(-15, 65),
+      signed_value(-1, 65),
+      signed_value(-2, 65),
+      signed_value(1, 65)};
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    require(
+        interpreter.signal_value(outputs[index]) == expected[index],
+        "wide signed arithmetic result");
+  }
+  require(
+      interpreter.signal_value(outputs[6]).to_msb_string() == "1"
+          && interpreter.signal_value(outputs[7]).to_msb_string()
+              == "0",
+      "wide signed relational ordering");
+  require(
+      interpreter.signal_value(outputs[8]).to_msb_string()
+          == "1" + std::string(64, '0'),
+      "signed minimum divided by negative one wraps at fixed width");
+  require(
+      interpreter.signal_value(outputs[9]).to_msb_string()
+          == std::string(65, 'X'),
+      "unknown signed arithmetic produces an all-X result");
+}
+
 void test_simir_wide_extract_and_concatenate() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1656,6 +1760,7 @@ int main() {
     test_simir_wide_truth_and_comparison();
     test_simir_wide_reduction_and_shift();
     test_simir_wide_unsigned_arithmetic();
+    test_simir_wide_signed_arithmetic();
     test_simir_wide_extract_and_concatenate();
     test_simir_insert_and_partial_writes();
     test_simir_force_release();

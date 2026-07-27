@@ -106,9 +106,10 @@ The following foundation is implemented:
 - SystemVerilog unary reductions and mixed-width logical left/right shifts
   with four-state unknown and oversized-amount semantics tested across the
   interpreter and LLVM O0/O2 paths;
-- SystemVerilog unary plus/minus and equal-width unsigned subtraction,
-  multiplication, division, and remainder with arbitrary-width interpreter
-  algorithms, guarded LLVM lowering, and differential source tests;
+- equal-width signed/unsigned packed arithmetic and relational comparisons for
+  VHDL and SystemVerilog, including distinct signed remainder/modulo,
+  arbitrary-width interpreter algorithms, guarded LLVM lowering, and
+  differential source tests;
 - declared-range-aware constant SystemVerilog bit/part selects and packed
   concatenations with arbitrary-width interpreter operations, LLVM
   single-word lowering, and ascending/non-zero-based range tests;

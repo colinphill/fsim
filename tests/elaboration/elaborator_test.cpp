@@ -1399,13 +1399,34 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signed_comparison.ok());
-    const auto rejected_signed_comparison =
+    const auto elaborated_signed_comparison =
         fsim::elaboration::elaborate(
             signed_comparison.design,
             "sv:work.signed_comparison");
-    assert(!rejected_signed_comparison.ok());
-    assert(has_diagnostic(
-        rejected_signed_comparison, "FSIM-ELAB-066"));
+    assert(elaborated_signed_comparison.ok());
+    const auto signed_comparison_lhs =
+        elaborated_signed_comparison.design->find_signal("lhs");
+    const auto signed_comparison_rhs =
+        elaborated_signed_comparison.design->find_signal("rhs");
+    const auto signed_comparison_result =
+        elaborated_signed_comparison.design->find_signal("result");
+    assert(
+        signed_comparison_lhs && signed_comparison_rhs
+        && signed_comparison_result);
+    auto signed_comparison_interpreter =
+        elaborated_signed_comparison.design->create_interpreter();
+    signed_comparison_interpreter->deposit_signal(
+        *signed_comparison_lhs,
+        fsim::runtime::PackedLogic4::from_msb_string("1111"));
+    signed_comparison_interpreter->deposit_signal(
+        *signed_comparison_rhs,
+        fsim::runtime::PackedLogic4::from_msb_string("0001"));
+    (void)signed_comparison_interpreter->run();
+    assert(
+        signed_comparison_interpreter
+            ->signal_value(*signed_comparison_result)
+            .to_msb_string()
+        == "1");
 
     const auto logical_process = fsim::frontend::parse_text(
         "logical_process.sv",
@@ -1660,19 +1681,225 @@ endmodule
 module signed_arithmetic;
   logic signed [7:0] lhs;
   logic signed [7:0] rhs;
-  logic signed [7:0] result;
-  always_comb result = lhs * rhs;
+  logic [7:0] unsigned_rhs;
+  logic signed [7:0] sum;
+  logic signed [7:0] difference;
+  logic signed [7:0] product;
+  logic signed [7:0] quotient;
+  logic signed [7:0] remainder;
+  logic less;
+  logic mixed_less;
+  always_comb begin
+    sum = lhs + rhs;
+    difference = lhs - rhs;
+    product = lhs * rhs;
+    quotient = lhs / rhs;
+    remainder = lhs % rhs;
+    less = lhs < rhs;
+    mixed_less = lhs < unsigned_rhs;
+  end
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(signed_arithmetic.ok());
-    const auto rejected_signed_arithmetic =
+    const auto elaborated_signed_arithmetic =
         fsim::elaboration::elaborate(
             signed_arithmetic.design,
             "sv:work.signed_arithmetic");
-    assert(!rejected_signed_arithmetic.ok());
+    assert(elaborated_signed_arithmetic.ok());
+    const auto signed_lhs =
+        elaborated_signed_arithmetic.design->find_signal("lhs");
+    const auto signed_rhs =
+        elaborated_signed_arithmetic.design->find_signal("rhs");
+    const auto unsigned_rhs =
+        elaborated_signed_arithmetic.design->find_signal(
+            "unsigned_rhs");
+    const std::array signed_outputs{
+        elaborated_signed_arithmetic.design->find_signal("sum"),
+        elaborated_signed_arithmetic.design->find_signal(
+            "difference"),
+        elaborated_signed_arithmetic.design->find_signal("product"),
+        elaborated_signed_arithmetic.design->find_signal(
+            "quotient"),
+        elaborated_signed_arithmetic.design->find_signal(
+            "remainder"),
+        elaborated_signed_arithmetic.design->find_signal("less"),
+        elaborated_signed_arithmetic.design->find_signal(
+            "mixed_less")};
+    assert(signed_lhs && signed_rhs && unsigned_rhs);
+    assert(std::ranges::all_of(
+        signed_outputs,
+        [](const auto& signal) {
+          return signal.has_value();
+        }));
+    auto signed_interpreter =
+        elaborated_signed_arithmetic.design->create_interpreter();
+    const auto run_signed =
+        [&](const std::string_view lhs,
+            const std::string_view rhs,
+            const std::string_view unsigned_value,
+            const std::array<std::string_view, 7>& expected) {
+          signed_interpreter->deposit_signal(
+              *signed_lhs,
+              fsim::runtime::PackedLogic4::from_msb_string(lhs));
+          signed_interpreter->deposit_signal(
+              *signed_rhs,
+              fsim::runtime::PackedLogic4::from_msb_string(rhs));
+          signed_interpreter->deposit_signal(
+              *unsigned_rhs,
+              fsim::runtime::PackedLogic4::from_msb_string(
+                  unsigned_value));
+          (void)signed_interpreter->run();
+          for (std::size_t index = 0;
+               index < signed_outputs.size(); ++index) {
+            assert(
+                signed_interpreter
+                    ->signal_value(*signed_outputs[index])
+                    .to_msb_string()
+                == expected[index]);
+          }
+        };
+    run_signed(
+        "11111011",
+        "00000011",
+        "00000001",
+        {"11111110", "11111000", "11110001",
+         "11111111", "11111110", "1", "0"});
+    run_signed(
+        "00000101",
+        "11111101",
+        "11111111",
+        {"00000010", "00001000", "11110001",
+         "11111111", "00000010", "0", "1"});
+
+    const auto vhdl_signed_arithmetic =
+        fsim::frontend::parse_text(
+            "vhdl_signed_arithmetic.vhd",
+            R"(
+entity vhdl_signed_arithmetic is
+  port (
+    lhs : in signed(7 downto 0);
+    rhs : in signed(7 downto 0);
+    sum : out signed(7 downto 0);
+    difference : out signed(7 downto 0);
+    product : out signed(7 downto 0);
+    quotient : out signed(7 downto 0);
+    remainder : out signed(7 downto 0);
+    modulo : out signed(7 downto 0);
+    less : out std_logic
+  );
+end entity;
+
+architecture rtl of vhdl_signed_arithmetic is
+begin
+  calculate: process(lhs, rhs)
+  begin
+    sum <= lhs + rhs;
+    difference <= lhs - rhs;
+    product <= lhs * rhs;
+    quotient <= lhs / rhs;
+    remainder <= lhs rem rhs;
+    modulo <= lhs mod rhs;
+    less <= lhs < rhs;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_signed_arithmetic.ok());
+    const auto elaborated_vhdl_signed_arithmetic =
+        fsim::elaboration::elaborate(
+            vhdl_signed_arithmetic.design,
+            "vhdl:work.vhdl_signed_arithmetic(rtl)");
+    if (!elaborated_vhdl_signed_arithmetic.ok()) {
+      for (const auto& diagnostic :
+           elaborated_vhdl_signed_arithmetic.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_vhdl_signed_arithmetic.ok());
+    const auto vhdl_signed_lhs =
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "lhs");
+    const auto vhdl_signed_rhs =
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "rhs");
+    const std::array vhdl_signed_outputs{
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "sum"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "difference"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "product"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "quotient"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "remainder"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "modulo"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "less")};
+    assert(vhdl_signed_lhs && vhdl_signed_rhs);
+    assert(std::ranges::all_of(
+        vhdl_signed_outputs,
+        [](const auto& signal) {
+          return signal.has_value();
+        }));
+    auto vhdl_signed_interpreter =
+        elaborated_vhdl_signed_arithmetic.design
+            ->create_interpreter();
+    vhdl_signed_interpreter->deposit_signal(
+        *vhdl_signed_lhs,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "11111011"));
+    vhdl_signed_interpreter->deposit_signal(
+        *vhdl_signed_rhs,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "00000011"));
+    (void)vhdl_signed_interpreter->run();
+    const std::array<std::string_view, 7>
+        expected_vhdl_signed{
+            "11111110",
+            "11111000",
+            "11110001",
+            "11111111",
+            "11111110",
+            "00000001",
+            "1"};
+    for (std::size_t index = 0;
+         index < vhdl_signed_outputs.size(); ++index) {
+      assert(
+          vhdl_signed_interpreter
+              ->signal_value(*vhdl_signed_outputs[index])
+              .to_msb_string()
+          == expected_vhdl_signed[index]);
+    }
+
+    const auto mixed_vhdl_arithmetic =
+        fsim::frontend::parse_text(
+            "mixed_vhdl_arithmetic.vhd",
+            R"(
+entity mixed_vhdl_arithmetic is
+  port (
+    lhs : in signed(7 downto 0);
+    rhs : in unsigned(7 downto 0);
+    result : out signed(7 downto 0)
+  );
+end entity;
+architecture rtl of mixed_vhdl_arithmetic is
+begin
+  result <= lhs + rhs;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(mixed_vhdl_arithmetic.ok());
+    const auto rejected_mixed_vhdl_arithmetic =
+        fsim::elaboration::elaborate(
+            mixed_vhdl_arithmetic.design,
+            "vhdl:work.mixed_vhdl_arithmetic(rtl)");
+    assert(!rejected_mixed_vhdl_arithmetic.ok());
     assert(has_diagnostic(
-        rejected_signed_arithmetic, "FSIM-ELAB-067"));
+        rejected_mixed_vhdl_arithmetic, "FSIM-ELAB-067"));
 
     const auto select_concat_process =
         fsim::frontend::parse_text(
