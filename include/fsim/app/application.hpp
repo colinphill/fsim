@@ -20,8 +20,15 @@
 
 namespace fsim::app {
 
+struct CheckedSource {
+  std::filesystem::path path;
+  /// SHA-256 of the exact in-memory bytes supplied to the HDL parser.
+  std::string content_digest;
+};
+
 struct CheckedProject {
   frontend::ParsedDesign parsed;
+  std::vector<CheckedSource> hdl_sources;
   std::size_t source_count{};
 };
 
@@ -31,6 +38,8 @@ struct BuiltProject {
   std::string time_resolution;
   std::filesystem::path cache_path;
   project::Optimization optimization{project::Optimization::o2};
+  /// Dense specialization-ID-indexed provenance keys for native modules.
+  std::vector<std::string> specialization_cache_keys;
   std::vector<std::filesystem::path> systemc_plugins;
   bool cache_hit{};
 };

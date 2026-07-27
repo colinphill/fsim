@@ -51,6 +51,12 @@ endmodule
     assert(counter_specialization.id == 0);
     assert(counter_specialization.unit == "sv:work.counter");
     assert(counter_specialization.instance == "counter");
+    assert(counter_specialization.source == "counter.sv");
+    assert(
+        counter_specialization.language
+        == fsim::frontend::Language::SystemVerilog2017);
+    assert(counter_specialization.library == "work");
+    assert(counter_specialization.parameter_values.empty());
     assert((
         counter_specialization.processes
         == std::vector<fsim::runtime::simir::ProcessId>{0, 1}));
@@ -200,6 +206,7 @@ end architecture rtl;
     assert(mixed_specializations[0].id == 0);
     assert(mixed_specializations[0].unit == "sv:work.tb");
     assert(mixed_specializations[0].instance == "tb");
+    assert(mixed_specializations[0].source == "tb.sv");
     assert((
         mixed_specializations[0].processes
         == std::vector<fsim::runtime::simir::ProcessId>{0}));
@@ -208,12 +215,14 @@ end architecture rtl;
         mixed_specializations[1].unit
         == "vhdl:work.counter(rtl)");
     assert(mixed_specializations[1].instance == "tb.u_counter");
+    assert(mixed_specializations[1].source == "counter.vhd");
     assert((
         mixed_specializations[1].processes
         == std::vector<fsim::runtime::simir::ProcessId>{1}));
     assert(mixed_specializations[2].id == 2);
     assert(mixed_specializations[2].unit == "sv:work.child");
     assert(mixed_specializations[2].instance == "tb.u_child");
+    assert(mixed_specializations[2].source == "tb.sv");
     assert((
         mixed_specializations[2].processes
         == std::vector<fsim::runtime::simir::ProcessId>{2}));

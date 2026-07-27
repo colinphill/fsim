@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <tuple>
 #include <vector>
@@ -95,6 +96,35 @@ module partial_group;
 endmodule
 )";
   }
+  const auto provenance_source = directory / "provenance.sv";
+  const auto unused_source = directory / "unused.sv";
+  const auto write_provenance_source =
+      [&](const std::string_view comment) {
+        std::ofstream output(provenance_source);
+        output << R"(
+module provenance;
+  logic q;
+  initial begin
+    q = 1'b1;
+    #1 $finish;
+  end
+endmodule
+)";
+        output << "// " << comment << '\n';
+      };
+  const auto write_unused_source =
+      [&](const std::string_view comment) {
+        std::ofstream output(unused_source);
+        output << R"(
+module unused;
+  logic q;
+  initial q = 1'b0;
+endmodule
+)";
+        output << "// " << comment << '\n';
+      };
+  write_provenance_source("top revision 1");
+  write_unused_source("unused revision 1");
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -151,6 +181,9 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   auto checked = fsim::app::check_project(config, diagnostics);
   assert(checked);
   assert(checked->source_count == 2);
+  assert(checked->hdl_sources.size() == 1);
+  assert(checked->hdl_sources.front().path == source);
+  assert(checked->hdl_sources.front().content_digest.size() == 64);
   assert(checked->parsed.units.size() == 2);
 
   auto first = fsim::app::build_project(config, diagnostics);
@@ -555,6 +588,120 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       partial_group_hybrid.result.status
       == fsim::runtime::RunStatus::stopped);
   assert(partial_group_hybrid.result.time == 1);
+
+  auto provenance_config = config;
+  provenance_config.project.name =
+      "specialization-provenance-test";
+  provenance_config.project.top = "sv:work.provenance";
+  provenance_config.build.optimization =
+      fsim::project::Optimization::o2;
+  provenance_config.build.cache_path =
+      directory / "provenance-cache";
+  provenance_config.source_sets.clear();
+  fsim::project::SourceSet provenance_sources;
+  provenance_sources.language =
+      fsim::project::Language::system_verilog;
+  provenance_sources.standard = "2017";
+  provenance_sources.library = "work";
+  provenance_sources.files = {
+      provenance_source,
+      unused_source,
+  };
+  provenance_config.source_sets.push_back(
+      std::move(provenance_sources));
+  struct ProvenanceRun {
+    std::string specialization_key;
+    bool analysis_cache_hit{};
+    CapturedSimulation simulation;
+  };
+  const auto run_provenance =
+      [&](const fsim::project::Config& run_config) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            run_config, run_diagnostics);
+        assert(project);
+        assert(project->design.specializations().size() == 1);
+        assert(project->specialization_cache_keys.size() == 1);
+        auto key = project->specialization_cache_keys.front();
+        const auto analysis_cache_hit = project->cache_hit;
+        auto captured = capture_simulation(
+            std::move(*project),
+            fsim::app::SimulationEngine::compiled);
+        assert(
+            captured.result.status
+            == fsim::runtime::RunStatus::stopped);
+        assert(captured.result.time == 1);
+        assert(captured.process_count == 1);
+        return ProvenanceRun{
+            std::move(key),
+            analysis_cache_hit,
+            std::move(captured)};
+      };
+
+  const auto provenance_cold =
+      run_provenance(provenance_config);
+  const auto provenance_warm =
+      run_provenance(provenance_config);
+  assert(!provenance_cold.analysis_cache_hit);
+  assert(provenance_warm.analysis_cache_hit);
+  assert(
+      provenance_warm.specialization_key
+      == provenance_cold.specialization_key);
+  assert(
+      provenance_warm.simulation.final_values
+      == provenance_cold.simulation.final_values);
+#if defined(FSIM_HAS_LLVM)
+  assert(provenance_cold.simulation.compiled_processes == 1);
+  assert(provenance_cold.simulation.compiled_modules == 1);
+  assert(provenance_cold.simulation.native_cache.hits == 0);
+  assert(provenance_cold.simulation.native_cache.misses == 1);
+  assert(provenance_cold.simulation.native_cache.stores == 1);
+  assert(provenance_warm.simulation.native_cache.hits == 1);
+  assert(provenance_warm.simulation.native_cache.misses == 0);
+#endif
+
+  // An uninstantiated source changes the project-analysis key, but not the
+  // instantiated specialization's native provenance.
+  write_unused_source("unused revision 2");
+  const auto provenance_unrelated =
+      run_provenance(provenance_config);
+  assert(!provenance_unrelated.analysis_cache_hit);
+  assert(
+      provenance_unrelated.specialization_key
+      == provenance_cold.specialization_key);
+#if defined(FSIM_HAS_LLVM)
+  assert(provenance_unrelated.simulation.native_cache.hits == 1);
+  assert(provenance_unrelated.simulation.native_cache.misses == 0);
+#endif
+
+  // A comment-only owning-source edit leaves SimIR unchanged but must still
+  // invalidate the specialization object by source provenance.
+  write_provenance_source("top revision 2");
+  const auto provenance_changed_source =
+      run_provenance(provenance_config);
+  assert(!provenance_changed_source.analysis_cache_hit);
+  assert(
+      provenance_changed_source.specialization_key
+      != provenance_cold.specialization_key);
+#if defined(FSIM_HAS_LLVM)
+  assert(provenance_changed_source.simulation.native_cache.hits == 0);
+  assert(provenance_changed_source.simulation.native_cache.misses == 1);
+  assert(provenance_changed_source.simulation.native_cache.stores == 1);
+#endif
+
+  auto provenance_standard_config = provenance_config;
+  provenance_standard_config.source_sets.front().standard = "2012";
+  const auto provenance_changed_standard =
+      run_provenance(provenance_standard_config);
+  assert(!provenance_changed_standard.analysis_cache_hit);
+  assert(
+      provenance_changed_standard.specialization_key
+      != provenance_changed_source.specialization_key);
+#if defined(FSIM_HAS_LLVM)
+  assert(provenance_changed_standard.simulation.native_cache.hits == 0);
+  assert(provenance_changed_standard.simulation.native_cache.misses == 1);
+  assert(provenance_changed_standard.simulation.native_cache.stores == 1);
+#endif
 
   fsim::diagnostic::Engine mixed_diagnostics;
   const auto mixed_manifest =

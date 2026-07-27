@@ -289,7 +289,7 @@ therefore excluded.
 | `FSIM-VCD-0001` | error | The trace output directory could not be created. |
 | `FSIM-VCD-0002` | error | The VCD trace file could not be opened. |
 | `FSIM-VCD-0003` | error | VCD declaration, value emission, timestamp scaling, or flushing failed. |
-| `FSIM-CACHE-0001` | error | A source file could not be hashed for the design cache key. |
+| `FSIM-CACHE-0001` | error | A parsed source could not be hashed or associated with its cache provenance. |
 | `FSIM-CACHE-0002` | warning | An unreadable or incompatible design-cache entry was discarded. |
 | `FSIM-CACHE-0003` | error | A design-cache entry could not be populated. |
 | `FSIM-CACHE-0004` | warning | Native-object cache load or store failures prevented complete cache reuse. |

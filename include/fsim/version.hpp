@@ -11,5 +11,11 @@ inline constexpr std::uint32_t manifest_schema_version = 1;
 inline constexpr std::uint32_t native_abi_version = 1;
 inline constexpr std::uint32_t runtime_abi_version = 1;
 inline constexpr std::string_view production_llvm_version = "22.1.8";
+// Bump when the bundled HDL declarations/bodies can affect elaboration or
+// generated code. The current vertical slice has no bundled IEEE package
+// implementation, but the explicit marker prevents silently adding one
+// without invalidating native objects.
+inline constexpr std::string_view standard_library_cache_version =
+    "none-v1";
 
 } // namespace fsim

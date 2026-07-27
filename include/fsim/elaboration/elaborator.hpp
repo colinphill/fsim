@@ -63,6 +63,12 @@ struct SpecializationInfo {
     std::string unit;
     std::string instance;
     std::vector<runtime::simir::ProcessId> processes;
+    std::string source;
+    frontend::Language language{frontend::Language::SystemVerilog2017};
+    std::string library{"work"};
+    // Canonical name/value pairs once frontend parameters and generics are
+    // represented. Empty for the current bounded frontend subset.
+    std::vector<std::pair<std::string, std::string>> parameter_values;
 };
 
 class ElaboratedDesign final {

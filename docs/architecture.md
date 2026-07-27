@@ -228,11 +228,20 @@ reports the principal counters. Application tests require a cold miss and
 store for every compiled specialization module followed by a warm hit with no
 misses or cache failures at both O0 and O2. The two-process static-sensitivity
 application fixture specifically requires one module miss/store followed by
-one warm module hit. Source/include content and eventual generic/parameter
-values do not yet participate in the module identity, the cache has no age/size
-eviction policy, and O0 does not yet provide the full debug metadata or
-statement/call safe-point model. The application analysis cache remains
-separate.
+one warm module hit. The application reads each HDL file once, hashes the exact
+in-memory bytes passed to the parser, and retains that digest with the checked
+source. Each specialization provenance key covers its owning source path and
+digest, language and standard, library, compilation-unit mode, macro/include
+settings, the bundled-standard-library version marker, and represented
+generic/parameter name/value pairs. The native module identity includes this
+key. A comment-only owning-source change therefore invalidates the module even
+when SimIR is identical, while changing an unrelated, uninstantiated source
+retains the module object. The current HDL preprocessor rejects include
+directories and macros, so transitive HDL include-content closure remains open
+until preprocessing exists. Actual generic/parameter values are likewise
+pending frontend support. The cache has no age/size eviction policy, and O0
+does not yet provide the full debug metadata or statement/call safe-point
+model. The application analysis cache remains separate.
 
 ## Debug and public API
 

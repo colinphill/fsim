@@ -1316,8 +1316,14 @@ private:
             throw std::length_error(
                 "too many elaborated design-unit specializations");
         }
-        SpecializationInfo specialization{
-            specialization_id, identity, path, {}};
+        SpecializationInfo specialization;
+        specialization.id = specialization_id;
+        specialization.unit = identity;
+        specialization.instance = path;
+        specialization.source = unit.span.source_name;
+        specialization.language = unit.language;
+        specialization.library =
+            unit.library.empty() ? "work" : unit.library;
 
         Lowerer lowerer{design_, local, diagnostics_};
         for (std::size_t index = 0;

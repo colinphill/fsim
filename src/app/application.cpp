@@ -7,6 +7,7 @@
 #endif
 #include "fsim/frontend/parser.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "fsim/support/sha256.hpp"
 #include "fsim/systemc/plugin_compiler.hpp"
 #include "fsim/systemc/plugin_loader.hpp"
 #include "fsim/version.hpp"
@@ -406,6 +407,42 @@ struct ParseInput {
   std::string library{"work"};
 };
 
+frontend::ParseResult parse_file_snapshot(
+    const ParseInput& input,
+    std::string& content_digest) {
+  std::ifstream stream(input.path, std::ios::binary);
+  if (!stream) {
+    frontend::ParseResult result;
+    result.diagnostics.push_back({
+        frontend::DiagnosticSeverity::Error,
+        "FSIM-FE-IO-001",
+        "unable to open source file",
+        {input.path.string(), {}, {}},
+        {},
+    });
+    return result;
+  }
+  std::string text{
+      std::istreambuf_iterator<char>(stream),
+      std::istreambuf_iterator<char>()};
+  if (!stream.good() && !stream.eof()) {
+    frontend::ParseResult result;
+    result.diagnostics.push_back({
+        frontend::DiagnosticSeverity::Error,
+        "FSIM-FE-IO-002",
+        "failed while reading source file",
+        {input.path.string(), {}, {}},
+        {},
+    });
+    return result;
+  }
+  content_digest = support::Sha256::hex(
+      support::Sha256::digest(text));
+  return frontend::parse(
+      frontend::SourceText{input.path.string(), std::move(text)},
+      input.language);
+}
+
 std::optional<systemc::PluginCompileRequest> systemc_request(
     const project::Config& config) {
   systemc::PluginCompileRequest request;
@@ -690,6 +727,7 @@ std::string target_name() {
 
 std::string make_cache_key(
     const project::Config& config,
+    const CheckedProject& checked,
     const std::string_view top,
     const std::string_view resolution,
     diagnostic::Engine& diagnostics) {
@@ -701,6 +739,8 @@ std::string make_cache_key(
   key.add("time-resolution", resolution);
   key.add("optimization", project::to_string(config.build.optimization));
   key.add("llvm", production_llvm_version);
+  key.add("standard-library", standard_library_cache_version);
+  std::size_t hdl_source_index = 0;
   for (const auto& set : config.source_sets) {
     key.add("language", project::to_string(set.language));
     key.add("standard", set.standard);
@@ -712,15 +752,39 @@ std::string make_cache_key(
       key.add("include", include.generic_string());
     }
     for (const auto& file : set.files) {
-      std::error_code error;
-      if (!key.add_file("source", file, error)) {
+      key.add("source-path", file.lexically_normal().generic_string());
+      if (set.language == project::Language::systemc) {
+        std::error_code error;
+        if (!key.add_file("source-content", file, error)) {
+          diagnostics.error(
+              "FSIM-CACHE-0001",
+              "cannot hash source file '" + file.generic_string()
+                  + "': " + error.message());
+          return {};
+        }
+        continue;
+      }
+      if (hdl_source_index >= checked.hdl_sources.size()
+          || checked.hdl_sources[hdl_source_index].path
+                  .lexically_normal()
+              != file.lexically_normal()) {
         diagnostics.error(
             "FSIM-CACHE-0001",
-            "cannot hash source file '" + file.generic_string()
-                + "': " + error.message());
+            "parsed source identity is inconsistent for '"
+                + file.generic_string() + "'");
         return {};
       }
+      key.add(
+          "source-content",
+          checked.hdl_sources[hdl_source_index].content_digest);
+      ++hdl_source_index;
     }
+  }
+  if (hdl_source_index != checked.hdl_sources.size()) {
+    diagnostics.error(
+        "FSIM-CACHE-0001",
+        "parsed HDL source count is inconsistent with the project manifest");
+    return {};
   }
   for (const auto& binding : config.bindings) {
     key.add("binding-instance", binding.instance);
@@ -728,6 +792,106 @@ std::string make_cache_key(
     key.add("binding-resolver", binding.resolver.value_or(""));
   }
   return key.finish();
+}
+
+std::optional<std::vector<std::string>>
+make_specialization_cache_keys(
+    const project::Config& config,
+    const CheckedProject& checked,
+    const elaboration::ElaboratedDesign& design,
+    diagnostic::Engine& diagnostics) {
+  struct SourceSettings {
+    const project::SourceSet* source_set{};
+    const CheckedSource* checked_source{};
+  };
+  const auto settings_for =
+      [&](const elaboration::SpecializationInfo& specialization)
+          -> std::optional<SourceSettings> {
+        const auto source_path =
+            std::filesystem::path{specialization.source}
+                .lexically_normal();
+        const CheckedSource* checked_source = nullptr;
+        for (const auto& candidate : checked.hdl_sources) {
+          if (candidate.path.lexically_normal() == source_path) {
+            checked_source = &candidate;
+            break;
+          }
+        }
+        if (checked_source == nullptr) {
+          return std::nullopt;
+        }
+        for (const auto& source_set : config.source_sets) {
+          if (source_set.language == project::Language::systemc) {
+            continue;
+          }
+          if (frontend_language(source_set.language)
+                  != specialization.language
+              || (source_set.library.empty() ? "work"
+                                             : source_set.library)
+                  != specialization.library) {
+            continue;
+          }
+          if (std::any_of(
+                  source_set.files.begin(),
+                  source_set.files.end(),
+                  [&](const std::filesystem::path& candidate) {
+                    return candidate.lexically_normal() == source_path;
+                  })) {
+            return SourceSettings{&source_set, checked_source};
+          }
+        }
+        return std::nullopt;
+      };
+
+  std::vector<std::string> result;
+  result.reserve(design.specializations().size());
+  for (const auto& specialization : design.specializations()) {
+    const auto settings = settings_for(specialization);
+    if (!settings) {
+      diagnostics.error(
+          "FSIM-CACHE-0001",
+          "cannot associate elaborated specialization '"
+              + specialization.unit + "' with parsed source '"
+              + specialization.source + "'");
+      return std::nullopt;
+    }
+
+    compiler::CacheKeyBuilder key;
+    key.add(
+        "specialization-provenance-schema",
+        "fsim-specialization-provenance-v1");
+    key.add("fsim-version", version);
+    key.add("standard-library", standard_library_cache_version);
+    key.add("unit", specialization.unit);
+    key.add(
+        "source-path",
+        settings->checked_source->path.lexically_normal().generic_string());
+    key.add(
+        "source-content",
+        settings->checked_source->content_digest);
+    key.add(
+        "language",
+        project::to_string(settings->source_set->language));
+    key.add("standard", settings->source_set->standard);
+    key.add("library", settings->source_set->library);
+    key.add(
+        "compilation-unit",
+        settings->source_set->compilation_unit);
+    for (const auto& define : settings->source_set->defines) {
+      key.add("define", define);
+    }
+    for (const auto& include :
+         settings->source_set->include_directories) {
+      key.add("include", include.lexically_normal().generic_string());
+    }
+    for (const auto& [name, value] :
+         specialization.parameter_values) {
+      key.add("parameter-name", name);
+      key.add("parameter-value", value);
+    }
+    result.push_back(key.finish());
+  }
+  return result;
 }
 
 bool wildcard_match(std::string_view pattern, std::string_view text) {
@@ -1930,6 +2094,7 @@ std::optional<CheckedProject> check_project(
 
   std::vector<std::optional<frontend::ParseResult>> parsed_inputs(
       inputs.size());
+  std::vector<std::string> source_digests(inputs.size());
   std::vector<std::exception_ptr> parse_failures(inputs.size());
   std::atomic_size_t next_input{0};
   auto job_count = config.build.jobs == 0
@@ -1948,8 +2113,8 @@ std::optional<CheckedProject> check_project(
           return;
         }
         try {
-          parsed_inputs[index] = frontend::parse_file(
-              inputs[index].path, inputs[index].language);
+          parsed_inputs[index] = parse_file_snapshot(
+              inputs[index], source_digests[index]);
         } catch (...) {
           parse_failures[index] = std::current_exception();
         }
@@ -1987,6 +2152,12 @@ std::optional<CheckedProject> check_project(
           "source analysis produced no result",
           {inputs[input_index].path.generic_string(), {}, {}});
       continue;
+    }
+    if (!source_digests[input_index].empty()) {
+      checked.hdl_sources.push_back({
+          inputs[input_index].path,
+          source_digests[input_index],
+      });
     }
     auto result = std::move(*parsed_inputs[input_index]);
     for (const auto& frontend_diagnostic : result.diagnostics) {
@@ -2055,7 +2226,14 @@ std::optional<BuiltProject> build_project(
     return std::nullopt;
   }
 
-  const auto key = make_cache_key(config, top, resolution, diagnostics);
+  auto specialization_cache_keys =
+      make_specialization_cache_keys(
+          config, *checked, *elaborated.design, diagnostics);
+  if (!specialization_cache_keys) {
+    return std::nullopt;
+  }
+  const auto key = make_cache_key(
+      config, *checked, top, resolution, diagnostics);
   if (key.empty()) {
     return std::nullopt;
   }
@@ -2092,6 +2270,7 @@ std::optional<BuiltProject> build_project(
       resolution,
       config.build.cache_path,
       config.build.optimization,
+      std::move(*specialization_cache_keys),
       std::move(systemc_plugins),
       hit};
 }
@@ -2162,7 +2341,9 @@ struct Simulation::Impl {
             "fsim-specialization:" +
             std::to_string(specialization.id) + ":" +
             specialization.unit + "@" +
-            specialization.instance;
+            specialization.instance + "#provenance=" +
+            built.specialization_cache_keys.at(
+                specialization.id);
         jit->add_process_module(
             module_identity, entries, signal_widths);
         ++compiled_modules;

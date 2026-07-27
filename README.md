@@ -188,9 +188,14 @@ cache stores one native object per compiled specialization module under
 `llvm-native`; `fsim build` reports compiled process/module counts and native
 cache hits, misses, stores, and rejected entries. LLVM O0/O2 object identity
 includes the specialization-module identity and ordered process keys. Each
-process key includes scheduled-write kind and the exact delayed-write delay,
-plus wait kind, ordered operands and widths, and static sensitivity signal/edge
-data.
+module identity includes a provenance key for the exact owning-source bytes
+supplied to the parser, source path, language standard, library,
+compilation-unit mode, macro/include settings, bundled-library version marker,
+and represented generic/parameter values. Each process key includes
+scheduled-write kind and the exact delayed-write delay, plus wait kind, ordered
+operands and widths, and static sensitivity signal/edge data. An unrelated,
+uninstantiated source edit therefore retains the specialization's native
+object, while even a comment-only edit to its owning source invalidates it.
 `WaitOn` and `WaitSensitivity` use appended resume-status values while keeping
 the v1 result layout and its existing status values unchanged. The result
 identifies the boundary instruction; immutable SimIR retains the dynamic

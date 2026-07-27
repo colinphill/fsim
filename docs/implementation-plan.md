@@ -47,6 +47,8 @@ The following foundation is implemented:
   application cache, with application-visible cold/warm telemetry and
   identity for scheduled-write kind/delay and wait kind, operands, widths, and
   static edge data;
+- exact parsed-byte HDL source digests and per-specialization provenance keys
+  for owning-source content plus current source-set/elaboration identity;
 - a shared checked allocation-free single-word `Logic4` path between generated
   callbacks and the runtime for values up to 64 bits;
 - append-only, per-process size-gated v1 runtime-table callbacks for
@@ -173,6 +175,11 @@ Completed:
   member retains its per-process frame identity;
 - forced-O0 hybrid debugger selection with per-process fallback and exact
   interpreter equivalence for the bounded REPL/scheduler-safe-point script;
+- single-read HDL parse/content hashing and per-specialization native
+  provenance covering the owning source, source-set semantics,
+  bundled-library marker, and represented parameter values, with tested reuse
+  across unrelated-source changes and invalidation for owning-source/standard
+  changes;
 - checked-in SV-testbench/VHDL-counter/SV-child example.
 
 Remaining before the architecture gate passes:
@@ -183,8 +190,8 @@ Remaining before the architecture gate passes:
   final state, assertions, scheduler observations, and trace events;
 - extend the bounded mixed-language differential to O0, assertion metadata,
   and normalized VCD, and validate it on LLVM 22.1.8 Windows; and
-- persist source/include/specialization identity through the application-level
-  native cache rather than only the adapter-local cache.
+- complete transitive HDL include-content provenance and actual
+  generic/parameter values once those frontend features exist.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
 
@@ -294,8 +301,8 @@ Remaining before v1 release:
 The next development iterations should occur in this order:
 
 1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   generated statement/call/source instrumentation, complete source/include
-   and generic/parameter specialization cache identity, and broaden the
+   generated statement/call/source instrumentation, complete transitive
+   include and actual generic/parameter cache identity, and broaden the
    interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.
