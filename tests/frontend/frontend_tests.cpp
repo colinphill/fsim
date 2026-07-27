@@ -3,6 +3,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -18,6 +21,247 @@ void require(bool condition, std::string_view message) {
   if (!condition) {
     throw std::runtime_error(std::string(message));
   }
+}
+
+std::filesystem::path make_test_directory(std::string_view name) {
+  const auto suffix =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto directory =
+      std::filesystem::temp_directory_path()
+      / ("fsim-" + std::string{name} + "-"
+         + std::to_string(suffix));
+  std::filesystem::create_directories(directory);
+  return directory;
+}
+
+void write_text(
+    const std::filesystem::path& path,
+    const std::string_view text) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary);
+  output << text;
+  require(
+      output.good(),
+      "frontend test fixture must be writable");
+}
+
+void test_systemverilog_preprocessor() {
+  const auto directory =
+      make_test_directory("verilog-preprocessor");
+  const auto include_directory = directory / "include";
+  const auto root = directory / "root.sv";
+  write_text(
+      include_directory / "nested" / "values.svh",
+      R"(`define FROM_NESTED 4'b1010
+)");
+  write_text(
+      include_directory / "definitions.svh",
+      R"(`include <nested/values.svh>
+`define JOIN(left,right) left``right
+`define RANGE [3:0]
+`define MESSAGE(value) `"value`"
+`define ASSIGN_VALUES \
+    value = `FROM_NESTED; \
+    command_value = `FROM_COMMAND;
+)");
+  write_text(
+      root,
+      R"(`define HEADER "definitions.svh"
+`include `HEADER
+`define SELECT_EXPECTED
+`undef SELECT_EXPECTED
+`ifndef SELECT_EXPECTED
+`define SELECT_EXPECTED
+`endif
+`ifdef MISSING
+module inactive_bad(;
+`elsif SELECT_EXPECTED
+`timescale 1ns/1ps
+module `JOIN(pre,processed)(
+  output logic `RANGE value,
+  output logic [3:0] command_value
+);
+  logic [7:0] source_line;
+  initial begin
+    `ASSIGN_VALUES
+    source_line = `__LINE__;
+    assert (1'b1) else $error(`MESSAGE(preprocessed));
+    assert (1'b1) else $error(`__FILE__);
+  end
+endmodule
+`else
+module also_inactive_bad(;
+`endif
+)");
+
+  PreprocessorOptions options;
+  options.include_directories = {include_directory};
+  options.defines = {"FROM_COMMAND=4'b0101"};
+  auto preprocessed = preprocess_verilog_file(
+      root, Language::SystemVerilog2017, options);
+  require(
+      preprocessed.ok(),
+      "includes, command definitions, conditionals, function macros, and "
+      "token concatenation must preprocess");
+  require(
+      preprocessed.dependencies.size() == 3,
+      "root and two transitive include snapshots");
+  require(
+      preprocessed.dependencies[1].path.filename()
+          == "definitions.svh"
+          && preprocessed.dependencies[2].path.filename()
+              == "values.svh",
+      "dependencies retain deterministic first-use order");
+
+  const auto parsed =
+      parse_verilog(std::move(preprocessed.lexed), true);
+  require(parsed.ok(), "preprocessed SystemVerilog must parse");
+  require(
+      parsed.design.units.size() == 1
+          && parsed.design.units.front().name == "preprocessed",
+      "conditional selection and token concatenation");
+  const auto& unit = parsed.design.units.front();
+  require(
+      unit.time_unit == "1ns" && unit.time_precision == "1ps",
+      "timescale directive survives preprocessing");
+  require(
+      unit.ports.size() == 2
+          && unit.ports.front().type.width()
+              == std::optional<std::uint64_t>{4},
+      "object macro expands into a packed range");
+  require(
+      unit.processes.size() == 1
+          && unit.processes.front().statements.size() == 5
+          && unit.processes.front().statements[0].value.text
+              == "4'b1010"
+          && unit.processes.front().statements[1].value.text
+              == "4'b0101",
+      "transitive and command-line macro values reach the AST");
+  require(
+      unit.processes.front().statements[2].value.kind
+          == ExpressionKind::IntegerLiteral,
+      "`__LINE__ expands to an integer literal");
+  require(
+      unit.processes.front().statements[3].assertion_message
+          == "preprocessed",
+      "SystemVerilog macro stringification");
+  require(
+      std::filesystem::path{
+          unit.processes.front().statements[4].assertion_message}
+              .filename()
+          == "root.sv",
+      "`__FILE__ expands to the normalized source name");
+
+  const auto bad_root = directory / "bad.sv";
+  write_text(
+      bad_root,
+      R"(`define BAD_ASSIGN target = )
+module bad;
+  logic target;
+  initial begin
+    `BAD_ASSIGN;
+  end
+endmodule
+)");
+  auto bad_preprocessed = preprocess_verilog_file(
+      bad_root, Language::SystemVerilog2017);
+  const auto bad = parse_verilog(
+      std::move(bad_preprocessed.lexed), true);
+  require(!bad.ok(), "invalid macro expansion must be rejected");
+  require(
+      std::any_of(
+          bad.diagnostics.begin(),
+          bad.diagnostics.end(),
+          [](const Diagnostic& diagnostic) {
+            return !diagnostic.expansion_stack.empty()
+                && diagnostic.expansion_stack.front().find(
+                       "macro `BAD_ASSIGN'")
+                    != std::string::npos;
+          }),
+      "parser diagnostics retain macro definition/invocation ancestry");
+
+  const auto bad_include = include_directory / "bad.svh";
+  write_text(bad_include, "module included_bad(;\n");
+  const auto include_error_root = directory / "include-error.sv";
+  write_text(
+      include_error_root,
+      "`include \"bad.svh\"\n");
+  auto include_error_preprocessed = preprocess_verilog_file(
+      include_error_root, Language::SystemVerilog2017, options);
+  const auto include_error = parse_verilog(
+      std::move(include_error_preprocessed.lexed), true);
+  require(
+      !include_error.ok()
+          && std::any_of(
+              include_error.diagnostics.begin(),
+              include_error.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return !diagnostic.expansion_stack.empty()
+                    && diagnostic.expansion_stack.front().find(
+                           "included '")
+                        != std::string::npos;
+              }),
+      "diagnostics retain nested include ancestry");
+
+  const auto missing_root = directory / "missing.sv";
+  write_text(missing_root, "`include \"absent.svh\"\n");
+  const auto missing = preprocess_verilog_file(
+      missing_root, Language::SystemVerilog2017, options);
+  require(
+      !missing.ok()
+          && std::any_of(
+              missing.lexed.diagnostics.begin(),
+              missing.lexed.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PP-022";
+              }),
+      "missing include receives a targeted diagnostic");
+
+  const auto directive_error_root =
+      directory / "directive-errors.sv";
+  write_text(
+      directive_error_root,
+      R"(`define TWO(first,second) first
+`TWO(one)
+`resetall
+`ifdef LEFT_OPEN
+)");
+  const auto directive_errors = preprocess_verilog_file(
+      directive_error_root, Language::SystemVerilog2017);
+  const auto has_preprocessor_code =
+      [&](const std::string_view code) {
+        return std::any_of(
+            directive_errors.lexed.diagnostics.begin(),
+            directive_errors.lexed.diagnostics.end(),
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !directive_errors.ok()
+          && has_preprocessor_code("FSIM-SV-PP-030")
+          && has_preprocessor_code("FSIM-SV-PP-011")
+          && has_preprocessor_code("FSIM-SV-PP-002"),
+      "macro arity, unsupported directive, and open conditional diagnostics");
+
+  const auto cycle_a = directory / "cycle-a.svh";
+  const auto cycle_b = directory / "cycle-b.svh";
+  write_text(cycle_a, "`include \"cycle-b.svh\"\n");
+  write_text(cycle_b, "`include \"cycle-a.svh\"\n");
+  const auto cycle = preprocess_verilog_file(
+      cycle_a, Language::SystemVerilog2017);
+  require(
+      !cycle.ok()
+          && std::any_of(
+              cycle.lexed.diagnostics.begin(),
+              cycle.lexed.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PP-005";
+              }),
+      "recursive include receives a targeted diagnostic");
+
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(directory, cleanup_error);
 }
 
 void test_vhdl_vertical_slice() {
@@ -1480,6 +1724,7 @@ int main() {
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
     test_systemverilog_vertical_slice();
+    test_systemverilog_preprocessor();
     test_non_ansi_verilog_ports();
     test_diagnostics_and_spans();
     test_vhdl_context_diagnostics();

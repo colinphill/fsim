@@ -36,6 +36,9 @@ std::string format_diagnostic(const Diagnostic& diagnostic) {
          << ':' << diagnostic.span.begin.column << ": "
          << to_string(diagnostic.severity) << '[' << diagnostic.code
          << "]: " << diagnostic.message;
+  for (const auto& expansion : diagnostic.expansion_stack) {
+    output << "\n  note: " << expansion;
+  }
   return output.str();
 }
 

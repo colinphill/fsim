@@ -32,5 +32,8 @@ struct ParseResult {
 [[nodiscard]] ParseResult parse_vhdl(SourceText source);
 [[nodiscard]] ParseResult parse_verilog(SourceText source,
                                          bool system_verilog = true);
+[[nodiscard]] ParseResult parse_verilog(
+    LexResult lexed,
+    bool system_verilog = true);
 
 }  // namespace fsim::frontend

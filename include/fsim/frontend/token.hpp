@@ -69,6 +69,9 @@ struct Token {
   TokenKind kind{TokenKind::EndOfFile};
   std::string text;
   SourceSpan span;
+  // Ordered outermost-to-innermost macro expansion descriptions. Tokens read
+  // directly from a source file leave this empty.
+  std::vector<std::string> expansion_stack;
 
   friend bool operator==(const Token&, const Token&) = default;
 };

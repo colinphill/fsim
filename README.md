@@ -29,6 +29,10 @@ The current tree contains:
 - a typed SimIR and reference interpreter;
 - hand-written VHDL-2008 and Verilog/SystemVerilog tokenizers and parsers for a
   deliberately small executable subset;
+- per-root Verilog/SystemVerilog preprocessing with quoted/angle includes,
+  manifest/CLI macros, object/function expansion, multiline replacements,
+  token concatenation/stringification, conditional compilation, source
+  ancestry, and transitive cache provenance;
 - bounded Verilog/SystemVerilog `` `timescale`` context, integer-delay scaling,
   and automatic selection of the finest declared directive precision;
 - recursive VHDL/SV instance elaboration in both hierarchy directions with
@@ -143,8 +147,9 @@ enabled. The checked-in Linux and Windows LLVM CI jobs configure and run the
 adapter tests against that exact version, including its C runtime-table header
 test and O0/O2 ORC tests. Linux GCC and Windows MSVC are also exercised without
 LLVM in Debug and Release configurations; separate Linux jobs run the suite
-with ASan/UBSan and exercise all three HDL lexer/parser entry points with
-Clang/libFuzzer. Adapter developers may manually smoke-test an older LLVM while
+with ASan/UBSan and exercise the VHDL parser plus both Verilog/SV
+preprocessor/parser entry points with Clang/libFuzzer. Adapter developers may
+manually smoke-test an older LLVM while
 bootstrapping, but that is not a supported project configuration and must not
 be used to claim v1 compatibility.
 
@@ -265,10 +270,11 @@ cache stores one native object per compiled specialization module under
 `llvm-native`; `fsim build` reports compiled process/module counts and native
 cache hits, misses, stores, and rejected entries. LLVM O0/O2 object identity
 includes the specialization-module identity and ordered process keys. Each
-module identity includes a provenance key for the exact owning-source bytes
-supplied to the parser, source path, language standard, library,
-compilation-unit mode, macro/include settings, bundled-library version marker,
-and represented generic/parameter values. Each process key includes
+module identity includes a provenance key for the exact owning-root and
+ordered Verilog/SystemVerilog transitive-include bytes supplied to the
+preprocessor/parser, source path, language standard, library, compilation-unit
+mode, macro/include settings, bundled-library version marker, and represented
+generic/parameter values. Each process key includes
 scheduled-write kind and the exact delayed-write delay, plus wait kind,
 ordered operands, widths, dynamic edges, and static sensitivity signal/edge
 data. An unrelated,

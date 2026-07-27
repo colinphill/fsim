@@ -94,15 +94,18 @@ representation. VH-013 therefore does not imply that `U`, `W`, `L`, `H`, and
 | SV-028 | Unary `+/-` and equal-width unsigned `-`, `*`, `/`, and `%`, including all-`X` unknown/divide-by-zero results | execute | [frontend arithmetic operator test](../tests/frontend/frontend_tests.cpp) | [width/domain diagnostics](../tests/elaboration/elaborator_test.cpp) | [typed arithmetic lowering](../src/elaboration/elaborator.cpp) | [interpreter known/unknown/zero-divisor table](../tests/elaboration/elaborator_test.cpp), [interpreter/O2 application differential](../tests/app/application_test.cpp) |
 | SV-029 | Constant bit/part selects and selected signal/local assignment targets plus packed concatenations with declared descending, ascending, and non-zero-based range mapping | execute | [frontend select/concatenation and selected-target test](../tests/frontend/frontend_tests.cpp) | [dynamic/reversed select and empty concatenation diagnostics](../tests/elaboration/elaborator_test.cpp) | [range-aware typed read/write lowering](../src/elaboration/elaborator.cpp) | [interpreter signal/local and overlap semantics](../tests/elaboration/elaborator_test.cpp), [interpreter/O2 application differential](../tests/app/application_test.cpp) |
 | SV-030 | Equal-width signed packed arithmetic/remainder and relational comparison, with unsigned result selection when either operand is unsigned | execute | [signed type/operator frontend test](../tests/frontend/frontend_tests.cpp) | [common width/domain diagnostics](../tests/elaboration/elaborator_test.cpp) | [language-aware signedness lowering](../src/elaboration/elaborator.cpp) | [signed and mixed-signedness interpreter test](../tests/elaboration/elaborator_test.cpp), [interpreter/O2 application differential](../tests/app/application_test.cpp) |
+| SV-031 | Per-file Verilog/SV preprocessing with exact quoted/angle transitive include snapshots, manifest definitions, object/function macros, multiline replacement, argument substitution, token concatenation/stringification, built-in file/line macros, `undef`, and nested `ifdef`/`ifndef`/`elsif`/`else` selection | execute | [atomic preprocessing and ancestry test](../tests/frontend/frontend_tests.cpp) | [missing include, malformed expansion, and targeted directive diagnostics](../tests/frontend/frontend_tests.cpp) | [include-defined specialization and transitive cache-key test](../tests/app/application_test.cpp) | [header-selected interpreter/compiled differential and invalidation](../tests/app/application_test.cpp) |
 
 SV-011 has operation-kernel evidence, not complete per-language evidence.
 Atomic SystemVerilog tests are still required before those operators can
 satisfy the release gate.
 
-SV-013 covers only integer delays under the lexical `` `timescale`` directive.
+SV-013 covers only integer delays under the preprocessed `` `timescale``
+directive.
 Fractional delays, `timeunit`/`timeprecision` declarations, precision rounding,
-and the general preprocessor remain release-gate work. SV-016 records a
-targeted rejection, not implemented `` `default_nettype`` semantics.
+and remaining compiler directives/default macro arguments/compilation-unit
+macro sharing remain release-gate work. SV-016 records a targeted rejection,
+not implemented `` `default_nettype`` semantics.
 
 ## Common IR, runtime, visibility, and tooling
 
@@ -259,7 +262,7 @@ They do not become supported when a permissive parser happens to consume them.
 
 | ID | Required feature group | Status | P+ | P- | E | R |
 |---|---|---|---|---|---|---|
-| V1-SV-01 | Full preprocessor: includes, macros, conditionals, token pasting, directive semantics, and expansion ancestry | v1 target | [bounded timescale context only](../tests/frontend/frontend_tests.cpp) | [unsupported default-nettype check](../tests/frontend/frontend_tests.cpp) | — | — |
+| V1-SV-01 | Full preprocessor: includes, macros, conditionals, token pasting, directive semantics, and expansion ancestry | v1 target | [bounded per-file preprocessing slice](../tests/frontend/frontend_tests.cpp) | [missing include, malformed expansion, and unsupported-directive checks](../tests/frontend/frontend_tests.cpp) | [transitive source/specialization provenance](../tests/app/application_test.cpp) | [header-selected interpreter/compiled differential](../tests/app/application_test.cpp) |
 | V1-SV-02 | Complete parameters, instances, generates, hierarchy, and specialization beyond the bounded SV-015 form | v1 target | [bounded instance form only](../tests/frontend/frontend_tests.cpp) | — | — | — |
 | V1-SV-03 | Interfaces/modports and packages | v1 target | — | — | — | — |
 | V1-SV-04 | Packed/unpacked types, structs/unions/enums, memories, and aggregate operations | v1 target | — | — | — | — |
@@ -280,7 +283,7 @@ They do not become supported when a permissive parser happens to consume them.
 | V1-CM-05 | Driver transactions, multi-driver resolution, update fanout, and committed-change visibility | v1 target | [bounded update/delayed-write scheduling and single-signal coalescing](../tests/runtime/runtime_tests.cpp) | [unimplemented resolver rejection](../tests/elaboration/elaborator_test.cpp) | — | [tick-0/tick-2 committed writes and tick-1/delta-1 posedge fanout comparisons only](../tests/app/application_test.cpp) |
 | V1-CM-06 | Full debugger REPL, safe points, stepping, breakpoints, scope/local inspection, trace selection, and Ctrl-C | v1 target | [bounded source/time/conditional-signal REPL with all four step modes, packed locals, live trace selection, real SIGINT, and forced-O0 hybrid execution](../tests/app/application_test.cpp) | [poisoned lifecycle](../tests/app/application_test.cpp) | [source/local lowering and O0 cache-mode identity](../tests/elaboration/elaborator_test.cpp) | [interpreter/O0 transcript, local values, lifecycle, callback-count, final-state, SIGINT stop/resume/restore equivalence plus O0 debug-VCD selection](../tests/app/application_test.cpp) |
 | V1-CM-07 | Selective buffered VCD, flattening rules, normalized goldens, and trace/debug overhead checks | v1 target | [VCD core](../tests/runtime/runtime_tests.cpp), [scaled-timescale and live debug-selection tests](../tests/app/application_test.cpp) | — | — | [bounded normalized application trace and debug add/remove selection tests](../tests/app/application_test.cpp) |
-| V1-CM-08 | Unicode/path behavior, sanitizer/fuzz jobs, diagnostic catalog, benchmarks, and source-build documentation | v1 target | [ASan/UBSan and bounded frontend libFuzzer jobs](../.github/workflows/ci.yml), [diagnostic catalog](diagnostics.md), and [catalog consistency gate](../cmake/CheckDiagnosticCatalog.cmake) | — | — | [frontend fuzz harness](../tests/fuzz/frontend_fuzz.cpp) |
+| V1-CM-08 | Unicode/path behavior, sanitizer/fuzz jobs, diagnostic catalog, benchmarks, and source-build documentation | v1 target | [ASan/UBSan and bounded frontend libFuzzer jobs](../.github/workflows/ci.yml), [diagnostic catalog](diagnostics.md), and [catalog consistency gate](../cmake/CheckDiagnosticCatalog.cmake) | — | — | [VHDL parser and Verilog/SV preprocessor/parser fuzz harness](../tests/fuzz/frontend_fuzz.cpp) |
 | V1-CM-09 | Ubuntu x86-64/GCC and Windows x86-64/MSVC Debug/Release CI with LLVM 22.1.8 | v1 target | [Linux/Windows Debug+Release and exact-LLVM workflow definitions](../.github/workflows/ci.yml) | — | — | — |
 
 ## Explicitly deferred beyond v1

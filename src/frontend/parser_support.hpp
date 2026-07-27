@@ -181,13 +181,13 @@ class ParserBase {
   void error(const Token& token, std::string code, std::string message) {
     diagnostics_.push_back(Diagnostic{DiagnosticSeverity::Error,
                                       std::move(code), std::move(message),
-                                      token.span, {}});
+                                      token.span, token.expansion_stack});
   }
 
   void warning(const Token& token, std::string code, std::string message) {
     diagnostics_.push_back(Diagnostic{DiagnosticSeverity::Warning,
                                       std::move(code), std::move(message),
-                                      token.span, {}});
+                                      token.span, token.expansion_stack});
   }
 
   void skip_to_semicolon() {

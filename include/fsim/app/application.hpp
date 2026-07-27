@@ -26,8 +26,14 @@ namespace fsim::app {
 
 struct CheckedSource {
   std::filesystem::path path;
-  /// SHA-256 of the exact in-memory bytes supplied to the HDL parser.
+  /// SHA-256 of the exact root bytes supplied to analysis/preprocessing.
   std::string content_digest;
+  struct Dependency {
+    std::filesystem::path path;
+    std::string content_digest;
+  };
+  /// Exact transitive preprocessing inputs, in deterministic first-use order.
+  std::vector<Dependency> dependencies;
 };
 
 struct CheckedProject {

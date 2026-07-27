@@ -3932,6 +3932,132 @@ end architecture rtl;
   assert(provenance_changed_standard.simulation.native_cache.stores == 1);
 #endif
 
+  // Verilog preprocessing consumes exact transitive snapshots. A header edit
+  // must invalidate both the analysis object and the owning specialization,
+  // while interpreter and compiled execution retain identical semantics.
+  const auto preprocessor_include =
+      directory / "preprocessor-include";
+  std::filesystem::create_directories(preprocessor_include);
+  const auto preprocessor_header =
+      preprocessor_include / "values.svh";
+  const auto preprocessor_source =
+      directory / "preprocessor.sv";
+  const auto write_preprocessor_header =
+      [&](const std::string_view value) {
+        std::ofstream output(
+            preprocessor_header, std::ios::binary);
+        output
+            << "`define PREPROCESSED_VALUE " << value << '\n'
+            << R"(module preprocessor_app;
+  logic [3:0] value;
+  initial begin
+    value = `PREPROCESSED_VALUE;
+    #1 $finish;
+  end
+endmodule
+)";
+        assert(output.good());
+      };
+  write_preprocessor_header("4'b1010");
+  {
+    std::ofstream output(
+        preprocessor_source, std::ios::binary);
+    output << R"(`ifdef ENABLE_PREPROCESSOR_APP
+`include "values.svh"
+`endif
+)";
+    assert(output.good());
+  }
+  auto preprocessor_config = config;
+  preprocessor_config.project.name = "preprocessor-test";
+  preprocessor_config.project.top =
+      "sv:work.preprocessor_app";
+  preprocessor_config.build.cache_path =
+      directory / "preprocessor-cache";
+  preprocessor_config.source_sets.clear();
+  fsim::project::SourceSet preprocessor_sources;
+  preprocessor_sources.language =
+      fsim::project::Language::system_verilog;
+  preprocessor_sources.standard = "2017";
+  preprocessor_sources.library = "work";
+  preprocessor_sources.files = {preprocessor_source};
+  preprocessor_sources.include_directories = {
+      preprocessor_include};
+  preprocessor_sources.defines = {
+      "ENABLE_PREPROCESSOR_APP=1"};
+  preprocessor_config.source_sets.push_back(
+      std::move(preprocessor_sources));
+
+  fsim::diagnostic::Engine preprocessor_check_diagnostics;
+  const auto preprocessor_checked =
+      fsim::app::check_project(
+          preprocessor_config,
+          preprocessor_check_diagnostics);
+  assert(preprocessor_checked);
+  assert(preprocessor_checked->hdl_sources.size() == 1);
+  assert(
+      preprocessor_checked->hdl_sources.front()
+          .dependencies.size()
+      == 1);
+  assert(
+      preprocessor_checked->hdl_sources.front()
+          .dependencies.front().path.filename()
+      == "values.svh");
+
+  const auto run_preprocessed =
+      [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            preprocessor_config, run_diagnostics);
+        assert(project);
+        assert(
+            project->specialization_cache_keys.size() == 1);
+        auto key =
+            project->specialization_cache_keys.front();
+        const bool analysis_hit = project->cache_hit;
+        auto capture =
+            capture_simulation(std::move(*project), engine);
+        return std::tuple{
+            std::move(key),
+            analysis_hit,
+            std::move(capture)};
+      };
+  auto [preprocessor_key_a, preprocessor_miss_a,
+        preprocessor_reference_a] =
+      run_preprocessed(
+          fsim::app::SimulationEngine::interpreter);
+  auto [preprocessor_key_a_warm, preprocessor_hit_a,
+        preprocessor_hybrid_a] =
+      run_preprocessed(
+          fsim::app::SimulationEngine::compiled);
+  assert(!preprocessor_miss_a);
+  assert(preprocessor_hit_a);
+  assert(preprocessor_key_a == preprocessor_key_a_warm);
+  compare_captures(
+      preprocessor_reference_a, preprocessor_hybrid_a);
+  assert(
+      preprocessor_hybrid_a.final_values
+      == std::vector<std::string>{"1010"});
+
+  write_preprocessor_header("4'b0101");
+  auto [preprocessor_key_b, preprocessor_miss_b,
+        preprocessor_reference_b] =
+      run_preprocessed(
+          fsim::app::SimulationEngine::interpreter);
+  auto [preprocessor_key_b_warm, preprocessor_hit_b,
+        preprocessor_hybrid_b] =
+      run_preprocessed(
+          fsim::app::SimulationEngine::compiled);
+  assert(!preprocessor_miss_b);
+  assert(preprocessor_hit_b);
+  assert(preprocessor_key_b == preprocessor_key_b_warm);
+  assert(preprocessor_key_b != preprocessor_key_a);
+  compare_captures(
+      preprocessor_reference_b, preprocessor_hybrid_b);
+  assert(
+      preprocessor_hybrid_b.final_values
+      == std::vector<std::string>{"0101"});
+
   fsim::diagnostic::Engine mixed_diagnostics;
   const auto mixed_manifest =
       std::filesystem::path{FSIM_TEST_SOURCE_DIR}

@@ -48,6 +48,10 @@ The following foundation is implemented:
 - packed 2-, 4-, and 9-state value kernels;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
+- a per-root Verilog/SystemVerilog preprocessor with exact transitive include
+  snapshots, manifest macros, object/function expansion, multiline
+  replacement, token concatenation/stringification, conditional compilation,
+  and include/macro diagnostic ancestry;
 - recursive VHDL/SV hierarchy in both language directions with explicit
   bindings and boundary checks;
 - buffered VCD, a bounded command-line debugger, and a versioned native C API;
@@ -169,7 +173,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 308 unique current production diagnostic codes.
+- a stable catalog covering 338 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -182,6 +186,7 @@ Current Linux validation:
 | Concurrent LLVM Debug and Release suites | Both pass; cache-test paths are isolated |
 | GCC ASan/UBSan | 13/13 tests pass with no findings |
 | Boost.Context 1.91.0 fibers | Checksum-verified fetch/configure/build; GCC Debug full suite 13/13, ASan/UBSan focused application, and LLVM 22 compiled-SV/SystemC application tests pass |
+| Verilog/SV preprocessing | GCC Debug atomic frontend plus interpreter application pass; exact LLVM 22 compiled-engine differential validation is recorded at the checkpoint |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -214,7 +219,8 @@ Completed:
 - versioned C API and SystemC plug-in ABI skeletons;
 - Linux GCC and Windows MSVC Debug/Release workflow definitions;
 - exact LLVM 22.1.8 Linux and Windows Debug/Release workflow definitions; and
-- sanitizer and frontend-fuzzer workflow definitions.
+- sanitizer and VHDL-parser/Verilog-SV-preprocessor-parser fuzzer workflow
+  definitions.
 
 Remaining before completion:
 
@@ -298,8 +304,9 @@ Remaining before the architecture gate passes:
 - extend the bounded mixed-language differential to O0 and mixed-language
   assertion failures, broaden normalized trace coverage across semantic
   fixtures, and validate it on LLVM 22.1.8 Windows; and
-- complete transitive HDL include-content provenance and actual
-  generic/parameter values once those frontend features exist.
+- complete actual generic/parameter values once those frontend features
+  exist; transitive Verilog/SystemVerilog include-content provenance is now
+  part of both analysis and specialization cache identity.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
 
@@ -322,9 +329,11 @@ Planned implementation sequence:
 2. Implement VHDL libraries, packages/bodies, contexts, configurations,
    generics, overload/type resolution, constant evaluation, and reviewed IEEE
    packages.
-3. Implement the Verilog/SV preprocessor, compilation-unit semantics,
-   parameters, packages, interfaces/modports, generates, and complete
-   synthesizable types.
+3. Complete the remaining Verilog/SV preprocessor directives, default macro
+   arguments, shared compilation-unit semantics, parameters, packages,
+   interfaces/modports, generates, and complete synthesizable types. The
+   per-file include/macro/conditional and cache-provenance slice is
+   implemented.
 4. Complete synthesizable statements, expressions, aggregates, memories,
    arrays, records/structs/unions/enums, functions/tasks, and hierarchy
    specialization.
@@ -451,8 +460,8 @@ Remaining before v1 release:
 The next development iterations should occur in this order:
 
 1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   call instrumentation and complete scoped locals, complete transitive include
-   and actual generic/parameter cache identity, and broaden the
+   call instrumentation and complete scoped locals, complete actual
+   generic/parameter cache identity, and broaden the
    interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.

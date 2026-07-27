@@ -57,7 +57,7 @@ therefore excluded.
 | `FSIM-FE-LEX-003` | error | An extended identifier is unterminated. |
 | `FSIM-FE-LEX-004` | error | A string literal is unterminated. |
 | `FSIM-FE-PARSE-001` | error | A parser expectation using the common fallback code failed. |
-| `FSIM-FE-PP-0001` | error | HDL include directories or macro definitions require the unimplemented HDL preprocessor. |
+| `FSIM-FE-PP-0001` | error | Include directories or macro definitions were supplied for a VHDL source set; these settings apply only to Verilog/SystemVerilog or SystemC. |
 
 ## VHDL frontend
 
@@ -145,6 +145,41 @@ therefore excluded.
 
 ## Verilog and SystemVerilog frontend
 
+### Verilog/SystemVerilog preprocessing
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-SV-PP-001` | error | The Verilog preprocessor was invoked for a non-Verilog language. |
+| `FSIM-SV-PP-002` | error | A conditional compilation block is unterminated. |
+| `FSIM-SV-PP-003` | error | A command-line or manifest macro definition has an invalid identifier. |
+| `FSIM-SV-PP-004` | error | Recursive include processing exceeded the configured depth limit. |
+| `FSIM-SV-PP-005` | error | An include cycle was detected. |
+| `FSIM-SV-PP-006` | error | `` `elsif`` has no matching conditional opener. |
+| `FSIM-SV-PP-007` | error | `` `elsif`` follows `` `else`` in the same conditional block. |
+| `FSIM-SV-PP-008` | error | `` `else`` has no matching conditional opener. |
+| `FSIM-SV-PP-009` | error | A conditional block contains more than one `` `else``. |
+| `FSIM-SV-PP-010` | error | `` `endif`` has no matching conditional opener. |
+| `FSIM-SV-PP-011` | error | A recognized compiler directive is outside the currently implemented preprocessing subset. |
+| `FSIM-SV-PP-012` | error | A conditional or undefinition directive lacks its required macro identifier. |
+| `FSIM-SV-PP-013` | error | Unexpected tokens follow a directive macro identifier. |
+| `FSIM-SV-PP-014` | error | A no-argument conditional directive has trailing tokens. |
+| `FSIM-SV-PP-015` | error | `` `define`` lacks a macro identifier. |
+| `FSIM-SV-PP-016` | error | A function-like macro parameter list is malformed. |
+| `FSIM-SV-PP-017` | error | A function-like macro repeats a parameter name. |
+| `FSIM-SV-PP-018` | error | A function-like macro parameter list is unterminated. |
+| `FSIM-SV-PP-019` | error | `` `include`` lacks a file name. |
+| `FSIM-SV-PP-020` | error | A macro-expanded include name does not produce exactly one token. |
+| `FSIM-SV-PP-021` | error | An include name is neither a string literal nor an angle-bracket name. |
+| `FSIM-SV-PP-022` | error | An include file cannot be resolved from the including file or configured search roots. |
+| `FSIM-SV-PP-023` | error | A function-like macro invocation lacks an argument list. |
+| `FSIM-SV-PP-024` | error | A function-like macro argument list is unterminated. |
+| `FSIM-SV-PP-025` | error | Token concatenation lacks an operand. |
+| `FSIM-SV-PP-026` | error | Token concatenation does not form exactly one valid token. |
+| `FSIM-SV-PP-027` | error | A backtick is not followed by a macro identifier. |
+| `FSIM-SV-PP-028` | error | A macro invocation or compiler directive is undefined. |
+| `FSIM-SV-PP-029` | error | Macro expansion is recursive or exceeds the configured depth limit. |
+| `FSIM-SV-PP-030` | error | A function-like macro receives the wrong number of arguments. |
+
 ### Verilog/SystemVerilog syntax
 
 | Code | Severity | Meaning |
@@ -226,7 +261,7 @@ therefore excluded.
 | `FSIM-SV-SEM-013` | error | An `always_comb` or `always_latch` contains a nonblocking assignment. |
 | `FSIM-SV-SEM-014` | error | A `case` statement contains more than one `default` item. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
-| `FSIM-SV-UNSUPPORTED-002` | error | A directive requires the unimplemented preprocessing stage. |
+| `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-003` | error | Parameter port lists are not implemented. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
 | `FSIM-SV-UNSUPPORTED-005` | error | A named port connection was used where a module-header declaration is required. |

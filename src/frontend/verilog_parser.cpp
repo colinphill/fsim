@@ -80,10 +80,13 @@ class VerilogParser final : private detail::ParserBase {
     } else {
       error(directive, "FSIM-SV-UNSUPPORTED-002",
             "preprocessor directive `" + directive.text +
-                " requires the future preprocessing stage");
+                " reached the parser without preprocessing");
     }
+    const auto source_name = tick.span.source_name;
     const auto line = tick.span.begin.line;
-    while (!at_end() && current().span.begin.line == line) {
+    while (!at_end()
+           && current().span.source_name == source_name
+           && current().span.begin.line == line) {
       advance();
     }
   }
@@ -1343,6 +1346,10 @@ ParseResult parse_verilog(SourceText source, bool system_verilog) {
   const auto language = system_verilog ? Language::SystemVerilog2017
                                        : Language::Verilog2005;
   return VerilogParser(lex(std::move(source), language), system_verilog).run();
+}
+
+ParseResult parse_verilog(LexResult lexed, bool system_verilog) {
+  return VerilogParser(std::move(lexed), system_verilog).run();
 }
 
 }  // namespace fsim::frontend

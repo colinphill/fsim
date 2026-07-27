@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/preprocessor.hpp"
 
 #include <cctype>
 #include <fstream>
@@ -30,6 +31,14 @@ ParseResult parse_text(std::string_view source_name, std::string_view text,
 
 ParseResult parse_file(const std::filesystem::path& path,
                        Language language) {
+  if (language == Language::Verilog2005
+      || language == Language::SystemVerilog2017) {
+    auto preprocessed =
+        preprocess_verilog_file(path, language);
+    return parse_verilog(
+        std::move(preprocessed.lexed),
+        language == Language::SystemVerilog2017);
+  }
   std::ifstream input(path, std::ios::binary);
   if (!input) {
     ParseResult result;

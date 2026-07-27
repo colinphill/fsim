@@ -6,6 +6,7 @@
 #include "fsim/compiler/llvm_jit.hpp"
 #endif
 #include "fsim/frontend/parser.hpp"
+#include "fsim/frontend/preprocessor.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/hierarchy.hpp"
@@ -565,17 +566,26 @@ diagnostic::SourceSpan span(const frontend::SourceSpan& source) {
 void import_diagnostic(
     diagnostic::Engine& output,
     const frontend::Diagnostic& input) {
+  diagnostic::Diagnostic converted;
   switch (input.severity) {
     case frontend::DiagnosticSeverity::Note:
-      output.note(input.code, input.message, span(input.span));
+      converted.severity = diagnostic::Severity::note;
       break;
     case frontend::DiagnosticSeverity::Warning:
-      output.warning(input.code, input.message, span(input.span));
+      converted.severity = diagnostic::Severity::warning;
       break;
     case frontend::DiagnosticSeverity::Error:
-      output.error(input.code, input.message, span(input.span));
+      converted.severity = diagnostic::Severity::error;
       break;
   }
+  converted.code = input.code;
+  converted.message = input.message;
+  converted.span = span(input.span);
+  converted.notes.reserve(input.expansion_stack.size());
+  for (const auto& expansion : input.expansion_stack) {
+    converted.notes.push_back({expansion, {}});
+  }
+  output.report(std::move(converted));
 }
 
 frontend::Language frontend_language(const project::Language language) {
@@ -596,42 +606,78 @@ struct ParseInput {
   std::filesystem::path path;
   frontend::Language language{frontend::Language::SystemVerilog2017};
   std::string library{"work"};
+  std::vector<std::filesystem::path> include_directories;
+  std::vector<std::string> defines;
 };
 
-frontend::ParseResult parse_file_snapshot(
-    const ParseInput& input,
-    std::string& content_digest) {
+struct ParsedSnapshot {
+  frontend::ParseResult result;
+  CheckedSource source;
+};
+
+ParsedSnapshot parse_file_snapshot(const ParseInput& input) {
+  if (input.language == frontend::Language::Verilog2005
+      || input.language == frontend::Language::SystemVerilog2017) {
+    frontend::PreprocessorOptions options;
+    options.include_directories = input.include_directories;
+    options.defines = input.defines;
+    auto preprocessed = frontend::preprocess_verilog_file(
+        input.path, input.language, options);
+    ParsedSnapshot snapshot;
+    snapshot.source.path = input.path;
+    if (!preprocessed.dependencies.empty()) {
+      const auto& root = preprocessed.dependencies.front();
+      snapshot.source.content_digest = support::Sha256::hex(
+          support::Sha256::digest(root.contents));
+      snapshot.source.dependencies.reserve(
+          preprocessed.dependencies.size() - 1);
+      for (std::size_t index = 1;
+           index < preprocessed.dependencies.size(); ++index) {
+        const auto& dependency = preprocessed.dependencies[index];
+        snapshot.source.dependencies.push_back({
+            dependency.path,
+            support::Sha256::hex(
+                support::Sha256::digest(dependency.contents))});
+      }
+    }
+    snapshot.result = frontend::parse_verilog(
+        std::move(preprocessed.lexed),
+        input.language == frontend::Language::SystemVerilog2017);
+    return snapshot;
+  }
+
+  ParsedSnapshot snapshot;
+  snapshot.source.path = input.path;
   std::ifstream stream(input.path, std::ios::binary);
   if (!stream) {
-    frontend::ParseResult result;
-    result.diagnostics.push_back({
+    snapshot.result.diagnostics.push_back({
         frontend::DiagnosticSeverity::Error,
         "FSIM-FE-IO-001",
         "unable to open source file",
         {input.path.string(), {}, {}},
         {},
     });
-    return result;
+    return snapshot;
   }
   std::string text{
       std::istreambuf_iterator<char>(stream),
       std::istreambuf_iterator<char>()};
   if (!stream.good() && !stream.eof()) {
-    frontend::ParseResult result;
-    result.diagnostics.push_back({
+    snapshot.result.diagnostics.push_back({
         frontend::DiagnosticSeverity::Error,
         "FSIM-FE-IO-002",
         "failed while reading source file",
         {input.path.string(), {}, {}},
         {},
     });
-    return result;
+    return snapshot;
   }
-  content_digest = support::Sha256::hex(
+  snapshot.source.content_digest = support::Sha256::hex(
       support::Sha256::digest(text));
-  return frontend::parse(
+  snapshot.result = frontend::parse(
       frontend::SourceText{input.path.string(), std::move(text)},
       input.language);
+  return snapshot;
 }
 
 std::optional<systemc::PluginCompileRequest> systemc_request(
@@ -1138,6 +1184,22 @@ std::string target_name() {
 #endif
 }
 
+bool same_source_path(
+    const std::filesystem::path& left,
+    const std::filesystem::path& right) {
+  if (left.lexically_normal() == right.lexically_normal()) {
+    return true;
+  }
+  std::error_code left_error;
+  std::error_code right_error;
+  const auto canonical_left =
+      std::filesystem::weakly_canonical(left, left_error);
+  const auto canonical_right =
+      std::filesystem::weakly_canonical(right, right_error);
+  return !left_error && !right_error
+      && canonical_left == canonical_right;
+}
+
 std::string make_cache_key(
     const project::Config& config,
     const CheckedProject& checked,
@@ -1154,6 +1216,9 @@ std::string make_cache_key(
   key.add("optimization", project::to_string(config.build.optimization));
   key.add("llvm", production_llvm_version);
   key.add("standard-library", standard_library_cache_version);
+  key.add(
+      "verilog-preprocessor",
+      frontend::verilog_preprocessor_cache_version);
   key.add("systemc-plugin", systemc_plugin_key);
   std::size_t hdl_source_index = 0;
   for (const auto& set : config.source_sets) {
@@ -1180,9 +1245,8 @@ std::string make_cache_key(
         continue;
       }
       if (hdl_source_index >= checked.hdl_sources.size()
-          || checked.hdl_sources[hdl_source_index].path
-                  .lexically_normal()
-              != file.lexically_normal()) {
+          || !same_source_path(
+              checked.hdl_sources[hdl_source_index].path, file)) {
         diagnostics.error(
             "FSIM-CACHE-0001",
             "parsed source identity is inconsistent for '"
@@ -1192,6 +1256,15 @@ std::string make_cache_key(
       key.add(
           "source-content",
           checked.hdl_sources[hdl_source_index].content_digest);
+      for (const auto& dependency :
+           checked.hdl_sources[hdl_source_index].dependencies) {
+        key.add(
+            "dependency-path",
+            dependency.path.lexically_normal().generic_string());
+        key.add(
+            "dependency-content",
+            dependency.content_digest);
+      }
       ++hdl_source_index;
     }
   }
@@ -1227,7 +1300,14 @@ make_specialization_cache_keys(
                 .lexically_normal();
         const CheckedSource* checked_source = nullptr;
         for (const auto& candidate : checked.hdl_sources) {
-          if (candidate.path.lexically_normal() == source_path) {
+          if (same_source_path(candidate.path, source_path)
+              || std::any_of(
+                  candidate.dependencies.begin(),
+                  candidate.dependencies.end(),
+                  [&](const CheckedSource::Dependency& dependency) {
+                    return same_source_path(
+                        dependency.path, source_path);
+                  })) {
             checked_source = &candidate;
             break;
           }
@@ -1250,7 +1330,8 @@ make_specialization_cache_keys(
                   source_set.files.begin(),
                   source_set.files.end(),
                   [&](const std::filesystem::path& candidate) {
-                    return candidate.lexically_normal() == source_path;
+                    return same_source_path(
+                        candidate, checked_source->path);
                   })) {
             return SourceSettings{&source_set, checked_source};
           }
@@ -1277,6 +1358,9 @@ make_specialization_cache_keys(
         "fsim-specialization-provenance-v1");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
+    key.add(
+        "verilog-preprocessor",
+        frontend::verilog_preprocessor_cache_version);
     key.add("unit", specialization.unit);
     key.add(
         "source-path",
@@ -1284,6 +1368,15 @@ make_specialization_cache_keys(
     key.add(
         "source-content",
         settings->checked_source->content_digest);
+    for (const auto& dependency :
+         settings->checked_source->dependencies) {
+      key.add(
+          "dependency-path",
+          dependency.path.lexically_normal().generic_string());
+      key.add(
+          "dependency-content",
+          dependency.content_digest);
+    }
     key.add(
         "language",
         project::to_string(settings->source_set->language));
@@ -2853,13 +2946,13 @@ std::optional<CheckedProject> check_project(
           "source-set compilation-unit grouping is preserved in the manifest, "
           "but files are parsed independently in this vertical slice");
     }
-    if (source_set.language != project::Language::systemc
+    if (source_set.language == project::Language::vhdl
         && (!source_set.include_directories.empty()
             || !source_set.defines.empty())) {
       diagnostics.error(
           "FSIM-FE-PP-0001",
-          "include directories and macro definitions require the forthcoming "
-          "HDL preprocessor");
+          "include directories and macro definitions are only valid for "
+          "Verilog/SystemVerilog and SystemC source sets");
     }
     if (source_set.language == project::Language::systemc) {
       systemc_source_count += source_set.files.size();
@@ -2867,7 +2960,11 @@ std::optional<CheckedProject> check_project(
     }
     for (const auto& file : source_set.files) {
       inputs.push_back(
-          {file, frontend_language(source_set.language), source_set.library});
+          {file,
+           frontend_language(source_set.language),
+           source_set.library,
+           source_set.include_directories,
+           source_set.defines});
     }
   }
   if (inputs.empty() && systemc_source_count == 0 && !diagnostics.has_error()) {
@@ -2880,9 +2977,8 @@ std::optional<CheckedProject> check_project(
     return std::nullopt;
   }
 
-  std::vector<std::optional<frontend::ParseResult>> parsed_inputs(
+  std::vector<std::optional<ParsedSnapshot>> parsed_inputs(
       inputs.size());
-  std::vector<std::string> source_digests(inputs.size());
   std::vector<std::exception_ptr> parse_failures(inputs.size());
   std::atomic_size_t next_input{0};
   auto job_count = config.build.jobs == 0
@@ -2901,8 +2997,8 @@ std::optional<CheckedProject> check_project(
           return;
         }
         try {
-          parsed_inputs[index] = parse_file_snapshot(
-              inputs[index], source_digests[index]);
+          parsed_inputs[index] =
+              parse_file_snapshot(inputs[index]);
         } catch (...) {
           parse_failures[index] = std::current_exception();
         }
@@ -2941,13 +3037,12 @@ std::optional<CheckedProject> check_project(
           {inputs[input_index].path.generic_string(), {}, {}});
       continue;
     }
-    if (!source_digests[input_index].empty()) {
-      checked.hdl_sources.push_back({
-          inputs[input_index].path,
-          source_digests[input_index],
-      });
+    auto snapshot = std::move(*parsed_inputs[input_index]);
+    if (!snapshot.source.content_digest.empty()) {
+      checked.hdl_sources.push_back(
+          std::move(snapshot.source));
     }
-    auto result = std::move(*parsed_inputs[input_index]);
+    auto result = std::move(snapshot.result);
     for (const auto& frontend_diagnostic : result.diagnostics) {
       import_diagnostic(diagnostics, frontend_diagnostic);
     }

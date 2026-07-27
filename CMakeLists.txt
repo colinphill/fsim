@@ -214,6 +214,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/common.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/lexer.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/parser.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
 )

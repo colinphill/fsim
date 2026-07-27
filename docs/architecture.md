@@ -22,8 +22,8 @@ The architectural invariants are:
 
 | Stage | Responsibility | Vertical-slice status |
 |---|---|---|
-| Source manager | Files, source locations, include and macro ancestry | Basic files and source spans are current; expansion ancestry is planned |
-| Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers are current; typed semantic HIR is partial |
+| Source manager | Files, source locations, include and macro ancestry | Exact per-root/transitive snapshots plus include/macro ancestry are current for Verilog/SV; VHDL source spans are current |
+| Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers plus a bounded per-file SV preprocessor are current; typed semantic HIR is partial |
 | Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive simple VHDL/SV hierarchy, dense instance-specific specialization records, explicit mixed bindings, port aliasing, and boundary checks are current; parameter/generic specialization and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
@@ -362,18 +362,20 @@ reports the principal counters. Application tests require a cold miss and
 store for every compiled specialization module followed by a warm hit with no
 misses or cache failures at both O0 and O2. The two-process static-sensitivity
 application fixture specifically requires one module miss/store followed by
-one warm module hit. The application reads each HDL file once, hashes the exact
-in-memory bytes passed to the parser, and retains that digest with the checked
-source. Each specialization provenance key covers its owning source path and
-digest, language and standard, library, compilation-unit mode, macro/include
-settings, the bundled-standard-library version marker, and represented
-generic/parameter name/value pairs. The native module identity includes this
-key. A comment-only owning-source change therefore invalidates the module even
-when SimIR is identical, while changing an unrelated, uninstantiated source
-retains the module object. The current HDL preprocessor rejects include
-directories and macros, so transitive HDL include-content closure remains open
-until preprocessing exists. Actual generic/parameter values are likewise
-pending frontend support. The cache has no age/size eviction policy. O0
+one warm module hit. The application snapshots every HDL root and each
+Verilog/SV transitive include before parsing, hashes the exact in-memory bytes
+actually consumed, and retains those ordered digests with the checked root.
+Repeated inclusion within one run reuses the first snapshot. Each
+specialization provenance key covers its owning compilation-unit root and
+complete include closure, language and standard, library, compilation-unit
+mode, macro/include settings, the bundled-standard-library version marker, and
+represented generic/parameter name/value pairs. A unit defined in an included
+file is associated with its root compilation unit. The native module identity
+includes this key. A comment-only owning-source or included-header change
+therefore invalidates the module even when SimIR is identical, while changing
+an unrelated, uninstantiated root retains the module object. Actual
+generic/parameter values are still pending frontend support. The cache has no
+age/size eviction policy. O0
 exposes source-bearing statement, wait, assertion, process-entry, and
 process-suspension points plus addressable ≤64-bit packed process locals. Call
 points, complete local scopes/types, and complete source metadata remain open.

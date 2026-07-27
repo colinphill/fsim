@@ -23,7 +23,7 @@ class Lexer {
     }
     const auto location = current_location();
     result_.tokens.push_back(
-        Token{TokenKind::EndOfFile, {}, span(location, location)});
+        Token{TokenKind::EndOfFile, {}, span(location, location), {}});
     return std::move(result_);
   }
 
@@ -80,6 +80,7 @@ class Lexer {
         kind,
         source_.text.substr(begin.offset, end.offset - begin.offset),
         span(begin, end),
+        {},
     });
   }
 
@@ -149,6 +150,11 @@ class Lexer {
   void lex_extended_identifier() {
     const auto begin = current_location();
     advance();
+    if (!is_vhdl() && (peek() == '\n' || peek() == '\r')) {
+      advance();
+      emit(TokenKind::Identifier, begin);
+      return;
+    }
     while (!at_end() && peek() != '\\' &&
            (!is_vhdl() || (peek() != '\n' && peek() != '\r'))) {
       if (!is_vhdl() &&
