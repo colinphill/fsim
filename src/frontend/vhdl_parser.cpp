@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,6 +18,30 @@ namespace {
 using detail::decimal_i64;
 using detail::decimal_u64;
 using detail::vhdl_name;
+
+[[nodiscard]] std::optional<std::int64_t> simple_integer_constant(
+    const Expression& expression) {
+  if (expression.kind == ExpressionKind::IntegerLiteral) {
+    return decimal_i64(expression.text);
+  }
+  if (expression.kind == ExpressionKind::Unary
+      && expression.operands.size() == 1
+      && (expression.text == "+" || expression.text == "-")) {
+    const auto magnitude =
+        simple_integer_constant(expression.operands.front());
+    if (!magnitude) {
+      return std::nullopt;
+    }
+    if (expression.text == "+") {
+      return magnitude;
+    }
+    if (*magnitude == std::numeric_limits<std::int64_t>::min()) {
+      return std::nullopt;
+    }
+    return -*magnitude;
+  }
+  return std::nullopt;
+}
 
 class VhdlParser final : private detail::ParserBase {
  public:
@@ -163,14 +188,7 @@ class VhdlParser final : private detail::ParserBase {
       if (match_keyword("port", true)) {
         parse_vhdl_ports(unit);
       } else if (match_keyword("generic", true)) {
-        const auto generic = previous();
-        error(generic, "FSIM-VHDL-UNSUPPORTED-002",
-              "generic clauses are not implemented in the vertical-slice "
-              "frontend");
-        if (at(TokenKind::LeftParen)) {
-          skip_balanced(TokenKind::LeftParen, TokenKind::RightParen);
-        }
-        match(TokenKind::Semicolon);
+        parse_vhdl_generics(unit, previous());
       } else {
         const auto declaration = advance();
         error(declaration, "FSIM-VHDL-UNSUPPORTED-003",
@@ -182,6 +200,110 @@ class VhdlParser final : private detail::ParserBase {
     parse_vhdl_end("entity");
     unit.span = span_from(start, previous());
     return unit;
+  }
+
+  void add_vhdl_generic(
+      DesignUnit& unit,
+      ParameterDeclaration generic,
+      const Token& name) {
+    const auto canonical = generic.name;
+    const auto object_conflict =
+        std::any_of(
+            unit.ports.begin(),
+            unit.ports.end(),
+            [&](const SignalDeclaration& declaration) {
+              return declaration.name == canonical;
+            })
+        || std::any_of(
+            unit.signals.begin(),
+            unit.signals.end(),
+            [&](const SignalDeclaration& declaration) {
+              return declaration.name == canonical;
+            });
+    if (object_conflict) {
+      error(
+          name,
+          "FSIM-VHDL-SEM-014",
+          "generic '" + canonical
+              + "' conflicts with an object declaration");
+      return;
+    }
+    if (std::any_of(
+            unit.parameters.begin(),
+            unit.parameters.end(),
+            [&](const ParameterDeclaration& existing) {
+              return existing.name == canonical;
+            })) {
+      error(
+          name,
+          "FSIM-VHDL-SEM-013",
+          "duplicate generic declaration '" + canonical + "'");
+      return;
+    }
+    unit.parameters.push_back(std::move(generic));
+  }
+
+  void parse_vhdl_generics(
+      DesignUnit& unit,
+      const Token& start) {
+    expect(
+        TokenKind::LeftParen,
+        "'(' after generic",
+        "FSIM-VHDL-PARSE-050");
+    while (!at_end() && !at(TokenKind::RightParen)) {
+      std::vector<Token> names;
+      names.push_back(expect_identifier("generic name"));
+      while (match(TokenKind::Comma)) {
+        names.push_back(expect_identifier("generic name"));
+      }
+      expect(
+          TokenKind::Colon,
+          "':' after generic name",
+          "FSIM-VHDL-PARSE-051");
+      const auto type = parse_vhdl_type(true);
+      if (type.packed_range
+          || (type.domain != ValueDomain::Integer
+              && type.domain != ValueDomain::Boolean
+              && type.domain != ValueDomain::Bit2)) {
+        error(
+            names.front(),
+            "FSIM-VHDL-UNSUPPORTED-018",
+            "this generic type is outside the bounded scalar integer, "
+            "Boolean, and bit subset");
+      }
+      Expression default_value;
+      if (match(TokenKind::ColonEqual)) {
+        default_value = parse_expression();
+      }
+      for (const auto& name : names) {
+        add_vhdl_generic(
+            unit,
+            ParameterDeclaration{
+                vhdl_name(name.text),
+                type,
+                default_value,
+                false,
+                span_from(name, previous())},
+            name);
+      }
+      if (!match(TokenKind::Semicolon)
+          && !at(TokenKind::RightParen)) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-052",
+            "expected ';' between generic declarations");
+        skip_to_semicolon();
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after generic declarations",
+        "FSIM-VHDL-PARSE-053");
+    expect(
+        TokenKind::Semicolon,
+        "';' after generic clause",
+        "FSIM-VHDL-PARSE-054");
+    (void)start;
   }
 
   void parse_vhdl_ports(DesignUnit& unit) {
@@ -233,6 +355,18 @@ class VhdlParser final : private detail::ParserBase {
               name,
               "FSIM-VHDL-SEM-002",
               "duplicate port declaration '" + canonical + "'");
+        } else if (
+            std::any_of(
+                unit.parameters.begin(),
+                unit.parameters.end(),
+                [&](const ParameterDeclaration& generic) {
+                  return generic.name == canonical;
+                })) {
+          error(
+              name,
+              "FSIM-VHDL-SEM-014",
+              "port '" + canonical
+                  + "' conflicts with a generic declaration");
         } else {
           unit.ports.push_back(
               SignalDeclaration{
@@ -256,7 +390,7 @@ class VhdlParser final : private detail::ParserBase {
            "FSIM-VHDL-PARSE-008");
   }
 
-  Type parse_vhdl_type() {
+  Type parse_vhdl_type(const bool allow_integer = false) {
     const auto first = expect_identifier("subtype indication");
     std::string spelling = vhdl_name(first.text);
     while (match(TokenKind::Dot)) {
@@ -294,7 +428,9 @@ class VhdlParser final : private detail::ParserBase {
           "subtype '" + spelling
               + "' requires semantic type resolution that is not "
                 "implemented in this frontend slice");
-    } else if (type.domain == ValueDomain::Integer) {
+    } else if (
+        type.domain == ValueDomain::Integer
+        && !allow_integer) {
       error(
           first,
           "FSIM-VHDL-UNSUPPORTED-014",
@@ -304,7 +440,7 @@ class VhdlParser final : private detail::ParserBase {
 
     if (match(TokenKind::LeftParen)) {
       const auto range_start = previous();
-      const auto left = parse_signed_decimal();
+      auto left_expression = parse_expression();
       bool descending = true;
       if (match_keyword("downto", true)) {
         descending = true;
@@ -314,25 +450,21 @@ class VhdlParser final : private detail::ParserBase {
         error(current(), "FSIM-VHDL-PARSE-009",
               "only locally static integer ranges are supported here");
       }
-      const auto right = parse_signed_decimal();
+      auto right_expression = parse_expression();
       expect(TokenKind::RightParen, "')' after range",
              "FSIM-VHDL-PARSE-010");
+      const auto left = simple_integer_constant(left_expression);
+      const auto right = simple_integer_constant(right_expression);
       if (left && right) {
         type.packed_range = PackedRange{*left, *right, descending};
-      } else {
-        error(range_start, "FSIM-VHDL-SEM-001",
-              "range bounds must be decimal integer literals in this "
-              "frontend slice");
       }
+      type.packed_range_expression = PackedRangeExpression{
+          std::move(left_expression),
+          std::move(right_expression),
+          cover(range_start.span, previous().span),
+          descending};
     }
     return type;
-  }
-
-  std::optional<std::int64_t> parse_signed_decimal() {
-    const bool negative = match(TokenKind::Minus);
-    const auto number =
-        expect(TokenKind::Number, "integer literal", "FSIM-VHDL-PARSE-011");
-    return decimal_i64(number.text, negative);
   }
 
   void parse_vhdl_end(std::string_view expected_kind) {
@@ -488,17 +620,7 @@ class VhdlParser final : private detail::ParserBase {
     }
 
     if (match_keyword("generic", true)) {
-      const auto generic = previous();
-      error(generic, "FSIM-VHDL-UNSUPPORTED-009",
-            "generic maps are not implemented in the vertical-slice "
-            "frontend");
-      expect_keyword("map", true, "FSIM-VHDL-PARSE-037");
-      if (at(TokenKind::LeftParen)) {
-        skip_balanced(TokenKind::LeftParen, TokenKind::RightParen);
-      } else {
-        error(current(), "FSIM-VHDL-PARSE-038",
-              "expected '(' after generic map");
-      }
+      parse_vhdl_generic_map(instance, previous());
     }
 
     if (!match_keyword("port", true)) {
@@ -529,6 +651,70 @@ class VhdlParser final : private detail::ParserBase {
            "FSIM-VHDL-PARSE-043");
     instance.span = span_from(label, previous());
     return instance;
+  }
+
+  void parse_vhdl_generic_map(
+      Instance& instance,
+      const Token& start) {
+    expect_keyword("map", true, "FSIM-VHDL-PARSE-037");
+    expect(
+        TokenKind::LeftParen,
+        "'(' after generic map",
+        "FSIM-VHDL-PARSE-038");
+    bool saw_named = false;
+    while (!at_end() && !at(TokenKind::RightParen)) {
+      const auto association_start = current();
+      ParameterOverride actual;
+      if (at(TokenKind::Identifier)
+          && at(TokenKind::Arrow, 1)) {
+        saw_named = true;
+        const auto name = advance();
+        advance();
+        actual.name = vhdl_name(name.text);
+        if (std::any_of(
+                instance.parameter_overrides.begin(),
+                instance.parameter_overrides.end(),
+                [&](const ParameterOverride& existing) {
+                  return existing.name == actual.name;
+                })) {
+          error(
+              name,
+              "FSIM-VHDL-SEM-015",
+              "duplicate named generic actual '"
+                  + *actual.name + "'");
+        }
+      } else if (saw_named) {
+        error(
+            current(),
+            "FSIM-VHDL-SEM-016",
+            "a positional generic actual cannot follow a named actual");
+      }
+      if (match_keyword("open", true)) {
+        actual.value = Expression{
+            ExpressionKind::Invalid,
+            "open",
+            {},
+            previous().span};
+        error(
+            previous(),
+            "FSIM-VHDL-UNSUPPORTED-019",
+            "open generic actuals are not implemented in this frontend "
+            "slice");
+      } else {
+        actual.value = parse_expression();
+      }
+      actual.span =
+          cover(association_start.span, previous().span);
+      instance.parameter_overrides.push_back(std::move(actual));
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after generic map",
+        "FSIM-VHDL-PARSE-055");
+    (void)start;
   }
 
   PortConnection parse_vhdl_port_connection() {

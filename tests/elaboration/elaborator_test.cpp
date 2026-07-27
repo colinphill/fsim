@@ -285,6 +285,200 @@ endmodule
     assert(has_diagnostic(
         rejected_parameters, "FSIM-ELAB-PARAM-005"));
 
+    const auto generic_parsed = fsim::frontend::parse_text(
+        "generic-specialization.vhd",
+        R"(
+entity generic_counter is
+  generic (
+    width : positive := 8;
+    increment : natural := 1;
+    enabled : boolean := true;
+    last : integer := width - 1
+  );
+  port (
+    clk : in std_logic;
+    q : out unsigned(last downto 0)
+  );
+end entity;
+
+architecture rtl of generic_counter is
+  signal next_value : unsigned(last downto 0);
+begin
+  next_value <= q + increment;
+  update: process(clk)
+  begin
+    if rising_edge(clk) then
+      if enabled then
+        q <= next_value;
+      else
+        q <= q;
+      end if;
+    end if;
+  end process;
+end architecture;
+
+entity generic_top is
+  port (
+    clk : in std_logic;
+    q4 : out unsigned(3 downto 0);
+    q8 : out unsigned(7 downto 0)
+  );
+end entity;
+
+architecture rtl of generic_top is
+begin
+  four: entity work.generic_counter(rtl)
+    generic map (
+      width => 4,
+      increment => 2
+    )
+    port map (
+      clk => clk,
+      q => q4
+    );
+  eight: entity work.generic_counter(rtl)
+    generic map (
+      8,
+      increment => 3,
+      enabled => false
+    )
+    port map (
+      clk => clk,
+      q => q8
+    );
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(generic_parsed.ok());
+    const auto generic_elaborated =
+        fsim::elaboration::elaborate(
+            generic_parsed.design,
+            "vhdl:work.generic_top(rtl)");
+    if (!generic_elaborated.ok()) {
+        for (const auto& diagnostic :
+             generic_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(generic_elaborated.ok());
+    assert(
+        generic_elaborated.design->specializations().size() == 3);
+    const auto& generic_specializations =
+        generic_elaborated.design->specializations();
+    assert(generic_specializations[0].parameter_values.empty());
+    assert((
+        generic_specializations[1].parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"width", "4"},
+            {"increment", "2"},
+            {"enabled", "true"},
+            {"last", "3"}}));
+    assert((
+        generic_specializations[2].parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"width", "8"},
+            {"increment", "3"},
+            {"enabled", "false"},
+            {"last", "7"}}));
+    const auto generic_clock =
+        generic_elaborated.design->find_signal("clk");
+    const auto generic_q4 =
+        generic_elaborated.design->find_signal("q4");
+    const auto generic_q8 =
+        generic_elaborated.design->find_signal("q8");
+    const auto generic_next4 =
+        generic_elaborated.design->find_signal(
+            "generic_top.four.next_value");
+    const auto generic_next8 =
+        generic_elaborated.design->find_signal(
+            "generic_top.eight.next_value");
+    assert(
+        generic_clock && generic_q4 && generic_q8
+        && generic_next4 && generic_next8);
+    assert(
+        generic_elaborated.design->signals()
+            .at(*generic_q4).width
+        == 4);
+    assert(
+        generic_elaborated.design->signals()
+            .at(*generic_q8).width
+        == 8);
+    assert(
+        generic_elaborated.design->signals()
+            .at(*generic_next4).width
+        == 4);
+    assert(
+        generic_elaborated.design->signals()
+            .at(*generic_next8).width
+        == 8);
+    auto generic_interpreter =
+        generic_elaborated.design->create_interpreter();
+    generic_interpreter->deposit_signal(
+        *generic_clock,
+        fsim::runtime::PackedLogic4::from_msb_string("0"));
+    generic_interpreter->deposit_signal(
+        *generic_q4,
+        fsim::runtime::PackedLogic4::from_msb_string("0000"));
+    generic_interpreter->deposit_signal(
+        *generic_q8,
+        fsim::runtime::PackedLogic4::from_msb_string("00000000"));
+    generic_interpreter->start();
+    (void)generic_interpreter->run();
+    generic_interpreter->deposit_signal(
+        *generic_clock,
+        fsim::runtime::PackedLogic4::from_msb_string("1"));
+    (void)generic_interpreter->run();
+    assert(
+        generic_interpreter
+            ->signal_value(*generic_q4)
+            .to_msb_string()
+        == "0010");
+    assert(
+        generic_interpreter
+            ->signal_value(*generic_q8)
+            .to_msb_string()
+        == "00000000");
+
+    const auto invalid_generics = fsim::frontend::parse_text(
+        "invalid-generic-elaboration.vhd",
+        R"(
+entity invalid_generic_target is
+  generic (
+    required_value : integer;
+    natural_value : natural := -1;
+    broken_value : integer := missing_value
+  );
+end entity;
+architecture rtl of invalid_generic_target is
+begin
+end architecture;
+entity invalid_generic_top is
+end entity;
+architecture rtl of invalid_generic_top is
+begin
+  unknown: entity work.invalid_generic_target(rtl)
+    generic map (missing => 2)
+    port map ();
+  excessive: entity work.invalid_generic_target(rtl)
+    generic map (1, 2, 3, 4)
+    port map ();
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(invalid_generics.ok());
+    const auto rejected_generics =
+        fsim::elaboration::elaborate(
+            invalid_generics.design,
+            "vhdl:work.invalid_generic_top(rtl)");
+    assert(!rejected_generics.ok());
+    assert(has_diagnostic(
+        rejected_generics, "FSIM-ELAB-GENERIC-001"));
+    assert(has_diagnostic(
+        rejected_generics, "FSIM-ELAB-GENERIC-005"));
+    assert(has_diagnostic(
+        rejected_generics, "FSIM-ELAB-GENERIC-008"));
+
     constexpr std::string_view vhdl_source = R"(
 entity counter_vhdl is
   port (

@@ -128,8 +128,8 @@ directions.
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
 particular, complete semantic analysis, general mixed-boundary conversions and
-multi-driver resolution, VHDL generic specialization and complete
-SystemVerilog parameter typing, complete scoped/local type coverage and call
+multi-driver resolution, complete VHDL generic typing and SystemVerilog
+parameter typing, complete scoped/local type coverage and call
 safe points, broader interpreter/JIT differential coverage, remaining SystemC
 kernel behavior, fractional-delay and declaration-based time semantics,
 IEEE VHDL packages, complete HDL event controls, and most testbench features
@@ -285,8 +285,9 @@ includes the specialization-module identity and ordered process keys. Each
 module identity includes a provenance key for the exact owning-root and
 ordered Verilog/SystemVerilog transitive-include bytes supplied to the
 preprocessor/parser, source path, language standard, library, compilation-unit
-mode, macro/include settings, bundled-library version marker, and represented
-generic/parameter values. Each process key includes
+mode, macro/include settings, separated VHDL entity-interface source,
+bundled-library version marker, and represented generic/parameter values. Each
+process key includes
 scheduled-write kind and the exact delayed-write delay, plus wait kind,
 ordered operands, widths, dynamic edges, and static sensitivity signal/edge
 data. An unrelated,
@@ -302,8 +303,9 @@ signals. Builds without LLVM execute entirely through the reference evaluator.
 The bounded O0 debug path is differentially tested against the interpreter for
 source breakpoints and statement/process/scheduler stepping.
 Value-bearing operations wider than 64 bits, call instrumentation and complete
-local-variable scope/type semantics, full parameter/generic specialization
-identity, and broader differential coverage remain work in progress.
+local-variable scope/type semantics, complete parameter/generic type and sizing
+rules, reusable code-specialization deduplication, and broader differential
+coverage remain work in progress.
 
 The application suite also compares a bounded scheduled-write design exactly
 between the interpreter and O2 hybrid engine. It checks an update commit at

@@ -1189,7 +1189,8 @@ class VerilogParser final : private detail::ParserBase {
     type.packed_range_expression = PackedRangeExpression{
         std::move(left_expression),
         std::move(right_expression),
-        cover(start.span, previous().span)};
+        cover(start.span, previous().span),
+        std::nullopt};
   }
 
   [[nodiscard]] bool is_declaration_start() const {

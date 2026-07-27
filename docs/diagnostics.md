@@ -75,7 +75,6 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-008` | error | Expected `;` after a port clause. |
 | `FSIM-VHDL-PARSE-009` | error | Expected `to` or `downto` in the supported locally static range form. |
 | `FSIM-VHDL-PARSE-010` | error | Expected `)` after a VHDL range. |
-| `FSIM-VHDL-PARSE-011` | error | Expected an integer literal in a signed decimal bound. |
 | `FSIM-VHDL-PARSE-012` | error | Expected `end` in a design-unit end clause. |
 | `FSIM-VHDL-PARSE-013` | error | Expected `;` after a design-unit end clause. |
 | `FSIM-VHDL-PARSE-014` | error | Expected `of` in an architecture header. |
@@ -114,34 +113,43 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-047` | error | Expected `:` after process-variable names. |
 | `FSIM-VHDL-PARSE-048` | error | Expected `;` after a process-variable declaration. |
 | `FSIM-VHDL-PARSE-049` | error | Expected `;` after a wait statement. |
+| `FSIM-VHDL-PARSE-050` | error | Expected `(` after an entity `generic` clause. |
+| `FSIM-VHDL-PARSE-051` | error | Expected `:` after generic names. |
+| `FSIM-VHDL-PARSE-052` | error | Expected `;` between generic declarations. |
+| `FSIM-VHDL-PARSE-053` | error | Expected `)` after generic declarations. |
+| `FSIM-VHDL-PARSE-054` | error | Expected `;` after a generic clause. |
+| `FSIM-VHDL-PARSE-055` | error | Expected `)` after a generic map. |
 
 ### VHDL semantics and bounded-subset rejections
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `FSIM-VHDL-SEM-001` | error | A packed range bound is not a supported decimal integer literal. |
 | `FSIM-VHDL-SEM-002` | error | Duplicate port declaration. |
 | `FSIM-VHDL-SEM-003` | error | Duplicate signal declaration. |
 | `FSIM-VHDL-SEM-004` | error | A delay magnitude is not an integer literal. |
 | `FSIM-VHDL-SEM-011` | error | An assertion severity is not `note`, `warning`, `error`, or `failure`. |
 | `FSIM-VHDL-SEM-012` | error | A process combines a sensitivity list with an explicit wait statement. |
+| `FSIM-VHDL-SEM-013` | error | A generic name is declared more than once. |
+| `FSIM-VHDL-SEM-014` | error | A generic conflicts with a port or signal in the same declarative namespace. |
+| `FSIM-VHDL-SEM-015` | error | A named generic actual is repeated in one map. |
+| `FSIM-VHDL-SEM-016` | error | A positional generic actual follows a named actual. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
-| `FSIM-VHDL-UNSUPPORTED-002` | error | Generic clauses are not implemented in this frontend slice. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
 | `FSIM-VHDL-UNSUPPORTED-005` | error | Unsupported labeled concurrent statement. |
 | `FSIM-VHDL-UNSUPPORTED-006` | error | Unsupported concurrent statement. |
 | `FSIM-VHDL-UNSUPPORTED-007` | error | A process declarative item is not a bounded variable declaration. |
 | `FSIM-VHDL-UNSUPPORTED-008` | error | Unsupported sequential statement. |
-| `FSIM-VHDL-UNSUPPORTED-009` | error | Generic maps are not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-010` | error | A port-map actual is not a simple identifier. |
 | `FSIM-VHDL-UNSUPPORTED-011` | error | Port default expressions are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-013` | error | A subtype requires semantic type resolution not implemented in this slice. |
-| `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family object is parsed but not executable. |
+| `FSIM-VHDL-UNSUPPORTED-014` | error | A non-generic integer-family object is parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | VHDL context declarations are not implemented in this frontend slice. |
 | `FSIM-VHDL-UNSUPPORTED-016` | error | A wait form requires unsupported bare, `until`, or combined-clause semantics. |
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
+| `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
+| `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -350,7 +358,16 @@ therefore excluded.
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
-| `FSIM-ELAB-PARAM-001` | error | A parameter override has an unknown/local target, has too many positional values, crosses into a non-Verilog target, or is applied to a SystemC factory. |
+| `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
+| `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
+| `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |
+| `FSIM-ELAB-GENERIC-004` | error | A VHDL generic actual constant expression cannot be evaluated. |
+| `FSIM-ELAB-GENERIC-005` | error | A VHDL generic default constant expression cannot be evaluated. |
+| `FSIM-ELAB-GENERIC-006` | error | A generic-dependent packed range cannot be evaluated. |
+| `FSIM-ELAB-GENERIC-007` | error | A generic-dependent packed range width overflows the supported range. |
+| `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
+| `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
+| `FSIM-ELAB-PARAM-001` | error | A parameter override has an unknown/local target, is missing or excessive, or is applied to a SystemC factory. |
 | `FSIM-ELAB-PARAM-002` | error | A parameter override is duplicated during elaboration. |
 | `FSIM-ELAB-PARAM-003` | error | Named and positional parameter overrides are mixed during elaboration. |
 | `FSIM-ELAB-PARAM-004` | error | A parameter override constant expression cannot be evaluated. |

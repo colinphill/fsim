@@ -475,27 +475,171 @@ end architecture;
   require(architecture != nullptr && architecture->instances.size() == 2,
           "unsupported associations must recover to following instances");
 
-  bool saw_generic_map = false;
   std::size_t complex_actuals = 0;
   for (const auto& diagnostic : result.diagnostics) {
-    saw_generic_map =
-        saw_generic_map ||
-        diagnostic.code == "FSIM-VHDL-UNSUPPORTED-009";
     if (diagnostic.code == "FSIM-VHDL-UNSUPPORTED-010") {
       ++complex_actuals;
       require(diagnostic.span.source_name == "instances.vhd",
               "unsupported actual diagnostic source span");
     }
   }
-  require(saw_generic_map, "generic map must have a targeted diagnostic");
   require(complex_actuals == 2,
           "indexed and open actuals need targeted diagnostics");
+  require(
+      architecture->instances[0].parameter_overrides.size() == 1
+          && architecture->instances[0].parameter_overrides[0].name
+              == std::optional<std::string>{"width"}
+          && architecture->instances[0]
+                 .parameter_overrides[0].value.text
+              == "2",
+      "named generic maps must remain in the instance HIR");
   require(architecture->instances[1].connections.size() == 2 &&
               architecture->instances[1].connections[0].value.kind ==
                   ExpressionKind::Invalid &&
               architecture->instances[1].connections[1].value.kind ==
                   ExpressionKind::Invalid,
           "unsupported actuals must not appear as valid expressions");
+}
+
+void test_vhdl_generics() {
+  const auto result = parse_text(
+      "generics.vhd",
+      R"(
+entity generic_child is
+  generic (
+    Width, Depth : positive := 8;
+    Enabled : boolean := true;
+    Required : integer
+  );
+  port (
+    data : out bit_vector(Width - 1 downto 0)
+  );
+end entity;
+
+architecture rtl of generic_child is
+  signal local_data : bit_vector(Width - 1 downto 0);
+begin
+  data <= local_data;
+end architecture;
+
+entity generic_top is
+end entity;
+
+architecture rtl of generic_top is
+  signal named_data : bit_vector(3 downto 0);
+  signal mixed_data : bit_vector(1 downto 0);
+begin
+  named_child: entity work.generic_child(rtl)
+    generic map (
+      Width => 4,
+      Required => 2
+    )
+    port map (data => named_data);
+  mixed_child: entity work.generic_child(rtl)
+    generic map (
+      2,
+      Enabled => false,
+      Required => 1
+    )
+    port map (data => mixed_data);
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      result.ok(),
+      "bounded VHDL generic declarations and maps must parse");
+  const auto* child =
+      result.design.find(UnitKind::VhdlEntity, "generic_child");
+  require(
+      child != nullptr && child->parameters.size() == 4,
+      "VHDL generics are retained in declaration order");
+  require(
+      child->parameters[0].name == "width"
+          && child->parameters[0].type.spelling == "positive"
+          && child->parameters[0].default_value.text == "8"
+          && child->parameters[1].name == "depth"
+          && child->parameters[2].type.domain
+              == ValueDomain::Boolean
+          && child->parameters[2].default_value.kind
+              == ExpressionKind::BooleanLiteral
+          && child->parameters[3].default_value.kind
+              == ExpressionKind::Invalid,
+      "typed defaults and required generics");
+  require(
+      child->ports.size() == 1
+          && !child->ports[0].type.packed_range
+          && child->ports[0].type.packed_range_expression
+          && child->ports[0]
+                 .type.packed_range_expression->descending
+              == std::optional<bool>{true},
+      "VHDL symbolic ranges retain explicit direction");
+  const auto top_architecture = std::find_if(
+      result.design.units.begin(),
+      result.design.units.end(),
+      [](const DesignUnit& unit) {
+        return unit.kind == UnitKind::VhdlArchitecture
+            && unit.primary_name == "generic_top";
+      });
+  require(
+      top_architecture != result.design.units.end()
+          && top_architecture->instances.size() == 2
+          && top_architecture->instances[0]
+                 .parameter_overrides.size()
+              == 2
+          && top_architecture->instances[0]
+                 .parameter_overrides[0].name
+              == std::optional<std::string>{"width"}
+          && !top_architecture->instances[1]
+                  .parameter_overrides[0].name
+          && top_architecture->instances[1]
+                 .parameter_overrides[1].name
+              == std::optional<std::string>{"enabled"},
+      "named and positional-then-named generic maps are represented");
+
+  const auto invalid = parse_text(
+      "invalid-generics.vhd",
+      R"(
+entity invalid_generic is
+  generic (
+    Clash : integer := 1;
+    Clash : integer := 2;
+    Vector_Value : bit_vector(1 downto 0) := "00"
+  );
+  port (Clash : in bit);
+end entity;
+architecture rtl of invalid_generic is
+begin
+end architecture;
+entity invalid_top is
+end entity;
+architecture rtl of invalid_top is
+begin
+  bad: entity work.invalid_generic(rtl)
+    generic map (
+      Clash => 1,
+      Clash => 2,
+      3
+    )
+    port map ();
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code = [&](const std::string_view code) {
+    return std::any_of(
+        invalid.diagnostics.begin(),
+        invalid.diagnostics.end(),
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !invalid.ok()
+          && has_code("FSIM-VHDL-SEM-013")
+          && has_code("FSIM-VHDL-SEM-014")
+          && has_code("FSIM-VHDL-SEM-015")
+          && has_code("FSIM-VHDL-SEM-016")
+          && has_code("FSIM-VHDL-UNSUPPORTED-018"),
+      "VHDL generic diagnostics are stable and targeted");
 }
 
 void test_vhdl_select_and_concatenation_expressions() {
@@ -2042,6 +2186,7 @@ int main() {
         "unrepresentable 2^64-element range must not overflow");
     test_vhdl_vertical_slice();
     test_vhdl_instance_diagnostics();
+    test_vhdl_generics();
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
     test_systemverilog_vertical_slice();

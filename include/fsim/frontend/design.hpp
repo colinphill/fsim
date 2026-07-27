@@ -77,6 +77,9 @@ struct PackedRangeExpression {
   Expression left;
   Expression right;
   SourceSpan span;
+  // VHDL ranges retain their explicit `downto`/`to` direction. Verilog and
+  // SystemVerilog leave this empty and derive direction from evaluated bounds.
+  std::optional<bool> descending;
 };
 
 struct Type {
@@ -129,13 +132,15 @@ struct PortConnection {
 struct ParameterDeclaration {
   std::string name;
   Type type;
+  // Invalid denotes a VHDL generic without a default. SystemVerilog value
+  // parameters currently require a parsed default.
   Expression default_value;
   bool local{};
   SourceSpan span;
 };
 
 struct ParameterOverride {
-  // Empty for a positional override.
+  // Empty for a positional parameter override or VHDL generic actual.
   std::optional<std::string> name;
   Expression value;
   SourceSpan span;

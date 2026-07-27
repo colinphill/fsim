@@ -139,22 +139,24 @@ using SpecializationId = std::uint32_t;
 
 /// One elaborated design-unit occurrence and its directly owned processes.
 ///
-/// Parameterized Verilog/SystemVerilog occurrences carry canonical parameter
-/// values after constant evaluation. Each occurrence remains an explicit
-/// specialization record so process ownership and cache identity never depend
-/// on recovering hierarchy from process-name strings.
+/// Parameterized VHDL and Verilog/SystemVerilog occurrences carry canonical
+/// generic/parameter values after constant evaluation. Each occurrence remains
+/// an explicit specialization record so process ownership and cache identity
+/// never depend on recovering hierarchy from process-name strings.
 struct SpecializationInfo {
     SpecializationId id{};
     std::string unit;
     std::string instance;
     std::vector<runtime::simir::ProcessId> processes;
     std::string source;
+    // Additional source roots that define this specialization's interface,
+    // such as a VHDL entity paired with an architecture in another file.
+    std::vector<std::string> source_dependencies;
     frontend::Language language{frontend::Language::SystemVerilog2017};
     std::string library{"work"};
     bool is_cell{};
-    // Canonical name/value pairs after frontend parameter evaluation. Empty
-    // for unparameterized units and languages whose generics are not yet
-    // implemented.
+    // Canonical name/value pairs after frontend generic/parameter evaluation.
+    // Empty for unparameterized units.
     std::vector<std::pair<std::string, std::string>> parameter_values;
 };
 

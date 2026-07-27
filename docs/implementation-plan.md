@@ -78,6 +78,10 @@ The following foundation is implemented:
 - ordered Verilog/SystemVerilog integral value parameters and localparams,
   named/positional overrides, dependent constant evaluation, parameterized
   packed ranges, and canonical per-instance specialization values;
+- VHDL scalar integer/Boolean/bit generic declarations, defaults,
+  positional-then-named maps, dependent constant evaluation, parameterized
+  ranges, entity/architecture interface merging, and canonical per-instance
+  specialization values;
 - a persistent LLVM native-object cache selected beneath the configured
   application cache, with application-visible cold/warm telemetry and
   identity for scheduled-write kind/delay and wait kind, operands, widths, and
@@ -304,9 +308,9 @@ Completed:
   interpreter equivalence for the bounded REPL/scheduler-safe-point script;
 - single-read HDL parse/content hashing and per-specialization native
   provenance covering the owning source, source-set semantics,
-  bundled-library marker, and represented parameter values, with tested reuse
-  across unrelated-source changes and invalidation for owning-source/standard
-  changes;
+  bundled-library marker, and represented generic/parameter values, with
+  tested reuse across unrelated-source changes and invalidation for owning
+  source, separated VHDL entity interface, and standard changes;
 - checked-in SV-testbench/VHDL-counter/SV-child example.
 
 Remaining before the architecture gate passes:
@@ -319,9 +323,9 @@ Remaining before the architecture gate passes:
 - extend the bounded mixed-language differential to O0 and mixed-language
   assertion failures, broaden normalized trace coverage across semantic
   fixtures, and validate it on LLVM 22.1.8 Windows; and
-- complete VHDL generics and the remaining SystemVerilog parameter type/sizing
-  rules; bounded integral SystemVerilog values already participate in both
-  analysis and per-specialization native-cache identity.
+- complete VHDL generic types and the remaining SystemVerilog parameter
+  type/sizing rules; bounded scalar VHDL and integral SystemVerilog values
+  already participate in per-specialization native-cache identity.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
 
@@ -329,7 +333,7 @@ Early groundwork:
 
 - handwritten tokenization and recursive-descent/precedence parsing;
 - VHDL entity/architecture/port/signal/process nodes and represented
-  library/use/context-reference clauses;
+  library/use/context-reference clauses plus bounded generic specialization;
 - SV modules, common declarations, simple hierarchy, basic procedural and
   continuous statements, bounded integral parameter specialization, and
   bounded `` `timescale`` handling;
@@ -476,8 +480,8 @@ Remaining before v1 release:
 The next development iterations should occur in this order:
 
 1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   call instrumentation and complete scoped locals, add VHDL generic and
-   remaining SystemVerilog parameter semantics, and broaden the
+   call instrumentation and complete scoped locals, add remaining VHDL generic
+   and SystemVerilog parameter semantics, and broaden the
    interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.

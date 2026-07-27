@@ -1388,10 +1388,11 @@ make_specialization_cache_keys(
     const CheckedSource* checked_source{};
   };
   const auto settings_for =
-      [&](const elaboration::SpecializationInfo& specialization)
+      [&](const elaboration::SpecializationInfo& specialization,
+          const std::string_view source)
           -> std::optional<SourceSettings> {
         const auto source_path =
-            std::filesystem::path{specialization.source}
+            std::filesystem::path{source}
                 .lexically_normal();
         const CheckedSource* checked_source = nullptr;
         for (const auto& candidate : checked.hdl_sources) {
@@ -1437,7 +1438,8 @@ make_specialization_cache_keys(
   std::vector<std::string> result;
   result.reserve(design.specializations().size());
   for (const auto& specialization : design.specializations()) {
-    const auto settings = settings_for(specialization);
+    const auto settings =
+        settings_for(specialization, specialization.source);
     if (!settings) {
       diagnostics.error(
           "FSIM-CACHE-0001",
@@ -1450,7 +1452,7 @@ make_specialization_cache_keys(
     compiler::CacheKeyBuilder key;
     key.add(
         "specialization-provenance-schema",
-        "fsim-specialization-provenance-v1");
+        "fsim-specialization-provenance-v2");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
     key.add(
@@ -1474,6 +1476,40 @@ make_specialization_cache_keys(
       key.add(
           "dependency-content",
           dependency.content_digest);
+    }
+    for (const auto& interface_source :
+         specialization.source_dependencies) {
+      const auto interface_settings =
+          settings_for(specialization, interface_source);
+      if (!interface_settings) {
+        diagnostics.error(
+            "FSIM-CACHE-0001",
+            "cannot associate elaborated specialization interface '"
+                + interface_source + "' for '"
+                + specialization.unit + "' with a checked source");
+        return std::nullopt;
+      }
+      key.add(
+          "interface-source-path",
+          interface_settings->checked_source->path
+              .lexically_normal()
+              .generic_string());
+      key.add(
+          "interface-source-content",
+          interface_settings->checked_source->content_digest);
+      key.add(
+          "interface-source-compilation-unit",
+          interface_settings->checked_source
+              ->compilation_unit_digest);
+      for (const auto& dependency :
+           interface_settings->checked_source->dependencies) {
+        key.add(
+            "interface-dependency-path",
+            dependency.path.lexically_normal().generic_string());
+        key.add(
+            "interface-dependency-content",
+            dependency.content_digest);
+      }
     }
     key.add(
         "language",

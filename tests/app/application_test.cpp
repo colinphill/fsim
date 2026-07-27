@@ -646,6 +646,75 @@ endmodule
             << "endmodule\n";
       };
   write_parameter_top(2);
+  const auto vhdl_generic_entity_source =
+      directory / "vhdl_generic_child_entity.vhd";
+  const auto write_vhdl_generic_entity =
+      [&](const std::string_view revision) {
+        std::ofstream output(vhdl_generic_entity_source);
+        output << R"(
+entity vhdl_generic_child is
+  generic (
+    width : positive := 1;
+    value : natural := 1;
+    last : integer := width - 1
+  );
+  port (
+    q : out unsigned(last downto 0)
+  );
+end entity;
+)";
+        output << "-- " << revision << '\n';
+      };
+  write_vhdl_generic_entity("interface revision 1");
+  const auto vhdl_generic_architecture_source =
+      directory / "vhdl_generic_child_architecture.vhd";
+  {
+    std::ofstream output(vhdl_generic_architecture_source);
+    output << R"(
+architecture rtl of vhdl_generic_child is
+begin
+  q <= value;
+end architecture;
+)";
+  }
+  const auto vhdl_generic_top_source =
+      directory / "vhdl_generic_top.vhd";
+  const auto write_vhdl_generic_top =
+      [&](const std::uint64_t narrow_value) {
+        std::ofstream output(vhdl_generic_top_source);
+        output << R"(
+entity vhdl_generic_top is
+end entity;
+
+architecture rtl of vhdl_generic_top is
+  signal narrow : unsigned(3 downto 0);
+  signal wide : unsigned(7 downto 0);
+begin
+  narrow_child: entity work.vhdl_generic_child(rtl)
+    generic map (
+      width => 4,
+      value => )"
+               << narrow_value << R"(
+    )
+    port map (
+      q => narrow
+    );
+  wide_child: entity work.vhdl_generic_child(rtl)
+    generic map (
+      8,
+      value => 3
+    )
+    port map (
+      q => wide
+    );
+  stopper: process
+  begin
+    wait for 1 ns;
+  end process;
+end architecture;
+)";
+      };
+  write_vhdl_generic_top(2);
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -4119,6 +4188,199 @@ end architecture rtl;
   assert(parameter_changed.simulation.native_cache.hits == 1);
   assert(parameter_changed.simulation.native_cache.misses == 2);
   assert(parameter_changed.simulation.native_cache.stores == 2);
+#endif
+
+  auto generic_config = config;
+  generic_config.project.name = "vhdl-generic-specialization-test";
+  generic_config.project.top =
+      "vhdl:work.vhdl_generic_top(rtl)";
+  generic_config.build.optimization =
+      fsim::project::Optimization::o2;
+  generic_config.build.cache_path =
+      directory / "vhdl-generic-specialization-cache";
+  generic_config.source_sets.clear();
+  fsim::project::SourceSet generic_sources;
+  generic_sources.language = fsim::project::Language::vhdl;
+  generic_sources.standard = "2008";
+  generic_sources.library = "work";
+  generic_sources.compilation_unit = "file";
+  generic_sources.files = {
+      vhdl_generic_entity_source,
+      vhdl_generic_architecture_source,
+      vhdl_generic_top_source,
+  };
+  generic_config.source_sets.push_back(
+      std::move(generic_sources));
+  const auto run_generic_specializations =
+      [&](const fsim::app::SimulationEngine engine,
+          const std::string_view narrow_value) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            generic_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 3);
+        assert(project->specialization_cache_keys.size() == 3);
+        ParameterRun result;
+        for (std::size_t index = 0;
+             index < project->design.specializations().size();
+             ++index) {
+          const auto& specialization =
+              project->design.specializations()[index];
+          result.keys.emplace_back(
+              specialization.instance,
+              project->specialization_cache_keys[index]);
+          if (specialization.instance
+              == "vhdl_generic_top.narrow_child") {
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"width", "4"},
+                    {"value", std::string{narrow_value}},
+                    {"last", "3"}}));
+            assert(
+                specialization.source_dependencies
+                == std::vector<std::string>{
+                    vhdl_generic_entity_source.string()});
+          } else if (
+              specialization.instance
+              == "vhdl_generic_top.wide_child") {
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"width", "8"},
+                    {"value", "3"},
+                    {"last", "7"}}));
+            assert(
+                specialization.source_dependencies
+                == std::vector<std::string>{
+                    vhdl_generic_entity_source.string()});
+          }
+        }
+        result.simulation =
+            capture_simulation(std::move(*project), engine, 0);
+        return result;
+      };
+
+  const auto generic_reference =
+      run_generic_specializations(
+          fsim::app::SimulationEngine::interpreter, "2");
+  const auto generic_cold =
+      run_generic_specializations(
+          fsim::app::SimulationEngine::compiled, "2");
+  compare_captures(
+      generic_reference.simulation,
+      generic_cold.simulation);
+  assert(
+      generic_cold.simulation.result.status
+      == fsim::runtime::RunStatus::time_limit);
+  assert(generic_cold.simulation.result.time == 0);
+  assert((
+      generic_cold.simulation.final_values
+      == std::vector<std::string>{"0010", "00000011"}));
+  assert(generic_cold.simulation.process_count == 3);
+  assert(
+      key_for_instance(
+          generic_cold,
+          "vhdl_generic_top.narrow_child")
+      != key_for_instance(
+          generic_cold,
+          "vhdl_generic_top.wide_child"));
+#if defined(FSIM_HAS_LLVM)
+  assert(generic_cold.simulation.compiled_processes == 3);
+  assert(generic_cold.simulation.compiled_modules == 3);
+  assert(generic_cold.simulation.native_cache.hits == 0);
+  assert(generic_cold.simulation.native_cache.misses == 3);
+  assert(generic_cold.simulation.native_cache.stores == 3);
+#endif
+
+  const auto generic_warm =
+      run_generic_specializations(
+          fsim::app::SimulationEngine::compiled, "2");
+  assert(generic_warm.keys == generic_cold.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(generic_warm.simulation.native_cache.hits == 3);
+  assert(generic_warm.simulation.native_cache.misses == 0);
+#endif
+
+  write_vhdl_generic_top(5);
+  const auto generic_changed_reference =
+      run_generic_specializations(
+          fsim::app::SimulationEngine::interpreter, "5");
+  const auto generic_changed =
+      run_generic_specializations(
+          fsim::app::SimulationEngine::compiled, "5");
+  compare_captures(
+      generic_changed_reference.simulation,
+      generic_changed.simulation);
+  assert((
+      generic_changed.simulation.final_values
+      == std::vector<std::string>{"0101", "00000011"}));
+  assert(
+      key_for_instance(
+          generic_changed, "vhdl_generic_top")
+      != key_for_instance(
+          generic_cold, "vhdl_generic_top"));
+  assert(
+      key_for_instance(
+          generic_changed,
+          "vhdl_generic_top.narrow_child")
+      != key_for_instance(
+          generic_cold,
+          "vhdl_generic_top.narrow_child"));
+  assert(
+      key_for_instance(
+          generic_changed,
+          "vhdl_generic_top.wide_child")
+      == key_for_instance(
+          generic_cold,
+          "vhdl_generic_top.wide_child"));
+#if defined(FSIM_HAS_LLVM)
+  assert(generic_changed.simulation.native_cache.hits == 1);
+  assert(generic_changed.simulation.native_cache.misses == 2);
+  assert(generic_changed.simulation.native_cache.stores == 2);
+#endif
+
+  write_vhdl_generic_entity("interface revision 2");
+  const auto generic_interface_changed =
+      run_generic_specializations(
+          fsim::app::SimulationEngine::compiled, "5");
+  assert(
+      key_for_instance(
+          generic_interface_changed,
+          "vhdl_generic_top")
+      == key_for_instance(
+          generic_changed,
+          "vhdl_generic_top"));
+  assert(
+      key_for_instance(
+          generic_interface_changed,
+          "vhdl_generic_top.narrow_child")
+      != key_for_instance(
+          generic_changed,
+          "vhdl_generic_top.narrow_child"));
+  assert(
+      key_for_instance(
+          generic_interface_changed,
+          "vhdl_generic_top.wide_child")
+      != key_for_instance(
+          generic_changed,
+          "vhdl_generic_top.wide_child"));
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      generic_interface_changed.simulation.native_cache.hits
+      == 1);
+  assert(
+      generic_interface_changed.simulation.native_cache.misses
+      == 2);
+  assert(
+      generic_interface_changed.simulation.native_cache.stores
+      == 2);
 #endif
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit

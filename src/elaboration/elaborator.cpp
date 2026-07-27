@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cctype>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -268,10 +269,22 @@ std::optional<LoweredLiteral> literal_value(
 
 using ConstantEnvironment =
     std::unordered_map<std::string, std::int64_t>;
+using ConstantDomainEnvironment =
+    std::unordered_map<std::string, frontend::ValueDomain>;
 
 std::optional<std::int64_t> constant_literal_integer(
     const Expression& expression,
     std::string& error) {
+    if (expression.kind == ExpressionKind::BooleanLiteral) {
+        if (expression.text == "true") {
+            return 1;
+        }
+        if (expression.text == "false") {
+            return 0;
+        }
+        error = "Boolean literal is malformed";
+        return std::nullopt;
+    }
     if (expression.kind == ExpressionKind::IntegerLiteral
         && expression.text.find('\'') == std::string::npos) {
         const auto value = unsigned_decimal(expression.text);
@@ -416,7 +429,8 @@ std::optional<std::int64_t> evaluate_constant_expression(
     const ConstantEnvironment& environment,
     std::string& error) {
     if (expression.kind == ExpressionKind::IntegerLiteral
-        || expression.kind == ExpressionKind::LogicLiteral) {
+        || expression.kind == ExpressionKind::LogicLiteral
+        || expression.kind == ExpressionKind::BooleanLiteral) {
         return constant_literal_integer(expression, error);
     }
     if (expression.kind == ExpressionKind::Identifier) {
@@ -586,7 +600,24 @@ std::optional<std::int64_t> evaluate_constant_expression(
 
 Expression constant_expression(
     const std::int64_t value,
-    const frontend::SourceSpan& span) {
+    const frontend::SourceSpan& span,
+    const frontend::ValueDomain domain,
+    const frontend::Language language) {
+    if (domain == frontend::ValueDomain::Boolean) {
+        return {
+            ExpressionKind::BooleanLiteral,
+            value == 0 ? "false" : "true",
+            {},
+            span};
+    }
+    if (domain == frontend::ValueDomain::Bit2
+        && language == frontend::Language::Vhdl2008) {
+        return {
+            ExpressionKind::LogicLiteral,
+            value == 0 ? "'0'" : "'1'",
+            {},
+            span};
+    }
     if (value >= 0) {
         return {
             ExpressionKind::IntegerLiteral,
@@ -612,23 +643,34 @@ Expression constant_expression(
 
 void substitute_parameters(
     Expression& expression,
-    const ConstantEnvironment& environment) {
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language) {
     if (expression.kind == ExpressionKind::Identifier) {
         if (const auto found = environment.find(expression.text);
             found != environment.end()) {
-            expression = constant_expression(found->second, expression.span);
+            const auto domain = domains.find(expression.text);
+            expression = constant_expression(
+                found->second,
+                expression.span,
+                domain == domains.end()
+                    ? frontend::ValueDomain::Integer
+                    : domain->second,
+                language);
             return;
         }
     }
     for (auto& operand : expression.operands) {
-        substitute_parameters(operand, environment);
+        substitute_parameters(
+            operand, environment, domains, language);
     }
 }
 
 void substitute_parameters(
     frontend::Type& type,
     const ConstantEnvironment& environment,
-    std::vector<Diagnostic>& diagnostics) {
+    std::vector<Diagnostic>& diagnostics,
+    const frontend::Language language) {
     if (!type.packed_range_expression) {
         return;
     }
@@ -643,16 +685,23 @@ void substitute_parameters(
         : std::nullopt;
     if (!left || !right) {
         diagnostics.push_back({
-            "FSIM-ELAB-PARAM-006",
+            language == frontend::Language::Vhdl2008
+                ? "FSIM-ELAB-GENERIC-006"
+                : "FSIM-ELAB-PARAM-006",
             "cannot evaluate packed range: " + error,
             type.packed_range_expression->span});
         return;
     }
     const frontend::PackedRange range{
-        *left, *right, *left >= *right};
+        *left,
+        *right,
+        type.packed_range_expression->descending.value_or(
+            *left >= *right)};
     if (range.width() == 0) {
         diagnostics.push_back({
-            "FSIM-ELAB-PARAM-007",
+            language == frontend::Language::Vhdl2008
+                ? "FSIM-ELAB-GENERIC-007"
+                : "FSIM-ELAB-PARAM-007",
             "packed range width overflows fsim's 64-bit range",
             type.packed_range_expression->span});
         return;
@@ -664,35 +713,65 @@ void substitute_parameters(
 void substitute_parameters(
     frontend::VariableDeclaration& declaration,
     const ConstantEnvironment& environment,
-    std::vector<Diagnostic>& diagnostics) {
-    substitute_parameters(declaration.type, environment, diagnostics);
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics,
+    const frontend::Language language) {
+    substitute_parameters(
+        declaration.type, environment, diagnostics, language);
     if (declaration.initializer) {
-        substitute_parameters(*declaration.initializer, environment);
+        substitute_parameters(
+            *declaration.initializer,
+            environment,
+            domains,
+            language);
     }
 }
 
 void substitute_parameters(
     std::vector<Statement>& statements,
     const ConstantEnvironment& environment,
-    std::vector<Diagnostic>& diagnostics) {
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics,
+    const frontend::Language language) {
     for (auto& statement : statements) {
-        substitute_parameters(statement.target, environment);
-        substitute_parameters(statement.value, environment);
-        substitute_parameters(statement.condition, environment);
+        substitute_parameters(
+            statement.target, environment, domains, language);
+        substitute_parameters(
+            statement.value, environment, domains, language);
+        substitute_parameters(
+            statement.condition, environment, domains, language);
         for (auto& declaration : statement.declarations) {
-            substitute_parameters(declaration, environment, diagnostics);
+            substitute_parameters(
+                declaration,
+                environment,
+                domains,
+                diagnostics,
+                language);
         }
         for (auto& alternative : statement.case_alternatives) {
             for (auto& choice : alternative.choices) {
-                substitute_parameters(choice, environment);
+                substitute_parameters(
+                    choice, environment, domains, language);
             }
             substitute_parameters(
-                alternative.statements, environment, diagnostics);
+                alternative.statements,
+                environment,
+                domains,
+                diagnostics,
+                language);
         }
         substitute_parameters(
-            statement.statements, environment, diagnostics);
+            statement.statements,
+            environment,
+            domains,
+            diagnostics,
+            language);
         substitute_parameters(
-            statement.else_statements, environment, diagnostics);
+            statement.else_statements,
+            environment,
+            domains,
+            diagnostics,
+            language);
     }
 }
 
@@ -700,8 +779,48 @@ struct SpecializedUnit {
     DesignUnit unit;
     ConstantEnvironment environment;
     std::vector<std::pair<std::string, std::string>> values;
-    bool valid{true};
 };
+
+enum class SpecializationDiagnostic {
+    invalid_actual,
+    duplicate_actual,
+    association_order,
+    actual_evaluation,
+    default_evaluation,
+    subtype_constraint,
+};
+
+const char* specialization_diagnostic_code(
+    const bool is_vhdl,
+    const SpecializationDiagnostic diagnostic) {
+    switch (diagnostic) {
+    case SpecializationDiagnostic::invalid_actual:
+        return is_vhdl
+            ? "FSIM-ELAB-GENERIC-001"
+            : "FSIM-ELAB-PARAM-001";
+    case SpecializationDiagnostic::duplicate_actual:
+        return is_vhdl
+            ? "FSIM-ELAB-GENERIC-002"
+            : "FSIM-ELAB-PARAM-002";
+    case SpecializationDiagnostic::association_order:
+        return is_vhdl
+            ? "FSIM-ELAB-GENERIC-003"
+            : "FSIM-ELAB-PARAM-003";
+    case SpecializationDiagnostic::actual_evaluation:
+        return is_vhdl
+            ? "FSIM-ELAB-GENERIC-004"
+            : "FSIM-ELAB-PARAM-004";
+    case SpecializationDiagnostic::default_evaluation:
+        return is_vhdl
+            ? "FSIM-ELAB-GENERIC-005"
+            : "FSIM-ELAB-PARAM-005";
+    case SpecializationDiagnostic::subtype_constraint:
+        return "FSIM-ELAB-GENERIC-008";
+    }
+    return is_vhdl
+        ? "FSIM-ELAB-GENERIC-001"
+        : "FSIM-ELAB-PARAM-001";
+}
 
 SpecializedUnit specialize_unit(
     const DesignUnit& source,
@@ -710,15 +829,25 @@ SpecializedUnit specialize_unit(
     std::vector<Diagnostic>& diagnostics) {
     SpecializedUnit result;
     result.unit = source;
-    if (source.language != frontend::Language::SystemVerilog2017
-        && source.language != frontend::Language::Verilog2005) {
+    const bool is_vhdl =
+        source.language == frontend::Language::Vhdl2008;
+    const bool is_verilog =
+        source.language == frontend::Language::SystemVerilog2017
+        || source.language == frontend::Language::Verilog2005;
+    const auto code = [&](const SpecializationDiagnostic diagnostic) {
+        return specialization_diagnostic_code(
+            is_vhdl, diagnostic);
+    };
+    const auto object_kind =
+        is_vhdl ? std::string_view{"generic"}
+                : std::string_view{"parameter"};
+    if (!is_vhdl && !is_verilog) {
         if (!overrides.empty()) {
             diagnostics.push_back({
-                "FSIM-ELAB-PARAM-001",
-                "Verilog parameter overrides cannot target a non-Verilog "
-                "design unit",
+                code(SpecializationDiagnostic::invalid_actual),
+                "generic or parameter actuals cannot target this design "
+                "unit",
                 overrides.front().span});
-            result.valid = false;
         }
         return result;
     }
@@ -729,8 +858,9 @@ SpecializedUnit specialize_unit(
             overridable.push_back(&parameter);
         }
     }
-    std::unordered_map<std::string, std::int64_t> named_overrides;
-    std::vector<std::int64_t> positional_overrides;
+    std::vector<std::optional<std::int64_t>> actuals(
+        overridable.size());
+    std::size_t next_positional = 0;
     bool saw_named = false;
     bool saw_positional = false;
     for (const auto& override : overrides) {
@@ -739,120 +869,203 @@ SpecializedUnit specialize_unit(
             override.value, parent_environment, error);
         if (!value) {
             diagnostics.push_back({
-                "FSIM-ELAB-PARAM-004",
-                "cannot evaluate parameter override: " + error,
+                code(SpecializationDiagnostic::actual_evaluation),
+                "cannot evaluate " + std::string{object_kind}
+                    + " actual: " + error,
                 override.span});
-            result.valid = false;
             continue;
         }
+        std::optional<std::size_t> actual_index;
         if (override.name) {
             saw_named = true;
             const auto declared = std::find_if(
                 overridable.begin(),
                 overridable.end(),
                 [&](const frontend::ParameterDeclaration* parameter) {
-                  return parameter->name == *override.name;
+                    return parameter->name == *override.name;
                 });
             if (declared == overridable.end()) {
                 diagnostics.push_back({
-                    "FSIM-ELAB-PARAM-001",
-                    "unknown or local parameter override '"
-                        + *override.name + "' on module '"
-                        + source.name + "'",
+                    code(SpecializationDiagnostic::invalid_actual),
+                    "unknown or local " + std::string{object_kind}
+                        + " actual '" + *override.name + "'",
                     override.span});
-                result.valid = false;
+                continue;
             }
-            if (!named_overrides.emplace(*override.name, *value).second) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-PARAM-002",
-                    "duplicate parameter override '" + *override.name + "'",
-                    override.span});
-                result.valid = false;
-            }
+            actual_index = static_cast<std::size_t>(
+                std::distance(overridable.begin(), declared));
         } else {
             saw_positional = true;
-            positional_overrides.push_back(*value);
+            if (is_vhdl && saw_named) {
+                diagnostics.push_back({
+                    code(SpecializationDiagnostic::association_order),
+                    "a positional generic actual cannot follow a named "
+                    "actual",
+                    override.span});
+            }
+            if (next_positional >= overridable.size()) {
+                diagnostics.push_back({
+                    code(SpecializationDiagnostic::invalid_actual),
+                    "too many positional "
+                        + std::string{object_kind} + " actuals",
+                    override.span});
+                continue;
+            }
+            actual_index = next_positional++;
+        }
+        if (actual_index) {
+            if (actuals[*actual_index]) {
+                diagnostics.push_back({
+                    code(SpecializationDiagnostic::duplicate_actual),
+                    "duplicate " + std::string{object_kind}
+                        + " actual for '"
+                        + overridable[*actual_index]->name + "'",
+                    override.span});
+            } else {
+                actuals[*actual_index] = *value;
+            }
         }
     }
-    if (saw_named && saw_positional) {
+    if (is_verilog && saw_named && saw_positional) {
         diagnostics.push_back({
-            "FSIM-ELAB-PARAM-003",
+            code(SpecializationDiagnostic::association_order),
             "named and positional parameter overrides cannot be mixed",
             overrides.front().span});
-        result.valid = false;
     }
 
-    if (positional_overrides.size() > overridable.size()) {
-        diagnostics.push_back({
-            "FSIM-ELAB-PARAM-001",
-            "too many positional parameter overrides for module '"
-                + source.name + "'",
-            overrides.empty() ? source.span : overrides.back().span});
-        result.valid = false;
-    }
-    std::size_t positional = 0;
+    std::size_t overridable_index = 0;
+    ConstantDomainEnvironment domains;
     for (const auto& parameter : source.parameters) {
         std::optional<std::int64_t> value;
         if (!parameter.local) {
-            if (saw_named) {
-                if (const auto found =
-                        named_overrides.find(parameter.name);
-                    found != named_overrides.end()) {
-                    value = found->second;
-                }
-            } else if (positional < positional_overrides.size()) {
-                value = positional_overrides[positional++];
-            }
+            value = actuals.at(overridable_index++);
         }
         if (!value) {
-            std::string error;
-            value = evaluate_constant_expression(
-                parameter.default_value, result.environment, error);
-            if (!value) {
+            if (parameter.default_value.kind
+                == ExpressionKind::Invalid) {
                 diagnostics.push_back({
-                    "FSIM-ELAB-PARAM-005",
-                    "cannot evaluate default for parameter '"
-                        + parameter.name + "': " + error,
+                    code(SpecializationDiagnostic::invalid_actual),
+                    std::string{object_kind} + " '"
+                        + parameter.name
+                        + "' requires an actual because it has no default",
                     parameter.span});
-                result.valid = false;
                 value = 0;
+            } else {
+                std::string error;
+                value = evaluate_constant_expression(
+                    parameter.default_value,
+                    result.environment,
+                    error);
+                if (!value) {
+                    diagnostics.push_back({
+                        code(
+                            SpecializationDiagnostic::
+                                default_evaluation),
+                        "cannot evaluate default for "
+                            + std::string{object_kind} + " '"
+                            + parameter.name + "': " + error,
+                        parameter.span});
+                    value = 0;
+                }
+            }
+        }
+        if (is_vhdl) {
+            const auto spelling = parameter.type.spelling;
+            const bool violates_natural =
+                spelling == "natural" && *value < 0;
+            const bool violates_positive =
+                spelling == "positive" && *value <= 0;
+            const bool violates_boolean =
+                parameter.type.domain == frontend::ValueDomain::Boolean
+                && *value != 0 && *value != 1;
+            const bool violates_bit =
+                parameter.type.domain == frontend::ValueDomain::Bit2
+                && *value != 0 && *value != 1;
+            if (violates_natural || violates_positive
+                || violates_boolean || violates_bit) {
+                diagnostics.push_back({
+                    code(
+                        SpecializationDiagnostic::
+                            subtype_constraint),
+                    "generic '" + parameter.name
+                        + "' value is outside subtype '"
+                        + parameter.type.spelling + "'",
+                    parameter.span});
             }
         }
         result.environment[parameter.name] = *value;
+        domains[parameter.name] = parameter.type.domain;
         result.values.emplace_back(
-            parameter.name, std::to_string(*value));
+            parameter.name,
+            is_vhdl
+                    && parameter.type.domain
+                        == frontend::ValueDomain::Boolean
+                ? (*value == 0 ? "false" : "true")
+                : std::to_string(*value));
     }
 
     for (auto& parameter : result.unit.parameters) {
         substitute_parameters(
-            parameter.type, result.environment, diagnostics);
+            parameter.type,
+            result.environment,
+            diagnostics,
+            source.language);
         substitute_parameters(
-            parameter.default_value, result.environment);
+            parameter.default_value,
+            result.environment,
+            domains,
+            source.language);
     }
     for (auto& port : result.unit.ports) {
-        substitute_parameters(port.type, result.environment, diagnostics);
+        substitute_parameters(
+            port.type,
+            result.environment,
+            diagnostics,
+            source.language);
     }
     for (auto& signal : result.unit.signals) {
-        substitute_parameters(signal.type, result.environment, diagnostics);
+        substitute_parameters(
+            signal.type,
+            result.environment,
+            diagnostics,
+            source.language);
     }
     substitute_parameters(
         result.unit.concurrent_statements,
         result.environment,
-        diagnostics);
+        domains,
+        diagnostics,
+        source.language);
     for (auto& process : result.unit.processes) {
         for (auto& variable : process.variables) {
             substitute_parameters(
-                variable, result.environment, diagnostics);
+                variable,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
         }
         substitute_parameters(
-            process.statements, result.environment, diagnostics);
+            process.statements,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
     }
     for (auto& instance : result.unit.instances) {
         for (auto& override : instance.parameter_overrides) {
-            substitute_parameters(override.value, result.environment);
+            substitute_parameters(
+                override.value,
+                result.environment,
+                domains,
+                source.language);
         }
         for (auto& connection : instance.connections) {
-            substitute_parameters(connection.value, result.environment);
+            substitute_parameters(
+                connection.value,
+                result.environment,
+                domains,
+                source.language);
         }
     }
     return result;
@@ -2910,6 +3123,9 @@ const std::vector<frontend::SignalDeclaration>* unit_ports(
     const frontend::ParsedDesign& parsed,
     const DesignUnit& unit) {
     if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
+        if (!unit.ports.empty()) {
+            return &unit.ports;
+        }
         const auto* entity = find_vhdl_entity(parsed, unit);
         return entity == nullptr ? nullptr : &entity->ports;
     }
@@ -3046,8 +3262,8 @@ public:
     }
 
     void build(const DesignUnit& root) {
-        auto specialized = specialize_unit(
-            root, {}, {}, diagnostics_);
+        auto specialized = specialize_selected_unit(
+            root, {}, {});
         instantiate(
             specialized.unit,
             design_.top_,
@@ -3065,6 +3281,46 @@ public:
 private:
     using SignalMap = std::unordered_map<std::string, SignalId>;
     using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
+
+    DesignUnit effective_unit(const DesignUnit& selected) {
+        auto result = selected;
+        if (selected.kind
+            != frontend::UnitKind::VhdlArchitecture) {
+            return result;
+        }
+        const auto* entity = find_vhdl_entity(parsed_, selected);
+        if (entity == nullptr) {
+            return result;
+        }
+        result.parameters = entity->parameters;
+        result.ports = entity->ports;
+        for (const auto& generic : result.parameters) {
+            if (std::any_of(
+                    result.signals.begin(),
+                    result.signals.end(),
+                    [&](const frontend::SignalDeclaration& signal) {
+                        return signal.name == generic.name;
+                    })) {
+                report(
+                    "FSIM-ELAB-GENERIC-009",
+                    "architecture object '" + generic.name
+                        + "' conflicts with an entity generic",
+                    generic.span);
+            }
+        }
+        return result;
+    }
+
+    SpecializedUnit specialize_selected_unit(
+        const DesignUnit& selected,
+        const std::vector<frontend::ParameterOverride>& overrides,
+        const ConstantEnvironment& parent_environment) {
+        return specialize_unit(
+            effective_unit(selected),
+            overrides,
+            parent_environment,
+            diagnostics_);
+    }
 
     void finish() {
         validate_process_drivers();
@@ -4135,10 +4391,10 @@ private:
                     {});
                 continue;
             }
+            auto specialized =
+                specialize_selected_unit(*selected, {}, {});
             auto child_aliases = connect_foreign_child(
-                child, *selected, child_path, objects);
-            auto specialized = specialize_unit(
-                *selected, {}, {}, diagnostics_);
+                child, specialized.unit, child_path, objects);
             instantiate(
                 specialized.unit,
                 child_path,
@@ -4206,6 +4462,15 @@ private:
         specialization.unit = identity;
         specialization.instance = path;
         specialization.source = unit.span.source_name;
+        if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
+            if (const auto* entity = find_vhdl_entity(parsed_, unit);
+                entity != nullptr
+                && entity->span.source_name
+                    != specialization.source) {
+                specialization.source_dependencies.push_back(
+                    entity->span.source_name);
+            }
+        }
         specialization.language = unit.language;
         specialization.library =
             unit.library.empty() ? "work" : unit.library;
@@ -4240,9 +4505,13 @@ private:
                     && target->language == "systemc") {
                     if (!instance.parameter_overrides.empty()) {
                         report(
-                            "FSIM-ELAB-PARAM-001",
-                            "Verilog parameter overrides cannot target a "
-                            "SystemC factory",
+                            unit.language
+                                    == frontend::Language::Vhdl2008
+                                ? "FSIM-ELAB-GENERIC-001"
+                                : "FSIM-ELAB-PARAM-001",
+                            "HDL generic or parameter actuals cannot target "
+                            "a SystemC factory until its typed construction "
+                            "schema is implemented",
                             instance.parameter_overrides.front().span);
                         continue;
                     }
@@ -4274,11 +4543,10 @@ private:
             if (target == nullptr) {
                 continue;
             }
-            auto child_specialized = specialize_unit(
+            auto child_specialized = specialize_selected_unit(
                 *target,
                 instance.parameter_overrides,
-                parameter_environment,
-                diagnostics_);
+                parameter_environment);
             auto child_aliases = connect_instance(
                 instance,
                 child_specialized.unit,
