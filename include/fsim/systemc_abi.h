@@ -52,6 +52,14 @@ typedef enum fsim_sc_value_encoding_v1 {
     FSIM_SC_UNSIGNED = 3
 } fsim_sc_value_encoding_v1;
 
+typedef enum fsim_sc_construction_type_v1 {
+    FSIM_SC_CONSTRUCTION_INTEGER = 0,
+    FSIM_SC_CONSTRUCTION_NATURAL = 1,
+    FSIM_SC_CONSTRUCTION_POSITIVE = 2,
+    FSIM_SC_CONSTRUCTION_BOOLEAN = 3,
+    FSIM_SC_CONSTRUCTION_BIT = 4
+} fsim_sc_construction_type_v1;
+
 typedef enum fsim_sc_notification_kind_v1 {
     FSIM_SC_NOTIFY_IMMEDIATE = 0,
     FSIM_SC_NOTIFY_DELTA = 1,
@@ -285,6 +293,17 @@ typedef struct fsim_sc_host_v1 {
         fsim_sc_handle_v1 child,
         const char* name,
         int64_t value);
+
+    /*
+     * Append-only lookup of the canonical construction value selected for
+     * the module currently being built. Factory code may query only names
+     * declared in its registered schema.
+     */
+    fsim_sc_status_v1 (*get_construction_value)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* name,
+        int64_t* result);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {
@@ -309,6 +328,19 @@ typedef struct fsim_sc_registrar_v1 {
         fsim_sc_module_elaborate_v1 factory,
         fsim_sc_module_destroy_v1 destroy,
         void* user);
+
+    /*
+     * Append-only typed construction schema. Register the factory first,
+     * then its parameters in declaration order. A missing default is encoded
+     * by has_default == 0; default_value is ignored in that case.
+     */
+    fsim_sc_status_v1 (*register_factory_parameter)(
+        void* context,
+        const char* factory,
+        const char* name,
+        fsim_sc_construction_type_v1 type,
+        uint8_t has_default,
+        int64_t default_value);
 } fsim_sc_registrar_v1;
 
 typedef fsim_sc_status_v1 (*fsim_plugin_init_v1_fn)(

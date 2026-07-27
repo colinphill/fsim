@@ -74,9 +74,17 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, wait_static),
     "foreign HDL construction actuals must remain append-only");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, get_construction_value)
+        > offsetof(fsim_sc_host_v1, set_foreign_child_actual),
+    "SystemC construction-value lookup must remain append-only");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");
+_Static_assert(
+    offsetof(fsim_sc_registrar_v1, register_factory_parameter)
+        > offsetof(fsim_sc_registrar_v1, register_elaboration_factory),
+    "typed factory schemas must remain append-only");
 _Static_assert(
     sizeof(fsim_sc_handle_v1) == sizeof(uint64_t),
     "SystemC handles must remain opaque 64-bit values");

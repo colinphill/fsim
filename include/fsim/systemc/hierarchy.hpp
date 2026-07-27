@@ -44,6 +44,13 @@ struct ForeignChildDescription {
     std::vector<ForeignPortDescription> ports;
 };
 
+struct ConstructionParameterDescription {
+    std::string name;
+    fsim_sc_construction_type_v1 type{
+        FSIM_SC_CONSTRUCTION_INTEGER};
+    std::optional<std::int64_t> default_value;
+};
+
 struct SensitivityDescription {
     fsim_sc_handle_v1 object{};
     fsim_sc_edge_kind_v1 edge{FSIM_SC_ANY_EDGE};
@@ -100,6 +107,8 @@ struct ModuleDescription {
     fsim_sc_handle_v1 parent{};
     std::string factory;
     std::string instance;
+    std::vector<std::pair<std::string, std::int64_t>>
+        construction_values;
     std::vector<PortDescription> ports;
     std::vector<ForeignChildDescription> foreign_children;
     std::vector<ProcessDescription> processes;
@@ -149,11 +158,21 @@ public:
     [[nodiscard]] bool has_elaboration_factory(
         std::string_view name) const noexcept;
     [[nodiscard]] std::size_t factory_count() const noexcept;
+    [[nodiscard]] std::optional<
+        std::vector<ConstructionParameterDescription>>
+    factory_parameters(std::string_view name) const;
 
     [[nodiscard]] std::optional<ModuleDescription> instantiate(
         std::string_view factory,
         std::string_view instance,
         fsim_sc_handle_v1 parent,
+        std::string& error);
+    [[nodiscard]] std::optional<ModuleDescription> instantiate(
+        std::string_view factory,
+        std::string_view instance,
+        fsim_sc_handle_v1 parent,
+        std::span<const std::pair<std::string, std::int64_t>>
+            construction_actuals,
         std::string& error);
 
     /// Bind one plug-in object handle to its dense common-runtime signal.

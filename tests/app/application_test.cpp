@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/systemc/hierarchy.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <cassert>
@@ -1336,7 +1337,9 @@ SC_MODULE(HdlBridge) {
   fsim::systemc::hdl_instance u_hdl{"u_hdl"};
 
   SC_CTOR(HdlBridge) {
-    u_hdl.set_actual("INVERT", 0);
+    u_hdl.set_actual(
+        "INVERT",
+        fsim::systemc::construction_value<int>("CHILD_INVERT"));
     u_hdl.bind_input("value", value);
     u_hdl.bind_output("inverted", inverted);
   }
@@ -1411,9 +1414,16 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (status != FSIM_SC_OK) {
     return status;
   }
+  constexpr std::array<fsim::systemc::factory_parameter, 1>
+      bridge_parameters{{
+          {"CHILD_INVERT",
+           FSIM_SC_CONSTRUCTION_BOOLEAN,
+           true,
+           0},
+      }};
   const auto bridge_status =
       fsim::systemc::register_module_factory<HdlBridge>(
-          host, registrar, "bridge");
+          host, registrar, "bridge", bridge_parameters);
   if (bridge_status != FSIM_SC_OK) {
     return bridge_status;
   }
@@ -1775,6 +1785,12 @@ end architecture rtl;
   assert(
       hdl_systemc_project->design.systemc_instances().size()
       == 1);
+  assert((
+      hdl_systemc_project->systemc_hierarchy
+          ->factory_parameters("bridge")
+          ->front()
+          .default_value
+      == 0));
   const auto hdl_systemc_value =
       hdl_systemc_project->design.find_signal("value");
   const auto hdl_systemc_child_value =

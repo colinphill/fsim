@@ -14,6 +14,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -2279,6 +2280,61 @@ private:
     fsim_sc_handle_v1 handle_{};
 };
 
+struct factory_parameter {
+    const char* name{};
+    fsim_sc_construction_type_v1 type{
+        FSIM_SC_CONSTRUCTION_INTEGER};
+    bool has_default{};
+    std::int64_t default_value{};
+};
+
+/// Read a canonical value declared by the active factory's construction
+/// schema. This is valid only while an fsim module constructor is running.
+template <typename T>
+[[nodiscard]] T construction_value(const char* name) {
+    static_assert(
+        std::is_integral_v<T>,
+        "SystemC construction values currently support integral types");
+    const auto* host = sc_core::detail::current_host;
+    if (host == nullptr || sc_core::detail::current_module == 0
+        || name == nullptr || *name == '\0'
+        || host->get_construction_value == nullptr) {
+        throw std::logic_error{
+            "construction_value requires an active typed fsim factory"};
+    }
+    std::int64_t value{};
+    sc_core::detail::check_status(
+        host->get_construction_value(
+            host->context,
+            sc_core::detail::current_module,
+            name,
+            &value),
+        "read SystemC construction value");
+    if constexpr (std::is_same_v<T, bool>) {
+        if (value != 0 && value != 1) {
+            throw std::out_of_range{
+                "Boolean construction value is not 0 or 1"};
+        }
+    } else if constexpr (std::is_signed_v<T>) {
+        if (value < static_cast<std::int64_t>(
+                        std::numeric_limits<T>::min())
+            || value > static_cast<std::int64_t>(
+                           std::numeric_limits<T>::max())) {
+            throw std::out_of_range{
+                "SystemC construction value does not fit target type"};
+        }
+    } else {
+        if (value < 0
+            || static_cast<std::uint64_t>(value)
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<T>::max())) {
+            throw std::out_of_range{
+                "SystemC construction value does not fit target type"};
+        }
+    }
+    return static_cast<T>(value);
+}
+
 template <typename Module>
 struct module_factory_state {
     static fsim_sc_status_v1 elaborate(
@@ -2327,7 +2383,8 @@ template <typename Module>
 [[nodiscard]] fsim_sc_status_v1 register_module_factory(
     const fsim_sc_host_v1* host,
     fsim_sc_registrar_v1* registrar,
-    const char* name) noexcept {
+    const char* name,
+    const std::span<const factory_parameter> parameters) noexcept {
     if (host == nullptr || registrar == nullptr || name == nullptr
         || *name == '\0'
         || host->abi_version != FSIM_SYSTEMC_ABI_VERSION
@@ -2335,6 +2392,7 @@ template <typename Module>
         || host->struct_size < sizeof(fsim_sc_host_v1)
         || registrar->struct_size < sizeof(fsim_sc_registrar_v1)
         || registrar->register_elaboration_factory == nullptr
+        || registrar->register_factory_parameter == nullptr
         || host->register_port == nullptr
         || host->register_process == nullptr
         || host->add_sensitivity == nullptr
@@ -2359,15 +2417,41 @@ template <typename Module>
         || host->register_foreign_child == nullptr
         || host->connect_foreign_port == nullptr
         || host->wait_static == nullptr
-        || host->set_foreign_child_actual == nullptr) {
+        || host->set_foreign_child_actual == nullptr
+        || host->get_construction_value == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
-    return registrar->register_elaboration_factory(
+    auto status = registrar->register_elaboration_factory(
         registrar->context,
         name,
         module_factory_state<Module>::elaborate,
         module_factory_state<Module>::destroy,
         const_cast<fsim_sc_host_v1*>(host));
+    if (status != FSIM_SC_OK) {
+        return status;
+    }
+    for (const auto& parameter : parameters) {
+        status = registrar->register_factory_parameter(
+            registrar->context,
+            name,
+            parameter.name,
+            parameter.type,
+            parameter.has_default ? 1 : 0,
+            parameter.default_value);
+        if (status != FSIM_SC_OK) {
+            return status;
+        }
+    }
+    return FSIM_SC_OK;
+}
+
+template <typename Module>
+[[nodiscard]] fsim_sc_status_v1 register_module_factory(
+    const fsim_sc_host_v1* host,
+    fsim_sc_registrar_v1* registrar,
+    const char* name) noexcept {
+    return register_module_factory<Module>(
+        host, registrar, name, {});
 }
 
 } // namespace fsim::systemc

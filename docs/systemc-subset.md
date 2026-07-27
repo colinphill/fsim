@@ -104,15 +104,20 @@ conversion, detects recursive instantiation, and applies the same explicit
 resolver policy. A SystemC parent may therefore contain an HDL child which
 contains another bound SystemC child. Any language may be the project top.
 
-Construction parameters are being implemented bidirectionally. An HDL parameter
-override or VHDL generic map targeting SystemC will be checked against
-factory-declared name/type/default metadata and passed as canonical values when
-the factory is constructed. Conversely, `hdl_instance::set_actual(name,
+Construction parameters are being implemented bidirectionally. Factories can
+now register ordered integer, natural, positive, Boolean, or bit parameter
+schemas with optional defaults, and module constructors read their canonical
+values with `fsim::systemc::construction_value<T>(name)`. Registry construction
+validates missing, unknown, duplicate, and subtype-invalid values
+transactionally. Connecting an HDL parameter override or VHDL generic map to
+that schema is the remaining forward-boundary step. Conversely,
+`hdl_instance::set_actual(name,
 value)` now supplies immutable signed scalar actuals for its manifest-selected
 HDL target. The append-only native ABI carries those values into ordinary
 VHDL-generic or Verilog/SystemVerilog-parameter specialization and cache
 identity, with duplicate/unknown actual diagnostics. HDL-to-SystemC actuals
-remain explicitly rejected until the factory schema half is implemented.
+remain explicitly rejected until the common elaborator consumes the registered
+schema.
 This covers VHDL→SystemC, SV→SystemC, SystemC→VHDL, and SystemC→SV alongside
 the ordinary VHDL↔SV directions; SystemC is a peer hierarchy language rather
 than a leaf-only foreign model.

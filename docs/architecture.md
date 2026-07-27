@@ -93,6 +93,16 @@ the same canonical specialization and native-cache identity as source-written
 generic/parameter actuals. The reverse HDL-to-SystemC direction still awaits
 factory-declared typed schemas and construction-value delivery.
 
+The reverse-path ABI spine now exists: a factory registers ordered scalar
+parameter declarations after its typed factory registration, the transactional
+plug-in loader buffers and replays both as one unit, and the hierarchy registry
+canonicalizes explicit/default values before invoking the module constructor.
+An active constructor reads only declared values through
+`construction_value<T>`. The schema supports integer, natural, positive,
+Boolean, and bit constraints. The remaining integration step is for the common
+HDL hierarchy walk to evaluate source instance actuals against this schema
+before asking the registry to construct the bound SystemC module.
+
 ## Runtime values
 
 The runtime distinguishes three logic domains:

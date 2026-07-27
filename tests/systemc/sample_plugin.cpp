@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc_abi.h"
 
+#include <cstdint>
+#include <limits>
+
 namespace {
 
 void* create_module(void*, const char*, fsim_sc_handle_v1) {
@@ -27,6 +30,7 @@ fsim_sc_status_v1 elaborate_bridge(
         || host->register_foreign_child == nullptr
         || host->connect_foreign_port == nullptr
         || host->set_foreign_child_actual == nullptr
+        || host->get_construction_value == nullptr
         || host->set_process_initialize == nullptr) {
         return FSIM_SC_INVALID_ARGUMENT;
     }
@@ -34,7 +38,15 @@ fsim_sc_status_v1 elaborate_bridge(
     fsim_sc_handle_v1 value = 0;
     fsim_sc_handle_v1 child = 0;
     fsim_sc_handle_v1 process = 0;
-    auto status = host->register_port(
+    std::int64_t width = 0;
+    auto status = host->get_construction_value(
+        host->context, module, "WIDTH", &width);
+    if (status != FSIM_SC_OK || width <= 0
+        || width
+            > std::numeric_limits<std::uint32_t>::max()) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    status = host->register_port(
         host->context,
         module,
         "clock",
@@ -51,7 +63,7 @@ fsim_sc_status_v1 elaborate_bridge(
         "value",
         FSIM_SC_OUTPUT,
         FSIM_SC_UNSIGNED,
-        8,
+        static_cast<std::uint32_t>(width),
         &value);
     if (status != FSIM_SC_OK) {
         return status;
@@ -107,7 +119,7 @@ fsim_sc_status_v1 elaborate_bridge(
         "value",
         FSIM_SC_OUTPUT,
         FSIM_SC_UNSIGNED,
-        8,
+        static_cast<std::uint32_t>(width),
         value);
     if (status != FSIM_SC_OK) {
         return status;
@@ -138,10 +150,23 @@ extern "C" FSIM_SC_EXPORT fsim_sc_status_v1 fsim_plugin_init_v1(
     if (status != FSIM_SC_OK) {
         return status;
     }
-    return registrar->register_elaboration_factory(
+    status = registrar->register_elaboration_factory(
         registrar->context,
         "bridge",
         elaborate_bridge,
         destroy_bridge,
         const_cast<fsim_sc_host_v1*>(host));
+    if (status != FSIM_SC_OK
+        || registrar->register_factory_parameter == nullptr) {
+        return status != FSIM_SC_OK
+            ? status
+            : FSIM_SC_ABI_MISMATCH;
+    }
+    return registrar->register_factory_parameter(
+        registrar->context,
+        "bridge",
+        "WIDTH",
+        FSIM_SC_CONSTRUCTION_POSITIVE,
+        1,
+        8);
 }

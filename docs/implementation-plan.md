@@ -173,6 +173,9 @@ The following foundation is implemented:
 - append-only immutable named scalar actuals from a SystemC `hdl_instance`
   into manifest-selected VHDL generic or SystemVerilog parameter
   specialization, with real plug-in execution and cache identity;
+- append-only ordered SystemC factory schemas for integer/natural/positive/
+  Boolean/bit construction parameters, transactional loader replay,
+  canonical default/explicit validation, and typed constructor lookup;
 - a typed `fsim::systemc::hdl_instance` facade extension for constructor-time
   SystemC-to-VHDL/SV child declaration, manifest-selected implementation, and
   append-only named scalar construction actuals specialized into either HDL;

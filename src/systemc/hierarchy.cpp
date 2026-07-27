@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
@@ -34,6 +35,7 @@ struct HierarchyRegistry::Impl {
         fsim_sc_module_elaborate_v1 elaborate{};
         fsim_sc_module_destroy_v1 destroy{};
         void* user{};
+        std::vector<ConstructionParameterDescription> parameters;
     };
 
     struct Object {
@@ -259,6 +261,29 @@ void shutdown_threads(HierarchyRegistry::Impl& registry) noexcept {
         || encoding == FSIM_SC_LOGIC4
         || encoding == FSIM_SC_SIGNED
         || encoding == FSIM_SC_UNSIGNED;
+}
+
+[[nodiscard]] bool valid_construction_type(
+    const fsim_sc_construction_type_v1 type) noexcept {
+    return type >= FSIM_SC_CONSTRUCTION_INTEGER
+        && type <= FSIM_SC_CONSTRUCTION_BIT;
+}
+
+[[nodiscard]] bool valid_construction_value(
+    const fsim_sc_construction_type_v1 type,
+    const std::int64_t value) noexcept {
+    switch (type) {
+    case FSIM_SC_CONSTRUCTION_INTEGER:
+        return true;
+    case FSIM_SC_CONSTRUCTION_NATURAL:
+        return value >= 0;
+    case FSIM_SC_CONSTRUCTION_POSITIVE:
+        return value > 0;
+    case FSIM_SC_CONSTRUCTION_BOOLEAN:
+    case FSIM_SC_CONSTRUCTION_BIT:
+        return value == 0 || value == 1;
+    }
+    return false;
 }
 
 [[nodiscard]] const ModuleDescription* find_module_description(
@@ -601,6 +626,38 @@ extern "C" fsim_sc_status_v1 registry_set_foreign_child_actual(
             return FSIM_SC_INVALID_ARGUMENT;
         }
         actuals.emplace_back(name, value);
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_get_construction_value(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* name,
+    std::int64_t* result) noexcept {
+    if (context == nullptr || module == 0 || name == nullptr
+        || *name == '\0' || result == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.pending.find(module);
+        if (found == registry.pending.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto value = std::find_if(
+            found->second.construction_values.begin(),
+            found->second.construction_values.end(),
+            [&](const auto& candidate) {
+                return candidate.first == name;
+            });
+        if (value == found->second.construction_values.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        *result = value->second;
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -1594,7 +1651,7 @@ extern "C" fsim_sc_status_v1 registry_register_factory(
         return registry.factories.emplace(
                    name,
                    HierarchyRegistry::Impl::Factory{
-                       factory, nullptr, destroy, user})
+                       factory, nullptr, destroy, user, {}})
                        .second
             ? FSIM_SC_OK
             : FSIM_SC_INVALID_ARGUMENT;
@@ -1619,10 +1676,51 @@ extern "C" fsim_sc_status_v1 registry_register_elaboration_factory(
         return registry.factories.emplace(
                    name,
                    HierarchyRegistry::Impl::Factory{
-                       nullptr, factory, destroy, user})
+                       nullptr, factory, destroy, user, {}})
                        .second
             ? FSIM_SC_OK
             : FSIM_SC_INVALID_ARGUMENT;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_register_factory_parameter(
+    void* context,
+    const char* factory,
+    const char* name,
+    const fsim_sc_construction_type_v1 type,
+    const std::uint8_t has_default,
+    const std::int64_t default_value) noexcept {
+    if (context == nullptr || factory == nullptr || *factory == '\0'
+        || name == nullptr || *name == '\0'
+        || !valid_construction_type(type)
+        || has_default > 1
+        || (has_default != 0
+            && !valid_construction_value(type, default_value))) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.factories.find(factory);
+        if (found == registry.factories.end()
+            || std::any_of(
+                found->second.parameters.begin(),
+                found->second.parameters.end(),
+                [&](const auto& parameter) {
+                    return parameter.name == name;
+                })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        found->second.parameters.push_back({
+            name,
+            type,
+            has_default != 0
+                ? std::optional<std::int64_t>{default_value}
+                : std::nullopt,
+        });
+        return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
     }
@@ -1700,6 +1798,8 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.wait_static = registry_wait_static;
     host.set_foreign_child_actual =
         registry_set_foreign_child_actual;
+    host.get_construction_value =
+        registry_get_construction_value;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -1708,6 +1808,8 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     registrar.register_factory = registry_register_factory;
     registrar.register_elaboration_factory =
         registry_register_elaboration_factory;
+    registrar.register_factory_parameter =
+        registry_register_factory_parameter;
 
     impl->plugin = Plugin::load(path, host, registrar, error);
     if (!impl->plugin) {
@@ -1737,10 +1839,34 @@ std::size_t HierarchyRegistry::factory_count() const noexcept {
     return impl_ == nullptr ? 0 : impl_->factories.size();
 }
 
+std::optional<std::vector<ConstructionParameterDescription>>
+HierarchyRegistry::factory_parameters(
+    const std::string_view name) const {
+    if (impl_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto found = impl_->factories.find(std::string{name});
+    if (found == impl_->factories.end()) {
+        return std::nullopt;
+    }
+    return found->second.parameters;
+}
+
 std::optional<ModuleDescription> HierarchyRegistry::instantiate(
     const std::string_view factory,
     const std::string_view instance,
     const fsim_sc_handle_v1 parent,
+    std::string& error) {
+    return instantiate(factory, instance, parent, {}, error);
+}
+
+std::optional<ModuleDescription> HierarchyRegistry::instantiate(
+    const std::string_view factory,
+    const std::string_view instance,
+    const fsim_sc_handle_v1 parent,
+    const std::span<
+        const std::pair<std::string, std::int64_t>>
+        construction_actuals,
     std::string& error) {
     error.clear();
     if (impl_ == nullptr || factory.empty() || instance.empty()) {
@@ -1759,6 +1885,59 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
               "elaboration surface";
         return std::nullopt;
     }
+    std::vector<std::pair<std::string, std::int64_t>>
+        construction_values;
+    construction_values.reserve(found->second.parameters.size());
+    for (const auto& parameter : found->second.parameters) {
+        const auto actual = std::find_if(
+            construction_actuals.begin(),
+            construction_actuals.end(),
+            [&](const auto& candidate) {
+                return candidate.first == parameter.name;
+            });
+        const auto duplicate =
+            actual != construction_actuals.end()
+            && std::find_if(
+                   std::next(actual),
+                   construction_actuals.end(),
+                   [&](const auto& candidate) {
+                       return candidate.first == parameter.name;
+                   })
+                != construction_actuals.end();
+        if (duplicate) {
+            error = "SystemC construction parameter '"
+                + parameter.name + "' receives more than one actual";
+            return std::nullopt;
+        }
+        const auto value =
+            actual != construction_actuals.end()
+            ? std::optional<std::int64_t>{actual->second}
+            : parameter.default_value;
+        if (!value) {
+            error = "SystemC construction parameter '"
+                + parameter.name + "' requires an actual";
+            return std::nullopt;
+        }
+        if (!valid_construction_value(parameter.type, *value)) {
+            error = "SystemC construction parameter '"
+                + parameter.name + "' violates its declared type";
+            return std::nullopt;
+        }
+        construction_values.emplace_back(
+            parameter.name, *value);
+    }
+    for (const auto& actual : construction_actuals) {
+        if (std::none_of(
+                found->second.parameters.begin(),
+                found->second.parameters.end(),
+                [&](const auto& parameter) {
+                    return parameter.name == actual.first;
+                })) {
+            error = "unknown SystemC construction parameter '"
+                + actual.first + "'";
+            return std::nullopt;
+        }
+    }
     const auto handle = impl_->allocate_handle();
     if (!handle) {
         error = "SystemC hierarchy handle space is exhausted";
@@ -1769,6 +1948,8 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
     pending.parent = parent;
     pending.factory = factory;
     pending.instance = instance;
+    pending.construction_values =
+        std::move(construction_values);
     impl_->pending.emplace(*handle, pending);
 
     void* object = nullptr;
