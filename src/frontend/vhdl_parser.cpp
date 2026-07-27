@@ -566,6 +566,12 @@ class VhdlParser final : private detail::ParserBase {
           label_token ? vhdl_name(label_token->text) : std::string{}));
       return;
     }
+    if (label_token && match_keyword("if", true)) {
+      unit.conditional_generates.push_back(
+          parse_vhdl_conditional_generate(
+              *label_token, previous()));
+      return;
+    }
     if (label_token &&
         (keyword("entity", 0, true) ||
          (at(TokenKind::Identifier) &&
@@ -591,6 +597,84 @@ class VhdlParser final : private detail::ParserBase {
           "unsupported concurrent statement starting with '" +
               unexpected.text + "'");
     skip_to_semicolon();
+  }
+
+  ConditionalGenerate parse_vhdl_conditional_generate(
+      const Token& label,
+      const Token& start) {
+    ConditionalGenerate result;
+    result.then_scope = vhdl_name(label.text);
+    result.else_scope = result.then_scope;
+    result.condition = parse_expression();
+    expect_keyword("generate", true, "FSIM-VHDL-PARSE-056");
+    (void)match_keyword("begin", true);
+    parse_vhdl_generate_branch(
+        result.then_instances,
+        result.then_generates);
+    if (match_keyword("else", true)) {
+      expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
+      (void)match_keyword("begin", true);
+      parse_vhdl_generate_branch(
+          result.else_instances,
+          result.else_generates);
+    }
+    expect_keyword("end", true, "FSIM-VHDL-PARSE-058");
+    expect_keyword("generate", true, "FSIM-VHDL-PARSE-059");
+    if (at(TokenKind::Identifier)) {
+      const auto end_label = advance();
+      if (vhdl_name(end_label.text) != result.then_scope) {
+        error(
+            end_label,
+            "FSIM-VHDL-PARSE-060",
+            "generate end label does not match '"
+                + result.then_scope + "'");
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after conditional generate",
+        "FSIM-VHDL-PARSE-061");
+    result.span = span_from(start, previous());
+    return result;
+  }
+
+  void parse_vhdl_generate_branch(
+      std::vector<Instance>& instances,
+      std::vector<ConditionalGenerate>& nested) {
+    while (!at_end() && !keyword("else", 0, true)
+           && !keyword("end", 0, true)) {
+      if (!(at(TokenKind::Identifier)
+            && at(TokenKind::Colon, 1))) {
+        const auto unsupported = advance();
+        error(
+            unsupported,
+            "FSIM-VHDL-UNSUPPORTED-020",
+            "conditional generate branches currently admit only "
+            "labeled instances and nested if-generate regions");
+        skip_to_semicolon();
+        continue;
+      }
+      const auto label = advance();
+      advance();
+      if (match_keyword("if", true)) {
+        nested.push_back(
+            parse_vhdl_conditional_generate(
+                label, previous()));
+      } else if (
+          keyword("entity", 0, true)
+          || (at(TokenKind::Identifier)
+              && (keyword("port", 1, true)
+                  || keyword("generic", 1, true)))) {
+        instances.push_back(parse_vhdl_instance(label));
+      } else {
+        error(
+            current(),
+            "FSIM-VHDL-UNSUPPORTED-020",
+            "unsupported concurrent item in conditional generate "
+            "branch");
+        skip_to_semicolon();
+      }
+    }
   }
 
   Instance parse_vhdl_instance(const Token& label) {

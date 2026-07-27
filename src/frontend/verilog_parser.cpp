@@ -694,6 +694,8 @@ class VerilogParser final : private detail::ParserBase {
         unit.processes.push_back(parse_always());
       } else if (keyword("initial")) {
         unit.processes.push_back(parse_initial());
+      } else if (match_keyword("generate")) {
+        parse_generate_region(unit, previous());
       } else if (
           at(TokenKind::Identifier)
           && ((at(TokenKind::Identifier, 1)
@@ -718,6 +720,107 @@ class VerilogParser final : private detail::ParserBase {
     resolve_implicit_nets(unit);
     unit.span = span_from(start, previous());
     return unit;
+  }
+
+  void parse_generate_region(
+      DesignUnit& unit, const Token& generate_token) {
+    while (!at_end() && !keyword("endgenerate")) {
+      if (!match_keyword("if")) {
+        const auto unsupported = advance();
+        error(
+            unsupported,
+            "FSIM-SV-UNSUPPORTED-021",
+            "only conditional instance generate regions are executable");
+        while (!at_end() && !keyword("endgenerate")
+               && !keyword("if")) {
+          advance();
+        }
+        continue;
+      }
+      unit.conditional_generates.push_back(
+          parse_conditional_generate(previous()));
+    }
+    expect_keyword(
+        "endgenerate", false, "FSIM-SV-PARSE-064");
+    (void)generate_token;
+  }
+
+  ConditionalGenerate parse_conditional_generate(
+      const Token& start) {
+    ConditionalGenerate result;
+    expect(
+        TokenKind::LeftParen,
+        "'(' after generate if",
+        "FSIM-SV-PARSE-059");
+    result.condition = parse_expression();
+    expect(
+        TokenKind::RightParen,
+        "')' after generate condition",
+        "FSIM-SV-PARSE-060");
+    parse_generate_branch(
+        result.then_scope,
+        result.then_instances,
+        result.then_generates);
+    if (match_keyword("else")) {
+      parse_generate_branch(
+          result.else_scope,
+          result.else_instances,
+          result.else_generates);
+    }
+    result.span = span_from(start, previous());
+    return result;
+  }
+
+  void parse_generate_branch(
+      std::string& scope,
+      std::vector<Instance>& instances,
+      std::vector<ConditionalGenerate>& nested) {
+    if (!match_keyword("begin")) {
+      error(
+          current(),
+          "FSIM-SV-PARSE-061",
+          "a conditional generate branch must use a labeled begin/end "
+          "block");
+      return;
+    }
+    expect(
+        TokenKind::Colon,
+        "':' before generate block label",
+        "FSIM-SV-PARSE-062");
+    const auto label = expect_identifier("generate block label");
+    scope = label.text;
+    while (!at_end() && !keyword("end")) {
+      if (match_keyword("if")) {
+        nested.push_back(
+            parse_conditional_generate(previous()));
+      } else if (
+          at(TokenKind::Identifier)
+          && ((at(TokenKind::Identifier, 1)
+               && at(TokenKind::LeftParen, 2))
+              || (at(TokenKind::Hash, 1)
+                  && at(TokenKind::LeftParen, 2)))) {
+        instances.push_back(parse_instance());
+      } else {
+        const auto unsupported = advance();
+        error(
+            unsupported,
+            "FSIM-SV-UNSUPPORTED-021",
+            "conditional generate branches currently admit only "
+            "instances and nested generate-if regions");
+        skip_to_semicolon();
+      }
+    }
+    expect_keyword("end", false, "FSIM-SV-PARSE-063");
+    if (match(TokenKind::Colon)) {
+      const auto end_label = expect_identifier(
+          "generate block label after end");
+      if (end_label.text != scope) {
+        error(
+            end_label,
+            "FSIM-SV-PARSE-063",
+            "generate end label does not match '" + scope + "'");
+      }
+    }
   }
 
   Type parse_parameter_type() {

@@ -2172,6 +2172,164 @@ endmodule
       "SystemVerilog nested and outer false branches");
 }
 
+void test_conditional_generate_hierarchy() {
+  const auto systemverilog = parse_text(
+      "generate.sv",
+      R"(
+module leaf(input logic value, output logic result);
+  assign result = value;
+endmodule
+
+module generated #(parameter ENABLED = 1) (
+  input logic value,
+  output logic result
+);
+  generate
+    if (ENABLED) begin : selected
+      leaf active(.value(value), .result(result));
+      if (ENABLED) begin : nested_selected
+        leaf nested_active(.value(value), .result(result));
+      end else begin : nested_rejected
+        leaf nested_inactive(.value(value), .result(result));
+      end
+    end else begin : rejected
+      leaf inactive(.value(value), .result(result));
+    end
+  endgenerate
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "SystemVerilog conditional instance generate must parse");
+  const auto* sv_unit =
+      systemverilog.design.find(UnitKind::VerilogModule, "generated");
+  require(
+      sv_unit != nullptr
+          && sv_unit->conditional_generates.size() == 1,
+      "SystemVerilog generate HIR count");
+  const auto& sv_generate =
+      sv_unit->conditional_generates.front();
+  require(
+      sv_generate.then_scope == "selected"
+          && sv_generate.else_scope == "rejected"
+          && sv_generate.condition.kind
+              == ExpressionKind::Identifier
+          && sv_generate.condition.text == "ENABLED"
+          && sv_generate.then_instances.size() == 1
+          && sv_generate.then_instances.front().name == "active"
+          && sv_generate.else_instances.size() == 1
+          && sv_generate.else_instances.front().name == "inactive"
+          && sv_generate.then_generates.size() == 1
+          && sv_generate.then_generates.front().then_scope
+              == "nested_selected"
+          && sv_generate.then_generates.front().then_instances
+                 .front()
+                 .name
+              == "nested_active",
+      "SystemVerilog conditional generate branches and labels");
+
+  const auto vhdl = parse_text(
+      "generate.vhd",
+      R"(
+entity generated is
+  generic (enabled : boolean := true);
+  port (
+    value : in std_logic;
+    result : out std_logic
+  );
+end entity;
+
+architecture rtl of generated is
+begin
+  selection: if enabled generate
+    active: entity work.leaf(rtl)
+      port map (value => value, result => result);
+    nested: if enabled generate
+      nested_active: entity work.leaf(rtl)
+        port map (value => value, result => result);
+    else generate
+      nested_inactive: entity work.leaf(rtl)
+        port map (value => value, result => result);
+    end generate nested;
+  else generate
+    inactive: entity work.leaf(rtl)
+      port map (value => value, result => result);
+  end generate selection;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      vhdl.ok(),
+      "VHDL conditional instance generate must parse");
+  const auto* vhdl_unit =
+      vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      vhdl_unit != nullptr
+          && vhdl_unit->conditional_generates.size() == 1,
+      "VHDL generate HIR count");
+  const auto& vhdl_generate =
+      vhdl_unit->conditional_generates.front();
+  require(
+      vhdl_generate.then_scope == "selection"
+          && vhdl_generate.else_scope == "selection"
+          && vhdl_generate.condition.text == "enabled"
+          && vhdl_generate.then_instances.front().name == "active"
+          && vhdl_generate.else_instances.front().name == "inactive"
+          && vhdl_generate.then_generates.size() == 1
+          && vhdl_generate.then_generates.front().then_scope
+              == "nested"
+          && vhdl_generate.then_generates.front().then_instances
+                 .front()
+                 .name
+              == "nested_active",
+      "VHDL conditional generate branches and canonical label");
+
+  const auto unlabeled_systemverilog = parse_text(
+      "unlabeled_generate.sv",
+      R"(
+module invalid #(parameter ENABLED = 1);
+  generate
+    if (ENABLED) begin
+    end
+  endgenerate
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !unlabeled_systemverilog.ok()
+          && std::any_of(
+              unlabeled_systemverilog.diagnostics.begin(),
+              unlabeled_systemverilog.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-062";
+              }),
+      "unlabeled SystemVerilog generate branch is targeted");
+
+  const auto unsupported_vhdl_body = parse_text(
+      "unsupported_generate.vhd",
+      R"(
+architecture rtl of generated is
+  signal q : std_logic;
+begin
+  selection: if true generate
+    q <= '1';
+  end generate selection;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !unsupported_vhdl_body.ok()
+          && std::any_of(
+              unsupported_vhdl_body.diagnostics.begin(),
+              unsupported_vhdl_body.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-020";
+              }),
+      "unsupported VHDL generate body is targeted");
+}
+
 }  // namespace
 
 int main() {
@@ -2209,6 +2367,7 @@ int main() {
     test_systemverilog_arithmetic_expressions();
     test_systemverilog_select_and_concatenation_expressions();
     test_conditional_statement_trees();
+    test_conditional_generate_hierarchy();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

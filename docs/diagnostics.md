@@ -119,6 +119,12 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-053` | error | Expected `)` after generic declarations. |
 | `FSIM-VHDL-PARSE-054` | error | Expected `;` after a generic clause. |
 | `FSIM-VHDL-PARSE-055` | error | Expected `)` after a generic map. |
+| `FSIM-VHDL-PARSE-056` | error | Expected `generate` after a VHDL if-generate condition. |
+| `FSIM-VHDL-PARSE-057` | error | Expected `generate` after `else` in a conditional generate. |
+| `FSIM-VHDL-PARSE-058` | error | Expected `end` for a conditional generate. |
+| `FSIM-VHDL-PARSE-059` | error | Expected `generate` after the conditional-generate `end`. |
+| `FSIM-VHDL-PARSE-060` | error | A conditional-generate end label does not match its opening label. |
+| `FSIM-VHDL-PARSE-061` | error | Expected `;` after a conditional generate. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -150,6 +156,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |
+| `FSIM-VHDL-UNSUPPORTED-020` | error | A conditional-generate branch contains an item other than a labeled instance or nested if-generate region. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -257,6 +264,12 @@ therefore excluded.
 | `FSIM-SV-PARSE-056` | error | Expected `(` after a named parameter override. |
 | `FSIM-SV-PARSE-057` | error | Expected `)` after a named parameter override. |
 | `FSIM-SV-PARSE-058` | error | Expected `)` after instance parameter overrides. |
+| `FSIM-SV-PARSE-059` | error | Expected `(` after a generate `if`. |
+| `FSIM-SV-PARSE-060` | error | Expected `)` after a generate condition. |
+| `FSIM-SV-PARSE-061` | error | A conditional-generate branch is not a labeled `begin`/`end` block. |
+| `FSIM-SV-PARSE-062` | error | Expected `:` before a generate-block label. |
+| `FSIM-SV-PARSE-063` | error | A generate branch lacks `end` or has a mismatched end label. |
+| `FSIM-SV-PARSE-064` | error | Expected `endgenerate`. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -307,6 +320,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
 | `FSIM-SV-UNSUPPORTED-020` | error | A parameter data type is outside the supported integral subset. |
+| `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded conditional instance-generate subset. |
 
 ## Elaboration and SimIR lowering
 
@@ -358,6 +372,7 @@ therefore excluded.
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
+| `FSIM-ELAB-GEN-001` | error | A conditional-generate expression cannot be evaluated for its specialization. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

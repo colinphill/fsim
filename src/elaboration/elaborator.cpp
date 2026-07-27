@@ -776,6 +776,104 @@ void substitute_parameters(
     }
 }
 
+void substitute_parameters(
+    std::vector<frontend::Instance>& instances,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language) {
+    for (auto& instance : instances) {
+        for (auto& override : instance.parameter_overrides) {
+            substitute_parameters(
+                override.value, environment, domains, language);
+        }
+        for (auto& connection : instance.connections) {
+            substitute_parameters(
+                connection.value, environment, domains, language);
+        }
+    }
+}
+
+void substitute_parameters(
+    std::vector<frontend::ConditionalGenerate>& generates,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language) {
+    for (auto& generate : generates) {
+        substitute_parameters(
+            generate.condition, environment, domains, language);
+        substitute_parameters(
+            generate.then_instances,
+            environment,
+            domains,
+            language);
+        substitute_parameters(
+            generate.else_instances,
+            environment,
+            domains,
+            language);
+        substitute_parameters(
+            generate.then_generates,
+            environment,
+            domains,
+            language);
+        substitute_parameters(
+            generate.else_generates,
+            environment,
+            domains,
+            language);
+    }
+}
+
+void expand_conditional_generates(
+    const std::vector<frontend::ConditionalGenerate>& generates,
+    const ConstantEnvironment& environment,
+    const std::string_view parent_scope,
+    std::vector<frontend::Instance>& instances,
+    std::vector<Diagnostic>& diagnostics) {
+    for (const auto& generate : generates) {
+        std::string error;
+        const auto condition = evaluate_constant_expression(
+            generate.condition, environment, error);
+        if (!condition) {
+            diagnostics.push_back({
+                "FSIM-ELAB-GEN-001",
+                "cannot evaluate conditional generate expression: "
+                    + error,
+                generate.condition.span});
+            continue;
+        }
+        const bool selected_then = *condition != 0;
+        const auto& selected_instances =
+            selected_then
+            ? generate.then_instances
+            : generate.else_instances;
+        const auto& selected_nested =
+            selected_then
+            ? generate.then_generates
+            : generate.else_generates;
+        const auto& local_scope =
+            selected_then
+            ? generate.then_scope
+            : generate.else_scope;
+        const auto scope =
+            parent_scope.empty()
+            ? local_scope
+            : std::string{parent_scope} + "." + local_scope;
+        for (auto instance : selected_instances) {
+            instance.name = scope.empty()
+                ? instance.name
+                : scope + "." + instance.name;
+            instances.push_back(std::move(instance));
+        }
+        expand_conditional_generates(
+            selected_nested,
+            environment,
+            scope,
+            instances,
+            diagnostics);
+    }
+}
+
 struct SpecializedUnit {
     DesignUnit unit;
     ConstantEnvironment environment;
@@ -1106,22 +1204,23 @@ SpecializedUnit specialize_unit(
             diagnostics,
             source.language);
     }
-    for (auto& instance : result.unit.instances) {
-        for (auto& override : instance.parameter_overrides) {
-            substitute_parameters(
-                override.value,
-                result.environment,
-                domains,
-                source.language);
-        }
-        for (auto& connection : instance.connections) {
-            substitute_parameters(
-                connection.value,
-                result.environment,
-                domains,
-                source.language);
-        }
-    }
+    substitute_parameters(
+        result.unit.instances,
+        result.environment,
+        domains,
+        source.language);
+    substitute_parameters(
+        result.unit.conditional_generates,
+        result.environment,
+        domains,
+        source.language);
+    expand_conditional_generates(
+        result.unit.conditional_generates,
+        result.environment,
+        {},
+        result.unit.instances,
+        diagnostics);
+    result.unit.conditional_generates.clear();
     return result;
 }
 

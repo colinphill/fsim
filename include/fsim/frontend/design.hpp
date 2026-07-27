@@ -261,6 +261,21 @@ struct Process {
   SourceSpan span;
 };
 
+/// Elaboration-time conditional hierarchy region. The current executable
+/// subset admits nested module/entity instances in each branch; later
+/// frontend work extends the same region node with declarations and
+/// concurrent behavior without changing selection semantics.
+struct ConditionalGenerate {
+  std::string then_scope;
+  std::string else_scope;
+  Expression condition;
+  std::vector<Instance> then_instances;
+  std::vector<Instance> else_instances;
+  std::vector<ConditionalGenerate> then_generates;
+  std::vector<ConditionalGenerate> else_generates;
+  SourceSpan span;
+};
+
 enum class VhdlContextItemKind {
   LibraryClause,
   UseClause,
@@ -298,6 +313,7 @@ struct DesignUnit {
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;
   std::vector<Instance> instances;
+  std::vector<ConditionalGenerate> conditional_generates;
   SourceSpan span;
 };
 

@@ -24,7 +24,7 @@ The architectural invariants are:
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots plus include/macro ancestry are current for Verilog/SV; VHDL source spans are current |
 | Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers plus a bounded multi-root SV preprocessor are current; typed semantic HIR is partial |
-| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, construction-actual transfer across VHDL/SV bindings, explicit mixed bindings, port aliasing, and boundary checks are current; general generic/parameter typing, SystemC construction-parameter transfer, and complete driver semantics are planned |
+| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, conditional instance-generate expansion, construction-actual transfer across all three languages, explicit mixed bindings, port aliasing, and boundary checks are current; general generic/parameter typing and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
@@ -41,12 +41,16 @@ The compact elaborated design now assigns a dense specialization ID to every
 instantiated unit occurrence and records its canonical unit identity, instance
 path, directly owned process IDs, and canonical bounded VHDL generic or
 SystemVerilog parameter/localparam values. Those values distinguish occurrence
-and native-cache identity. Complete generic/parameter typing, reusable
-code-specialization deduplication, and typed construction-parameter transfer
-through SystemC factories remain planned.
+and native-cache identity. Typed bounded scalar construction values also cross
+SystemC factory boundaries in both directions. Complete generic/parameter
+typing and reusable code-specialization deduplication remain planned.
 
-The current hierarchy builder recursively follows simple VHDL or SV instance
-nodes. Same-language children resolve within the parsed units. A manifest
+The current hierarchy builder recursively follows direct VHDL/SV instances
+and bounded conditional instance-generate regions. Generate conditions are
+constant-evaluated after generic/parameter substitution for each occurrence;
+only the selected branch enters DesignIR, and its declared block label becomes
+part of the stable instance path used by explicit mixed-language bindings.
+Same-language children resolve within the parsed units. A manifest
 binding may override an instance with a language-qualified VHDL or SV target;
 the builder then connects named or positional whole-signal actuals by aliasing
 the child port ID to the parent signal ID. It diagnoses missing or duplicate
@@ -60,9 +64,9 @@ target declaration is VHDL; a VHDL name that would match multiple distinct
 case-sensitive Verilog/SystemVerilog parameters is rejected as ambiguous.
 The association syntax owns ordering legality, so VHDL may use positional
 actuals followed by named actuals while Verilog/SystemVerilog may not mix the
-two forms. Cross-SystemC construction parameters, expression port actuals,
-unpacked/record boundaries, and actual multi-driver resolution remain outside
-this slice.
+two forms. Typed scalar construction actuals also cross SystemC factories in
+both directions. Expression port actuals, unpacked/record boundaries, and
+actual multi-driver resolution remain outside this slice.
 
 The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a

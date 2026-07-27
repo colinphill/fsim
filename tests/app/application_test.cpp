@@ -773,6 +773,41 @@ begin
 end architecture;
 )";
   }
+  const auto generated_mixed_sv_top_source =
+      directory / "generated_mixed_sv_top.sv";
+  {
+    std::ofstream output(generated_mixed_sv_top_source);
+    output << R"(
+module generated_local_leaf #(
+  parameter WIDTH = 4,
+  parameter VALUE = 3
+) (
+  output logic [WIDTH - 1:0] q
+);
+  initial q = VALUE;
+endmodule
+
+module generated_mixed_sv_top #(
+  parameter ENABLE_FOREIGN = 1
+);
+  logic [3:0] q;
+  generate
+    if (ENABLE_FOREIGN) begin : foreign_branch
+      vhdl_generated_bound #(
+        .WIDTH(4),
+        .VALUE(9)
+      ) child(.q(q));
+    end else begin : local_branch
+      generated_local_leaf #(
+        .WIDTH(4),
+        .VALUE(3)
+      ) child(.q(q));
+    end
+  endgenerate
+  initial #1 $finish;
+endmodule
+)";
+  }
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -4791,6 +4826,123 @@ end architecture rtl;
   assert(
       vhdl_to_sv_actual_warm.simulation.native_cache.misses
       == 0);
+#endif
+
+  // A selected generate branch contributes its label to the stable hierarchy
+  // path. Explicit bindings therefore address generated foreign instances
+  // without making language-dependent guesses.
+  auto generated_mixed_config = config;
+  generated_mixed_config.project.name =
+      "generated-mixed-hierarchy-test";
+  generated_mixed_config.project.top =
+      "sv:work.generated_mixed_sv_top";
+  generated_mixed_config.build.optimization =
+      fsim::project::Optimization::o2;
+  generated_mixed_config.build.cache_path =
+      directory / "generated-mixed-hierarchy-cache";
+  generated_mixed_config.source_sets.clear();
+  fsim::project::SourceSet generated_mixed_vhdl_sources;
+  generated_mixed_vhdl_sources.language =
+      fsim::project::Language::vhdl;
+  generated_mixed_vhdl_sources.standard = "2008";
+  generated_mixed_vhdl_sources.library = "work";
+  generated_mixed_vhdl_sources.compilation_unit = "file";
+  generated_mixed_vhdl_sources.files = {
+      vhdl_generic_entity_source,
+      vhdl_generic_architecture_source,
+  };
+  generated_mixed_config.source_sets.push_back(
+      std::move(generated_mixed_vhdl_sources));
+  fsim::project::SourceSet generated_mixed_sv_sources;
+  generated_mixed_sv_sources.language =
+      fsim::project::Language::system_verilog;
+  generated_mixed_sv_sources.standard = "2017";
+  generated_mixed_sv_sources.library = "work";
+  generated_mixed_sv_sources.compilation_unit = "file";
+  generated_mixed_sv_sources.files = {
+      generated_mixed_sv_top_source};
+  generated_mixed_config.source_sets.push_back(
+      std::move(generated_mixed_sv_sources));
+  generated_mixed_config.bindings = {
+      {"generated_mixed_sv_top.foreign_branch.child",
+       "vhdl:work.vhdl_generic_child(rtl)",
+       std::nullopt},
+  };
+  const auto run_generated_mixed =
+      [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            generated_mixed_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 2);
+        assert(project->specialization_cache_keys.size() == 2);
+        ParameterRun result;
+        for (std::size_t index = 0;
+             index < project->design.specializations().size();
+             ++index) {
+          const auto& specialization =
+              project->design.specializations()[index];
+          result.keys.emplace_back(
+              specialization.instance,
+              project->specialization_cache_keys[index]);
+          if (specialization.instance
+              == "generated_mixed_sv_top.foreign_branch.child") {
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"width", "4"},
+                    {"value", "9"},
+                    {"last", "3"}}));
+          }
+        }
+        result.simulation =
+            capture_simulation(std::move(*project), engine);
+        return result;
+      };
+
+  const auto generated_mixed_reference =
+      run_generated_mixed(
+          fsim::app::SimulationEngine::interpreter);
+  const auto generated_mixed_cold =
+      run_generated_mixed(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      generated_mixed_reference.simulation,
+      generated_mixed_cold.simulation);
+  assert(
+      generated_mixed_cold.simulation.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(generated_mixed_cold.simulation.result.time == 1);
+  assert((
+      generated_mixed_cold.simulation.final_values
+      == std::vector<std::string>{"1001"}));
+  assert(generated_mixed_cold.simulation.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      generated_mixed_cold.simulation.compiled_processes == 2);
+  assert(
+      generated_mixed_cold.simulation.compiled_modules == 2);
+  assert(
+      generated_mixed_cold.simulation.native_cache.hits == 0);
+  assert(
+      generated_mixed_cold.simulation.native_cache.misses == 2);
+  assert(
+      generated_mixed_cold.simulation.native_cache.stores == 2);
+#endif
+  const auto generated_mixed_warm =
+      run_generated_mixed(
+          fsim::app::SimulationEngine::compiled);
+  assert(generated_mixed_warm.keys == generated_mixed_cold.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      generated_mixed_warm.simulation.native_cache.hits == 2);
+  assert(
+      generated_mixed_warm.simulation.native_cache.misses == 0);
 #endif
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit

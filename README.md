@@ -42,6 +42,8 @@ The current tree contains:
 - recursive VHDL/SV instance elaboration in both hierarchy directions with
   explicit cross-language bindings, whole-signal port aliasing, and boundary
   validation;
+- specialization-time VHDL and SystemVerilog conditional instance-generate
+  expansion with labeled generated scopes retained in mixed binding paths;
 - lowering of scalar and common packed operations into SimIR;
 - bounded source-level VHDL `wait for`/`wait on` and Verilog/SystemVerilog
   integer-delay, any-change, `posedge`, and `negedge` procedural event
@@ -131,6 +133,10 @@ typed factory schemas also carry the reverse HDL-to-SystemC direction for the
 bounded scalar subset. The common hierarchy walk evaluates source-language
 actuals, exposes validated canonical values to constructors, and only then
 checks parameter-dependent ports.
+
+VHDL `if`/`else generate` and SystemVerilog `generate if` instance branches
+are evaluated per specialization; selected block labels form stable hierarchy
+components, including for explicit bindings to or from SystemC factories.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

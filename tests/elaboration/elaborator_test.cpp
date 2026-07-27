@@ -732,6 +732,230 @@ end architecture;
     assert(has_diagnostic(
         ambiguous_actual, "FSIM-ELAB-PARAM-009"));
 
+    auto generated_sv = fsim::frontend::parse_text(
+        "generated-mixed.sv",
+        R"(
+module generated_sv_leaf #(
+  parameter VALUE = 3
+) (
+  output logic [3:0] q
+);
+  initial q = VALUE;
+endmodule
+
+module generated_sv_true #(
+  parameter ENABLED = 1
+) (
+  output logic [3:0] q
+);
+  generate
+    if (ENABLED) begin : foreign_branch
+      generated_foreign #(.VALUE(9)) child(.q(q));
+    end else begin : local_branch
+      if (1) begin : nested_branch
+        generated_sv_leaf #(.VALUE(3)) child(.q(q));
+      end else begin : unused_nested_branch
+        generated_sv_leaf #(.VALUE(4)) child(.q(q));
+      end
+    end
+  endgenerate
+endmodule
+
+module generated_sv_false #(
+  parameter ENABLED = 0
+) (
+  output logic [3:0] q
+);
+  generate
+    if (ENABLED) begin : foreign_branch
+      generated_foreign #(.VALUE(9)) child(.q(q));
+    end else begin : local_branch
+      if (1) begin : nested_branch
+        generated_sv_leaf #(.VALUE(3)) child(.q(q));
+      end else begin : unused_nested_branch
+        generated_sv_leaf #(.VALUE(4)) child(.q(q));
+      end
+    end
+  endgenerate
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    auto generated_vhdl = fsim::frontend::parse_text(
+        "generated-mixed.vhd",
+        R"(
+entity generated_vhdl_leaf is
+  generic (
+    value : natural := 1
+  );
+  port (
+    q : out unsigned(3 downto 0)
+  );
+end entity;
+architecture rtl of generated_vhdl_leaf is
+begin
+  q <= value;
+end architecture;
+
+entity generated_vhdl_top is
+  generic (
+    enabled : boolean := true
+  );
+  port (
+    q : out unsigned(3 downto 0)
+  );
+end entity;
+architecture rtl of generated_vhdl_top is
+begin
+  selection: if enabled generate
+    nested: if enabled generate
+      child: entity work.generated_foreign(rtl)
+        generic map (
+          value => 6
+        )
+        port map (
+          q => q
+        );
+    else generate
+      child: entity work.generated_vhdl_leaf(rtl)
+        generic map (
+          value => 7
+        )
+        port map (
+          q => q
+        );
+    end generate nested;
+  else generate
+    child: entity work.generated_vhdl_leaf(rtl)
+      generic map (
+        value => 2
+      )
+      port map (
+        q => q
+      );
+  end generate selection;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(generated_sv.ok());
+    assert(generated_vhdl.ok());
+    fsim::frontend::ParsedDesign generated_design =
+        std::move(generated_sv.design);
+    generated_design.units.insert(
+        generated_design.units.end(),
+        std::make_move_iterator(
+            generated_vhdl.design.units.begin()),
+        std::make_move_iterator(
+            generated_vhdl.design.units.end()));
+
+    const std::vector<fsim::elaboration::Binding>
+        generated_sv_binding{
+            {"generated_sv_true.foreign_branch.child",
+             "vhdl:work.generated_vhdl_leaf(rtl)",
+             std::nullopt},
+        };
+    const auto generated_sv_true =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_true",
+            generated_sv_binding);
+    assert(generated_sv_true.ok());
+    assert(
+        generated_sv_true.design->specializations().size() == 2);
+    assert(
+        generated_sv_true.design->specializations()[1].instance
+        == "generated_sv_true.foreign_branch.child");
+    const auto generated_sv_true_q =
+        generated_sv_true.design->find_signal("q");
+    assert(generated_sv_true_q);
+    auto generated_sv_true_interpreter =
+        generated_sv_true.design->create_interpreter();
+    assert(
+        generated_sv_true_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_sv_true_interpreter
+            ->signal_value(*generated_sv_true_q)
+            .to_msb_string()
+        == "1001");
+
+    const auto generated_sv_false =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_false");
+    assert(generated_sv_false.ok());
+    assert(
+        generated_sv_false.design->specializations()[1].instance
+        == "generated_sv_false.local_branch.nested_branch.child");
+    assert(
+        !generated_sv_false.design->find_signal(
+            "generated_sv_false.foreign_branch.child.q"));
+    const auto generated_sv_false_q =
+        generated_sv_false.design->find_signal("q");
+    assert(generated_sv_false_q);
+    auto generated_sv_false_interpreter =
+        generated_sv_false.design->create_interpreter();
+    assert(
+        generated_sv_false_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_sv_false_interpreter
+            ->signal_value(*generated_sv_false_q)
+            .to_msb_string()
+        == "0011");
+
+    const std::vector<fsim::elaboration::Binding>
+        generated_vhdl_binding{
+            {"generated_vhdl_top.selection.nested.child",
+             "sv:work.generated_sv_leaf",
+             std::nullopt},
+        };
+    const auto generated_vhdl_top =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_top(rtl)",
+            generated_vhdl_binding);
+    assert(generated_vhdl_top.ok());
+    assert(
+        generated_vhdl_top.design->specializations()[1].instance
+        == "generated_vhdl_top.selection.nested.child");
+    assert((
+        generated_vhdl_top.design->specializations()[1]
+            .parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"VALUE", "6"}}));
+    const auto generated_vhdl_q =
+        generated_vhdl_top.design->find_signal("q");
+    assert(generated_vhdl_q);
+    auto generated_vhdl_interpreter =
+        generated_vhdl_top.design->create_interpreter();
+    assert(
+        generated_vhdl_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_vhdl_interpreter
+            ->signal_value(*generated_vhdl_q)
+            .to_msb_string()
+        == "0110");
+
+    auto unevaluable_generate_design = generated_design;
+    const auto unevaluable_unit = std::find_if(
+        unevaluable_generate_design.units.begin(),
+        unevaluable_generate_design.units.end(),
+        [](const auto& unit) {
+          return unit.name == "generated_sv_true";
+        });
+    assert(unevaluable_unit != unevaluable_generate_design.units.end());
+    assert(!unevaluable_unit->conditional_generates.empty());
+    unevaluable_unit->conditional_generates.front().condition.text =
+        "MISSING_GENERATE_CONSTANT";
+    const auto unevaluable_generate =
+        fsim::elaboration::elaborate(
+            unevaluable_generate_design,
+            "sv:work.generated_sv_true");
+    assert(!unevaluable_generate.ok());
+    assert(has_diagnostic(
+        unevaluable_generate, "FSIM-ELAB-GEN-001"));
+
     constexpr std::string_view vhdl_source = R"(
 entity counter_vhdl is
   port (
