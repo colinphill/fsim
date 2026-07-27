@@ -34,6 +34,8 @@ struct CheckedSource {
   };
   /// Exact transitive preprocessing inputs, in deterministic first-use order.
   std::vector<Dependency> dependencies;
+  /// Digest of every ordered root/include snapshot in this compilation unit.
+  std::string compilation_unit_digest;
 };
 
 struct CheckedProject {
@@ -56,8 +58,9 @@ struct BuiltProject {
   bool cache_hit{};
 };
 
-/// Parse all HDL source files in deterministic manifest order. Files may be
-/// analyzed concurrently, but diagnostics and units are merged in source order.
+/// Parse all HDL source files in deterministic manifest order. Independent
+/// compilation units may be analyzed concurrently; roots within a shared
+/// Verilog/SV unit remain ordered. Units are merged back into source order.
 [[nodiscard]] std::optional<CheckedProject> check_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics);

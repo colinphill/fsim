@@ -1561,6 +1561,9 @@ end architecture rtl;
   assert(checked->hdl_sources.size() == 1);
   assert(checked->hdl_sources.front().path == source);
   assert(checked->hdl_sources.front().content_digest.size() == 64);
+  assert(
+      checked->hdl_sources.front().compilation_unit_digest.size()
+      == 64);
   assert(checked->parsed.units.size() == 2);
 
   auto first = fsim::app::build_project(config, diagnostics);
@@ -4057,6 +4060,153 @@ endmodule
   assert(
       preprocessor_hybrid_b.final_values
       == std::vector<std::string>{"0101"});
+
+  const auto shared_macro_source =
+      directory / "shared-macros.sv";
+  const auto shared_module_source =
+      directory / "shared-module.sv";
+  const auto write_shared_macro =
+      [&](const std::string_view value) {
+        std::ofstream output(
+            shared_macro_source, std::ios::binary);
+        output << "`define SHARED_RUNTIME_VALUE "
+               << value << '\n';
+        assert(output.good());
+      };
+  write_shared_macro("4'b0110");
+  {
+    std::ofstream output(
+        shared_module_source, std::ios::binary);
+    output << R"(module shared_preprocessor_app;
+  logic [3:0] value;
+  initial begin
+    value = `SHARED_RUNTIME_VALUE;
+    #1 $finish;
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+  auto shared_preprocessor_config = config;
+  shared_preprocessor_config.project.name =
+      "shared-preprocessor-test";
+  shared_preprocessor_config.project.top =
+      "sv:work.shared_preprocessor_app";
+  shared_preprocessor_config.build.cache_path =
+      directory / "shared-preprocessor-cache";
+  shared_preprocessor_config.source_sets.clear();
+  fsim::project::SourceSet shared_preprocessor_sources;
+  shared_preprocessor_sources.language =
+      fsim::project::Language::system_verilog;
+  shared_preprocessor_sources.standard = "2017";
+  shared_preprocessor_sources.library = "work";
+  shared_preprocessor_sources.compilation_unit = "source-set";
+  shared_preprocessor_sources.files = {
+      shared_macro_source, shared_module_source};
+  shared_preprocessor_config.source_sets.push_back(
+      shared_preprocessor_sources);
+
+  fsim::diagnostic::Engine shared_check_diagnostics;
+  const auto shared_checked = fsim::app::check_project(
+      shared_preprocessor_config, shared_check_diagnostics);
+  assert(shared_checked);
+  assert(shared_checked->hdl_sources.size() == 2);
+  assert(
+      !shared_checked->hdl_sources[0]
+           .compilation_unit_digest.empty());
+  assert(
+      shared_checked->hdl_sources[0].compilation_unit_digest
+      == shared_checked->hdl_sources[1].compilation_unit_digest);
+
+  const auto run_shared_preprocessor =
+      [&](const fsim::project::Config& run_config,
+          const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            run_config, run_diagnostics);
+        assert(project);
+        assert(project->specialization_cache_keys.size() == 1);
+        auto key = project->specialization_cache_keys.front();
+        auto capture =
+            capture_simulation(std::move(*project), engine);
+        return std::pair{
+            std::move(key), std::move(capture)};
+      };
+  auto [shared_key_a, shared_reference_a] =
+      run_shared_preprocessor(
+          shared_preprocessor_config,
+          fsim::app::SimulationEngine::interpreter);
+  auto [shared_key_a_warm, shared_hybrid_a] =
+      run_shared_preprocessor(
+          shared_preprocessor_config,
+          fsim::app::SimulationEngine::compiled);
+  assert(shared_key_a == shared_key_a_warm);
+  compare_captures(shared_reference_a, shared_hybrid_a);
+  assert(
+      shared_hybrid_a.final_values
+      == std::vector<std::string>{"0110"});
+
+  write_shared_macro("4'b1001");
+  auto [shared_key_b, shared_reference_b] =
+      run_shared_preprocessor(
+          shared_preprocessor_config,
+          fsim::app::SimulationEngine::interpreter);
+  auto [shared_key_b_warm, shared_hybrid_b] =
+      run_shared_preprocessor(
+          shared_preprocessor_config,
+          fsim::app::SimulationEngine::compiled);
+  assert(shared_key_b == shared_key_b_warm);
+  assert(shared_key_b != shared_key_a);
+  compare_captures(shared_reference_b, shared_hybrid_b);
+  assert(
+      shared_hybrid_b.final_values
+      == std::vector<std::string>{"1001"});
+
+  auto independent_file_config = shared_preprocessor_config;
+  independent_file_config.source_sets.front().compilation_unit =
+      "file";
+  fsim::diagnostic::Engine independent_file_diagnostics;
+  assert(
+      !fsim::app::check_project(
+          independent_file_config,
+          independent_file_diagnostics));
+  assert(std::any_of(
+      independent_file_diagnostics.diagnostics().begin(),
+      independent_file_diagnostics.diagnostics().end(),
+      [](const fsim::diagnostic::Diagnostic& diagnostic) {
+        return diagnostic.code == "FSIM-SV-PP-028";
+      }));
+
+  auto combined_preprocessor_config =
+      shared_preprocessor_config;
+  combined_preprocessor_config.project.name =
+      "combined-preprocessor-test";
+  combined_preprocessor_config.build.cache_path =
+      directory / "combined-preprocessor-cache";
+  combined_preprocessor_config.source_sets.clear();
+  auto combined_definitions = shared_preprocessor_sources;
+  combined_definitions.library = "definitions";
+  combined_definitions.compilation_unit = "combined";
+  combined_definitions.files = {shared_macro_source};
+  auto combined_module = shared_preprocessor_sources;
+  combined_module.compilation_unit = "combined";
+  combined_module.files = {shared_module_source};
+  combined_preprocessor_config.source_sets = {
+      std::move(combined_definitions),
+      std::move(combined_module)};
+  auto [combined_key, combined_reference] =
+      run_shared_preprocessor(
+          combined_preprocessor_config,
+          fsim::app::SimulationEngine::interpreter);
+  auto [combined_key_warm, combined_hybrid] =
+      run_shared_preprocessor(
+          combined_preprocessor_config,
+          fsim::app::SimulationEngine::compiled);
+  assert(combined_key == combined_key_warm);
+  compare_captures(combined_reference, combined_hybrid);
+  assert(
+      combined_hybrid.final_values
+      == std::vector<std::string>{"1001"});
 
   fsim::diagnostic::Engine mixed_diagnostics;
   const auto mixed_manifest =

@@ -18,9 +18,14 @@
 namespace fsim::frontend {
 namespace {
 
+struct MacroParameter {
+  std::string name;
+  std::optional<std::vector<Token>> default_value;
+};
+
 struct Macro {
   std::string name;
-  std::optional<std::vector<std::string>> parameters;
+  std::optional<std::vector<MacroParameter>> parameters;
   std::vector<Token> replacement;
   SourceSpan definition;
 };
@@ -80,25 +85,33 @@ class VerilogPreprocessor {
   }
 
   PreprocessResult run(const std::filesystem::path& root) {
-    if (language_ != Language::Verilog2005
-        && language_ != Language::SystemVerilog2017) {
+    auto compilation = run(
+        std::vector<std::filesystem::path>{root});
+    return single_result(std::move(compilation));
+  }
+
+  PreprocessCompilationUnitResult run(
+      const std::vector<std::filesystem::path>& roots) {
+    const auto fallback =
+        roots.empty()
+            ? std::filesystem::path{"<empty>.sv"}
+            : roots.back();
+    if (!valid_language(fallback.string())) {
+      return finish_compilation_unit(fallback);
+    }
+    if (roots.empty()) {
       diagnose(
-          "FSIM-SV-PP-001",
-          "the Verilog preprocessor requires Verilog-2005 or "
-          "SystemVerilog-2017 input",
-          {root.string(), {}, {}});
-      return finish(root);
+          "FSIM-SV-PP-031",
+          "a Verilog compilation unit requires at least one root file",
+          {fallback.string(), {}, {}});
+      return finish_compilation_unit(fallback);
     }
     define_command_line_macros();
-    process_file(normalized_path(root), 0);
-    for (const auto& conditional : conditionals_) {
-      diagnose(
-          "FSIM-SV-PP-002",
-          "unterminated conditional compilation block",
-          conditional.opening);
+    for (const auto& root : roots) {
+      process_root(normalized_path(root));
     }
-    conditionals_.clear();
-    return finish(root);
+    diagnose_open_conditionals();
+    return finish_compilation_unit(roots.back());
   }
 
   PreprocessResult run(SourceText source) {
@@ -106,21 +119,37 @@ class VerilogPreprocessor {
         source.name.empty()
             ? std::filesystem::path{"<memory>.sv"}
             : std::filesystem::path{source.name});
-    if (language_ != Language::Verilog2005
-        && language_ != Language::SystemVerilog2017) {
-      diagnose(
-          "FSIM-SV-PP-001",
-          "the Verilog preprocessor requires Verilog-2005 or "
-          "SystemVerilog-2017 input",
-          {source.name, {}, {}});
-      return finish(root);
+    if (!valid_language(source.name)) {
+      return single_result(
+          finish_compilation_unit(root));
     }
     define_command_line_macros();
     const auto name = root.generic_string();
     source_snapshots_.emplace(name, std::move(source.text));
-    dependencies_.push_back(
+    inputs_.push_back(
         {root, source_snapshots_.find(name)->second});
-    process_file(root, 0);
+    process_root(root);
+    diagnose_open_conditionals();
+    return single_result(
+        finish_compilation_unit(root));
+  }
+
+ private:
+  [[nodiscard]] bool valid_language(
+      const std::string& source_name) {
+    if (language_ == Language::Verilog2005
+        || language_ == Language::SystemVerilog2017) {
+      return true;
+    }
+    diagnose(
+        "FSIM-SV-PP-001",
+        "the Verilog preprocessor requires Verilog-2005 or "
+        "SystemVerilog-2017 input",
+        {source_name, {}, {}});
+    return false;
+  }
+
+  void diagnose_open_conditionals() {
     for (const auto& conditional : conditionals_) {
       diagnose(
           "FSIM-SV-PP-002",
@@ -128,15 +157,28 @@ class VerilogPreprocessor {
           conditional.opening);
     }
     conditionals_.clear();
-    return finish(root);
   }
 
- private:
+  void process_root(const std::filesystem::path& root) {
+    current_dependency_names_.clear();
+    current_dependencies_.clear();
+    process_file(root, 0);
+    const auto found =
+        source_snapshots_.find(root.generic_string());
+    roots_.push_back({
+        root,
+        found == source_snapshots_.end()
+            ? std::string{}
+            : found->second,
+        std::move(current_dependencies_)});
+  }
+
   [[nodiscard]] bool active() const noexcept {
     return conditionals_.empty() || conditionals_.back().active;
   }
 
-  PreprocessResult finish(const std::filesystem::path& root) {
+  PreprocessCompilationUnitResult finish_compilation_unit(
+      const std::filesystem::path& root) {
     SourceSpan eof_span{normalized_path(root).generic_string(), {}, {}};
     if (root_eof_) {
       eof_span = root_eof_->span;
@@ -145,7 +187,24 @@ class VerilogPreprocessor {
         Token{TokenKind::EndOfFile, {}, std::move(eof_span), {}});
     return {
         LexResult{std::move(output_), std::move(diagnostics_)},
-        std::move(dependencies_)};
+        std::move(roots_),
+        std::move(inputs_)};
+  }
+
+  static PreprocessResult single_result(
+      PreprocessCompilationUnitResult compilation) {
+    PreprocessResult result;
+    result.lexed = std::move(compilation.lexed);
+    if (!compilation.roots.empty()) {
+      auto& root = compilation.roots.front();
+      result.dependencies.push_back(
+          {std::move(root.path), std::move(root.contents)});
+      result.dependencies.insert(
+          result.dependencies.end(),
+          std::make_move_iterator(root.dependencies.begin()),
+          std::make_move_iterator(root.dependencies.end()));
+    }
+    return result;
   }
 
   void diagnose(
@@ -245,7 +304,12 @@ class VerilogPreprocessor {
       snapshot = source_snapshots_
                      .emplace(name, std::move(*contents))
                      .first;
-      dependencies_.push_back({normalized, snapshot->second});
+      inputs_.push_back({normalized, snapshot->second});
+    }
+    if (depth != 0
+        && current_dependency_names_.insert(name).second) {
+      current_dependencies_.push_back(
+          {normalized, snapshot->second});
     }
 
     auto lexed = lex(
@@ -539,7 +603,7 @@ class VerilogPreprocessor {
     }
     const auto& name = tokens[begin];
     std::size_t replacement_begin = begin + 1;
-    std::optional<std::vector<std::string>> parameters;
+    std::optional<std::vector<MacroParameter>> parameters;
     if (replacement_begin < end
         && tokens[replacement_begin].kind == TokenKind::LeftParen
         && name.span.source_name
@@ -548,41 +612,103 @@ class VerilogPreprocessor {
             == tokens[replacement_begin].span.begin.offset) {
       parameters.emplace();
       ++replacement_begin;
-      bool expect_parameter = true;
       while (replacement_begin < end
              && tokens[replacement_begin].kind
                  != TokenKind::RightParen) {
-        if (!expect_parameter
-            || tokens[replacement_begin].kind
-                != TokenKind::Identifier) {
+        if (tokens[replacement_begin].kind
+            != TokenKind::Identifier) {
           diagnose(
               "FSIM-SV-PP-016",
               "function-like macro parameter list is malformed",
               tokens[replacement_begin].span);
           return;
         }
-        const auto parameter = tokens[replacement_begin++].text;
-        if (std::find(
-                parameters->begin(), parameters->end(), parameter)
-            != parameters->end()) {
+        MacroParameter parameter;
+        parameter.name = tokens[replacement_begin++].text;
+        if (std::any_of(
+                parameters->begin(),
+                parameters->end(),
+                [&](const MacroParameter& existing) {
+                  return existing.name == parameter.name;
+                })) {
           diagnose(
               "FSIM-SV-PP-017",
-              "duplicate macro parameter '" + parameter + "'",
+              "duplicate macro parameter '" + parameter.name + "'",
               tokens[replacement_begin - 1].span);
           return;
         }
-        parameters->push_back(parameter);
-        expect_parameter = false;
+        if (replacement_begin < end
+            && tokens[replacement_begin].kind
+                == TokenKind::Assign) {
+          ++replacement_begin;
+          parameter.default_value.emplace();
+          std::size_t parentheses = 0;
+          std::size_t brackets = 0;
+          std::size_t braces = 0;
+          while (replacement_begin < end) {
+            const auto& token = tokens[replacement_begin];
+            if (parentheses == 0 && brackets == 0 && braces == 0
+                && (token.kind == TokenKind::Comma
+                    || token.kind == TokenKind::RightParen)) {
+              break;
+            }
+            if (token.kind == TokenKind::LeftParen) {
+              ++parentheses;
+            } else if (
+                token.kind == TokenKind::RightParen
+                && parentheses != 0) {
+              --parentheses;
+            } else if (token.kind == TokenKind::LeftBracket) {
+              ++brackets;
+            } else if (
+                token.kind == TokenKind::RightBracket
+                && brackets != 0) {
+              --brackets;
+            } else if (token.kind == TokenKind::LeftBrace) {
+              ++braces;
+            } else if (
+                token.kind == TokenKind::RightBrace
+                && braces != 0) {
+              --braces;
+            }
+            if (!tokens[replacement_begin].text.empty()
+                && tokens[replacement_begin].text.front() == '\\'
+                && tokens[replacement_begin].text.find('\n')
+                    != std::string::npos) {
+              ++replacement_begin;
+              continue;
+            }
+            parameter.default_value->push_back(
+                tokens[replacement_begin++]);
+          }
+        }
+        parameters->push_back(std::move(parameter));
         if (replacement_begin < end
             && tokens[replacement_begin].kind == TokenKind::Comma) {
           ++replacement_begin;
-          expect_parameter = true;
+          if (replacement_begin >= end
+              || tokens[replacement_begin].kind
+                  == TokenKind::RightParen) {
+            diagnose(
+                "FSIM-SV-PP-016",
+                "function-like macro parameter list has a trailing comma",
+                tokens[replacement_begin - 1].span);
+            return;
+          }
+        } else if (
+            replacement_begin < end
+            && tokens[replacement_begin].kind
+                != TokenKind::RightParen) {
+          diagnose(
+              "FSIM-SV-PP-016",
+              "function-like macro parameters must be comma-separated",
+              tokens[replacement_begin].span);
+          return;
         }
       }
       if (replacement_begin >= end
           || tokens[replacement_begin].kind
-              != TokenKind::RightParen
-          || (expect_parameter && !parameters->empty())) {
+              != TokenKind::RightParen) {
         diagnose(
             "FSIM-SV-PP-018",
             "unterminated function-like macro parameter list",
@@ -897,16 +1023,38 @@ class VerilogPreprocessor {
     if (macro.parameters) {
       arguments =
           parse_arguments(tokens, index, macro, name_token);
-      if (arguments.size() != macro.parameters->size()) {
+      const auto provided_arguments = arguments.size();
+      if (provided_arguments > macro.parameters->size()) {
         diagnose(
             "FSIM-SV-PP-030",
             "macro `" + macro.name + "' expects "
                 + std::to_string(macro.parameters->size())
                 + " argument(s), received "
-                + std::to_string(arguments.size()),
+                + std::to_string(provided_arguments),
             invocation_span,
             inherited_stack);
         return {};
+      }
+      arguments.resize(macro.parameters->size());
+      for (std::size_t parameter = 0;
+           parameter < macro.parameters->size(); ++parameter) {
+        const bool missing = parameter >= provided_arguments;
+        const bool omitted =
+            missing || arguments[parameter].empty();
+        if (omitted
+            && (*macro.parameters)[parameter].default_value) {
+          arguments[parameter] =
+              *(*macro.parameters)[parameter].default_value;
+        } else if (missing) {
+          diagnose(
+              "FSIM-SV-PP-030",
+              "macro `" + macro.name
+                  + "' is missing required argument '"
+                  + (*macro.parameters)[parameter].name + "'",
+              invocation_span,
+              inherited_stack);
+          return {};
+        }
       }
     }
 
@@ -934,11 +1082,13 @@ class VerilogPreprocessor {
               1, string_token.text.size() - 3);
           const auto parameter_match =
               macro.parameters
-                  ? std::find(
+                  ? std::find_if(
                         macro.parameters->begin(),
                         macro.parameters->end(),
-                        parameter_name)
-                  : std::vector<std::string>::const_iterator{};
+                        [&](const MacroParameter& parameter) {
+                          return parameter.name == parameter_name;
+                        })
+                  : std::vector<MacroParameter>::const_iterator{};
           if (macro.parameters
               && parameter_match != macro.parameters->end()) {
             const auto parameter = static_cast<std::size_t>(
@@ -973,10 +1123,12 @@ class VerilogPreprocessor {
       std::optional<std::size_t> parameter;
       if (macro.parameters
           && replacement.kind == TokenKind::Identifier) {
-        const auto match = std::find(
+        const auto match = std::find_if(
             macro.parameters->begin(),
             macro.parameters->end(),
-            replacement.text);
+            [&](const MacroParameter& candidate) {
+              return candidate.name == replacement.text;
+            });
         if (match != macro.parameters->end()) {
           parameter = static_cast<std::size_t>(
               std::distance(macro.parameters->begin(), match));
@@ -1013,7 +1165,10 @@ class VerilogPreprocessor {
   std::optional<SourceSpan> include_invocation_;
   std::vector<std::string> include_ancestry_;
   std::unordered_map<std::string, std::string> source_snapshots_;
-  std::vector<PreprocessedDependency> dependencies_;
+  std::unordered_set<std::string> current_dependency_names_;
+  std::vector<PreprocessedDependency> current_dependencies_;
+  std::vector<PreprocessedRoot> roots_;
+  std::vector<PreprocessedDependency> inputs_;
   std::vector<Token> output_;
   std::vector<Diagnostic> diagnostics_;
   std::optional<Token> root_eof_;
@@ -1034,6 +1189,13 @@ PreprocessResult preprocess_verilog(
     const PreprocessorOptions& options) {
   return VerilogPreprocessor(language, options).run(
       std::move(source));
+}
+
+PreprocessCompilationUnitResult preprocess_verilog_compilation_unit(
+    const std::vector<std::filesystem::path>& paths,
+    const Language language,
+    const PreprocessorOptions& options) {
+  return VerilogPreprocessor(language, options).run(paths);
 }
 
 }  // namespace fsim::frontend

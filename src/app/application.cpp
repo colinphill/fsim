@@ -39,6 +39,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -606,48 +607,142 @@ struct ParseInput {
   std::filesystem::path path;
   frontend::Language language{frontend::Language::SystemVerilog2017};
   std::string library{"work"};
+  std::size_t source_order{};
+};
+
+struct ParseGroup {
+  frontend::Language language{frontend::Language::SystemVerilog2017};
+  std::string standard;
+  std::vector<ParseInput> inputs;
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
 };
 
 struct ParsedSnapshot {
   frontend::ParseResult result;
-  CheckedSource source;
+  std::vector<CheckedSource> sources;
+  std::vector<std::size_t> unit_source_orders;
 };
 
-ParsedSnapshot parse_file_snapshot(const ParseInput& input) {
-  if (input.language == frontend::Language::Verilog2005
-      || input.language == frontend::Language::SystemVerilog2017) {
+bool same_source_path(
+    const std::filesystem::path& left,
+    const std::filesystem::path& right) {
+  if (left.lexically_normal() == right.lexically_normal()) {
+    return true;
+  }
+  std::error_code left_error;
+  std::error_code right_error;
+  const auto canonical_left =
+      std::filesystem::weakly_canonical(left, left_error);
+  const auto canonical_right =
+      std::filesystem::weakly_canonical(right, right_error);
+  return !left_error && !right_error
+      && canonical_left == canonical_right;
+}
+
+std::string compilation_unit_digest(
+    const std::vector<frontend::PreprocessedRoot>& roots,
+    const std::vector<frontend::PreprocessedDependency>& inputs) {
+  compiler::CacheKeyBuilder key;
+  key.add(
+      "compilation-unit-snapshot-schema",
+      "fsim-hdl-compilation-unit-v1");
+  for (const auto& root : roots) {
+    key.add(
+        "root-path",
+        root.path.lexically_normal().generic_string());
+  }
+  for (const auto& input : inputs) {
+    key.add(
+        "input-path",
+        input.path.lexically_normal().generic_string());
+    key.add(
+        "input-content",
+        support::Sha256::hex(
+            support::Sha256::digest(input.contents)));
+  }
+  return key.finish();
+}
+
+ParsedSnapshot parse_group_snapshot(const ParseGroup& group) {
+  if (group.language == frontend::Language::Verilog2005
+      || group.language == frontend::Language::SystemVerilog2017) {
     frontend::PreprocessorOptions options;
-    options.include_directories = input.include_directories;
-    options.defines = input.defines;
-    auto preprocessed = frontend::preprocess_verilog_file(
-        input.path, input.language, options);
+    options.include_directories = group.include_directories;
+    options.defines = group.defines;
+    std::vector<std::filesystem::path> paths;
+    paths.reserve(group.inputs.size());
+    for (const auto& input : group.inputs) {
+      paths.push_back(input.path);
+    }
+    auto preprocessed =
+        frontend::preprocess_verilog_compilation_unit(
+            paths, group.language, options);
     ParsedSnapshot snapshot;
-    snapshot.source.path = input.path;
-    if (!preprocessed.dependencies.empty()) {
-      const auto& root = preprocessed.dependencies.front();
-      snapshot.source.content_digest = support::Sha256::hex(
+    const auto unit_digest =
+        compilation_unit_digest(
+            preprocessed.roots, preprocessed.inputs);
+    snapshot.sources.reserve(preprocessed.roots.size());
+    for (std::size_t root_index = 0;
+         root_index < preprocessed.roots.size(); ++root_index) {
+      const auto& root = preprocessed.roots[root_index];
+      CheckedSource source;
+      source.path =
+          root_index < group.inputs.size()
+              ? group.inputs[root_index].path
+              : root.path;
+      source.content_digest = support::Sha256::hex(
           support::Sha256::digest(root.contents));
-      snapshot.source.dependencies.reserve(
-          preprocessed.dependencies.size() - 1);
-      for (std::size_t index = 1;
-           index < preprocessed.dependencies.size(); ++index) {
-        const auto& dependency = preprocessed.dependencies[index];
-        snapshot.source.dependencies.push_back({
+      source.dependencies.reserve(root.dependencies.size());
+      for (const auto& dependency : root.dependencies) {
+        source.dependencies.push_back({
             dependency.path,
             support::Sha256::hex(
                 support::Sha256::digest(dependency.contents))});
       }
+      source.compilation_unit_digest = unit_digest;
+      snapshot.sources.push_back(std::move(source));
     }
     snapshot.result = frontend::parse_verilog(
         std::move(preprocessed.lexed),
-        input.language == frontend::Language::SystemVerilog2017);
+        group.language == frontend::Language::SystemVerilog2017);
+    for (auto& unit : snapshot.result.design.units) {
+      const auto unit_source =
+          std::filesystem::path{unit.span.source_name};
+      auto source_order =
+          group.inputs.empty()
+              ? std::size_t{}
+              : group.inputs.front().source_order;
+      for (std::size_t root_index = 0;
+           root_index < snapshot.sources.size()
+           && root_index < group.inputs.size(); ++root_index) {
+        const auto& source = snapshot.sources[root_index];
+        if (same_source_path(source.path, unit_source)
+            || std::any_of(
+                source.dependencies.begin(),
+                source.dependencies.end(),
+                [&](const CheckedSource::Dependency& dependency) {
+                  return same_source_path(
+                      dependency.path, unit_source);
+                })) {
+          unit.library = group.inputs[root_index].library;
+          source_order =
+              group.inputs[root_index].source_order;
+          break;
+        }
+      }
+      snapshot.unit_source_orders.push_back(source_order);
+    }
     return snapshot;
   }
 
   ParsedSnapshot snapshot;
-  snapshot.source.path = input.path;
+  if (group.inputs.empty()) {
+    return snapshot;
+  }
+  const auto& input = group.inputs.front();
+  CheckedSource source;
+  source.path = input.path;
   std::ifstream stream(input.path, std::ios::binary);
   if (!stream) {
     snapshot.result.diagnostics.push_back({
@@ -672,11 +767,23 @@ ParsedSnapshot parse_file_snapshot(const ParseInput& input) {
     });
     return snapshot;
   }
-  snapshot.source.content_digest = support::Sha256::hex(
+  source.content_digest = support::Sha256::hex(
       support::Sha256::digest(text));
+  compiler::CacheKeyBuilder key;
+  key.add(
+      "compilation-unit-snapshot-schema",
+      "fsim-hdl-compilation-unit-v1");
+  key.add("input-path", input.path.lexically_normal().generic_string());
+  key.add("input-content", source.content_digest);
+  source.compilation_unit_digest = key.finish();
   snapshot.result = frontend::parse(
       frontend::SourceText{input.path.string(), std::move(text)},
       input.language);
+  for (auto& unit : snapshot.result.design.units) {
+    unit.library = input.library;
+    snapshot.unit_source_orders.push_back(input.source_order);
+  }
+  snapshot.sources.push_back(std::move(source));
   return snapshot;
 }
 
@@ -1184,22 +1291,6 @@ std::string target_name() {
 #endif
 }
 
-bool same_source_path(
-    const std::filesystem::path& left,
-    const std::filesystem::path& right) {
-  if (left.lexically_normal() == right.lexically_normal()) {
-    return true;
-  }
-  std::error_code left_error;
-  std::error_code right_error;
-  const auto canonical_left =
-      std::filesystem::weakly_canonical(left, left_error);
-  const auto canonical_right =
-      std::filesystem::weakly_canonical(right, right_error);
-  return !left_error && !right_error
-      && canonical_left == canonical_right;
-}
-
 std::string make_cache_key(
     const project::Config& config,
     const CheckedProject& checked,
@@ -1256,6 +1347,10 @@ std::string make_cache_key(
       key.add(
           "source-content",
           checked.hdl_sources[hdl_source_index].content_digest);
+      key.add(
+          "source-compilation-unit",
+          checked.hdl_sources[hdl_source_index]
+              .compilation_unit_digest);
       for (const auto& dependency :
            checked.hdl_sources[hdl_source_index].dependencies) {
         key.add(
@@ -1368,6 +1463,9 @@ make_specialization_cache_keys(
     key.add(
         "source-content",
         settings->checked_source->content_digest);
+    key.add(
+        "source-compilation-unit",
+        settings->checked_source->compilation_unit_digest);
     for (const auto& dependency :
          settings->checked_source->dependencies) {
       key.add(
@@ -2937,14 +3035,17 @@ bool validate_declared_time_precisions(
 std::optional<CheckedProject> check_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics) {
-  std::vector<ParseInput> inputs;
+  std::vector<ParseGroup> groups;
+  std::map<std::string, std::size_t> combined_groups;
   std::size_t systemc_source_count = 0;
+  std::size_t hdl_source_count = 0;
   for (const auto& source_set : config.source_sets) {
-    if (source_set.compilation_unit != "file") {
+    if (source_set.language == project::Language::vhdl
+        && source_set.compilation_unit != "file") {
       diagnostics.warning(
           "FSIM-FE-CU-0001",
-          "source-set compilation-unit grouping is preserved in the manifest, "
-          "but files are parsed independently in this vertical slice");
+          "VHDL files are independent analysis units; compilation_unit "
+          "grouping applies to Verilog/SystemVerilog");
     }
     if (source_set.language == project::Language::vhdl
         && (!source_set.include_directories.empty()
@@ -2958,16 +3059,57 @@ std::optional<CheckedProject> check_project(
       systemc_source_count += source_set.files.size();
       continue;
     }
-    for (const auto& file : source_set.files) {
-      inputs.push_back(
-          {file,
-           frontend_language(source_set.language),
-           source_set.library,
-           source_set.include_directories,
-           source_set.defines});
+    const auto language = frontend_language(source_set.language);
+    const auto append_files = [&](ParseGroup& group) {
+      group.include_directories.insert(
+          group.include_directories.end(),
+          source_set.include_directories.begin(),
+          source_set.include_directories.end());
+      group.defines.insert(
+          group.defines.end(),
+          source_set.defines.begin(),
+          source_set.defines.end());
+      for (const auto& file : source_set.files) {
+        group.inputs.push_back(
+            {file, language, source_set.library, hdl_source_count++});
+      }
+    };
+    if (source_set.compilation_unit == "file"
+        || source_set.language == project::Language::vhdl) {
+      for (const auto& file : source_set.files) {
+        ParseGroup group;
+        group.language = language;
+        group.standard = source_set.standard;
+        group.include_directories = source_set.include_directories;
+        group.defines = source_set.defines;
+        group.inputs.push_back(
+            {file, language, source_set.library, hdl_source_count++});
+        groups.push_back(std::move(group));
+      }
+    } else if (source_set.compilation_unit == "source-set") {
+      ParseGroup group;
+      group.language = language;
+      group.standard = source_set.standard;
+      append_files(group);
+      groups.push_back(std::move(group));
+    } else {
+      const auto key =
+          std::to_string(static_cast<unsigned>(language))
+          + '\n' + source_set.standard;
+      auto found = combined_groups.find(key);
+      if (found == combined_groups.end()) {
+        const auto index = groups.size();
+        ParseGroup group;
+        group.language = language;
+        group.standard = source_set.standard;
+        groups.push_back(std::move(group));
+        found = combined_groups.emplace(key, index).first;
+      }
+      append_files(groups[found->second]);
     }
   }
-  if (inputs.empty() && systemc_source_count == 0 && !diagnostics.has_error()) {
+  if (hdl_source_count == 0 && systemc_source_count == 0
+      && !diagnostics.has_error()) {
     diagnostics.error("FSIM-FE-0001", "the project contains no HDL source files");
   }
   if (const auto request = systemc_request(config)) {
@@ -2978,14 +3120,14 @@ std::optional<CheckedProject> check_project(
   }
 
   std::vector<std::optional<ParsedSnapshot>> parsed_inputs(
-      inputs.size());
-  std::vector<std::exception_ptr> parse_failures(inputs.size());
+      groups.size());
+  std::vector<std::exception_ptr> parse_failures(groups.size());
   std::atomic_size_t next_input{0};
   auto job_count = config.build.jobs == 0
       ? static_cast<std::size_t>(std::thread::hardware_concurrency())
       : static_cast<std::size_t>(config.build.jobs);
   job_count = std::max<std::size_t>(1, job_count);
-  job_count = std::min(job_count, inputs.size());
+  job_count = std::min(job_count, groups.size());
   std::vector<std::future<void>> workers;
   workers.reserve(job_count);
   for (std::size_t worker = 0; worker < job_count; ++worker) {
@@ -2993,12 +3135,12 @@ std::optional<CheckedProject> check_project(
       while (true) {
         const auto index =
             next_input.fetch_add(1, std::memory_order_relaxed);
-        if (index >= inputs.size()) {
+        if (index >= groups.size()) {
           return;
         }
         try {
           parsed_inputs[index] =
-              parse_file_snapshot(inputs[index]);
+              parse_group_snapshot(groups[index]);
         } catch (...) {
           parse_failures[index] = std::current_exception();
         }
@@ -3010,52 +3152,104 @@ std::optional<CheckedProject> check_project(
   }
 
   CheckedProject checked;
-  checked.source_count = inputs.size() + systemc_source_count;
-  std::set<std::string> known_units;
+  checked.source_count = hdl_source_count + systemc_source_count;
+  std::vector<std::pair<std::size_t, CheckedSource>> checked_sources;
+  struct OrderedUnit {
+    std::size_t source_order{};
+    std::size_t unit_order{};
+    frontend::DesignUnit unit;
+  };
+  std::vector<OrderedUnit> ordered_units;
   for (std::size_t input_index = 0;
        input_index < parsed_inputs.size(); ++input_index) {
     if (parse_failures[input_index]) {
+      const auto path =
+          groups[input_index].inputs.empty()
+              ? std::filesystem::path{}
+              : groups[input_index].inputs.front().path;
       try {
         std::rethrow_exception(parse_failures[input_index]);
       } catch (const std::exception& error) {
         diagnostics.error(
             "FSIM-FE-0003",
             "source analysis failed: " + std::string{error.what()},
-            {inputs[input_index].path.generic_string(), {}, {}});
+            {path.generic_string(), {}, {}});
       } catch (...) {
         diagnostics.error(
             "FSIM-FE-0003",
             "source analysis failed with an unknown exception",
-            {inputs[input_index].path.generic_string(), {}, {}});
+            {path.generic_string(), {}, {}});
       }
       continue;
     }
     if (!parsed_inputs[input_index]) {
+      const auto path =
+          groups[input_index].inputs.empty()
+              ? std::filesystem::path{}
+              : groups[input_index].inputs.front().path;
       diagnostics.error(
           "FSIM-FE-0003",
           "source analysis produced no result",
-          {inputs[input_index].path.generic_string(), {}, {}});
+          {path.generic_string(), {}, {}});
       continue;
     }
     auto snapshot = std::move(*parsed_inputs[input_index]);
-    if (!snapshot.source.content_digest.empty()) {
-      checked.hdl_sources.push_back(
-          std::move(snapshot.source));
+    for (auto& source : snapshot.sources) {
+      const auto found = std::find_if(
+          groups[input_index].inputs.begin(),
+          groups[input_index].inputs.end(),
+          [&](const ParseInput& input) {
+            return same_source_path(input.path, source.path);
+          });
+      if (found != groups[input_index].inputs.end()
+          && !source.content_digest.empty()) {
+        checked_sources.emplace_back(
+            found->source_order, std::move(source));
+      }
     }
     auto result = std::move(snapshot.result);
     for (const auto& frontend_diagnostic : result.diagnostics) {
       import_diagnostic(diagnostics, frontend_diagnostic);
     }
-    for (auto& unit : result.design.units) {
-      unit.library = inputs[input_index].library;
-      const auto key = unit_key(unit);
-      if (!known_units.insert(key).second) {
-        diagnostics.error(
-            "FSIM-FE-0002",
-            "duplicate design unit '" + key + "'", span(unit.span));
-      } else {
-        checked.parsed.units.push_back(std::move(unit));
-      }
+    for (std::size_t unit_index = 0;
+         unit_index < result.design.units.size(); ++unit_index) {
+      ordered_units.push_back({
+          unit_index < snapshot.unit_source_orders.size()
+              ? snapshot.unit_source_orders[unit_index]
+              : std::size_t{},
+          unit_index,
+          std::move(result.design.units[unit_index])});
+    }
+  }
+  std::sort(
+      checked_sources.begin(),
+      checked_sources.end(),
+      [](const auto& left, const auto& right) {
+        return left.first < right.first;
+      });
+  checked.hdl_sources.reserve(checked_sources.size());
+  for (auto& [order, source] : checked_sources) {
+    (void)order;
+    checked.hdl_sources.push_back(std::move(source));
+  }
+  std::stable_sort(
+      ordered_units.begin(),
+      ordered_units.end(),
+      [](const OrderedUnit& left, const OrderedUnit& right) {
+        return std::tie(left.source_order, left.unit_order)
+            < std::tie(right.source_order, right.unit_order);
+      });
+  std::set<std::string> known_units;
+  checked.parsed.units.reserve(ordered_units.size());
+  for (auto& ordered : ordered_units) {
+    const auto key = unit_key(ordered.unit);
+    if (!known_units.insert(key).second) {
+      diagnostics.error(
+          "FSIM-FE-0002",
+          "duplicate design unit '" + key + "'",
+          span(ordered.unit.span));
+    } else {
+      checked.parsed.units.push_back(std::move(ordered.unit));
     }
   }
   if (diagnostics.has_error()) {

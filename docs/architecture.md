@@ -22,8 +22,8 @@ The architectural invariants are:
 
 | Stage | Responsibility | Vertical-slice status |
 |---|---|---|
-| Source manager | Files, source locations, include and macro ancestry | Exact per-root/transitive snapshots plus include/macro ancestry are current for Verilog/SV; VHDL source spans are current |
-| Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers plus a bounded per-file SV preprocessor are current; typed semantic HIR is partial |
+| Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots plus include/macro ancestry are current for Verilog/SV; VHDL source spans are current |
+| Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers plus a bounded multi-root SV preprocessor are current; typed semantic HIR is partial |
 | Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive simple VHDL/SV hierarchy, dense instance-specific specialization records, explicit mixed bindings, port aliasing, and boundary checks are current; parameter/generic specialization and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
@@ -365,10 +365,16 @@ application fixture specifically requires one module miss/store followed by
 one warm module hit. The application snapshots every HDL root and each
 Verilog/SV transitive include before parsing, hashes the exact in-memory bytes
 actually consumed, and retains those ordered digests with the checked root.
-Repeated inclusion within one run reuses the first snapshot. Each
-specialization provenance key covers its owning compilation-unit root and
-complete include closure, language and standard, library, compilation-unit
-mode, macro/include settings, the bundled-standard-library version marker, and
+Repeated inclusion within one compilation unit reuses the first snapshot.
+`compilation_unit = "file"` creates one state/digest per file,
+`"source-set"` shares ordered macro/conditional/directive state within that
+source set, and `"combined"` shares compatible language/standard state across
+all source sets selecting that mode. Combined roots retain their source-set
+library ownership; their include roots and manifest definitions are appended
+in source-set order before preprocessing. Each specialization provenance key
+covers its ordered compilation-unit roots and complete include closure,
+language and standard, library, compilation-unit mode, macro/include settings,
+the bundled-standard-library version marker, and
 represented generic/parameter name/value pairs. A unit defined in an included
 file is associated with its root compilation unit. The native module identity
 includes this key. A comment-only owning-source or included-header change

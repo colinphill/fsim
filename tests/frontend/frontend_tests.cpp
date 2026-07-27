@@ -60,6 +60,7 @@ void test_systemverilog_preprocessor() {
 `define JOIN(left,right) left``right
 `define RANGE [3:0]
 `define MESSAGE(value) `"value`"
+`define DEFAULTED(value=4'b0011) value
 `define ASSIGN_VALUES \
     value = `FROM_NESTED; \
     command_value = `FROM_COMMAND;
@@ -82,8 +83,10 @@ module `JOIN(pre,processed)(
   output logic [3:0] command_value
 );
   logic [7:0] source_line;
+  logic [3:0] default_value;
   initial begin
     `ASSIGN_VALUES
+    default_value = `DEFAULTED();
     source_line = `__LINE__;
     assert (1'b1) else $error(`MESSAGE(preprocessed));
     assert (1'b1) else $error(`__FILE__);
@@ -131,26 +134,75 @@ module also_inactive_bad(;
       "object macro expands into a packed range");
   require(
       unit.processes.size() == 1
-          && unit.processes.front().statements.size() == 5
+          && unit.processes.front().statements.size() == 6
           && unit.processes.front().statements[0].value.text
               == "4'b1010"
           && unit.processes.front().statements[1].value.text
               == "4'b0101",
       "transitive and command-line macro values reach the AST");
   require(
-      unit.processes.front().statements[2].value.kind
+      unit.processes.front().statements[2].value.text
+          == "4'b0011",
+      "omitted function-macro argument uses its default");
+  require(
+      unit.processes.front().statements[3].value.kind
           == ExpressionKind::IntegerLiteral,
       "`__LINE__ expands to an integer literal");
   require(
-      unit.processes.front().statements[3].assertion_message
+      unit.processes.front().statements[4].assertion_message
           == "preprocessed",
       "SystemVerilog macro stringification");
   require(
       std::filesystem::path{
-          unit.processes.front().statements[4].assertion_message}
+          unit.processes.front().statements[5].assertion_message}
               .filename()
           == "root.sv",
       "`__FILE__ expands to the normalized source name");
+
+  const auto compilation_first = directory / "shared-first.sv";
+  const auto compilation_second = directory / "shared-second.sv";
+  write_text(
+      compilation_first,
+      R"(`timescale 10ns/1ns
+`define SHARED_VALUE 4'b1100
+`ifdef ENABLE_SHARED_UNIT
+)");
+  write_text(
+      compilation_second,
+      R"(module shared_compilation_unit;
+  logic [3:0] value;
+  initial begin
+    value = `SHARED_VALUE;
+    #1 $finish;
+  end
+endmodule
+`endif
+)");
+  PreprocessorOptions shared_options;
+  shared_options.defines = {"ENABLE_SHARED_UNIT=1"};
+  auto shared = preprocess_verilog_compilation_unit(
+      {compilation_first, compilation_second},
+      Language::SystemVerilog2017,
+      shared_options);
+  require(
+      shared.ok() && shared.roots.size() == 2
+          && shared.inputs.size() == 2,
+      "ordered roots form one exact preprocessing compilation unit");
+  const auto shared_parsed =
+      parse_verilog(std::move(shared.lexed), true);
+  require(
+      shared_parsed.ok()
+          && shared_parsed.design.units.size() == 1
+          && shared_parsed.design.units.front().name
+              == "shared_compilation_unit"
+          && shared_parsed.design.units.front().time_unit
+              == "10ns"
+          && shared_parsed.design.units.front()
+                  .processes.front()
+                  .statements.front()
+                  .value.text
+              == "4'b1100",
+      "macro, conditional, and timescale state persist across roots");
 
   const auto bad_root = directory / "bad.sv";
   write_text(
@@ -259,6 +311,18 @@ endmodule
                 return diagnostic.code == "FSIM-SV-PP-005";
               }),
       "recursive include receives a targeted diagnostic");
+  const auto empty_compilation_unit =
+      preprocess_verilog_compilation_unit(
+          {}, Language::SystemVerilog2017);
+  require(
+      !empty_compilation_unit.ok()
+          && std::any_of(
+              empty_compilation_unit.lexed.diagnostics.begin(),
+              empty_compilation_unit.lexed.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PP-031";
+              }),
+      "an empty preprocessing compilation unit is rejected");
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);

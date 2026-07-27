@@ -48,10 +48,12 @@ The following foundation is implemented:
 - packed 2-, 4-, and 9-state value kernels;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
-- a per-root Verilog/SystemVerilog preprocessor with exact transitive include
-  snapshots, manifest macros, object/function expansion, multiline
-  replacement, token concatenation/stringification, conditional compilation,
-  and include/macro diagnostic ancestry;
+- a multi-root Verilog/SystemVerilog preprocessor with exact ordered
+  compilation-unit/transitive snapshots, manifest macros, object/function
+  expansion with default arguments, multiline replacement, token
+  concatenation/stringification, conditional compilation, persistent
+  timescale context, include/macro diagnostic ancestry, and executable
+  `file`/`source-set`/`combined` policies;
 - recursive VHDL/SV hierarchy in both language directions with explicit
   bindings and boundary checks;
 - buffered VCD, a bounded command-line debugger, and a versioned native C API;
@@ -173,7 +175,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 338 unique current production diagnostic codes.
+- a stable catalog covering 339 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -186,7 +188,7 @@ Current Linux validation:
 | Concurrent LLVM Debug and Release suites | Both pass; cache-test paths are isolated |
 | GCC ASan/UBSan | 13/13 tests pass with no findings |
 | Boost.Context 1.91.0 fibers | Checksum-verified fetch/configure/build; GCC Debug full suite 13/13, ASan/UBSan focused application, and LLVM 22 compiled-SV/SystemC application tests pass |
-| Verilog/SV preprocessing | GCC Debug atomic frontend plus interpreter application pass; exact LLVM 22 compiled-engine differential validation is recorded at the checkpoint |
+| Verilog/SV preprocessing | GCC Debug atomic single/multi-root frontend plus interpreter application pass; exact LLVM 22 source-set/combined compiled-engine differential validation is recorded at the checkpoint |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -329,11 +331,10 @@ Planned implementation sequence:
 2. Implement VHDL libraries, packages/bodies, contexts, configurations,
    generics, overload/type resolution, constant evaluation, and reviewed IEEE
    packages.
-3. Complete the remaining Verilog/SV preprocessor directives, default macro
-   arguments, shared compilation-unit semantics, parameters, packages,
-   interfaces/modports, generates, and complete synthesizable types. The
-   per-file include/macro/conditional and cache-provenance slice is
-   implemented.
+3. Complete the remaining Verilog/SV compiler directives, parameters,
+   packages, interfaces/modports, generates, and complete synthesizable types.
+   Includes, macros with default arguments, conditionals, compilation-unit
+   sharing, and cache provenance are implemented.
 4. Complete synthesizable statements, expressions, aggregates, memories,
    arrays, records/structs/unions/enums, functions/tasks, and hierarchy
    specialization.

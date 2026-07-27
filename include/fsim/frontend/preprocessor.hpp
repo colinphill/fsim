@@ -12,7 +12,7 @@
 namespace fsim::frontend {
 
 inline constexpr std::string_view verilog_preprocessor_cache_version =
-    "fsim-verilog-preprocessor-v1";
+    "fsim-verilog-preprocessor-v2";
 
 struct PreprocessorOptions {
   std::vector<std::filesystem::path> include_directories;
@@ -37,6 +37,25 @@ struct PreprocessResult {
   }
 };
 
+struct PreprocessedRoot {
+  std::filesystem::path path;
+  std::string contents;
+  // Includes consumed while preprocessing this root, in first-use order.
+  std::vector<PreprocessedDependency> dependencies;
+};
+
+struct PreprocessCompilationUnitResult {
+  LexResult lexed;
+  // Ordered manifest roots and their exact include closures.
+  std::vector<PreprocessedRoot> roots;
+  // Every distinct root/include snapshot in compilation-unit first-use order.
+  std::vector<PreprocessedDependency> inputs;
+
+  [[nodiscard]] bool ok() const {
+    return lexed.ok();
+  }
+};
+
 // Preprocesses one Verilog/SystemVerilog compilation-unit root. Object-like and
 // function-like macros, command-line definitions, quoted/angle includes,
 // conditional compilation, undefinition, and token concatenation are applied
@@ -50,6 +69,14 @@ struct PreprocessResult {
 // encountered, still resolve relative to source.name and configured roots.
 [[nodiscard]] PreprocessResult preprocess_verilog(
     SourceText source,
+    Language language,
+    const PreprocessorOptions& options = {});
+
+// Processes ordered roots as one Verilog compilation unit. Macro definitions,
+// conditionals, and parser-visible directive context persist between roots.
+[[nodiscard]] PreprocessCompilationUnitResult
+preprocess_verilog_compilation_unit(
+    const std::vector<std::filesystem::path>& paths,
     Language language,
     const PreprocessorOptions& options = {});
 

@@ -48,7 +48,7 @@ therefore excluded.
 | `FSIM-FE-0001` | error | The project contains no HDL or SystemC source files. |
 | `FSIM-FE-0002` | error | More than one parsed source defines the same design-unit identity. |
 | `FSIM-FE-0003` | error | A parallel source-analysis task failed or produced no result. |
-| `FSIM-FE-CU-0001` | warning | Requested source-set compilation-unit grouping is preserved but not implemented; files are parsed independently. |
+| `FSIM-FE-CU-0001` | warning | A VHDL source set requested Verilog-style compilation-unit grouping; VHDL files remain independent analysis units. |
 | `FSIM-FE-IO-001` | error | An HDL source file could not be opened. |
 | `FSIM-FE-IO-002` | error | Reading an HDL source file failed after it was opened. |
 | `FSIM-FE-IO-003` | error | HDL language inference failed for the source-file extension. |
@@ -179,6 +179,7 @@ therefore excluded.
 | `FSIM-SV-PP-028` | error | A macro invocation or compiler directive is undefined. |
 | `FSIM-SV-PP-029` | error | Macro expansion is recursive or exceeds the configured depth limit. |
 | `FSIM-SV-PP-030` | error | A function-like macro receives the wrong number of arguments. |
+| `FSIM-SV-PP-031` | error | A Verilog preprocessing compilation unit contains no root files. |
 
 ### Verilog/SystemVerilog syntax
 

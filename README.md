@@ -29,10 +29,11 @@ The current tree contains:
 - a typed SimIR and reference interpreter;
 - hand-written VHDL-2008 and Verilog/SystemVerilog tokenizers and parsers for a
   deliberately small executable subset;
-- per-root Verilog/SystemVerilog preprocessing with quoted/angle includes,
-  manifest/CLI macros, object/function expansion, multiline replacements,
-  token concatenation/stringification, conditional compilation, source
-  ancestry, and transitive cache provenance;
+- Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
+  macros, object/function expansion with default arguments, multiline
+  replacements, token concatenation/stringification, conditional compilation,
+  source ancestry, `file`/`source-set`/`combined` state-sharing policies, and
+  compilation-unit-wide cache provenance;
 - bounded Verilog/SystemVerilog `` `timescale`` context, integer-delay scaling,
   and automatic selection of the finest declared directive precision;
 - recursive VHDL/SV instance elaboration in both hierarchy directions with
@@ -227,6 +228,14 @@ Direct source files are also accepted:
 ```sh
 build/dev/fsim check --lang systemverilog examples/vertical_slice/tb.sv
 ```
+
+For Verilog/SystemVerilog source sets, `compilation_unit = "file"` resets
+macro and directive context for every listed file, `"source-set"` shares
+ordered context across that source set, and `"combined"` shares context across
+all combined source sets with the same language and standard. Combined sets
+retain their declared libraries; their include directories and manifest
+definitions are accumulated in source-set order. VHDL files remain independent
+analysis units.
 
 `--diagnostics=json` selects structured diagnostics. Manifest values can be
 overridden with options such as `--top`, `--duration`, `--max-deltas`,
