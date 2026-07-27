@@ -39,6 +39,8 @@ struct ForeignPortDescription {
 struct ForeignChildDescription {
     fsim_sc_handle_v1 handle{};
     std::string name;
+    std::vector<std::pair<std::string, std::int64_t>>
+        construction_actuals;
     std::vector<ForeignPortDescription> ports;
 };
 

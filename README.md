@@ -125,8 +125,10 @@ Facade modules declare VHDL/SV children with the typed
 selects the implementation, so mixed hierarchy remains explicit in both
 directions. Bounded scalar VHDL generic and integral SystemVerilog parameter
 actuals already transfer across explicit VHDL/SV bindings in either direction
-before port widths are checked; typed construction schemas for carrying those
-values through SystemC factories remain in progress.
+before port widths are checked. `hdl_instance::set_actual` also transfers
+immutable named scalar values from SystemC into a selected VHDL/SV child;
+typed factory schemas for the reverse HDL-to-SystemC direction remain in
+progress.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

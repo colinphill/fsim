@@ -1336,6 +1336,7 @@ SC_MODULE(HdlBridge) {
   fsim::systemc::hdl_instance u_hdl{"u_hdl"};
 
   SC_CTOR(HdlBridge) {
+    u_hdl.set_actual("INVERT", 0);
     u_hdl.bind_input("value", value);
     u_hdl.bind_output("inverted", inverted);
   }
@@ -1538,11 +1539,13 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   {
     std::ofstream output(systemc_boundary_source);
     output << R"(
-module systemc_hdl_child(
+module systemc_hdl_child #(
+  parameter INVERT = 1
+) (
   input logic value,
   output logic inverted
 );
-  assign inverted = ~value;
+  assign inverted = INVERT ? ~value : value;
 endmodule
 
 module systemc_host;
@@ -1794,7 +1797,22 @@ end architecture rtl;
       hdl_systemc_interpreter
           ->signal_value(*hdl_systemc_inverted)
           .to_msb_string()
-      == "0");
+      == "1");
+  const auto hdl_systemc_child_specialization =
+      std::find_if(
+          hdl_systemc_project->design.specializations().begin(),
+          hdl_systemc_project->design.specializations().end(),
+          [](const auto& specialization) {
+            return specialization.instance
+                == "systemc_host.u_bridge.u_hdl";
+          });
+  assert(
+      hdl_systemc_child_specialization
+      != hdl_systemc_project->design.specializations().end());
+  assert((
+      hdl_systemc_child_specialization->parameter_values
+      == std::vector<std::pair<std::string, std::string>>{
+          {"INVERT", "0"}}));
 
   auto bound_port_config = hdl_systemc_config;
   bound_port_config.project.top =
@@ -2263,7 +2281,7 @@ end architecture rtl;
       systemc_hdl_interpreter
           ->signal_value(*systemc_root_inverted)
           .to_msb_string()
-      == "0");
+      == "1");
 
 #if defined(FSIM_HAS_BOOST_CONTEXT)
   auto systemc_thread_config = hdl_systemc_config;

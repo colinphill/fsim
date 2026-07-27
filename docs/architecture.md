@@ -85,6 +85,14 @@ state: the two elaboration callbacks run after common-object binding, the
 start callback runs before the first kernel start, and the end callback runs
 at terminal completion or session teardown.
 
+`hdl_instance::set_actual` records named signed scalar construction values on
+the foreign-child descriptor through an append-only host callback. The common
+elaborator applies them to the explicitly selected HDL unit using that target
+language's name and subtype rules before port checks. They therefore flow into
+the same canonical specialization and native-cache identity as source-written
+generic/parameter actuals. The reverse HDL-to-SystemC direction still awaits
+factory-declared typed schemas and construction-value delivery.
+
 ## Runtime values
 
 The runtime distinguishes three logic domains:

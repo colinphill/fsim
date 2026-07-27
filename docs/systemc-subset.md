@@ -104,15 +104,15 @@ conversion, detects recursive instantiation, and applies the same explicit
 resolver policy. A SystemC parent may therefore contain an HDL child which
 contains another bound SystemC child. Any language may be the project top.
 
-For v1, construction parameters are also bidirectional. An HDL parameter
+Construction parameters are being implemented bidirectionally. An HDL parameter
 override or VHDL generic map targeting SystemC will be checked against
 factory-declared name/type/default metadata and passed as canonical values when
-the factory is constructed. Conversely, `hdl_instance` will gain
-construction-time named actuals for its manifest-selected HDL target. The
-append-only native ABI will carry those values into specialization and cache
-identity. The current vertical slice executes unparameterized SystemC
-boundaries; it deliberately diagnoses Verilog overrides on a SystemC target
-until that typed schema is implemented.
+the factory is constructed. Conversely, `hdl_instance::set_actual(name,
+value)` now supplies immutable signed scalar actuals for its manifest-selected
+HDL target. The append-only native ABI carries those values into ordinary
+VHDL-generic or Verilog/SystemVerilog-parameter specialization and cache
+identity, with duplicate/unknown actual diagnostics. HDL-to-SystemC actuals
+remain explicitly rejected until the factory schema half is implemented.
 This covers VHDL→SystemC, SV→SystemC, SystemC→VHDL, and SystemC→SV alongside
 the ordinary VHDL↔SV directions; SystemC is a peer hierarchy language rather
 than a leaf-only foreign model.

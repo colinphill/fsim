@@ -26,6 +26,7 @@ fsim_sc_status_v1 elaborate_bridge(
         || host->add_sensitivity == nullptr
         || host->register_foreign_child == nullptr
         || host->connect_foreign_port == nullptr
+        || host->set_foreign_child_actual == nullptr
         || host->set_process_initialize == nullptr) {
         return FSIM_SC_INVALID_ARGUMENT;
     }
@@ -81,6 +82,11 @@ fsim_sc_status_v1 elaborate_bridge(
     }
     status = host->register_foreign_child(
         host->context, module, "u_hdl", &child);
+    if (status != FSIM_SC_OK) {
+        return status;
+    }
+    status = host->set_foreign_child_actual(
+        host->context, child, "WIDTH", 8);
     if (status != FSIM_SC_OK) {
         return status;
     }

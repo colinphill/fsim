@@ -2142,6 +2142,20 @@ public:
     hdl_instance(const hdl_instance&) = delete;
     hdl_instance& operator=(const hdl_instance&) = delete;
 
+    /// Supply one named, immutable scalar construction actual to the
+    /// manifest-selected VHDL or Verilog/SystemVerilog child.
+    void set_actual(const char* name, const std::int64_t value) {
+        if (name == nullptr || *name == '\0'
+            || host_->set_foreign_child_actual == nullptr) {
+            throw std::invalid_argument{
+                "HDL child construction actual name must be valid"};
+        }
+        sc_core::detail::check_status(
+            host_->set_foreign_child_actual(
+                host_->context, handle_, name, value),
+            "set HDL child construction actual");
+    }
+
     template <typename T>
     void bind_input(
         const char* name, const sc_core::sc_in<T>& object) {
@@ -2344,7 +2358,8 @@ template <typename Module>
         || host->bind_export == nullptr
         || host->register_foreign_child == nullptr
         || host->connect_foreign_port == nullptr
-        || host->wait_static == nullptr) {
+        || host->wait_static == nullptr
+        || host->set_foreign_child_actual == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

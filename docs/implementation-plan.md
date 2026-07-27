@@ -170,8 +170,12 @@ The following foundation is implemented:
   compiler;
 - typed, bidirectional SystemC/HDL hierarchy construction with either side as
   the selected top;
+- append-only immutable named scalar actuals from a SystemC `hdl_instance`
+  into manifest-selected VHDL generic or SystemVerilog parameter
+  specialization, with real plug-in execution and cache identity;
 - a typed `fsim::systemc::hdl_instance` facade extension for constructor-time
-  SystemC-to-VHDL/SV child declaration, with manifest-selected implementation;
+  SystemC-to-VHDL/SV child declaration, manifest-selected implementation, and
+  append-only named scalar construction actuals specialized into either HDL;
 - exact Boost.Context 1.91.0 discovery or checksum-verified source fetching,
   plus fiber-backed `SC_THREAD`/`SC_CTHREAD` timed, delta, and static waits on
   the common scheduler;

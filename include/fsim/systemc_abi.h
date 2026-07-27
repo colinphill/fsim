@@ -274,6 +274,17 @@ typedef struct fsim_sc_host_v1 {
 
     /* Append-only fiber suspension extension for plain wait(). */
     fsim_sc_status_v1 (*wait_static)(void* context);
+
+    /*
+     * Append-only foreign-HDL construction actual. Values are immutable
+     * signed scalar constants consumed during common elaboration and become
+     * part of the selected HDL specialization identity.
+     */
+    fsim_sc_status_v1 (*set_foreign_child_actual)(
+        void* context,
+        fsim_sc_handle_v1 child,
+        const char* name,
+        int64_t value);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

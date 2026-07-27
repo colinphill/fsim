@@ -554,11 +554,53 @@ extern "C" fsim_sc_status_v1 registry_register_foreign_child(
         }
         const auto index = found->second.foreign_children.size();
         found->second.foreign_children.push_back(
-            {*handle, name, {}});
+            {*handle, name, {}, {}});
         registry.children.emplace(
             *handle,
             HierarchyRegistry::Impl::Child{module, index});
         *result = *handle;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_set_foreign_child_actual(
+    void* context,
+    const fsim_sc_handle_v1 child,
+    const char* name,
+    const std::int64_t value) noexcept {
+    if (context == nullptr || child == 0 || name == nullptr
+        || *name == '\0') {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto child_found = registry.children.find(child);
+        if (child_found == registry.children.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto module =
+            registry.pending.find(child_found->second.module);
+        if (module == registry.pending.end()
+            || child_found->second.child
+                >= module->second.foreign_children.size()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        auto& actuals =
+            module->second
+                .foreign_children[child_found->second.child]
+                .construction_actuals;
+        if (std::any_of(
+                actuals.begin(),
+                actuals.end(),
+                [&](const auto& actual) {
+                    return actual.first == name;
+                })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        actuals.emplace_back(name, value);
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -1656,6 +1698,8 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.register_export = registry_register_export;
     host.bind_export = registry_bind_export;
     host.wait_static = registry_wait_static;
+    host.set_foreign_child_actual =
+        registry_set_foreign_child_actual;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;

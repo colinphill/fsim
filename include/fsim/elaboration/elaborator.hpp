@@ -46,6 +46,8 @@ struct ForeignPort {
 
 struct ForeignChild {
     std::string name;
+    std::vector<std::pair<std::string, std::int64_t>>
+        construction_actuals;
     std::vector<ForeignPort> ports;
 };
 

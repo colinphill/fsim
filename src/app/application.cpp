@@ -1023,6 +1023,8 @@ elaboration::SystemCInstanceDescription systemc_description(
   for (const auto& child : module.foreign_children) {
     elaboration::ForeignChild converted;
     converted.name = child.name;
+    converted.construction_actuals =
+        child.construction_actuals;
     converted.ports.reserve(child.ports.size());
     for (const auto& port : child.ports) {
       converted.ports.push_back({

@@ -110,6 +110,10 @@ int main(int argc, char** argv) {
         == FSIM_SC_POSEDGE);
     assert(bridge->foreign_children.size() == 1);
     assert(bridge->foreign_children[0].name == "u_hdl");
+    assert((
+        bridge->foreign_children[0].construction_actuals
+        == std::vector<std::pair<std::string, std::int64_t>>{
+            {"WIDTH", 8}}));
     assert(bridge->foreign_children[0].ports.size() == 2);
     assert(
         bridge->foreign_children[0].ports[0].object

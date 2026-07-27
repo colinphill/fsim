@@ -4446,9 +4446,26 @@ private:
                     {});
                 continue;
             }
+            std::vector<frontend::ParameterOverride> actuals;
+            actuals.reserve(child.construction_actuals.size());
+            for (const auto& [name, value] :
+                 child.construction_actuals) {
+                frontend::Expression expression;
+                expression.kind =
+                    frontend::ExpressionKind::IntegerLiteral;
+                expression.text = std::to_string(value);
+                actuals.push_back({
+                    name,
+                    std::move(expression),
+                    {},
+                });
+            }
             auto specialized =
                 specialize_selected_unit(
-                    *selected, {}, {}, selected->language);
+                    *selected,
+                    actuals,
+                    {},
+                    selected->language);
             auto child_aliases = connect_foreign_child(
                 child, specialized.unit, child_path, objects);
             instantiate(

@@ -911,11 +911,13 @@ module systemc_parent;
   end
 endmodule
 
-module systemc_hdl_child(
+module systemc_hdl_child #(
+  parameter VALUE = 8'hA5
+) (
   input bit clock,
   output bit [7:0] value
 );
-  assign value = 8'b10100101;
+  assign value = VALUE;
 endmodule
 )";
     const auto parsed_systemc_boundary = fsim::frontend::parse_text(
@@ -947,6 +949,7 @@ endmodule
             },
             {
                 {"u_hdl",
+                 {{"VALUE", 0x3c}},
                  {
                      {"clock", systemc_bit,
                       fsim::frontend::PortDirection::Input, 101},
@@ -1010,7 +1013,7 @@ endmodule
         hdl_to_systemc_interpreter
             ->signal_value(*systemc_parent_value)
             .to_msb_string()
-        == "10100101");
+        == "00111100");
 
     auto systemc_root = nested_systemc;
     systemc_root.path = "bridge";
@@ -1035,6 +1038,11 @@ endmodule
     assert(systemc_to_hdl.ok());
     assert(systemc_to_hdl.design->systemc_instances().size() == 1);
     assert(systemc_to_hdl.design->specializations().size() == 1);
+    assert((
+        systemc_to_hdl.design->specializations().front()
+            .parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"VALUE", "60"}}));
     const auto systemc_root_value =
         systemc_to_hdl.design->find_signal("bridge.value");
     const auto systemc_root_child_value =
@@ -1053,7 +1061,41 @@ endmodule
         systemc_to_hdl_interpreter
             ->signal_value(*systemc_root_value)
             .to_msb_string()
-        == "10100101");
+        == "00111100");
+
+    auto invalid_systemc_actual = systemc_root;
+    invalid_systemc_actual.foreign_children.front()
+        .construction_actuals = {{"MISSING", 1}};
+    const std::array invalid_systemc_actual_instances{
+        invalid_systemc_actual};
+    const auto rejected_systemc_actual =
+        fsim::elaboration::elaborate(
+            parsed_systemc_boundary.design,
+            "systemc:models.bridge",
+            systemc_to_hdl_bindings,
+            invalid_systemc_actual_instances);
+    assert(!rejected_systemc_actual.ok());
+    assert(has_diagnostic(
+        rejected_systemc_actual, "FSIM-ELAB-PARAM-001"));
+
+    auto duplicate_systemc_actual = systemc_root;
+    duplicate_systemc_actual.foreign_children.front()
+        .construction_actuals = {
+            {"VALUE", 1},
+            {"VALUE", 2},
+        };
+    const std::array duplicate_systemc_actual_instances{
+        duplicate_systemc_actual};
+    const auto rejected_duplicate_systemc_actual =
+        fsim::elaboration::elaborate(
+            parsed_systemc_boundary.design,
+            "systemc:models.bridge",
+            systemc_to_hdl_bindings,
+            duplicate_systemc_actual_instances);
+    assert(!rejected_duplicate_systemc_actual.ok());
+    assert(has_diagnostic(
+        rejected_duplicate_systemc_actual,
+        "FSIM-ELAB-PARAM-002"));
 
     const std::vector<fsim::elaboration::Binding>
         missing_systemc_child_binding;
@@ -1107,6 +1149,9 @@ begin
 end architecture rtl;
 
 entity systemc_vhdl_child is
+  generic (
+    choose : integer := 1
+  );
   port (
     value : in std_logic;
     inverted : out std_logic
@@ -1142,6 +1187,7 @@ end architecture rtl;
             },
             {
                 {"u_hdl",
+                 {{"CHOOSE", 0}},
                  {
                      {"value", systemc_logic,
                       fsim::frontend::PortDirection::Input, 201},
@@ -1179,6 +1225,21 @@ end architecture rtl;
     }
     assert(vhdl_systemc.ok());
     assert(vhdl_systemc.design->systemc_instances().size() == 1);
+    const auto vhdl_systemc_child_specialization =
+        std::find_if(
+            vhdl_systemc.design->specializations().begin(),
+            vhdl_systemc.design->specializations().end(),
+            [](const auto& specialization) {
+                return specialization.instance
+                    == "systemc_vhdl_parent.u_bridge.u_hdl";
+            });
+    assert(
+        vhdl_systemc_child_specialization
+        != vhdl_systemc.design->specializations().end());
+    assert((
+        vhdl_systemc_child_specialization->parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"choose", "0"}}));
     const auto vhdl_systemc_value =
         vhdl_systemc.design->find_signal("value");
     const auto vhdl_systemc_child_value =
