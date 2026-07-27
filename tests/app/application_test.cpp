@@ -906,18 +906,16 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       "signals\n"
       "show value\n"
       "scope ..\n"
-      "break signal q\n"
+      "break signal q == 1\n"
       "break time 1ns\n"
       "breakpoints\n"
       "continue\n"
-      "delete 1\n"
-      "continue\n"
       "delete 2\n"
       "break source tb.sv:13\n"
-      "breakpoints\n"
-      "run-until 2ns\n"
+      "run-until 3ns\n"
       "delete 3\n"
       "step statement\n"
+      "delete 1\n"
       "step process\n"
       "where\n"
       "break signal child_y\n"
@@ -953,11 +951,12 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert(
       transcript.find("tb.u_child.value = X") != std::string::npos);
   assert(
-      transcript.find("breakpoint 1 set on tb.q") != std::string::npos);
+      transcript.find("breakpoint 1 set on tb.q == 1")
+      != std::string::npos);
   assert(
       transcript.find("breakpoint 2 set at time 1") != std::string::npos);
   assert(
-      transcript.find("hit breakpoint 1: tb.q changed to 0 at time 0")
+      transcript.find("hit breakpoint 1: tb.q changed to 1 at time 2")
       != std::string::npos);
   assert(
       transcript.find("hit breakpoint 2: time 1") != std::string::npos);
@@ -1083,6 +1082,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       != std::string::npos);
 
   const auto manifest = directory / "fsim.toml";
+  const auto debug_trace = directory / "debug-select.vcd";
   {
     std::ofstream output(manifest);
     output << R"(
@@ -1104,9 +1104,20 @@ cache_path = "cli-cache"
 
 [run]
 max_deltas = 1000
+trace_file = "debug-select.vcd"
+trace_filters = ["__none__"]
 )";
   }
-  std::istringstream cli_input{"where\nquit\n"};
+  std::istringstream cli_input{
+      "where\n"
+      "trace list\n"
+      "trace add q\n"
+      "trace list\n"
+      "run 1ns\n"
+      "trace remove q\n"
+      "trace list\n"
+      "continue\n"
+      "quit\n"};
   std::ostringstream cli_output;
   std::ostringstream cli_error;
   auto services = fsim::app::make_cli_services(cli_input);
@@ -1137,6 +1148,43 @@ max_deltas = 1000
   assert(
       cli_output.str().find("time 0, delta 0, scope tb")
       != std::string::npos);
+  assert(
+      cli_output.str().find("(no traced signals)")
+      != std::string::npos);
+  assert(
+      cli_output.str().find("tracing tb.q")
+      != std::string::npos);
+  assert(
+      cli_output.str().find("stopped tracing tb.q")
+      != std::string::npos);
+  std::ifstream debug_trace_stream(debug_trace);
+  const std::string debug_vcd{
+      std::istreambuf_iterator<char>{debug_trace_stream},
+      std::istreambuf_iterator<char>{}};
+  assert(!debug_vcd.empty());
+  std::string q_identifier;
+  std::istringstream debug_vcd_lines{debug_vcd};
+  for (std::string line; std::getline(debug_vcd_lines, line);) {
+    if (line.starts_with("$var wire 1 ")
+        && line.ends_with(" q $end")) {
+      std::istringstream declaration{line};
+      std::string directive;
+      std::string kind;
+      std::string width;
+      declaration >> directive >> kind >> width >> q_identifier;
+      break;
+    }
+  }
+  assert(!q_identifier.empty());
+  assert(
+      debug_vcd.find("\nx" + q_identifier + "\n")
+      != std::string::npos);
+  assert(
+      debug_vcd.find("\n0" + q_identifier + "\n")
+      != std::string::npos);
+  assert(
+      debug_vcd.find("\n1" + q_identifier + "\n")
+      == std::string::npos);
 
   const auto differently_named = directory / "different_filename.sv";
   {

@@ -170,10 +170,12 @@ per-process interpreter fallback; builds without LLVM use the interpreter.
 SimIR retains source-bearing statement, wait, assertion, process-entry, and
 process-suspension points. O0 generated code always exposes those points, while
 O2 tests one size-gated runtime flag so ordinary runs continue through them.
-Call instrumentation, locals, conditional breakpoints, and trace selection
-remain future work. A design `$finish` is terminal for that simulation; a
-debugger or Ctrl-C stop remains resumable, while a fatal runtime error poisons
-the simulation and prevents further execution.
+Signal breakpoints accept exact-state `==`/`!=` conditions. When a debug VCD is
+configured, `trace add`, `trace remove`, `trace all`, `trace clear`, and
+`trace list` change the live committed-value selection. Call instrumentation
+and locals remain future work. A design `$finish` is terminal for that
+simulation; a debugger or Ctrl-C stop remains resumable, while a fatal runtime
+error poisons the simulation and prevents further execution.
 
 The native C session API also exposes tested statement/process/delta/time
 stepping and an asynchronous stop request that may be issued from a synchronous

@@ -278,13 +278,16 @@ objects beside the already populated O2 cache verify that the debug path
 actually selected O0. Call instrumentation and the complete run/debug
 differential remain release-gate work. The current REPL implements
 `continue`/relative `run`, `run-until`, statement/process/delta/time stepping,
-source/time/signal-change breakpoints with list/delete/clear operations,
-hierarchy/scope navigation, signal examination, and deposit/force/release. A
-design `$finish` marks the simulation finished, an external stop may be
-resumed, and a fatal runtime exception poisons the simulation so later
-execution commands are refused. Ctrl-C only sets an atomic stop request; the
-simulation thread observes it at a safe point. Locals, conditional breakpoints,
-trace selection, and complete Ctrl-C tests remain planned.
+source/time/signal-change breakpoints with list/delete/clear operations and
+exact-state signal `==`/`!=` conditions, hierarchy/scope navigation, signal
+examination, and deposit/force/release. A configured debug VCD predeclares the
+design signal table and permits live `add`/`remove`/`all`/`clear` selection;
+enabling a signal records its current value and subsequent committed changes.
+Run-mode VCD continues to declare only manifest-selected signals. A design
+`$finish` marks the simulation finished, an external stop may be resumed, and a
+fatal runtime exception poisons the simulation so later execution commands are
+refused. Ctrl-C only sets an atomic stop request; the simulation thread observes
+it at a safe point. Locals and complete Ctrl-C tests remain planned.
 
 ## Platform boundary
 

@@ -76,6 +76,8 @@ The following foundation is implemented:
   points, while O2 uses a size-gated runtime flag;
 - statement/process stepping in the REPL and C API, including process-bearing
   C safe-point callbacks;
+- exact-state conditional signal breakpoints and live add/remove/all/clear/list
+  selection for configured debug VCD output;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
 - a stable catalog covering 248 current production diagnostic codes.
@@ -250,9 +252,10 @@ Completed groundwork:
 - delayed/update and dynamic/static wait operations in the SimIR interpreter
   and bounded LLVM compiled subset;
 - deterministic project seed handling;
-- scope/signal navigation, source/time/signal-change breakpoints, all four step
-  modes, value mutation, and forced-O0 hybrid execution in the CLI debugger,
-  with bounded interpreter-equivalence evidence;
+- scope/signal navigation, source/time/signal-change breakpoints including
+  exact-state signal conditions, all four step modes, live debug-trace
+  selection, value mutation, and forced-O0 hybrid execution in the CLI
+  debugger, with bounded interpreter-equivalence evidence;
 - hierarchy/value/control/callback operations in `include/fsim/api.h`;
 - automated C API statement/process/delta/time stepping and callback-issued
   asynchronous stop/resume coverage, including terminal `$finish` precedence
@@ -275,8 +278,7 @@ Planned implementation sequence:
    notification in the common scheduler.
 5. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
-6. Add debug locals, trace selection, conditional breakpoints, call safe
-   points, and complete Ctrl-C testing.
+6. Add debug locals, call safe points, and complete Ctrl-C testing.
 7. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
    process, severity, source location, and message.

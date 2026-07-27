@@ -989,13 +989,15 @@ struct TraceState {
   std::ofstream stream;
   std::unique_ptr<runtime::VcdWriter> writer;
   std::vector<std::optional<runtime::VcdSignal>> handles;
+  std::vector<bool> enabled;
   SimulationTick tick_multiplier{1};
 };
 
 std::unique_ptr<TraceState> attach_trace(
     Simulation& simulation,
     const project::Config& config,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics,
+    const bool dynamic_selection = false) {
   if (!config.run.trace_file) {
     return nullptr;
   }
@@ -1030,8 +1032,12 @@ std::unique_ptr<TraceState> attach_trace(
         std::make_unique<runtime::VcdWriter>(
             trace->stream, scale->timescale);
     trace->handles.resize(simulation.design().signals().size());
+    trace->enabled.resize(simulation.design().signals().size());
     for (const auto& signal : simulation.design().signals()) {
-      if (trace_selected(config.run.trace_filters, signal.name)) {
+      const auto selected =
+          trace_selected(config.run.trace_filters, signal.name);
+      trace->enabled[signal.id] = selected;
+      if (dynamic_selection || selected) {
         trace->handles[signal.id] =
             trace->writer->declare_signal(signal.name, signal.width);
       }
@@ -1043,7 +1049,7 @@ std::unique_ptr<TraceState> attach_trace(
     }
     trace->writer->begin(simulation.now() * trace->tick_multiplier);
     for (const auto& signal : simulation.design().signals()) {
-      if (trace->handles[signal.id]) {
+      if (trace->handles[signal.id] && trace->enabled[signal.id]) {
         trace->writer->change(
             *trace->handles[signal.id], simulation.read_signal(signal.id));
       }
@@ -1055,7 +1061,8 @@ std::unique_ptr<TraceState> attach_trace(
             const PackedLogic4& value,
             const SimulationTick time,
             std::uint64_t) {
-          if (signal < state->handles.size() && state->handles[signal]) {
+          if (signal < state->handles.size() && state->handles[signal]
+              && state->enabled[signal]) {
             if (time
                 > std::numeric_limits<SimulationTick>::max()
                       / state->tick_multiplier) {
@@ -1278,12 +1285,13 @@ void print_debug_help(std::ostream& output) {
       << "Commands: continue|run [DURATION], run-until TIME, "
          "step statement|process|delta|time,\n"
       << "          break source [PATH:]LINE, break time TIME, "
-         "break signal SIGNAL,\n"
+         "break signal SIGNAL [==|!= VALUE],\n"
       << "          breakpoints,\n"
       << "          delete ID, clear, scope [PATH], scopes [PATH], "
          "signals [PATH],\n"
       << "          show SIGNAL,\n"
       << "          deposit SIGNAL VALUE, force SIGNAL VALUE, release SIGNAL,\n"
+      << "          trace add|remove SIGNAL, trace all|clear|list,\n"
       << "          where, help, quit\n";
 }
 
@@ -1309,6 +1317,8 @@ struct DebugBreakpoint {
   SignalId signal{};
   std::string path;
   std::uint32_t line{};
+  std::optional<PackedLogic4> signal_condition;
+  bool signal_condition_equal{true};
 };
 
 struct DebugBreakpointHit {
@@ -1321,10 +1331,12 @@ class DebuggerSession final {
   DebuggerSession(
       Simulation& simulation,
       std::ostream& output,
-      std::ostream& error)
+      std::ostream& error,
+      TraceState* trace = nullptr)
       : simulation_(simulation),
         output_(output),
         error_(error),
+        trace_(trace),
         scope_(simulation.design().top()),
         signal_paths_(simulation.design().signal_paths()) {
     observer_ = simulation_.add_signal_change_hook(
@@ -1338,9 +1350,17 @@ class DebuggerSession final {
           }
           const auto found = std::find_if(
               breakpoints_.begin(), breakpoints_.end(),
-              [signal](const DebugBreakpoint& breakpoint) {
-                return breakpoint.kind == DebugBreakpointKind::signal
-                    && breakpoint.signal == signal;
+              [signal, &value](const DebugBreakpoint& breakpoint) {
+                if (breakpoint.kind != DebugBreakpointKind::signal
+                    || breakpoint.signal != signal) {
+                  return false;
+                }
+                if (!breakpoint.signal_condition) {
+                  return true;
+                }
+                const auto equal =
+                    value == *breakpoint.signal_condition;
+                return equal == breakpoint.signal_condition_equal;
               });
           if (found == breakpoints_.end()) {
             return;
@@ -1403,8 +1423,9 @@ class DebuggerSession final {
       }
       return;
     }
-    if (command[0] == "break" && command.size() == 3) {
-      add_breakpoint(command[1], command[2]);
+    if (command[0] == "break"
+        && (command.size() == 3 || command.size() == 5)) {
+      add_breakpoint(command);
       return;
     }
     if (command[0] == "breakpoints"
@@ -1420,6 +1441,14 @@ class DebuggerSession final {
     if (command[0] == "clear" && command.size() == 1) {
       breakpoints_.clear();
       output_ << "cleared all breakpoints\n";
+      return;
+    }
+    if (command[0] == "trace") {
+      try {
+        trace_command(command);
+      } catch (const std::exception& exception) {
+        error_ << exception.what() << '\n';
+      }
       return;
     }
     if ((command[0] == "continue" || command[0] == "run")
@@ -1650,10 +1679,84 @@ class DebuggerSession final {
     }
   }
 
-  void add_breakpoint(
-      const std::string_view kind,
-      const std::string_view location) {
+  void trace_command(const std::vector<std::string>& command) {
+    if (trace_ == nullptr) {
+      output_ << "trace output is not configured\n";
+      return;
+    }
+    if (command.size() == 2 && command[1] == "list") {
+      bool found = false;
+      for (const auto& signal : simulation_.design().signals()) {
+        if (!trace_->enabled[signal.id]) {
+          continue;
+        }
+        found = true;
+        output_ << signal.name << '\n';
+      }
+      if (!found) {
+        output_ << "(no traced signals)\n";
+      }
+      return;
+    }
+    if (command.size() == 2
+        && (command[1] == "all" || command[1] == "clear")) {
+      const auto enable = command[1] == "all";
+      for (const auto& signal : simulation_.design().signals()) {
+        set_trace_enabled(signal.id, enable);
+      }
+      output_
+          << (enable ? "tracing all signals\n" : "cleared trace selection\n");
+      return;
+    }
+    if (command.size() == 3
+        && (command[1] == "add" || command[1] == "remove")) {
+      const auto signal = resolve_signal(command[2]);
+      if (!signal) {
+        return;
+      }
+      const auto enable = command[1] == "add";
+      set_trace_enabled(signal->second, enable);
+      output_
+          << (enable ? "tracing " : "stopped tracing ")
+          << signal->first << '\n';
+      return;
+    }
+    output_ << "usage: trace add|remove SIGNAL | "
+               "trace all|clear|list\n";
+  }
+
+  void set_trace_enabled(const SignalId signal, const bool enable) {
+    if (signal >= trace_->enabled.size()
+        || signal >= trace_->handles.size()
+        || !trace_->handles[signal]) {
+      throw std::logic_error{"debug trace signal is not declared"};
+    }
+    if (trace_->enabled[signal] == enable) {
+      return;
+    }
+    trace_->enabled[signal] = enable;
+    if (!enable) {
+      return;
+    }
+    if (simulation_.now()
+        > std::numeric_limits<SimulationTick>::max()
+              / trace_->tick_multiplier) {
+      throw std::overflow_error{"VCD timestamp scaling overflow"};
+    }
+    trace_->writer->set_time(
+        simulation_.now() * trace_->tick_multiplier);
+    trace_->writer->change(
+        *trace_->handles[signal], simulation_.read_signal(signal));
+  }
+
+  void add_breakpoint(const std::vector<std::string>& command) {
+    const std::string_view kind = command[1];
+    const std::string_view location = command[2];
     DebugBreakpoint breakpoint;
+    if (command.size() == 5 && kind != "signal") {
+      output_ << "only signal breakpoints accept a condition\n";
+      return;
+    }
     if (kind == "time") {
       const auto time = command_time(location);
       if (!time) {
@@ -1678,12 +1781,35 @@ class DebuggerSession final {
         return;
       }
       breakpoint.kind = DebugBreakpointKind::signal;
-      breakpoint.id = next_breakpoint_++;
       breakpoint.signal = signal->second;
       breakpoint.path = std::move(signal->first);
+      if (command.size() == 5) {
+        if (command[3] != "==" && command[3] != "!=") {
+          output_ << "signal breakpoint comparison must be == or !=\n";
+          return;
+        }
+        const auto& info =
+            simulation_.design().signals().at(breakpoint.signal);
+        std::string value_error;
+        auto condition =
+            parse_value(command[4], info.width, value_error);
+        if (!condition) {
+          output_ << value_error << '\n';
+          return;
+        }
+        breakpoint.signal_condition_equal = command[3] == "==";
+        breakpoint.signal_condition = std::move(*condition);
+      }
+      breakpoint.id = next_breakpoint_++;
       breakpoints_.push_back(breakpoint);
       output_ << "breakpoint " << breakpoint.id << " set on "
-              << breakpoint.path << '\n';
+              << breakpoint.path;
+      if (breakpoint.signal_condition) {
+        output_ << ' '
+                << (breakpoint.signal_condition_equal ? "== " : "!= ")
+                << breakpoint.signal_condition->to_msb_string();
+      }
+      output_ << '\n';
       return;
     }
     if (kind == "source") {
@@ -1716,7 +1842,8 @@ class DebuggerSession final {
       output_ << breakpoint.line << '\n';
       return;
     }
-    output_ << "usage: break time TIME | break signal SIGNAL | "
+    output_ << "usage: break time TIME | "
+               "break signal SIGNAL [==|!= VALUE] | "
                "break source [PATH:]LINE\n";
   }
 
@@ -1734,6 +1861,11 @@ class DebuggerSession final {
         }
       } else if (breakpoint.kind == DebugBreakpointKind::signal) {
         output_ << "signal " << breakpoint.path;
+        if (breakpoint.signal_condition) {
+          output_ << ' '
+                  << (breakpoint.signal_condition_equal ? "== " : "!= ")
+                  << breakpoint.signal_condition->to_msb_string();
+        }
       } else {
         output_ << "source ";
         if (!breakpoint.path.empty()) {
@@ -2024,6 +2156,7 @@ class DebuggerSession final {
   Simulation& simulation_;
   std::ostream& output_;
   std::ostream& error_;
+  TraceState* trace_{};
   std::string scope_;
   std::vector<std::pair<std::string, SignalId>> signal_paths_;
   std::vector<DebugBreakpoint> breakpoints_;
@@ -2033,6 +2166,36 @@ class DebuggerSession final {
   std::uint64_t observer_{};
   bool executing_{};
 };
+
+int run_debug_repl_impl(
+    Simulation& simulation,
+    std::istream& input,
+    std::ostream& output,
+    std::ostream& error,
+    TraceState* trace) {
+  DebuggerSession debugger(simulation, output, error, trace);
+  std::string line;
+  while (true) {
+    output << "(fsim) " << std::flush;
+    if (!std::getline(input, line)) {
+      output << '\n';
+      break;
+    }
+    const auto command = words(line);
+    if (command.empty()) {
+      continue;
+    }
+    if (command[0] == "quit" || command[0] == "q") {
+      break;
+    }
+    if (command[0] == "help") {
+      print_debug_help(output);
+      continue;
+    }
+    debugger.execute(command);
+  }
+  return 0;
+}
 
 int handle_debug(
     const cli::Invocation&,
@@ -2050,7 +2213,7 @@ int handle_debug(
       config.run.max_deltas,
       SimulationEngine::debug);
   report_native_cache_failures(simulation, diagnostics);
-  auto trace = attach_trace(simulation, config, diagnostics);
+  auto trace = attach_trace(simulation, config, diagnostics, true);
   if (config.run.trace_file && !trace) {
     return 1;
   }
@@ -2068,8 +2231,8 @@ int handle_debug(
            << " specialization module(s))\n";
   }
   print_debug_help(output);
-  const auto status =
-      run_debug_repl(simulation, input, output, error_output);
+  const auto status = run_debug_repl_impl(
+      simulation, input, output, error_output, trace.get());
   if (trace) {
     trace->writer->flush();
   }
@@ -2790,28 +2953,8 @@ int run_debug_repl(
     std::istream& input,
     std::ostream& output,
     std::ostream& error) {
-  DebuggerSession debugger(simulation, output, error);
-  std::string line;
-  while (true) {
-    output << "(fsim) " << std::flush;
-    if (!std::getline(input, line)) {
-      output << '\n';
-      break;
-    }
-    const auto command = words(line);
-    if (command.empty()) {
-      continue;
-    }
-    if (command[0] == "quit" || command[0] == "q") {
-      break;
-    }
-    if (command[0] == "help") {
-      print_debug_help(output);
-      continue;
-    }
-    debugger.execute(command);
-  }
-  return 0;
+  return run_debug_repl_impl(
+      simulation, input, output, error, nullptr);
 }
 
 std::optional<PackedLogic4> parse_value(
