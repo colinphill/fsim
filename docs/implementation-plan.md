@@ -176,6 +176,9 @@ The following foundation is implemented:
 - append-only ordered SystemC factory schemas for integer/natural/positive/
   Boolean/bit construction parameters, transactional loader replay,
   canonical default/explicit validation, and typed constructor lookup;
+- on-demand HDL-to-SystemC construction after parent-specialization constant
+  evaluation and source-language association checking, with canonical values
+  recorded in DesignIR before parameter-dependent port checks;
 - a typed `fsim::systemc::hdl_instance` facade extension for constructor-time
   SystemC-to-VHDL/SV child declaration, manifest-selected implementation, and
   append-only named scalar construction actuals specialized into either HDL;

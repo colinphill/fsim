@@ -127,10 +127,10 @@ directions. Bounded scalar VHDL generic and integral SystemVerilog parameter
 actuals already transfer across explicit VHDL/SV bindings in either direction
 before port widths are checked. `hdl_instance::set_actual` also transfers
 immutable named scalar values from SystemC into a selected VHDL/SV child;
-typed factory schemas for the reverse HDL-to-SystemC direction remain in
-progress. The factory side now registers typed scalar declarations and exposes
-validated canonical values to constructors; connecting source-language
-instance actuals during common elaboration is the remaining step.
+typed factory schemas also carry the reverse HDL-to-SystemC direction for the
+bounded scalar subset. The common hierarchy walk evaluates source-language
+actuals, exposes validated canonical values to constructors, and only then
+checks parameter-dependent ports.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

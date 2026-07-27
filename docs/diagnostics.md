@@ -375,6 +375,14 @@ therefore excluded.
 | `FSIM-ELAB-PARAM-006` | error | A parameterized packed range cannot be evaluated. |
 | `FSIM-ELAB-PARAM-007` | error | A parameterized packed range width overflows the supported range. |
 | `FSIM-ELAB-PARAM-009` | error | A case-insensitive VHDL named generic actual ambiguously matches multiple case-sensitive parameters on a foreign Verilog/SystemVerilog target. |
+| `FSIM-ELAB-SC-PARAM-001` | error | A SystemC construction actual is unknown, missing, or excessive. |
+| `FSIM-ELAB-SC-PARAM-002` | error | A SystemC construction parameter receives more than one actual. |
+| `FSIM-ELAB-SC-PARAM-003` | error | Construction actual association ordering is illegal for the HDL parent language. |
+| `FSIM-ELAB-SC-PARAM-004` | error | A SystemC construction actual constant expression cannot be evaluated in the parent specialization. |
+| `FSIM-ELAB-SC-PARAM-005` | error | A construction value violates the factory parameter's integer/natural/positive/Boolean/bit subtype. |
+| `FSIM-ELAB-SC-PARAM-006` | error | A VHDL named actual ambiguously matches case-distinct SystemC factory parameters. |
+| `FSIM-ELAB-SC-PARAM-007` | error | The selected SystemC factory schema cannot be inspected. |
+| `FSIM-ELAB-SC-PARAM-008` | error | The schema-validated SystemC instance cannot be constructed or has inconsistent provider identity. |
 | `FSIM-ELAB-TYPE-001` | error | A signal type cannot be represented by the packed runtime. |
 
 ### Bindings and mixed-language boundaries

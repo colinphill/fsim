@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <deque>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -1122,6 +1123,156 @@ SpecializedUnit specialize_unit(
         }
     }
     return result;
+}
+
+bool valid_systemc_construction_value(
+    const fsim_sc_construction_type_v1 type,
+    const std::int64_t value) {
+    switch (type) {
+    case FSIM_SC_CONSTRUCTION_INTEGER:
+        return true;
+    case FSIM_SC_CONSTRUCTION_NATURAL:
+        return value >= 0;
+    case FSIM_SC_CONSTRUCTION_POSITIVE:
+        return value > 0;
+    case FSIM_SC_CONSTRUCTION_BOOLEAN:
+    case FSIM_SC_CONSTRUCTION_BIT:
+        return value == 0 || value == 1;
+    }
+    return false;
+}
+
+std::optional<std::vector<std::pair<std::string, std::int64_t>>>
+specialize_systemc_construction(
+    const std::vector<SystemCConstructionParameter>& schema,
+    const std::vector<frontend::ParameterOverride>& overrides,
+    const ConstantEnvironment& parent_environment,
+    const frontend::Language association_language,
+    std::vector<Diagnostic>& diagnostics) {
+    const auto initial_diagnostic_count = diagnostics.size();
+    const bool vhdl_association =
+        association_language == frontend::Language::Vhdl2008;
+    std::vector<std::optional<std::int64_t>> actuals(schema.size());
+    std::size_t next_positional = 0;
+    bool saw_named = false;
+    bool saw_positional = false;
+    for (const auto& override : overrides) {
+        std::string evaluation_error;
+        const auto value = evaluate_constant_expression(
+            override.value, parent_environment, evaluation_error);
+        if (!value) {
+            diagnostics.push_back({
+                "FSIM-ELAB-SC-PARAM-004",
+                "cannot evaluate SystemC construction actual: "
+                    + evaluation_error,
+                override.span});
+            continue;
+        }
+        std::optional<std::size_t> index;
+        if (override.name) {
+            saw_named = true;
+            std::vector<std::size_t> matches;
+            for (std::size_t candidate = 0;
+                 candidate < schema.size();
+                 ++candidate) {
+                const auto matches_name =
+                    vhdl_association
+                    ? parameter_name_matches(
+                          schema[candidate].name,
+                          *override.name,
+                          frontend::Language::SystemVerilog2017,
+                          association_language)
+                    : schema[candidate].name == *override.name;
+                if (matches_name) {
+                    matches.push_back(candidate);
+                }
+            }
+            if (matches.size() > 1) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SC-PARAM-006",
+                    "VHDL generic name '" + *override.name
+                        + "' ambiguously matches multiple case-sensitive "
+                          "SystemC construction parameters",
+                    override.span});
+                continue;
+            }
+            if (matches.empty()) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SC-PARAM-001",
+                    "unknown SystemC construction parameter '"
+                        + *override.name + "'",
+                    override.span});
+                continue;
+            }
+            index = matches.front();
+        } else {
+            saw_positional = true;
+            if (vhdl_association && saw_named) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SC-PARAM-003",
+                    "a positional SystemC construction actual cannot "
+                    "follow a named VHDL actual",
+                    override.span});
+            }
+            if (next_positional >= schema.size()) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SC-PARAM-001",
+                    "too many positional SystemC construction actuals",
+                    override.span});
+                continue;
+            }
+            index = next_positional++;
+        }
+        if (actuals[*index]) {
+            diagnostics.push_back({
+                "FSIM-ELAB-SC-PARAM-002",
+                "duplicate SystemC construction actual for '"
+                    + schema[*index].name + "'",
+                override.span});
+        } else {
+            actuals[*index] = *value;
+        }
+    }
+    if (!vhdl_association && saw_named && saw_positional) {
+        diagnostics.push_back({
+            "FSIM-ELAB-SC-PARAM-003",
+            "named and positional SystemC construction actuals cannot "
+            "be mixed",
+            overrides.empty() ? frontend::SourceSpan{}
+                              : overrides.front().span});
+    }
+
+    std::vector<std::pair<std::string, std::int64_t>> values;
+    values.reserve(schema.size());
+    for (std::size_t index = 0; index < schema.size(); ++index) {
+        const auto value =
+            actuals[index].has_value()
+            ? actuals[index]
+            : schema[index].default_value;
+        if (!value) {
+            diagnostics.push_back({
+                "FSIM-ELAB-SC-PARAM-001",
+                "SystemC construction parameter '"
+                    + schema[index].name + "' requires an actual",
+                {}});
+            continue;
+        }
+        if (!valid_systemc_construction_value(
+                schema[index].type, *value)) {
+            diagnostics.push_back({
+                "FSIM-ELAB-SC-PARAM-005",
+                "SystemC construction parameter '"
+                    + schema[index].name
+                    + "' violates its declared scalar subtype",
+                {}});
+            continue;
+        }
+        values.emplace_back(schema[index].name, *value);
+    }
+    if (diagnostics.size() != initial_diagnostic_count) {
+        return std::nullopt;
+    }
+    return values;
 }
 
 } // namespace
@@ -3291,8 +3442,12 @@ public:
         std::vector<Diagnostic>& diagnostics,
         const std::span<const Binding> bindings,
         const std::span<const SystemCInstanceDescription>
-            systemc_instances)
-        : parsed_(parsed), design_(design), diagnostics_(diagnostics) {
+            systemc_instances,
+        SystemCFactoryProvider* systemc_provider)
+        : parsed_(parsed),
+          design_(design),
+          diagnostics_(diagnostics),
+          systemc_provider_(systemc_provider) {
         for (const auto& binding : bindings) {
             if (!bindings_.emplace(binding.instance, &binding).second) {
                 report(
@@ -3979,6 +4134,83 @@ private:
         return found->second;
     }
 
+    const SystemCInstanceDescription* construct_systemc_description(
+        const frontend::Instance& instance,
+        const std::string& path,
+        const std::string_view target,
+        const ConstantEnvironment& parent_environment,
+        const frontend::Language association_language) {
+        if (systemc_provider_ == nullptr) {
+            if (!instance.parameter_overrides.empty()) {
+                report(
+                    association_language
+                            == frontend::Language::Vhdl2008
+                        ? "FSIM-ELAB-GENERIC-001"
+                        : "FSIM-ELAB-PARAM-001",
+                    "HDL generic or parameter actuals require a live "
+                    "SystemC factory schema provider",
+                    instance.parameter_overrides.front().span);
+                return nullptr;
+            }
+            return systemc_description(path, target, instance.span);
+        }
+
+        std::string error;
+        auto schema = systemc_provider_->schema(target, error);
+        if (!schema) {
+            report(
+                "FSIM-ELAB-SC-PARAM-007",
+                "cannot inspect SystemC construction schema for '"
+                    + std::string{target} + "': " + error,
+                instance.span);
+            return nullptr;
+        }
+        auto values = specialize_systemc_construction(
+            *schema,
+            instance.parameter_overrides,
+            parent_environment,
+            association_language,
+            diagnostics_);
+        if (!values) {
+            return nullptr;
+        }
+        auto constructed = systemc_provider_->instantiate(
+            path, target, *values, error);
+        if (!constructed) {
+            report(
+                "FSIM-ELAB-SC-PARAM-008",
+                "cannot construct SystemC instance '" + path
+                    + "': " + error,
+                instance.span);
+            return nullptr;
+        }
+        if (constructed->path != path
+            || constructed->target != target) {
+            report(
+                "FSIM-ELAB-SC-PARAM-008",
+                "SystemC factory provider returned inconsistent "
+                "instance identity for '" + path + "'",
+                instance.span);
+            return nullptr;
+        }
+        owned_systemc_instances_.push_back(
+            std::move(*constructed));
+        const auto* description =
+            &owned_systemc_instances_.back();
+        if (!systemc_instances_
+                 .emplace(path, description)
+                 .second) {
+            report(
+                "FSIM-ELAB-BIND-032",
+                "duplicate constructed SystemC instance path '"
+                    + path + "'",
+                instance.span);
+            return nullptr;
+        }
+        used_systemc_instances_.insert(path);
+        return description;
+    }
+
     void instantiate_systemc(
         const SystemCInstanceDescription& instance,
         const std::string& path,
@@ -4237,6 +4469,8 @@ private:
         info.target = instance.target;
         info.instance = path;
         info.native_handle = instance.handle;
+        info.construction_values =
+            instance.construction_values;
         for (const auto& port : instance.ports) {
             if (const auto signal = aliases.find(port.name);
                 signal != aliases.end()) {
@@ -4576,23 +4810,13 @@ private:
                 const auto target = parse_target(binding->target);
                 if (target
                     && target->language == "systemc") {
-                    if (!instance.parameter_overrides.empty()) {
-                        report(
-                            unit.language
-                                    == frontend::Language::Vhdl2008
-                                ? "FSIM-ELAB-GENERIC-001"
-                                : "FSIM-ELAB-PARAM-001",
-                            "HDL generic or parameter actuals cannot target "
-                            "a SystemC factory until its typed construction "
-                            "schema is implemented",
-                            instance.parameter_overrides.front().span);
-                        continue;
-                    }
                     const auto* description =
-                        systemc_description(
+                        construct_systemc_description(
+                            instance,
                             child_path,
                             binding->target,
-                            instance.span);
+                            parameter_environment,
+                            unit.language);
                     if (description == nullptr) {
                         continue;
                     }
@@ -4654,6 +4878,9 @@ private:
     std::unordered_map<
         std::string, const SystemCInstanceDescription*>
         systemc_instances_;
+    std::deque<SystemCInstanceDescription>
+        owned_systemc_instances_;
+    SystemCFactoryProvider* systemc_provider_{};
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
     std::vector<std::string> stack_;
@@ -4753,6 +4980,21 @@ ElaborationResult elaborate(
     const std::span<const Binding> bindings,
     const std::span<const SystemCInstanceDescription>
         systemc_instances) {
+    return elaborate(
+        parsed,
+        top,
+        bindings,
+        systemc_instances,
+        nullptr);
+}
+
+ElaborationResult elaborate(
+    const frontend::ParsedDesign& parsed,
+    const std::string_view top,
+    const std::span<const Binding> bindings,
+    const std::span<const SystemCInstanceDescription>
+        systemc_instances,
+    SystemCFactoryProvider* systemc_provider) {
     ElaborationResult result;
     const auto requested = simple_top_name(top);
     bool systemc_top = false;
@@ -4784,7 +5026,8 @@ ElaborationResult elaborate(
         design,
         result.diagnostics,
         bindings,
-        systemc_instances};
+        systemc_instances,
+        systemc_provider};
     if (systemc_top) {
         const auto root = std::find_if(
             systemc_instances.begin(),

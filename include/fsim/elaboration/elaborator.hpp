@@ -98,6 +98,8 @@ struct SystemCInstanceDescription {
     std::string target;
     std::uint64_t handle{};
     std::uint64_t parent{};
+    std::vector<std::pair<std::string, std::int64_t>>
+        construction_values;
     std::vector<ExternalPort> ports;
     std::vector<ForeignChild> foreign_children;
     std::vector<ExternalProcess> processes;
@@ -106,6 +108,33 @@ struct SystemCInstanceDescription {
     std::vector<ExternalInternalSignal> internal_signals;
     std::vector<ExternalExport> exports;
     std::vector<SystemCInstanceDescription> native_children;
+};
+
+struct SystemCConstructionParameter {
+    std::string name;
+    fsim_sc_construction_type_v1 type{
+        FSIM_SC_CONSTRUCTION_INTEGER};
+    std::optional<std::int64_t> default_value;
+};
+
+/// Application-owned bridge used by the authoritative hierarchy walk to
+/// inspect a registered factory schema and construct an HDL-bound SystemC
+/// instance only after source-language actuals have been canonicalized.
+class SystemCFactoryProvider {
+public:
+    virtual ~SystemCFactoryProvider() = default;
+
+    [[nodiscard]] virtual std::optional<
+        std::vector<SystemCConstructionParameter>>
+    schema(std::string_view target, std::string& error) = 0;
+
+    [[nodiscard]] virtual std::optional<SystemCInstanceDescription>
+    instantiate(
+        std::string_view path,
+        std::string_view target,
+        std::span<const std::pair<std::string, std::int64_t>>
+            construction_values,
+        std::string& error) = 0;
 };
 
 [[nodiscard]] ElaborationResult elaborate(
@@ -119,6 +148,12 @@ struct SystemCInstanceDescription {
     std::string_view top,
     std::span<const Binding> bindings,
     std::span<const SystemCInstanceDescription> systemc_instances);
+[[nodiscard]] ElaborationResult elaborate(
+    const frontend::ParsedDesign& parsed,
+    std::string_view top,
+    std::span<const Binding> bindings,
+    std::span<const SystemCInstanceDescription> systemc_instances,
+    SystemCFactoryProvider* systemc_provider);
 
 struct Diagnostic {
     std::string code;
@@ -196,6 +231,8 @@ struct SystemCInstanceInfo {
     std::string target;
     std::string instance;
     std::uint64_t native_handle{};
+    std::vector<std::pair<std::string, std::int64_t>>
+        construction_values;
     std::vector<SystemCPortInfo> ports;
     std::vector<SystemCEventInfo> events;
     std::vector<SystemCPrimitiveChannelInfo> primitive_channels;
@@ -247,6 +284,12 @@ private:
         std::string_view,
         std::span<const Binding>,
         std::span<const SystemCInstanceDescription>);
+    friend ElaborationResult elaborate(
+        const frontend::ParsedDesign&,
+        std::string_view,
+        std::span<const Binding>,
+        std::span<const SystemCInstanceDescription>,
+        SystemCFactoryProvider*);
 
     std::string top_;
     std::vector<SignalInfo> signal_info_;

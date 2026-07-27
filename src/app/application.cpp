@@ -1009,6 +1009,8 @@ elaboration::SystemCInstanceDescription systemc_description(
   result.target = target;
   result.handle = module.handle;
   result.parent = module.parent;
+  result.construction_values =
+      module.construction_values;
   result.ports.reserve(module.ports.size());
   for (const auto& port : module.ports) {
     result.ports.push_back({
@@ -1096,7 +1098,6 @@ elaboration::SystemCInstanceDescription systemc_description(
 
 std::optional<std::vector<elaboration::SystemCInstanceDescription>>
 construct_systemc_instances(
-    const project::Config& config,
     const std::string_view top,
     systemc::HierarchyRegistry* registry,
     diagnostic::Engine& diagnostics) {
@@ -1110,13 +1111,9 @@ construct_systemc_instances(
       parsed && parsed->language == "systemc") {
     requests.push_back({parsed->unit, std::string{top}, *parsed});
   }
-  for (const auto& binding : config.bindings) {
-    const auto parsed = parse_binding_target(binding.target);
-    if (parsed && parsed->language == "systemc") {
-      requests.push_back(
-          {binding.instance, binding.target, *parsed});
-    }
-  }
+  // HDL-bound SystemC instances are constructed on demand by the common
+  // hierarchy walk after their source-language actuals are canonicalized.
+  // Only a selected SystemC top has no HDL parent and is eager here.
   std::sort(
       requests.begin(), requests.end(),
       [](const Request& left, const Request& right) {
@@ -1219,6 +1216,114 @@ construct_systemc_instances(
   }
   return result;
 }
+
+class ApplicationSystemCFactoryProvider final
+    : public elaboration::SystemCFactoryProvider {
+public:
+  ApplicationSystemCFactoryProvider(
+      systemc::HierarchyRegistry& registry,
+      const std::span<
+          const elaboration::SystemCInstanceDescription> eager_instances,
+      std::vector<std::uint64_t>& lifecycle_roots)
+      : registry_(registry), lifecycle_roots_(lifecycle_roots) {
+    for (const auto& instance : eager_instances) {
+      record_handles(instance.path, instance);
+    }
+  }
+
+  std::optional<std::vector<
+      elaboration::SystemCConstructionParameter>>
+  schema(
+      const std::string_view target,
+      std::string& error) override {
+    error.clear();
+    const auto parsed = parse_binding_target(target);
+    if (!parsed || parsed->language != "systemc"
+        || parsed->qualifier.empty()) {
+      error = "target must use systemc:plugin.factory spelling";
+      return std::nullopt;
+    }
+    const auto parameters =
+        registry_.factory_parameters(parsed->unit);
+    if (!parameters) {
+      error = "factory '" + parsed->unit
+          + "' was not registered";
+      return std::nullopt;
+    }
+    std::vector<elaboration::SystemCConstructionParameter>
+        result;
+    result.reserve(parameters->size());
+    for (const auto& parameter : *parameters) {
+      result.push_back({
+          parameter.name,
+          parameter.type,
+          parameter.default_value,
+      });
+    }
+    return result;
+  }
+
+  std::optional<elaboration::SystemCInstanceDescription>
+  instantiate(
+      const std::string_view path,
+      const std::string_view target,
+      const std::span<
+          const std::pair<std::string, std::int64_t>>
+          construction_values,
+      std::string& error) override {
+    error.clear();
+    const auto parsed = parse_binding_target(target);
+    if (!parsed || parsed->language != "systemc"
+        || parsed->qualifier.empty()) {
+      error = "target must use systemc:plugin.factory spelling";
+      return std::nullopt;
+    }
+    fsim_sc_handle_v1 parent = 0;
+    if (const auto separator = path.rfind('.');
+        separator != std::string_view::npos) {
+      const auto found =
+          handles_.find(std::string{path.substr(0, separator)});
+      if (found != handles_.end()) {
+        parent = found->second;
+      }
+    }
+    auto module = registry_.instantiate(
+        parsed->unit,
+        path,
+        parent,
+        construction_values,
+        error);
+    if (!module) {
+      return std::nullopt;
+    }
+    record_handles(std::string{path}, *module);
+    lifecycle_roots_.push_back(module->handle);
+    return systemc_description(path, target, *module);
+  }
+
+private:
+  void record_handles(
+      const std::string& path,
+      const elaboration::SystemCInstanceDescription& description) {
+    handles_.emplace(path, description.handle);
+    for (const auto& child : description.native_children) {
+      record_handles(child.path, child);
+    }
+  }
+
+  void record_handles(
+      const std::string& path,
+      const systemc::ModuleDescription& description) {
+    handles_.emplace(path, description.handle);
+    for (const auto& child : description.native_children) {
+      record_handles(path + "." + child.instance, child);
+    }
+  }
+
+  systemc::HierarchyRegistry& registry_;
+  std::vector<std::uint64_t>& lifecycle_roots_;
+  std::map<std::string, fsim_sc_handle_v1> handles_;
+};
 
 void validate_bindings(
     const project::Config& config,
@@ -3352,7 +3457,7 @@ std::optional<BuiltProject> build_project(
     return std::nullopt;
   }
   auto systemc_instances = construct_systemc_instances(
-      config, top, systemc_hierarchy.get(), diagnostics);
+      top, systemc_hierarchy.get(), diagnostics);
   if (!systemc_instances) {
     return std::nullopt;
   }
@@ -3367,8 +3472,21 @@ std::optional<BuiltProject> build_project(
     bindings.push_back(
         {binding.instance, binding.target, binding.resolver});
   }
+  std::unique_ptr<ApplicationSystemCFactoryProvider>
+      systemc_provider;
+  if (systemc_hierarchy) {
+    systemc_provider =
+        std::make_unique<ApplicationSystemCFactoryProvider>(
+            *systemc_hierarchy,
+            *systemc_instances,
+            systemc_roots);
+  }
   auto elaborated = elaboration::elaborate(
-      checked->parsed, top, bindings, *systemc_instances);
+      checked->parsed,
+      top,
+      bindings,
+      *systemc_instances,
+      systemc_provider.get());
   for (const auto& input : elaborated.diagnostics) {
     diagnostics.error(input.code, input.message, span(input.span));
   }

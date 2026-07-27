@@ -109,15 +109,18 @@ now register ordered integer, natural, positive, Boolean, or bit parameter
 schemas with optional defaults, and module constructors read their canonical
 values with `fsim::systemc::construction_value<T>(name)`. Registry construction
 validates missing, unknown, duplicate, and subtype-invalid values
-transactionally. Connecting an HDL parameter override or VHDL generic map to
-that schema is the remaining forward-boundary step. Conversely,
+transactionally. The common hierarchy walk now evaluates an HDL parameter
+override or VHDL generic map in its parent specialization, applies the
+parent-language association/name rules, validates the selected schema, and
+only then constructs the SystemC module and checks its resulting ports.
+Conversely,
 `hdl_instance::set_actual(name,
 value)` now supplies immutable signed scalar actuals for its manifest-selected
 HDL target. The append-only native ABI carries those values into ordinary
 VHDL-generic or Verilog/SystemVerilog-parameter specialization and cache
-identity, with duplicate/unknown actual diagnostics. HDL-to-SystemC actuals
-remain explicitly rejected until the common elaborator consumes the registered
-schema.
+identity, with duplicate/unknown actual diagnostics. Both boundary directions
+therefore use immutable canonical construction values in the bounded scalar
+subset.
 This covers VHDL→SystemC, SV→SystemC, SystemC→VHDL, and SystemC→SV alongside
 the ordinary VHDL↔SV directions; SystemC is a peer hierarchy language rather
 than a leaf-only foreign model.

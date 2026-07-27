@@ -782,14 +782,21 @@ end architecture;
 SC_MODULE(MethodBridge) {
   sc_core::sc_in<sc_dt::sc_logic> value{"value"};
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  bool passthrough{};
 
   SC_CTOR(MethodBridge) {
+    passthrough =
+        fsim::systemc::construction_value<bool>("PASSTHROUGH");
     SC_METHOD(evaluate);
     sensitive << value;
   }
 
   void evaluate() {
     const auto input = value.read();
+    if (passthrough) {
+      inverted.write(input);
+      return;
+    }
     if (input == sc_dt::sc_logic{'0'}) {
       inverted.write(sc_dt::sc_logic{'1'});
     } else if (input == sc_dt::sc_logic{'1'}) {
@@ -1433,9 +1440,16 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (thread_status != FSIM_SC_OK) {
     return thread_status;
   }
+  constexpr std::array<fsim::systemc::factory_parameter, 1>
+      method_parameters{{
+          {"PASSTHROUGH",
+           FSIM_SC_CONSTRUCTION_BOOLEAN,
+           true,
+           0},
+      }};
   const auto method_status =
       fsim::systemc::register_module_factory<MethodBridge>(
-          host, registrar, "method_bridge");
+          host, registrar, "method_bridge", method_parameters);
   if (method_status != FSIM_SC_OK) {
     return method_status;
   }
@@ -1558,10 +1572,14 @@ module systemc_hdl_child #(
   assign inverted = INVERT ? ~value : value;
 endmodule
 
-module systemc_host;
+module systemc_host #(
+  parameter CHILD_MODE = 1
+);
   logic value;
   logic inverted;
-  bridge_placeholder u_bridge(
+  bridge_placeholder #(
+      .CHILD_INVERT(CHILD_MODE)
+  ) u_bridge(
       .value(value),
       .inverted(inverted));
   initial begin
@@ -1700,6 +1718,7 @@ architecture rtl of systemc_method_vhdl_host is
 begin
   value <= '1';
   u_method: method_bridge_placeholder
+    generic map (passthrough => true)
     port map (value => value, inverted => inverted);
 end architecture rtl;
 )";
@@ -1813,7 +1832,12 @@ end architecture rtl;
       hdl_systemc_interpreter
           ->signal_value(*hdl_systemc_inverted)
           .to_msb_string()
-      == "1");
+      == "0");
+  assert((
+      hdl_systemc_project->design.systemc_instances().front()
+          .construction_values
+      == std::vector<std::pair<std::string, std::int64_t>>{
+          {"CHILD_INVERT", 1}}));
   const auto hdl_systemc_child_specialization =
       std::find_if(
           hdl_systemc_project->design.specializations().begin(),
@@ -1828,7 +1852,60 @@ end architecture rtl;
   assert((
       hdl_systemc_child_specialization->parameter_values
       == std::vector<std::pair<std::string, std::string>>{
-          {"INVERT", "0"}}));
+          {"INVERT", "1"}}));
+  const auto run_compiled_systemc_actual =
+      [&]() {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            hdl_systemc_config, run_diagnostics);
+        assert(project);
+        assert((
+            project->design.systemc_instances().front()
+                .construction_values
+            == std::vector<
+                std::pair<std::string, std::int64_t>>{
+                {"CHILD_INVERT", 1}}));
+        const auto output =
+            project->design.find_signal("inverted");
+        assert(output);
+        fsim::app::Simulation simulation{
+            std::move(*project),
+            hdl_systemc_config.run.max_deltas,
+            fsim::app::SimulationEngine::compiled};
+        const auto result = simulation.run();
+        assert(
+            result.status == fsim::runtime::RunStatus::stopped);
+        assert(
+            simulation.read_signal(*output).to_msb_string()
+            == "0");
+        return std::pair{
+            simulation.native_cache_statistics(),
+            simulation.compiled_process_count()};
+      };
+  const auto [systemc_actual_cold_cache,
+              systemc_actual_cold_processes] =
+      run_compiled_systemc_actual();
+  const auto [systemc_actual_warm_cache,
+              systemc_actual_warm_processes] =
+      run_compiled_systemc_actual();
+  assert(
+      systemc_actual_warm_processes
+      == systemc_actual_cold_processes);
+#if defined(FSIM_HAS_LLVM)
+  assert(systemc_actual_cold_processes > 0);
+  assert(systemc_actual_cold_cache.misses > 0);
+  assert(systemc_actual_cold_cache.stores > 0);
+  assert(systemc_actual_warm_cache.hits > 0);
+  assert(systemc_actual_warm_cache.misses == 0);
+#else
+  assert(systemc_actual_cold_processes == 0);
+  assert(
+      systemc_actual_cold_cache
+      == fsim::app::NativeCacheStatistics{});
+  assert(
+      systemc_actual_warm_cache
+      == fsim::app::NativeCacheStatistics{});
+#endif
 
   auto bound_port_config = hdl_systemc_config;
   bound_port_config.project.top =
@@ -2449,7 +2526,7 @@ end architecture rtl;
       vhdl_systemc_method_simulation
           .read_signal(*vhdl_method_output)
           .to_msb_string()
-      == "0");
+      == "1");
 
   auto systemc_method_top_config = systemc_method_config;
   systemc_method_top_config.project.top =

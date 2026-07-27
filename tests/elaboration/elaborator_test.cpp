@@ -25,6 +25,69 @@ bool has_diagnostic(
     return false;
 }
 
+class TestSystemCFactoryProvider final
+    : public fsim::elaboration::SystemCFactoryProvider {
+public:
+    std::vector<fsim::elaboration::SystemCConstructionParameter>
+        parameters;
+    fsim::elaboration::SystemCInstanceDescription prototype;
+    std::vector<std::pair<std::string, std::int64_t>>
+        last_values;
+    std::uint64_t next_handle{10'000};
+    std::string schema_failure;
+    std::string construction_failure;
+
+    std::optional<std::vector<
+        fsim::elaboration::SystemCConstructionParameter>>
+    schema(
+        std::string_view,
+        std::string& error) override {
+        if (!schema_failure.empty()) {
+            error = schema_failure;
+            return std::nullopt;
+        }
+        error.clear();
+        return parameters;
+    }
+
+    std::optional<fsim::elaboration::SystemCInstanceDescription>
+    instantiate(
+        const std::string_view path,
+        const std::string_view target,
+        const std::span<
+            const std::pair<std::string, std::int64_t>> values,
+        std::string& error) override {
+        if (!construction_failure.empty()) {
+            error = construction_failure;
+            return std::nullopt;
+        }
+        error.clear();
+        auto result = prototype;
+        result.path = path;
+        result.target = target;
+        result.handle = next_handle++;
+        result.construction_values.assign(
+            values.begin(), values.end());
+        last_values = result.construction_values;
+        const auto width = std::find_if(
+            values.begin(),
+            values.end(),
+            [](const auto& value) {
+                return value.first == "WIDTH";
+            });
+        if (width != values.end() && width->second > 0) {
+            for (auto& port : result.ports) {
+                if (port.name == "value" && width->second > 1) {
+                    port.type.packed_range =
+                        fsim::frontend::PackedRange{
+                            width->second - 1, 0, true};
+                }
+            }
+        }
+        return result;
+    }
+};
+
 } // namespace
 
 int main() {
@@ -935,12 +998,145 @@ endmodule
         "systemc.unsigned",
         fsim::frontend::PackedRange{7, 0, true},
         false};
+    const auto parsed_systemc_parameters =
+        fsim::frontend::parse_text(
+            "systemc_parameters.sv",
+            R"(
+module systemc_parameter_host;
+  bit [3:0] value;
+  bridge_placeholder #(.WIDTH(4)) u_bridge(.value(value));
+endmodule
+
+module systemc_invalid_parameter_host;
+  bit value;
+  bridge_placeholder #(.WIDTH(0)) u_bridge(.value(value));
+endmodule
+
+module systemc_unknown_parameter_host;
+  bit value;
+  bridge_placeholder #(.MISSING(1)) u_bridge(.value(value));
+endmodule
+
+module systemc_missing_parameter_host;
+  bit value;
+  bridge_placeholder u_bridge(.value(value));
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed_systemc_parameters.ok());
+    TestSystemCFactoryProvider parameter_provider;
+    parameter_provider.parameters = {
+        {"WIDTH", FSIM_SC_CONSTRUCTION_POSITIVE, std::nullopt},
+    };
+    parameter_provider.prototype.target =
+        "systemc:models.parameter_bridge";
+    parameter_provider.prototype.ports = {
+        {10'001,
+         "value",
+         systemc_unsigned,
+         fsim::frontend::PortDirection::Output,
+         0},
+    };
+    const std::vector<fsim::elaboration::Binding>
+        systemc_parameter_binding{
+            {"systemc_parameter_host.u_bridge",
+             "systemc:models.parameter_bridge",
+             std::nullopt},
+        };
+    const auto systemc_parameterized =
+        fsim::elaboration::elaborate(
+            parsed_systemc_parameters.design,
+            "sv:work.systemc_parameter_host",
+            systemc_parameter_binding,
+            std::span<const
+                fsim::elaboration::SystemCInstanceDescription>{},
+            &parameter_provider);
+    assert(systemc_parameterized.ok());
+    assert((
+        parameter_provider.last_values
+        == std::vector<std::pair<std::string, std::int64_t>>{
+            {"WIDTH", 4}}));
+    assert((
+        systemc_parameterized.design->systemc_instances().front()
+            .construction_values
+        == parameter_provider.last_values));
+    const auto parameterized_value =
+        systemc_parameterized.design->find_signal("value");
+    assert(parameterized_value);
+    assert(
+        systemc_parameterized.design->signals()
+            .at(*parameterized_value)
+            .width
+        == 4);
+
+    const auto reject_systemc_parameter =
+        [&](const std::string_view top,
+            const std::string_view instance,
+            const std::string_view diagnostic) {
+          TestSystemCFactoryProvider provider = parameter_provider;
+          const std::vector<fsim::elaboration::Binding> binding{
+              {std::string{instance},
+               "systemc:models.parameter_bridge",
+               std::nullopt},
+          };
+          const auto result = fsim::elaboration::elaborate(
+              parsed_systemc_parameters.design,
+              top,
+              binding,
+              std::span<const
+                  fsim::elaboration::SystemCInstanceDescription>{},
+              &provider);
+          assert(!result.ok());
+          assert(has_diagnostic(result, diagnostic));
+        };
+    reject_systemc_parameter(
+        "sv:work.systemc_invalid_parameter_host",
+        "systemc_invalid_parameter_host.u_bridge",
+        "FSIM-ELAB-SC-PARAM-005");
+    reject_systemc_parameter(
+        "sv:work.systemc_unknown_parameter_host",
+        "systemc_unknown_parameter_host.u_bridge",
+        "FSIM-ELAB-SC-PARAM-001");
+    reject_systemc_parameter(
+        "sv:work.systemc_missing_parameter_host",
+        "systemc_missing_parameter_host.u_bridge",
+        "FSIM-ELAB-SC-PARAM-001");
+    auto unavailable_schema_provider = parameter_provider;
+    unavailable_schema_provider.schema_failure =
+        "intentional schema failure";
+    const auto unavailable_schema =
+        fsim::elaboration::elaborate(
+            parsed_systemc_parameters.design,
+            "sv:work.systemc_parameter_host",
+            systemc_parameter_binding,
+            std::span<const
+                fsim::elaboration::SystemCInstanceDescription>{},
+            &unavailable_schema_provider);
+    assert(!unavailable_schema.ok());
+    assert(has_diagnostic(
+        unavailable_schema, "FSIM-ELAB-SC-PARAM-007"));
+    auto failed_construction_provider = parameter_provider;
+    failed_construction_provider.construction_failure =
+        "intentional construction failure";
+    const auto failed_construction =
+        fsim::elaboration::elaborate(
+            parsed_systemc_parameters.design,
+            "sv:work.systemc_parameter_host",
+            systemc_parameter_binding,
+            std::span<const
+                fsim::elaboration::SystemCInstanceDescription>{},
+            &failed_construction_provider);
+    assert(!failed_construction.ok());
+    assert(has_diagnostic(
+        failed_construction, "FSIM-ELAB-SC-PARAM-008"));
+
     const fsim::elaboration::SystemCInstanceDescription
         nested_systemc{
             "systemc_parent.u_bridge",
             "systemc:models.bridge",
             100,
             0,
+            {},
             {
                 {101, "clock", systemc_bit,
                  fsim::frontend::PortDirection::Input, 0},
@@ -1179,6 +1375,7 @@ end architecture rtl;
             "systemc:models.bridge",
             200,
             0,
+            {},
             {
                 {201, "value", systemc_logic,
                  fsim::frontend::PortDirection::Input, 0},
@@ -3633,6 +3830,7 @@ endmodule
             "systemc:models.conflict",
             1000,
             0,
+            {},
             {
                 {1001,
                  "first",

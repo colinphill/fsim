@@ -90,7 +90,7 @@ the foreign-child descriptor through an append-only host callback. The common
 elaborator applies them to the explicitly selected HDL unit using that target
 language's name and subtype rules before port checks. They therefore flow into
 the same canonical specialization and native-cache identity as source-written
-generic/parameter actuals. The reverse HDL-to-SystemC direction still awaits
+generic/parameter actuals. The reverse HDL-to-SystemC direction now uses
 factory-declared typed schemas and construction-value delivery.
 
 The reverse-path ABI spine now exists: a factory registers ordered scalar
@@ -99,9 +99,12 @@ plug-in loader buffers and replays both as one unit, and the hierarchy registry
 canonicalizes explicit/default values before invoking the module constructor.
 An active constructor reads only declared values through
 `construction_value<T>`. The schema supports integer, natural, positive,
-Boolean, and bit constraints. The remaining integration step is for the common
-HDL hierarchy walk to evaluate source instance actuals against this schema
-before asking the registry to construct the bound SystemC module.
+Boolean, and bit constraints. The common HDL hierarchy walk evaluates source
+instance actuals in the parent specialization, applies VHDL/SV association
+rules, validates the schema, and invokes an application-owned provider only
+after canonicalization. The constructed ports are then connected and checked,
+so parameter-dependent SystemC interfaces never pass through a mismatched
+default construction.
 
 ## Runtime values
 
