@@ -719,6 +719,11 @@ class VerilogParser final : private detail::ParserBase {
           self(
               self, statement.else_statements, has_timing,
               has_nonblocking);
+          for (const auto& alternative : statement.case_alternatives) {
+            self(
+                self, alternative.statements, has_timing,
+                has_nonblocking);
+          }
         }
       };
       bool has_timing = false;
@@ -802,7 +807,86 @@ class VerilogParser final : private detail::ParserBase {
     return sensitivities;
   }
 
+  void skip_case_statement() {
+    std::size_t depth = 1;
+    while (!at_end() && depth != 0) {
+      if (keyword("case") || keyword("casez") || keyword("casex")) {
+        ++depth;
+        advance();
+      } else if (match_keyword("endcase")) {
+        --depth;
+      } else {
+        advance();
+      }
+    }
+  }
+
+  Statement parse_case_statement(const Token& start) {
+    Statement statement;
+    statement.kind = StatementKind::Case;
+    expect(TokenKind::LeftParen, "'(' after case", "FSIM-SV-PARSE-046");
+    statement.condition = parse_expression();
+    expect(TokenKind::RightParen, "')' after case expression",
+           "FSIM-SV-PARSE-047");
+    if (match_keyword("inside")) {
+      error(previous(), "FSIM-SV-UNSUPPORTED-018",
+            "case inside matching is not implemented");
+      skip_case_statement();
+      statement.span = span_from(start, previous());
+      return statement;
+    }
+
+    bool saw_default = false;
+    while (!at_end() && !keyword("endcase")) {
+      const auto item_start = current();
+      CaseAlternative alternative;
+      if (match_keyword("default")) {
+        alternative.is_default = true;
+        if (saw_default) {
+          error(item_start, "FSIM-SV-SEM-014",
+                "a case statement may contain only one default item");
+        }
+        saw_default = true;
+      } else {
+        alternative.choices.push_back(parse_expression());
+        while (match(TokenKind::Comma)) {
+          alternative.choices.push_back(parse_expression());
+        }
+      }
+      expect(TokenKind::Colon, "':' after case item",
+             "FSIM-SV-PARSE-048");
+      if (auto body = parse_statement()) {
+        alternative.statements.push_back(std::move(*body));
+      }
+      alternative.span = cover(item_start.span, previous().span);
+      statement.case_alternatives.push_back(std::move(alternative));
+    }
+    expect_keyword("endcase", false, "FSIM-SV-PARSE-049");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   std::optional<Statement> parse_statement() {
+    if (language_ == Language::SystemVerilog2017
+        && (keyword("unique") || keyword("unique0")
+            || keyword("priority"))
+        && (keyword("case", 1) || keyword("casez", 1)
+            || keyword("casex", 1))) {
+      const auto qualifier = advance();
+      error(qualifier, "FSIM-SV-UNSUPPORTED-017",
+            "unique and priority case qualifiers are not implemented");
+    }
+    if (keyword("casez") || keyword("casex")) {
+      const auto unsupported = advance();
+      error(unsupported, "FSIM-SV-UNSUPPORTED-016",
+            unsupported.text
+                + " wildcard matching is not implemented; use exact case");
+      skip_case_statement();
+      return std::nullopt;
+    }
+    if (match_keyword("case")) {
+      return parse_case_statement(previous());
+    }
     if (language_ == Language::SystemVerilog2017
         && match_keyword("assert")) {
       const auto start = previous();

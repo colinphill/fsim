@@ -81,6 +81,16 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     }
     return result;
   }
+  if (operation == BinaryOperator::case_equal) {
+    auto result = PackedLogic4(1, Logic4::one);
+    for (std::size_t index = 0; index < lhs.width(); ++index) {
+      if (lhs.get(index) != rhs.get(index)) {
+        result.set(0, Logic4::zero);
+        break;
+      }
+    }
+    return result;
+  }
 
   PackedLogic4 result(lhs.width(), Logic4::zero);
   if (operation == BinaryOperator::add_unsigned) {
@@ -109,6 +119,7 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
       break;
     case BinaryOperator::add_unsigned:
     case BinaryOperator::equal:
+    case BinaryOperator::case_equal:
       break;
     }
   }

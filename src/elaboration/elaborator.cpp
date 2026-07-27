@@ -389,10 +389,19 @@ private:
         return std::any_of(
             statements.begin(), statements.end(),
             [](const Statement& statement) {
+                const auto case_wait =
+                    std::any_of(
+                        statement.case_alternatives.begin(),
+                        statement.case_alternatives.end(),
+                        [](const frontend::CaseAlternative& alternative) {
+                            return contains_explicit_wait(
+                                alternative.statements);
+                        });
                 return statement.kind == StatementKind::Delay
                     || statement.kind == StatementKind::WaitOn
                     || contains_explicit_wait(statement.statements)
-                    || contains_explicit_wait(statement.else_statements);
+                    || contains_explicit_wait(statement.else_statements)
+                    || case_wait;
             });
     }
 
@@ -554,6 +563,9 @@ private:
             break;
         case StatementKind::If:
             lower_if(statement);
+            break;
+        case StatementKind::Case:
+            lower_case(statement);
             break;
         case StatementKind::Assert:
             lower_assert(statement);
@@ -842,6 +854,99 @@ private:
         process_.operations[jump_index] = Jump{end};
     }
 
+    void lower_case(const Statement& statement) {
+        const auto selector_width =
+            infer_width(statement.condition).value_or(std::size_t{1});
+        const auto selector =
+            lower_expression(statement.condition, selector_width);
+        if (!selector) {
+            return;
+        }
+
+        std::vector<InstructionIndex> exit_jumps;
+        const frontend::CaseAlternative* default_alternative = nullptr;
+        for (const auto& alternative : statement.case_alternatives) {
+            if (alternative.is_default) {
+                default_alternative = &alternative;
+                continue;
+            }
+
+            std::vector<InstructionIndex> branches;
+            for (const auto& choice : alternative.choices) {
+                const auto choice_register =
+                    lower_expression(choice, register_width(*selector));
+                if (!choice_register) {
+                    continue;
+                }
+                if (register_width(*choice_register)
+                    != register_width(*selector)) {
+                    report(
+                        "FSIM-ELAB-063",
+                        "case item width "
+                            + std::to_string(
+                                register_width(*choice_register))
+                            + " does not match selector width "
+                            + std::to_string(register_width(*selector)),
+                        choice.span);
+                    continue;
+                }
+                const auto condition =
+                    allocate_register(1, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary{
+                    BinaryOperator::case_equal,
+                    condition,
+                    *selector,
+                    *choice_register});
+                branches.push_back(
+                    static_cast<InstructionIndex>(
+                        process_.operations.size()));
+                process_.operations.emplace_back(Branch{
+                    condition,
+                    0,
+                    0,
+                    UnknownBranchPolicy::when_false});
+            }
+
+            const auto skip_body =
+                static_cast<InstructionIndex>(process_.operations.size());
+            process_.operations.emplace_back(Jump{0});
+            const auto body_start =
+                static_cast<InstructionIndex>(process_.operations.size());
+            lower_statements(alternative.statements);
+            exit_jumps.push_back(
+                static_cast<InstructionIndex>(
+                    process_.operations.size()));
+            process_.operations.emplace_back(Jump{0});
+            const auto next_alternative =
+                static_cast<InstructionIndex>(process_.operations.size());
+
+            for (std::size_t index = 0; index < branches.size(); ++index) {
+                const auto false_target =
+                    index + 1 < branches.size()
+                        ? static_cast<InstructionIndex>(
+                              branches[index] + 1)
+                        : skip_body;
+                const auto& operation =
+                    std::get<Branch>(process_.operations[branches[index]]);
+                process_.operations[branches[index]] = Branch{
+                    operation.condition,
+                    body_start,
+                    false_target,
+                    UnknownBranchPolicy::when_false};
+            }
+            process_.operations[skip_body] = Jump{next_alternative};
+        }
+
+        if (default_alternative != nullptr) {
+            lower_statements(default_alternative->statements);
+        }
+        const auto end =
+            static_cast<InstructionIndex>(process_.operations.size());
+        for (const auto jump : exit_jumps) {
+            process_.operations[jump] = Jump{end};
+        }
+    }
+
     std::optional<RegisterId> lower_expression(
         const Expression& expression, const std::size_t expected_width) {
         if (expression.kind == ExpressionKind::Identifier) {
@@ -1022,6 +1127,15 @@ private:
             case StatementKind::Assert:
                 collect_identifiers(statement.condition, output);
                 break;
+            case StatementKind::Case:
+                collect_identifiers(statement.condition, output);
+                for (const auto& alternative :
+                     statement.case_alternatives) {
+                    for (const auto& choice : alternative.choices) {
+                        collect_identifiers(choice, output);
+                    }
+                }
+                break;
             case StatementKind::Delay:
             case StatementKind::WaitOn:
             case StatementKind::Finish:
@@ -1033,6 +1147,11 @@ private:
                 statement.statements, output);
             collect_statement_identifiers(
                 statement.else_statements, output);
+            for (const auto& alternative :
+                 statement.case_alternatives) {
+                collect_statement_identifiers(
+                    alternative.statements, output);
+            }
         }
     }
 

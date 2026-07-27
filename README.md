@@ -40,6 +40,8 @@ The current tree contains:
   controls;
 - deterministic simple-expression sensitivity inference for `always @*`,
   time-zero `always_comb`/`always_latch`, and dynamic `@*`;
+- ordered Verilog/SystemVerilog exact `case`/`default` lowering with
+  comma-separated choices and four-state `X`/`Z` matching;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

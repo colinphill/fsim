@@ -194,6 +194,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-043` | error | Expected `)` after an assertion `$error` message. |
 | `FSIM-SV-PARSE-044` | error | Expected `;` after an assertion. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
+| `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
+| `FSIM-SV-PARSE-047` | error | Expected `)` after a `case` selector expression. |
+| `FSIM-SV-PARSE-048` | error | Expected `:` after a `case` item. |
+| `FSIM-SV-PARSE-049` | error | Expected `endcase`. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -220,6 +224,7 @@ therefore excluded.
 | `FSIM-SV-SEM-011` | error | An `always_comb` or `always_latch` has an explicit event control. |
 | `FSIM-SV-SEM-012` | error | An `always_comb` or `always_latch` contains a timing control. |
 | `FSIM-SV-SEM-013` | error | An `always_comb` or `always_latch` contains a nonblocking assignment. |
+| `FSIM-SV-SEM-014` | error | A `case` statement contains more than one `default` item. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A directive requires the unimplemented preprocessing stage. |
 | `FSIM-SV-UNSUPPORTED-003` | error | Parameter port lists are not implemented. |
@@ -235,6 +240,9 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-013` | error | `` `default_nettype`` is recognized but implicit-net legality is not implemented. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-015` | error | A nested procedural block declaration requires unsupported local-scope semantics. |
+| `FSIM-SV-UNSUPPORTED-016` | error | `casez` or `casex` requires unsupported wildcard matching. |
+| `FSIM-SV-UNSUPPORTED-017` | error | A `case` statement uses an unsupported `unique`, `unique0`, or `priority` qualifier. |
+| `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
 
 ## Elaboration and SimIR lowering
 
@@ -276,6 +284,7 @@ therefore excluded.
 | `FSIM-ELAB-060` | error | An edge-qualified dynamic wait names a nonscalar signal. |
 | `FSIM-ELAB-061` | error | A wildcard process has no readable signal dependency. |
 | `FSIM-ELAB-062` | error | A dynamic wildcard event control has no readable signal dependency. |
+| `FSIM-ELAB-063` | error | A case-item choice width does not match its selector width. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

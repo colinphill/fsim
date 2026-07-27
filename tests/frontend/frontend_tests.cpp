@@ -883,6 +883,87 @@ endmodule
       "always_comb/always_latch language-version diagnostics");
 }
 
+void test_systemverilog_case_statements() {
+  const auto result = parse_text(
+      "case_statement.sv",
+      R"(
+module case_statement;
+  logic [1:0] selector;
+  logic [1:0] result;
+  always_comb case (selector)
+    2'b00: result = 2'b01;
+    2'b01, 2'b10: begin
+      result = 2'b10;
+    end
+    default: result = 2'b11;
+  endcase
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(result.ok(), "exact SystemVerilog case statement must parse");
+  const auto& statement =
+      result.design.units.front().processes.front().statements.front();
+  require(
+      statement.kind == StatementKind::Case
+          && statement.condition.kind == ExpressionKind::Identifier
+          && statement.condition.text == "selector"
+          && statement.case_alternatives.size() == 3,
+      "case selector and ordered alternatives");
+  require(
+      statement.case_alternatives[0].choices.size() == 1
+          && statement.case_alternatives[1].choices.size() == 2
+          && statement.case_alternatives[1].statements.size() == 1
+          && statement.case_alternatives[1].statements.front().kind
+              == StatementKind::Block
+          && statement.case_alternatives[2].is_default
+          && statement.case_alternatives[2].choices.empty(),
+      "case choices, block body, and default metadata");
+
+  const auto invalid = parse_text(
+      "bad_case.sv",
+      R"(
+module bad_case;
+  logic selector;
+  logic result;
+  always_comb case (selector)
+    default: result = 1'b0;
+    default: result = 1'b1;
+  endcase
+  initial casex (selector)
+    1'bx: result = 1'b0;
+  endcase
+  initial unique case (selector)
+    1'b0: result = 1'b0;
+  endcase
+  initial unique0 case (selector)
+    1'b0: result = 1'b0;
+  endcase
+  initial case (selector) inside
+    [1'b0:1'b1]: result = 1'b0;
+  endcase
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid.ok(), "unsupported and duplicate case forms must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-SEM-014"},
+           std::string_view{"FSIM-SV-UNSUPPORTED-016"},
+           std::string_view{"FSIM-SV-UNSUPPORTED-017"},
+           std::string_view{"FSIM-SV-UNSUPPORTED-018"}}) {
+    require(
+        std::any_of(
+            invalid.diagnostics.begin(),
+            invalid.diagnostics.end(),
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted case diagnostic");
+  }
+  require(
+      invalid.design.units.front().processes.size() == 5,
+      "case diagnostics must recover to following processes");
+}
+
 }  // namespace
 
 int main() {
@@ -908,6 +989,7 @@ int main() {
     test_process_variable_declarations();
     test_procedural_wait_statements();
     test_wildcard_and_always_comb_processes();
+    test_systemverilog_case_statements();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

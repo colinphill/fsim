@@ -48,6 +48,7 @@ enum class BinaryOperator : std::uint8_t {
   bit_xor,
   add_unsigned,
   equal,
+  case_equal,
 };
 
 struct Binary {

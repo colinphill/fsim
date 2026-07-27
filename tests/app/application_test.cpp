@@ -158,6 +158,31 @@ module wildcard_app;
 endmodule
 )";
   }
+  const auto case_source = directory / "case.sv";
+  {
+    std::ofstream output(case_source);
+    output << R"(
+module case_app;
+  logic [1:0] selector;
+  logic [1:0] result;
+  always_comb case (selector)
+    2'b00: result = 2'b00;
+    2'b01, 2'b10: result = 2'b01;
+    2'bx0: result = 2'b10;
+    2'bz1: result = 2'b11;
+    default: result = 2'b00;
+  endcase
+  initial begin
+    selector = 2'b00;
+    #1 selector = 2'b10;
+    #1 selector = 2'bx0;
+    #1 selector = 2'bz1;
+    #1 selector = 2'b11;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
   const auto partial_group_source = directory / "partial_group.sv";
   {
     std::ofstream output(partial_group_source);
@@ -896,6 +921,70 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert((
       wildcard_hybrid.final_values
       == std::vector<std::string>{"1", "1", "0", "1"}));
+
+  auto case_config = config;
+  case_config.project.name = "case-statement-test";
+  case_config.project.top = "sv:work.case_app";
+  case_config.build.optimization =
+      fsim::project::Optimization::o2;
+  case_config.build.cache_path = directory / "case-cache";
+  case_config.source_sets.clear();
+  fsim::project::SourceSet case_sources;
+  case_sources.language =
+      fsim::project::Language::system_verilog;
+  case_sources.standard = "2017";
+  case_sources.library = "work";
+  case_sources.files.push_back(case_source);
+  case_config.source_sets.push_back(std::move(case_sources));
+  fsim::diagnostic::Engine case_diagnostics;
+  auto case_reference_project =
+      fsim::app::build_project(case_config, case_diagnostics);
+  auto case_hybrid_project =
+      fsim::app::build_project(case_config, case_diagnostics);
+  assert(case_reference_project);
+  assert(case_hybrid_project);
+  const auto case_selector =
+      case_reference_project->design.find_signal(
+          "case_app.selector");
+  const auto case_result =
+      case_reference_project->design.find_signal(
+          "case_app.result");
+  assert(case_selector && case_result);
+  const auto case_reference = capture_simulation(
+      std::move(*case_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto case_hybrid = capture_simulation(
+      std::move(*case_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(case_reference, case_hybrid);
+  assert(
+      case_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(case_hybrid.result.time == 5);
+  assert(case_hybrid.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(case_hybrid.compiled_processes == 2);
+  assert(case_hybrid.compiled_modules == 1);
+#endif
+  assert((
+      case_hybrid.final_values
+      == std::vector<std::string>{"11", "00"}));
+  assert(std::find(
+             case_hybrid.changes.begin(),
+             case_hybrid.changes.end(),
+             std::tuple{
+                 *case_result, std::string{"10"},
+                 fsim::runtime::SimulationTick{2},
+                 std::uint64_t{1}})
+         != case_hybrid.changes.end());
+  assert(std::find(
+             case_hybrid.changes.begin(),
+             case_hybrid.changes.end(),
+             std::tuple{
+                 *case_result, std::string{"11"},
+                 fsim::runtime::SimulationTick{3},
+                 std::uint64_t{1}})
+         != case_hybrid.changes.end());
 
   auto partial_group_config = config;
   partial_group_config.project.name =

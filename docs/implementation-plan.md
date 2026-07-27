@@ -92,9 +92,12 @@ The following foundation is implemented:
   time-zero `always_comb`/`always_latch`, plus dynamic `@*`, with a
   four-process interpreter/O2 delta
   differential;
+- ordered exact Verilog/SystemVerilog `case`/`default` lowering with
+  comma-separated choices, four-state `X`/`Z` matching, width diagnostics,
+  and an interpreter/O2 differential;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 273 current production diagnostic codes.
+- a stable catalog covering 279 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -271,6 +274,8 @@ Completed groundwork:
   SystemVerilog any-change/scalar-edge procedural event controls;
 - inferred wildcard sensitivities for bounded `always @*`, `always_comb`,
   `always_latch`, and dynamic `@*`;
+- bounded exact Verilog/SystemVerilog `case` statements with ordered,
+  four-state alternatives and default fallback;
 - deterministic project seed handling;
 - scope/signal navigation, source/time/signal-change breakpoints including
   exact-state signal conditions, all four step modes, live debug-trace

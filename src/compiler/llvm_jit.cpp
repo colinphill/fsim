@@ -517,6 +517,7 @@ validate_process(const Process &process,
               case BinaryOperator::bit_xor:
               case BinaryOperator::add_unsigned:
               case BinaryOperator::equal:
+              case BinaryOperator::case_equal:
                 break;
               default:
                 reject(process, index,
@@ -526,7 +527,8 @@ validate_process(const Process &process,
               record_use(operation.lhs, index);
               record_use(operation.rhs, index);
               unify_registers(operation.lhs, operation.rhs, index);
-              if (operation.operation == BinaryOperator::equal) {
+              if (operation.operation == BinaryOperator::equal
+                  || operation.operation == BinaryOperator::case_equal) {
                 constrain_width(operation.destination, 1U, index);
               } else {
                 unify_registers(operation.destination, operation.lhs, index);
@@ -1281,6 +1283,19 @@ struct EncodedBit {
     auto *bval =
         builder.CreateZExt(unknown, llvm::Type::getInt64Ty(context));
     return {aval, bval, 1};
+  }
+  case BinaryOperator::case_equal: {
+    auto *aval_equal = builder.CreateICmpEQ(
+        builder.CreateAnd(lhs.aval, mask),
+        builder.CreateAnd(rhs.aval, mask));
+    auto *bval_equal = builder.CreateICmpEQ(
+        builder.CreateAnd(lhs.bval, mask),
+        builder.CreateAnd(rhs.bval, mask));
+    auto *equal = builder.CreateAnd(aval_equal, bval_equal);
+    return {
+        builder.CreateZExt(equal, llvm::Type::getInt64Ty(context)),
+        constant_i64(context, 0),
+        1};
   }
   }
   llvm_unreachable("all BinaryOperator values are handled");

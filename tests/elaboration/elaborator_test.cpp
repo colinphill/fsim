@@ -1053,6 +1053,96 @@ endmodule
             .to_msb_string()
         == "1");
 
+    const auto case_process = fsim::frontend::parse_text(
+        "case_process.sv",
+        R"(
+module case_process;
+  logic [1:0] selector;
+  logic [1:0] result;
+  always_comb case (selector)
+    2'b00: result = 2'b00;
+    2'b01, 2'b10: result = 2'b01;
+    2'bx0: result = 2'b10;
+    2'bz1: result = 2'b11;
+    default: result = 2'b00;
+  endcase
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(case_process.ok());
+    const auto elaborated_case =
+        fsim::elaboration::elaborate(
+            case_process.design, "sv:work.case_process");
+    assert(elaborated_case.ok());
+    const auto case_selector =
+        elaborated_case.design->find_signal("selector");
+    const auto case_result =
+        elaborated_case.design->find_signal("result");
+    assert(case_selector && case_result);
+    assert((
+        elaborated_case.design->processes().front()
+            .static_sensitivity
+        == std::vector<fsim::runtime::simir::Sensitivity>{
+            {*case_selector,
+             fsim::runtime::simir::EdgeKind::any}}));
+    const auto has_case_equality = std::any_of(
+        elaborated_case.design->processes().front()
+            .operations.begin(),
+        elaborated_case.design->processes().front()
+            .operations.end(),
+        [](const fsim::runtime::simir::Operation& operation) {
+            const auto* binary =
+                std::get_if<fsim::runtime::simir::Binary>(
+                    &operation);
+            return binary != nullptr
+                && binary->operation
+                    == fsim::runtime::simir::BinaryOperator::
+                        case_equal;
+        });
+    assert(has_case_equality);
+    auto case_interpreter =
+        elaborated_case.design->create_interpreter();
+    (void)case_interpreter->run();
+    for (const auto& [selector_value, expected] :
+         std::vector<std::pair<std::string, std::string>>{
+             {"00", "00"},
+             {"01", "01"},
+             {"10", "01"},
+             {"x0", "10"},
+             {"z1", "11"},
+             {"11", "00"}}) {
+        case_interpreter->deposit_signal(
+            *case_selector,
+            fsim::runtime::PackedLogic4::from_msb_string(
+                selector_value));
+        (void)case_interpreter->run();
+        assert(
+            case_interpreter
+                ->signal_value(*case_result)
+                .to_msb_string()
+            == expected);
+    }
+
+    const auto mismatched_case = fsim::frontend::parse_text(
+        "mismatched_case.sv",
+        R"(
+module mismatched_case;
+  logic [1:0] selector;
+  logic result;
+  always_comb case (selector)
+    1'b0: result = 1'b0;
+    default: result = 1'b1;
+  endcase
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(mismatched_case.ok());
+    const auto rejected_case =
+        fsim::elaboration::elaborate(
+            mismatched_case.design, "sv:work.mismatched_case");
+    assert(!rejected_case.ok());
+    assert(has_diagnostic(rejected_case, "FSIM-ELAB-063"));
+
     const auto empty_wildcard = fsim::frontend::parse_text(
         "empty_wildcard.sv",
         R"(

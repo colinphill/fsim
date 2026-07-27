@@ -137,6 +137,14 @@ zero before using the inferred static list; `always @*` waits for the first
 change, while dynamic `@*` installs an inferred `WaitOn`. Function/task body
 dependencies remain pending.
 
+Exact Verilog/SystemVerilog `case` evaluates its selector once, tests
+comma-separated choices in source order with a dedicated four-state
+case-equality operation, and executes `default` only when no choice matches.
+The comparison treats `X` and `Z` as exact values and always produces a
+two-state condition, so interpreter and LLVM branch behavior is identical.
+`casez`, `casex`, `case inside`, and `unique`/`unique0`/`priority`
+qualifiers remain targeted unsupported forms.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

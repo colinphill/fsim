@@ -127,6 +127,7 @@ struct Delay {
 enum class StatementKind {
   Assignment,
   If,
+  Case,
   Assert,
   Delay,
   WaitOn,
@@ -154,6 +155,8 @@ struct Sensitivity {
   SourceSpan span;
 };
 
+struct CaseAlternative;
+
 struct Statement {
   StatementKind kind{StatementKind::Null};
   SourceSpan span;
@@ -171,8 +174,17 @@ struct Statement {
   std::vector<Statement> statements;
   // The false branch of an If statement.
   std::vector<Statement> else_statements;
+  // Ordered alternatives of a SystemVerilog case statement.
+  std::vector<CaseAlternative> case_alternatives;
   // Declarations directly owned by a procedural block.
   std::vector<VariableDeclaration> declarations;
+};
+
+struct CaseAlternative {
+  std::vector<Expression> choices;
+  std::vector<Statement> statements;
+  bool is_default{};
+  SourceSpan span;
 };
 
 enum class ProcessKind {

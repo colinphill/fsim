@@ -67,7 +67,7 @@ struct ObservedWrite {
 };
 
 struct TestRuntime {
-  std::array<EncodedSignal, 8> signals{};
+  std::array<EncodedSignal, 9> signals{};
   std::uint32_t assertion_count{};
   std::uint32_t failed_process{};
   std::uint32_t failed_instruction{};
@@ -1060,7 +1060,7 @@ void test_scalar_truth_tables_and_64_bits() {
   Process scalar;
   scalar.id = 0;
   scalar.name = "scalar";
-  scalar.register_count = 8;
+  scalar.register_count = 9;
   scalar.operations = {
       ReadSignal{0, 0},
       ReadSignal{1, 1},
@@ -1076,9 +1076,12 @@ void test_scalar_truth_tables_and_64_bits() {
       WriteBlocking{6, 6},
       Binary{BinaryOperator::equal, 7, 0, 1},
       WriteBlocking{7, 7},
+      Binary{BinaryOperator::case_equal, 8, 0, 1},
+      WriteBlocking{8, 8},
       Halt{},
   };
-  const std::array<std::uint32_t, 8> scalar_widths{1, 1, 1, 1, 1, 1, 1, 1};
+  const std::array<std::uint32_t, 9> scalar_widths{
+      1, 1, 1, 1, 1, 1, 1, 1, 1};
   jit.add_process("scalar_truth_table", scalar, scalar_widths);
   const auto scalar_handle = jit.lookup("scalar_truth_table");
 
@@ -1099,6 +1102,10 @@ void test_scalar_truth_tables_and_64_bits() {
       assert(runtime.signals[5] == encode(fsim::runtime::logic_xor(lhs, rhs)));
       assert(runtime.signals[6] == encode(fsim::runtime::logic_not(lhs)));
       assert(runtime.signals[7] == encode(equality(lhs, rhs)));
+      assert(
+          runtime.signals[8]
+          == encode(
+              lhs == rhs ? Logic4::one : Logic4::zero));
     }
   }
 
