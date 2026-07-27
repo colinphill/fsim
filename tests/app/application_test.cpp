@@ -808,6 +808,41 @@ module generated_mixed_sv_top #(
 endmodule
 )";
   }
+  const auto generated_loop_vhdl_source =
+      directory / "generated_loop_child.vhd";
+  {
+    std::ofstream output(generated_loop_vhdl_source);
+    output << R"(
+entity generated_loop_child is
+  generic (
+    value : natural := 0
+  );
+end entity;
+
+architecture rtl of generated_loop_child is
+  signal q : unsigned(3 downto 0);
+begin
+  q <= value;
+end architecture;
+)";
+  }
+  const auto generated_loop_sv_top_source =
+      directory / "generated_loop_top.sv";
+  {
+    std::ofstream output(generated_loop_sv_top_source);
+    output << R"(
+module generated_loop_top #(
+  parameter COUNT = 3
+);
+  generate
+    for (genvar i = 0; i < COUNT; i = i + 1) begin : lanes
+      generated_loop_bound #(.VALUE(i + 5)) child();
+    end
+  endgenerate
+  initial #1 $finish;
+endmodule
+)";
+  }
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -4943,6 +4978,129 @@ end architecture rtl;
       generated_mixed_warm.simulation.native_cache.hits == 2);
   assert(
       generated_mixed_warm.simulation.native_cache.misses == 0);
+#endif
+
+  // Loop-generate expansion is also specialization-owned: the loop variable
+  // becomes a constant construction actual and the indexed scope is stable
+  // enough to bind every selected foreign child explicitly.
+  auto generated_loop_config = config;
+  generated_loop_config.project.name =
+      "generated-loop-mixed-hierarchy-test";
+  generated_loop_config.project.top =
+      "sv:work.generated_loop_top";
+  generated_loop_config.build.optimization =
+      fsim::project::Optimization::o2;
+  generated_loop_config.build.cache_path =
+      directory / "generated-loop-mixed-hierarchy-cache";
+  generated_loop_config.source_sets.clear();
+  fsim::project::SourceSet generated_loop_vhdl_sources;
+  generated_loop_vhdl_sources.language =
+      fsim::project::Language::vhdl;
+  generated_loop_vhdl_sources.standard = "2008";
+  generated_loop_vhdl_sources.library = "work";
+  generated_loop_vhdl_sources.compilation_unit = "file";
+  generated_loop_vhdl_sources.files = {
+      generated_loop_vhdl_source};
+  generated_loop_config.source_sets.push_back(
+      std::move(generated_loop_vhdl_sources));
+  fsim::project::SourceSet generated_loop_sv_sources;
+  generated_loop_sv_sources.language =
+      fsim::project::Language::system_verilog;
+  generated_loop_sv_sources.standard = "2017";
+  generated_loop_sv_sources.library = "work";
+  generated_loop_sv_sources.compilation_unit = "file";
+  generated_loop_sv_sources.files = {
+      generated_loop_sv_top_source};
+  generated_loop_config.source_sets.push_back(
+      std::move(generated_loop_sv_sources));
+  generated_loop_config.bindings = {
+      {"generated_loop_top.lanes[0].child",
+       "vhdl:work.generated_loop_child(rtl)",
+       std::nullopt},
+      {"generated_loop_top.lanes[1].child",
+       "vhdl:work.generated_loop_child(rtl)",
+       std::nullopt},
+      {"generated_loop_top.lanes[2].child",
+       "vhdl:work.generated_loop_child(rtl)",
+       std::nullopt},
+  };
+  const auto run_generated_loop =
+      [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            generated_loop_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 4);
+        assert(project->specialization_cache_keys.size() == 4);
+        ParameterRun result;
+        for (std::size_t index = 0;
+             index < project->design.specializations().size();
+             ++index) {
+          const auto& specialization =
+              project->design.specializations()[index];
+          result.keys.emplace_back(
+              specialization.instance,
+              project->specialization_cache_keys[index]);
+          if (index > 0) {
+            const auto lane = index - 1;
+            assert(
+                specialization.instance
+                == "generated_loop_top.lanes["
+                    + std::to_string(lane) + "].child");
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"value", std::to_string(lane + 5)}}));
+          }
+        }
+        result.simulation =
+            capture_simulation(std::move(*project), engine);
+        return result;
+      };
+
+  const auto generated_loop_reference =
+      run_generated_loop(
+          fsim::app::SimulationEngine::interpreter);
+  const auto generated_loop_cold =
+      run_generated_loop(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      generated_loop_reference.simulation,
+      generated_loop_cold.simulation);
+  assert(
+      generated_loop_cold.simulation.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(generated_loop_cold.simulation.result.time == 1);
+  assert((
+      generated_loop_cold.simulation.final_values
+      == std::vector<std::string>{"0101", "0110", "0111"}));
+  assert(generated_loop_cold.simulation.process_count == 4);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      generated_loop_cold.simulation.compiled_processes == 4);
+  assert(
+      generated_loop_cold.simulation.compiled_modules == 4);
+  assert(
+      generated_loop_cold.simulation.native_cache.hits == 0);
+  assert(
+      generated_loop_cold.simulation.native_cache.misses == 4);
+  assert(
+      generated_loop_cold.simulation.native_cache.stores == 4);
+#endif
+  const auto generated_loop_warm =
+      run_generated_loop(
+          fsim::app::SimulationEngine::compiled);
+  assert(generated_loop_warm.keys == generated_loop_cold.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      generated_loop_warm.simulation.native_cache.hits == 4);
+  assert(
+      generated_loop_warm.simulation.native_cache.misses == 0);
 #endif
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit

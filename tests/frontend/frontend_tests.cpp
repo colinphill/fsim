@@ -2197,6 +2197,17 @@ module generated #(parameter ENABLED = 1) (
     end
   endgenerate
 endmodule
+
+module generated_loop #(parameter COUNT = 3) (
+  input logic value,
+  output logic result
+);
+  generate
+    for (genvar i = 0; i < COUNT; i = i + 1) begin : lane
+      leaf child(.value(value), .result(result));
+    end
+  endgenerate
+endmodule
 )",
       Language::SystemVerilog2017);
   require(
@@ -2206,10 +2217,10 @@ endmodule
       systemverilog.design.find(UnitKind::VerilogModule, "generated");
   require(
       sv_unit != nullptr
-          && sv_unit->conditional_generates.size() == 1,
+          && sv_unit->generate_regions.size() == 1,
       "SystemVerilog generate HIR count");
   const auto& sv_generate =
-      sv_unit->conditional_generates.front();
+      sv_unit->generate_regions.front();
   require(
       sv_generate.then_scope == "selected"
           && sv_generate.else_scope == "rejected"
@@ -2228,6 +2239,31 @@ endmodule
                  .name
               == "nested_active",
       "SystemVerilog conditional generate branches and labels");
+  const auto* sv_loop_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule, "generated_loop");
+  require(
+      sv_loop_unit != nullptr
+          && sv_loop_unit->generate_regions.size() == 1,
+      "SystemVerilog loop-generate HIR count");
+  const auto& sv_loop = sv_loop_unit->generate_regions.front();
+  require(
+      sv_loop.kind == GenerateKind::Iterative
+          && sv_loop.then_scope == "lane"
+          && sv_loop.variable == "i"
+          && sv_loop.initial.kind == ExpressionKind::IntegerLiteral
+          && sv_loop.condition.kind == ExpressionKind::Binary
+          && sv_loop.condition.text == "<"
+          && sv_loop.iteration.kind == ExpressionKind::Binary
+          && sv_loop.iteration.text == "+"
+          && sv_loop.then_instances.front().name == "child"
+          && std::none_of(
+              sv_loop_unit->signals.begin(),
+              sv_loop_unit->signals.end(),
+              [](const auto& signal) {
+                return signal.name == "i";
+              }),
+      "SystemVerilog canonical genvar-for region");
 
   const auto vhdl = parse_text(
       "generate.vhd",
@@ -2257,6 +2293,22 @@ begin
       port map (value => value, result => result);
   end generate selection;
 end architecture;
+
+entity generated_loop is
+  generic (count : natural := 3);
+  port (
+    value : in std_logic;
+    result : out std_logic
+  );
+end entity;
+
+architecture rtl of generated_loop is
+begin
+  lanes: for i in 2 downto 0 generate
+    child: entity work.leaf(rtl)
+      port map (value => value, result => result);
+  end generate lanes;
+end architecture;
 )",
       Language::Vhdl2008);
   require(
@@ -2266,10 +2318,10 @@ end architecture;
       vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(
       vhdl_unit != nullptr
-          && vhdl_unit->conditional_generates.size() == 1,
+          && vhdl_unit->generate_regions.size() == 1,
       "VHDL generate HIR count");
   const auto& vhdl_generate =
-      vhdl_unit->conditional_generates.front();
+      vhdl_unit->generate_regions.front();
   require(
       vhdl_generate.then_scope == "selection"
           && vhdl_generate.else_scope == "selection"
@@ -2284,6 +2336,27 @@ end architecture;
                  .name
               == "nested_active",
       "VHDL conditional generate branches and canonical label");
+  const auto vhdl_loop_unit = std::find_if(
+      vhdl.design.units.begin(),
+      vhdl.design.units.end(),
+      [](const auto& unit) {
+        return unit.kind == UnitKind::VhdlArchitecture
+            && unit.primary_name == "generated_loop";
+      });
+  require(
+      vhdl_loop_unit != vhdl.design.units.end()
+          && vhdl_loop_unit->generate_regions.size() == 1,
+      "VHDL loop-generate HIR count");
+  const auto& vhdl_loop =
+      vhdl_loop_unit->generate_regions.front();
+  require(
+      vhdl_loop.kind == GenerateKind::Iterative
+          && vhdl_loop.then_scope == "lanes"
+          && vhdl_loop.variable == "i"
+          && vhdl_loop.condition.text == ">="
+          && vhdl_loop.iteration.text == "-"
+          && vhdl_loop.then_instances.front().name == "child",
+      "VHDL descending for-generate region");
 
   const auto unlabeled_systemverilog = parse_text(
       "unlabeled_generate.sv",
@@ -2328,6 +2401,47 @@ end architecture;
                     == "FSIM-VHDL-UNSUPPORTED-020";
               }),
       "unsupported VHDL generate body is targeted");
+
+  const auto invalid_systemverilog_loop = parse_text(
+      "invalid_loop_generate.sv",
+      R"(
+module invalid_loop;
+  generate
+    for (i = 0; i < 2; i = i + 1) begin : lane
+    end
+  endgenerate
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_systemverilog_loop.ok()
+          && std::any_of(
+              invalid_systemverilog_loop.diagnostics.begin(),
+              invalid_systemverilog_loop.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-066";
+              }),
+      "non-inline-genvar loop generate is targeted");
+
+  const auto invalid_vhdl_loop = parse_text(
+      "invalid_loop_generate.vhd",
+      R"(
+architecture rtl of invalid_loop is
+begin
+  lanes: for i in 0 generate
+  end generate lanes;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_vhdl_loop.ok()
+          && std::any_of(
+              invalid_vhdl_loop.diagnostics.begin(),
+              invalid_vhdl_loop.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-PARSE-063";
+              }),
+      "missing VHDL generate range direction is targeted");
 }
 
 }  // namespace

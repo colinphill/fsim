@@ -743,6 +743,13 @@ module generated_sv_leaf #(
   initial q = VALUE;
 endmodule
 
+module generated_sv_internal_leaf #(
+  parameter VALUE = 0
+);
+  logic [3:0] q;
+  initial q = VALUE;
+endmodule
+
 module generated_sv_true #(
   parameter ENABLED = 1
 ) (
@@ -750,7 +757,9 @@ module generated_sv_true #(
 );
   generate
     if (ENABLED) begin : foreign_branch
-      generated_foreign #(.VALUE(9)) child(.q(q));
+      for (genvar j = 0; j < 1; j = j + 1) begin : nested_lane
+        generated_foreign #(.VALUE(j + 9)) child(.q(q));
+      end
     end else begin : local_branch
       if (1) begin : nested_branch
         generated_sv_leaf #(.VALUE(3)) child(.q(q));
@@ -778,6 +787,26 @@ module generated_sv_false #(
     end
   endgenerate
 endmodule
+
+module generated_sv_loop #(
+  parameter COUNT = 3
+);
+  generate
+    for (genvar i = 0; i < COUNT; i = i + 1) begin : lanes
+      generated_vhdl_loop_bound #(.VALUE(i + 5)) child();
+    end
+  endgenerate
+endmodule
+
+module generated_shadow_loop;
+  generate
+    for (genvar i = 0; i < 1; i = i + 1) begin : outer
+      for (genvar i = 0; i < 1; i = i + 1) begin : inner
+        generated_sv_internal_leaf child();
+      end
+    end
+  endgenerate
+endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     auto generated_vhdl = fsim::frontend::parse_text(
@@ -792,6 +821,17 @@ entity generated_vhdl_leaf is
   );
 end entity;
 architecture rtl of generated_vhdl_leaf is
+begin
+  q <= value;
+end architecture;
+
+entity generated_vhdl_internal_leaf is
+  generic (
+    value : natural := 0
+  );
+end entity;
+architecture rtl of generated_vhdl_internal_leaf is
+  signal q : unsigned(3 downto 0);
 begin
   q <= value;
 end architecture;
@@ -834,6 +874,22 @@ begin
       );
   end generate selection;
 end architecture;
+
+entity generated_vhdl_loop_top is
+  generic (
+    count : positive := 3
+  );
+end entity;
+architecture rtl of generated_vhdl_loop_top is
+begin
+  lanes: for i in count - 1 downto 0 generate
+    child: entity work.generated_sv_loop_bound(rtl)
+      generic map (
+        value => i + 4
+      )
+      port map ();
+  end generate lanes;
+end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(generated_sv.ok());
@@ -849,7 +905,7 @@ end architecture;
 
     const std::vector<fsim::elaboration::Binding>
         generated_sv_binding{
-            {"generated_sv_true.foreign_branch.child",
+            {"generated_sv_true.foreign_branch.nested_lane[0].child",
              "vhdl:work.generated_vhdl_leaf(rtl)",
              std::nullopt},
         };
@@ -863,7 +919,7 @@ end architecture;
         generated_sv_true.design->specializations().size() == 2);
     assert(
         generated_sv_true.design->specializations()[1].instance
-        == "generated_sv_true.foreign_branch.child");
+        == "generated_sv_true.foreign_branch.nested_lane[0].child");
     const auto generated_sv_true_q =
         generated_sv_true.design->find_signal("q");
     assert(generated_sv_true_q);
@@ -937,6 +993,126 @@ end architecture;
             .to_msb_string()
         == "0110");
 
+    const std::vector<fsim::elaboration::Binding>
+        generated_sv_loop_bindings{
+            {"generated_sv_loop.lanes[0].child",
+             "vhdl:work.generated_vhdl_internal_leaf(rtl)",
+             std::nullopt},
+            {"generated_sv_loop.lanes[1].child",
+             "vhdl:work.generated_vhdl_internal_leaf(rtl)",
+             std::nullopt},
+            {"generated_sv_loop.lanes[2].child",
+             "vhdl:work.generated_vhdl_internal_leaf(rtl)",
+             std::nullopt},
+        };
+    const auto generated_sv_loop =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_loop",
+            generated_sv_loop_bindings);
+    assert(generated_sv_loop.ok());
+    assert(generated_sv_loop.design->specializations().size() == 4);
+    for (std::size_t index = 0; index < 3; ++index) {
+      const auto path =
+          "generated_sv_loop.lanes[" + std::to_string(index)
+          + "].child";
+      const auto& specialization =
+          generated_sv_loop.design->specializations()[index + 1];
+      assert(specialization.instance == path);
+      assert((
+          specialization.parameter_values
+          == std::vector<std::pair<std::string, std::string>>{
+              {"value", std::to_string(index + 5)}}));
+    }
+    auto generated_sv_loop_interpreter =
+        generated_sv_loop.design->create_interpreter();
+    assert(
+        generated_sv_loop_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const std::array<std::string_view, 3> sv_loop_values{
+        "0101", "0110", "0111"};
+    for (std::size_t index = 0; index < 3; ++index) {
+      const auto signal = generated_sv_loop.design->find_signal(
+          "generated_sv_loop.lanes[" + std::to_string(index)
+          + "].child.q");
+      assert(signal);
+      assert(
+          generated_sv_loop_interpreter
+              ->signal_value(*signal)
+              .to_msb_string()
+          == sv_loop_values[index]);
+    }
+    auto empty_generated_loop_design = generated_design;
+    const auto empty_loop_unit = std::find_if(
+        empty_generated_loop_design.units.begin(),
+        empty_generated_loop_design.units.end(),
+        [](const auto& unit) {
+          return unit.name == "generated_sv_loop";
+        });
+    assert(empty_loop_unit != empty_generated_loop_design.units.end());
+    assert(!empty_loop_unit->parameters.empty());
+    empty_loop_unit->parameters.front().default_value.text = "0";
+    const auto empty_generated_loop =
+        fsim::elaboration::elaborate(
+            empty_generated_loop_design,
+            "sv:work.generated_sv_loop");
+    assert(empty_generated_loop.ok());
+    assert(empty_generated_loop.design->specializations().size() == 1);
+
+    const std::vector<fsim::elaboration::Binding>
+        generated_vhdl_loop_bindings{
+            {"generated_vhdl_loop_top.lanes[2].child",
+             "sv:work.generated_sv_internal_leaf",
+             std::nullopt},
+            {"generated_vhdl_loop_top.lanes[1].child",
+             "sv:work.generated_sv_internal_leaf",
+             std::nullopt},
+            {"generated_vhdl_loop_top.lanes[0].child",
+             "sv:work.generated_sv_internal_leaf",
+             std::nullopt},
+        };
+    const auto generated_vhdl_loop =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_loop_top(rtl)",
+            generated_vhdl_loop_bindings);
+    assert(generated_vhdl_loop.ok());
+    assert(generated_vhdl_loop.design->specializations().size() == 4);
+    const std::array<std::size_t, 3> descending_indices{2, 1, 0};
+    for (std::size_t ordinal = 0;
+         ordinal < descending_indices.size();
+         ++ordinal) {
+      const auto index = descending_indices[ordinal];
+      const auto path =
+          "generated_vhdl_loop_top.lanes["
+          + std::to_string(index) + "].child";
+      const auto& specialization =
+          generated_vhdl_loop.design->specializations()[ordinal + 1];
+      assert(specialization.instance == path);
+      assert((
+          specialization.parameter_values
+          == std::vector<std::pair<std::string, std::string>>{
+              {"VALUE", std::to_string(index + 4)}}));
+    }
+    auto generated_vhdl_loop_interpreter =
+        generated_vhdl_loop.design->create_interpreter();
+    assert(
+        generated_vhdl_loop_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const std::array<std::string_view, 3> vhdl_loop_values{
+        "0100", "0101", "0110"};
+    for (const auto index : descending_indices) {
+      const auto signal = generated_vhdl_loop.design->find_signal(
+          "generated_vhdl_loop_top.lanes["
+          + std::to_string(index) + "].child.q");
+      assert(signal);
+      assert(
+          generated_vhdl_loop_interpreter
+              ->signal_value(*signal)
+              .to_msb_string()
+          == vhdl_loop_values[index]);
+    }
+
     auto unevaluable_generate_design = generated_design;
     const auto unevaluable_unit = std::find_if(
         unevaluable_generate_design.units.begin(),
@@ -945,8 +1121,8 @@ end architecture;
           return unit.name == "generated_sv_true";
         });
     assert(unevaluable_unit != unevaluable_generate_design.units.end());
-    assert(!unevaluable_unit->conditional_generates.empty());
-    unevaluable_unit->conditional_generates.front().condition.text =
+    assert(!unevaluable_unit->generate_regions.empty());
+    unevaluable_unit->generate_regions.front().condition.text =
         "MISSING_GENERATE_CONSTANT";
     const auto unevaluable_generate =
         fsim::elaboration::elaborate(
@@ -955,6 +1131,102 @@ end architecture;
     assert(!unevaluable_generate.ok());
     assert(has_diagnostic(
         unevaluable_generate, "FSIM-ELAB-GEN-001"));
+
+    const auto generated_loop_unit =
+        [](fsim::frontend::ParsedDesign& design)
+        -> fsim::frontend::DesignUnit& {
+          const auto found = std::find_if(
+              design.units.begin(),
+              design.units.end(),
+              [](const auto& unit) {
+                return unit.name == "generated_sv_loop";
+              });
+          assert(found != design.units.end());
+          assert(!found->generate_regions.empty());
+          return *found;
+        };
+    auto invalid_loop_initial_design = generated_design;
+    auto& invalid_loop_initial =
+        generated_loop_unit(invalid_loop_initial_design)
+            .generate_regions.front()
+            .initial;
+    invalid_loop_initial.kind =
+        fsim::frontend::ExpressionKind::Identifier;
+    invalid_loop_initial.text = "MISSING_LOOP_INITIAL";
+    invalid_loop_initial.operands.clear();
+    const auto invalid_loop_initial_result =
+        fsim::elaboration::elaborate(
+            invalid_loop_initial_design,
+            "sv:work.generated_sv_loop");
+    assert(!invalid_loop_initial_result.ok());
+    assert(has_diagnostic(
+        invalid_loop_initial_result, "FSIM-ELAB-GEN-002"));
+
+    auto invalid_loop_condition_design = generated_design;
+    auto& invalid_loop_condition =
+        generated_loop_unit(invalid_loop_condition_design)
+            .generate_regions.front()
+            .condition;
+    invalid_loop_condition.kind =
+        fsim::frontend::ExpressionKind::Identifier;
+    invalid_loop_condition.text = "MISSING_LOOP_CONDITION";
+    invalid_loop_condition.operands.clear();
+    const auto invalid_loop_condition_result =
+        fsim::elaboration::elaborate(
+            invalid_loop_condition_design,
+            "sv:work.generated_sv_loop");
+    assert(!invalid_loop_condition_result.ok());
+    assert(has_diagnostic(
+        invalid_loop_condition_result, "FSIM-ELAB-GEN-003"));
+
+    const std::vector<fsim::elaboration::Binding>
+        first_generated_loop_binding{
+            {"generated_sv_loop.lanes[0].child",
+             "vhdl:work.generated_vhdl_internal_leaf(rtl)",
+             std::nullopt},
+        };
+    auto stalled_loop_design = generated_design;
+    auto& stalled_iteration =
+        generated_loop_unit(stalled_loop_design)
+            .generate_regions.front()
+            .iteration;
+    stalled_iteration.kind =
+        fsim::frontend::ExpressionKind::Identifier;
+    stalled_iteration.text = "i";
+    stalled_iteration.operands.clear();
+    const auto stalled_loop =
+        fsim::elaboration::elaborate(
+            stalled_loop_design,
+            "sv:work.generated_sv_loop",
+            first_generated_loop_binding);
+    assert(!stalled_loop.ok());
+    assert(has_diagnostic(stalled_loop, "FSIM-ELAB-GEN-006"));
+
+    auto invalid_loop_iteration_design = generated_design;
+    auto& invalid_loop_iteration =
+        generated_loop_unit(invalid_loop_iteration_design)
+            .generate_regions.front()
+            .iteration;
+    invalid_loop_iteration.kind =
+        fsim::frontend::ExpressionKind::Identifier;
+    invalid_loop_iteration.text = "MISSING_LOOP_ITERATION";
+    invalid_loop_iteration.operands.clear();
+    const auto invalid_loop_iteration_result =
+        fsim::elaboration::elaborate(
+            invalid_loop_iteration_design,
+            "sv:work.generated_sv_loop",
+            first_generated_loop_binding);
+    assert(!invalid_loop_iteration_result.ok());
+    assert(has_diagnostic(
+        invalid_loop_iteration_result, "FSIM-ELAB-GEN-005"));
+
+    const auto shadowed_loop =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_shadow_loop");
+    assert(!shadowed_loop.ok());
+    assert(has_diagnostic(
+        shadowed_loop, "FSIM-ELAB-GEN-007"));
 
     constexpr std::string_view vhdl_source = R"(
 entity counter_vhdl is

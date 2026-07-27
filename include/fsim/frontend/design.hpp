@@ -261,18 +261,28 @@ struct Process {
   SourceSpan span;
 };
 
-/// Elaboration-time conditional hierarchy region. The current executable
-/// subset admits nested module/entity instances in each branch; later
-/// frontend work extends the same region node with declarations and
-/// concurrent behavior without changing selection semantics.
-struct ConditionalGenerate {
+enum class GenerateKind {
+  Conditional,
+  Iterative,
+};
+
+/// Elaboration-time hierarchy region. Conditional regions use `condition`
+/// and both branches. Iterative regions use `variable`, `initial`,
+/// `condition`, and `iteration`, with their body in the `then_*` fields.
+/// Regions recursively compose while the current executable subset admits
+/// module/entity instances as leaf items.
+struct GenerateRegion {
+  GenerateKind kind{GenerateKind::Conditional};
   std::string then_scope;
   std::string else_scope;
+  std::string variable;
+  Expression initial;
   Expression condition;
+  Expression iteration;
   std::vector<Instance> then_instances;
   std::vector<Instance> else_instances;
-  std::vector<ConditionalGenerate> then_generates;
-  std::vector<ConditionalGenerate> else_generates;
+  std::vector<GenerateRegion> then_generates;
+  std::vector<GenerateRegion> else_generates;
   SourceSpan span;
 };
 
@@ -313,7 +323,7 @@ struct DesignUnit {
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;
   std::vector<Instance> instances;
-  std::vector<ConditionalGenerate> conditional_generates;
+  std::vector<GenerateRegion> generate_regions;
   SourceSpan span;
 };
 

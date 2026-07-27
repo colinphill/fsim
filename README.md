@@ -42,8 +42,9 @@ The current tree contains:
 - recursive VHDL/SV instance elaboration in both hierarchy directions with
   explicit cross-language bindings, whole-signal port aliasing, and boundary
   validation;
-- specialization-time VHDL and SystemVerilog conditional instance-generate
-  expansion with labeled generated scopes retained in mixed binding paths;
+- specialization-time VHDL and SystemVerilog conditional/iterative
+  instance-generate expansion with labeled and indexed generated scopes
+  retained in mixed binding paths;
 - lowering of scalar and common packed operations into SimIR;
 - bounded source-level VHDL `wait for`/`wait on` and Verilog/SystemVerilog
   integer-delay, any-change, `posedge`, and `negedge` procedural event
@@ -137,6 +138,9 @@ checks parameter-dependent ports.
 VHDL `if`/`else generate` and SystemVerilog `generate if` instance branches
 are evaluated per specialization; selected block labels form stable hierarchy
 components, including for explicit bindings to or from SystemC factories.
+VHDL integer-range `for generate` and canonical inline-`genvar` SystemVerilog
+loops use deterministic `label[index]` components and substitute the loop
+constant into child construction actuals before specialization.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

@@ -567,8 +567,14 @@ class VhdlParser final : private detail::ParserBase {
       return;
     }
     if (label_token && match_keyword("if", true)) {
-      unit.conditional_generates.push_back(
+      unit.generate_regions.push_back(
           parse_vhdl_conditional_generate(
+              *label_token, previous()));
+      return;
+    }
+    if (label_token && match_keyword("for", true)) {
+      unit.generate_regions.push_back(
+          parse_vhdl_iterative_generate(
               *label_token, previous()));
       return;
     }
@@ -599,10 +605,10 @@ class VhdlParser final : private detail::ParserBase {
     skip_to_semicolon();
   }
 
-  ConditionalGenerate parse_vhdl_conditional_generate(
+  GenerateRegion parse_vhdl_conditional_generate(
       const Token& label,
       const Token& start) {
-    ConditionalGenerate result;
+    GenerateRegion result;
     result.then_scope = vhdl_name(label.text);
     result.else_scope = result.then_scope;
     result.condition = parse_expression();
@@ -638,9 +644,78 @@ class VhdlParser final : private detail::ParserBase {
     return result;
   }
 
+  GenerateRegion parse_vhdl_iterative_generate(
+      const Token& label,
+      const Token& start) {
+    GenerateRegion result;
+    result.kind = GenerateKind::Iterative;
+    result.then_scope = vhdl_name(label.text);
+    const auto variable = expect_identifier("generate loop variable");
+    result.variable = vhdl_name(variable.text);
+    expect_keyword("in", true, "FSIM-VHDL-PARSE-062");
+    result.initial = parse_expression();
+    bool descending = false;
+    if (match_keyword("to", true)) {
+      descending = false;
+    } else if (match_keyword("downto", true)) {
+      descending = true;
+    } else {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-063",
+          "expected 'to' or 'downto' in generate iteration range");
+    }
+    auto limit = parse_expression();
+    expect_keyword("generate", true, "FSIM-VHDL-PARSE-064");
+    const auto expression_span = span_from(variable, previous());
+    Expression loop_variable{
+        ExpressionKind::Identifier,
+        result.variable,
+        {},
+        variable.span};
+    result.condition = {
+        ExpressionKind::Binary,
+        descending ? ">=" : "<=",
+        {loop_variable, std::move(limit)},
+        expression_span};
+    result.iteration = {
+        ExpressionKind::Binary,
+        descending ? "-" : "+",
+        {
+            std::move(loop_variable),
+            Expression{
+                ExpressionKind::IntegerLiteral,
+                "1",
+                {},
+                expression_span}},
+        expression_span};
+    (void)match_keyword("begin", true);
+    parse_vhdl_generate_branch(
+        result.then_instances,
+        result.then_generates);
+    expect_keyword("end", true, "FSIM-VHDL-PARSE-065");
+    expect_keyword("generate", true, "FSIM-VHDL-PARSE-066");
+    if (at(TokenKind::Identifier)) {
+      const auto end_label = advance();
+      if (vhdl_name(end_label.text) != result.then_scope) {
+        error(
+            end_label,
+            "FSIM-VHDL-PARSE-067",
+            "generate end label does not match '"
+                + result.then_scope + "'");
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after iterative generate",
+        "FSIM-VHDL-PARSE-068");
+    result.span = span_from(start, previous());
+    return result;
+  }
+
   void parse_vhdl_generate_branch(
       std::vector<Instance>& instances,
-      std::vector<ConditionalGenerate>& nested) {
+      std::vector<GenerateRegion>& nested) {
     while (!at_end() && !keyword("else", 0, true)
            && !keyword("end", 0, true)) {
       if (!(at(TokenKind::Identifier)
@@ -649,8 +724,8 @@ class VhdlParser final : private detail::ParserBase {
         error(
             unsupported,
             "FSIM-VHDL-UNSUPPORTED-020",
-            "conditional generate branches currently admit only "
-            "labeled instances and nested if-generate regions");
+            "generate branches currently admit only labeled instances "
+            "and nested if/for-generate regions");
         skip_to_semicolon();
         continue;
       }
@@ -659,6 +734,10 @@ class VhdlParser final : private detail::ParserBase {
       if (match_keyword("if", true)) {
         nested.push_back(
             parse_vhdl_conditional_generate(
+                label, previous()));
+      } else if (match_keyword("for", true)) {
+        nested.push_back(
+            parse_vhdl_iterative_generate(
                 label, previous()));
       } else if (
           keyword("entity", 0, true)
@@ -670,8 +749,7 @@ class VhdlParser final : private detail::ParserBase {
         error(
             current(),
             "FSIM-VHDL-UNSUPPORTED-020",
-            "unsupported concurrent item in conditional generate "
-            "branch");
+            "unsupported concurrent item in generate branch");
         skip_to_semicolon();
       }
     }

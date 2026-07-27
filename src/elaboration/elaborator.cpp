@@ -794,43 +794,182 @@ void substitute_parameters(
 }
 
 void substitute_parameters(
-    std::vector<frontend::ConditionalGenerate>& generates,
+    std::vector<frontend::GenerateRegion>& generates,
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,
     const frontend::Language language) {
     for (auto& generate : generates) {
         substitute_parameters(
-            generate.condition, environment, domains, language);
+            generate.initial, environment, domains, language);
+        auto body_environment = environment;
+        auto body_domains = domains;
+        if (generate.kind == frontend::GenerateKind::Iterative) {
+            body_environment.erase(generate.variable);
+            body_domains.erase(generate.variable);
+        }
+        substitute_parameters(
+            generate.condition,
+            body_environment,
+            body_domains,
+            language);
+        substitute_parameters(
+            generate.iteration,
+            body_environment,
+            body_domains,
+            language);
         substitute_parameters(
             generate.then_instances,
-            environment,
-            domains,
+            body_environment,
+            body_domains,
             language);
         substitute_parameters(
             generate.else_instances,
-            environment,
-            domains,
+            body_environment,
+            body_domains,
             language);
         substitute_parameters(
             generate.then_generates,
-            environment,
-            domains,
+            body_environment,
+            body_domains,
             language);
         substitute_parameters(
             generate.else_generates,
-            environment,
-            domains,
+            body_environment,
+            body_domains,
             language);
     }
 }
 
-void expand_conditional_generates(
-    const std::vector<frontend::ConditionalGenerate>& generates,
+std::string generated_scope(
+    const std::string_view parent_scope,
+    const std::string_view local_scope) {
+    return parent_scope.empty()
+        ? std::string{local_scope}
+        : std::string{parent_scope} + "." + std::string{local_scope};
+}
+
+void append_generated_branch(
+    const std::vector<frontend::Instance>& selected_instances,
+    const std::vector<frontend::GenerateRegion>& selected_nested,
     const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    const std::string_view parent_scope,
+    std::vector<frontend::Instance>& instances,
+    std::vector<Diagnostic>& diagnostics);
+
+void expand_generate_regions(
+    const std::vector<frontend::GenerateRegion>& generates,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
     const std::string_view parent_scope,
     std::vector<frontend::Instance>& instances,
     std::vector<Diagnostic>& diagnostics) {
     for (const auto& generate : generates) {
+        if (generate.kind == frontend::GenerateKind::Iterative) {
+            if (environment.contains(generate.variable)) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-007",
+                    "nested loop-generate variable '"
+                        + generate.variable
+                        + "' shadows an enclosing constant; this "
+                          "bounded slice requires a distinct name",
+                    generate.span});
+                continue;
+            }
+            std::string error;
+            const auto initial = evaluate_constant_expression(
+                generate.initial, environment, error);
+            if (!initial) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-002",
+                    "cannot evaluate loop-generate initial value: "
+                        + error,
+                    generate.initial.span});
+                continue;
+            }
+            auto iteration_environment = environment;
+            auto iteration_domains = domains;
+            iteration_domains[generate.variable] =
+                frontend::ValueDomain::Integer;
+            std::int64_t value = *initial;
+            constexpr std::size_t maximum_iterations = 1'000'000;
+            std::size_t count = 0;
+            while (true) {
+                iteration_environment[generate.variable] = value;
+                error.clear();
+                const auto condition = evaluate_constant_expression(
+                    generate.condition,
+                    iteration_environment,
+                    error);
+                if (!condition) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-003",
+                        "cannot evaluate loop-generate condition: "
+                            + error,
+                        generate.condition.span});
+                    break;
+                }
+                if (*condition == 0) {
+                    break;
+                }
+                if (count++ == maximum_iterations) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-004",
+                        "loop generate exceeds the bounded "
+                        "1,000,000-iteration elaboration limit",
+                        generate.span});
+                    break;
+                }
+                auto body_instances = generate.then_instances;
+                auto body_nested = generate.then_generates;
+                substitute_parameters(
+                    body_instances,
+                    iteration_environment,
+                    iteration_domains,
+                    language);
+                substitute_parameters(
+                    body_nested,
+                    iteration_environment,
+                    iteration_domains,
+                    language);
+                const auto indexed_scope =
+                    generate.then_scope + "["
+                    + std::to_string(value) + "]";
+                append_generated_branch(
+                    body_instances,
+                    body_nested,
+                    iteration_environment,
+                    iteration_domains,
+                    language,
+                    generated_scope(parent_scope, indexed_scope),
+                    instances,
+                    diagnostics);
+                error.clear();
+                const auto next = evaluate_constant_expression(
+                    generate.iteration,
+                    iteration_environment,
+                    error);
+                if (!next) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-005",
+                        "cannot evaluate loop-generate iteration: "
+                            + error,
+                        generate.iteration.span});
+                    break;
+                }
+                if (*next == value) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-006",
+                        "loop-generate iteration does not advance",
+                        generate.iteration.span});
+                    break;
+                }
+                value = *next;
+            }
+            continue;
+        }
         std::string error;
         const auto condition = evaluate_constant_expression(
             generate.condition, environment, error);
@@ -855,23 +994,41 @@ void expand_conditional_generates(
             selected_then
             ? generate.then_scope
             : generate.else_scope;
-        const auto scope =
-            parent_scope.empty()
-            ? local_scope
-            : std::string{parent_scope} + "." + local_scope;
-        for (auto instance : selected_instances) {
-            instance.name = scope.empty()
-                ? instance.name
-                : scope + "." + instance.name;
-            instances.push_back(std::move(instance));
-        }
-        expand_conditional_generates(
+        append_generated_branch(
+            selected_instances,
             selected_nested,
             environment,
-            scope,
+            domains,
+            language,
+            generated_scope(parent_scope, local_scope),
             instances,
             diagnostics);
     }
+}
+
+void append_generated_branch(
+    const std::vector<frontend::Instance>& selected_instances,
+    const std::vector<frontend::GenerateRegion>& selected_nested,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    const std::string_view parent_scope,
+    std::vector<frontend::Instance>& instances,
+    std::vector<Diagnostic>& diagnostics) {
+    for (auto instance : selected_instances) {
+        instance.name = parent_scope.empty()
+            ? instance.name
+            : std::string{parent_scope} + "." + instance.name;
+        instances.push_back(std::move(instance));
+    }
+    expand_generate_regions(
+        selected_nested,
+        environment,
+        domains,
+        language,
+        parent_scope,
+        instances,
+        diagnostics);
 }
 
 struct SpecializedUnit {
@@ -1210,17 +1367,19 @@ SpecializedUnit specialize_unit(
         domains,
         source.language);
     substitute_parameters(
-        result.unit.conditional_generates,
+        result.unit.generate_regions,
         result.environment,
         domains,
         source.language);
-    expand_conditional_generates(
-        result.unit.conditional_generates,
+    expand_generate_regions(
+        result.unit.generate_regions,
         result.environment,
+        domains,
+        source.language,
         {},
         result.unit.instances,
         diagnostics);
-    result.unit.conditional_generates.clear();
+    result.unit.generate_regions.clear();
     return result;
 }
 

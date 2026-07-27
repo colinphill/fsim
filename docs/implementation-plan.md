@@ -82,9 +82,10 @@ The following foundation is implemented:
   positional-then-named maps, dependent constant evaluation, parameterized
   ranges, entity/architecture interface merging, and canonical per-instance
   specialization values;
-- parameter/generic-driven VHDL and SystemVerilog conditional instance-generate
-  regions, including nested selections, stable labeled hierarchy paths, and
-  explicit mixed-language bindings through the selected branch;
+- parameter/generic-driven VHDL and SystemVerilog conditional and iterative
+  instance-generate regions, including recursive nesting, loop-variable
+  substitution, stable labeled/indexed hierarchy paths, and explicit
+  mixed-language bindings through selected branches and realized iterations;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -209,7 +210,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 410 unique current production diagnostic codes.
+- a stable catalog covering 431 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -224,6 +225,7 @@ Current Linux validation:
 | Boost.Context 1.91.0 fibers | Checksum-verified fetch/configure/build; GCC Debug full suite 13/13, ASan/UBSan focused application, and LLVM 22 compiled-SV/SystemC application tests pass |
 | Verilog/SV preprocessing/directives | GCC Debug and exact LLVM 22 atomic frontend/elaboration plus source-set/combined interpreter/compiled differentials pass, including shared default-net/cell/reset state and omitted-input pulls |
 | Conditional instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL and SV selection, stable generated mixed-binding paths, interpreter/JIT equivalence, and cold/warm native cache |
+| Iterative instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL ascending/descending ranges and canonical SV inline-`genvar` loops, nested expansion, mixed indexed bindings, interpreter/JIT equivalence, and cold/warm native cache |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -347,8 +349,9 @@ Remaining before the architecture gate passes:
 - complete VHDL generic types and the remaining SystemVerilog parameter
   type/sizing rules; bounded scalar VHDL and integral SystemVerilog values
   already participate in per-specialization native-cache identity and cross
-  explicit VHDL/SystemVerilog bindings. Conditional instance-generate is
-  implemented; loop/case generate and general generate bodies remain.
+  explicit VHDL/SystemVerilog bindings. Conditional and bounded iterative
+  instance-generate are implemented; case generate, broader SV loop syntax,
+  and general generate bodies remain.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
 
@@ -357,10 +360,11 @@ Early groundwork:
 - handwritten tokenization and recursive-descent/precedence parsing;
 - VHDL entity/architecture/port/signal/process nodes and represented
   library/use/context-reference clauses plus bounded generic specialization
-  and conditional instance-generate;
+  and conditional/iterative instance-generate;
 - SV modules, common declarations, simple hierarchy, basic procedural and
   continuous statements, bounded integral parameter specialization,
-  conditional instance-generate, and bounded `` `timescale`` handling;
+  conditional/canonical-genvar instance-generate, and bounded
+  `` `timescale`` handling;
 - domain, width, signedness, duplicate-declaration, driver, and binding checks;
   and
 - a checked-in feature matrix with positive, negative, elaboration, and
@@ -374,8 +378,8 @@ Planned implementation sequence:
    generics, overload/type resolution, constant evaluation, and reviewed IEEE
    packages.
 3. Complete the remaining Verilog/SV `` `line``/pragma semantics, parameters,
-   packages, interfaces/modports, loop/case and general-body generates, and
-   complete synthesizable types.
+   packages, interfaces/modports, case and general-body generates, broader
+   legal genvar forms, and complete synthesizable types.
    Includes, macros with default arguments, conditionals, compilation-unit
    sharing, cache provenance, `` `default_nettype``, and
    reset/cell/keyword/unconnected-drive state are implemented.

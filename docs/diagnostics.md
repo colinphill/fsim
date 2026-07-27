@@ -125,6 +125,13 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-059` | error | Expected `generate` after the conditional-generate `end`. |
 | `FSIM-VHDL-PARSE-060` | error | A conditional-generate end label does not match its opening label. |
 | `FSIM-VHDL-PARSE-061` | error | Expected `;` after a conditional generate. |
+| `FSIM-VHDL-PARSE-062` | error | Expected `in` after a VHDL generate-loop variable. |
+| `FSIM-VHDL-PARSE-063` | error | Expected `to` or `downto` in a VHDL generate iteration range. |
+| `FSIM-VHDL-PARSE-064` | error | Expected `generate` after a VHDL generate iteration range. |
+| `FSIM-VHDL-PARSE-065` | error | Expected `end` for an iterative generate. |
+| `FSIM-VHDL-PARSE-066` | error | Expected `generate` after the iterative-generate `end`. |
+| `FSIM-VHDL-PARSE-067` | error | An iterative-generate end label does not match its opening label. |
+| `FSIM-VHDL-PARSE-068` | error | Expected `;` after an iterative generate. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -270,6 +277,14 @@ therefore excluded.
 | `FSIM-SV-PARSE-062` | error | Expected `:` before a generate-block label. |
 | `FSIM-SV-PARSE-063` | error | A generate branch lacks `end` or has a mismatched end label. |
 | `FSIM-SV-PARSE-064` | error | Expected `endgenerate`. |
+| `FSIM-SV-PARSE-065` | error | Expected `(` after a generate `for`. |
+| `FSIM-SV-PARSE-066` | error | An executable generate loop does not declare its variable with inline `genvar`. |
+| `FSIM-SV-PARSE-067` | error | Expected `=` after a generate-loop variable. |
+| `FSIM-SV-PARSE-068` | error | Expected `;` after a generate-loop initializer. |
+| `FSIM-SV-PARSE-069` | error | Expected `;` after a generate-loop condition. |
+| `FSIM-SV-PARSE-070` | error | A generate-loop iteration assigns a name other than its loop variable. |
+| `FSIM-SV-PARSE-071` | error | Expected `=` in a generate-loop iteration. |
+| `FSIM-SV-PARSE-072` | error | Expected `)` after a generate-loop header. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -320,7 +335,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
 | `FSIM-SV-UNSUPPORTED-020` | error | A parameter data type is outside the supported integral subset. |
-| `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded conditional instance-generate subset. |
+| `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded conditional/canonical-genvar instance-generate subset. |
 
 ## Elaboration and SimIR lowering
 
@@ -373,6 +388,12 @@ therefore excluded.
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
 | `FSIM-ELAB-GEN-001` | error | A conditional-generate expression cannot be evaluated for its specialization. |
+| `FSIM-ELAB-GEN-002` | error | A loop-generate initial value cannot be evaluated for its specialization. |
+| `FSIM-ELAB-GEN-003` | error | A loop-generate continuation condition cannot be evaluated. |
+| `FSIM-ELAB-GEN-004` | error | A loop generate exceeds the bounded one-million-iteration elaboration limit. |
+| `FSIM-ELAB-GEN-005` | error | A loop-generate iteration expression cannot be evaluated. |
+| `FSIM-ELAB-GEN-006` | error | A loop-generate iteration does not advance its variable. |
+| `FSIM-ELAB-GEN-007` | error | A nested loop-generate variable shadows an enclosing constant in the bounded executable slice. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

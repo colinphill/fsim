@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -587,7 +588,8 @@ class VerilogParser final : private detail::ParserBase {
   };
 
   void note_implicit_net_reference(const Token& name) {
-    if (!current_procedural_names_.contains(name.text)) {
+    if (!current_procedural_names_.contains(name.text)
+        && !current_generate_names_.contains(name.text)) {
       implicit_net_references_.push_back(
           {name.text, current_default_nettype_, name.span,
            name.expansion_stack});
@@ -643,6 +645,7 @@ class VerilogParser final : private detail::ParserBase {
     port_type_refinements_.clear();
     implicit_net_references_.clear();
     current_procedural_names_.clear();
+    current_generate_names_.clear();
     module_time_unit_magnitude_ = current_time_unit_magnitude_;
     module_time_unit_ = current_time_unit_;
     module_time_precision_ = current_time_precision_;
@@ -725,29 +728,35 @@ class VerilogParser final : private detail::ParserBase {
   void parse_generate_region(
       DesignUnit& unit, const Token& generate_token) {
     while (!at_end() && !keyword("endgenerate")) {
-      if (!match_keyword("if")) {
-        const auto unsupported = advance();
-        error(
-            unsupported,
-            "FSIM-SV-UNSUPPORTED-021",
-            "only conditional instance generate regions are executable");
-        while (!at_end() && !keyword("endgenerate")
-               && !keyword("if")) {
-          advance();
-        }
+      if (match_keyword("if")) {
+        unit.generate_regions.push_back(
+            parse_conditional_generate(previous()));
         continue;
       }
-      unit.conditional_generates.push_back(
-          parse_conditional_generate(previous()));
+      if (match_keyword("for")) {
+        unit.generate_regions.push_back(
+            parse_iterative_generate(previous()));
+        continue;
+      }
+      const auto unsupported = advance();
+      error(
+          unsupported,
+          "FSIM-SV-UNSUPPORTED-021",
+          "only conditional and canonical genvar-for instance "
+          "generate regions are executable");
+      while (!at_end() && !keyword("endgenerate")
+             && !keyword("if") && !keyword("for")) {
+        advance();
+      }
     }
     expect_keyword(
         "endgenerate", false, "FSIM-SV-PARSE-064");
     (void)generate_token;
   }
 
-  ConditionalGenerate parse_conditional_generate(
+  GenerateRegion parse_conditional_generate(
       const Token& start) {
-    ConditionalGenerate result;
+    GenerateRegion result;
     expect(
         TokenKind::LeftParen,
         "'(' after generate if",
@@ -771,10 +780,67 @@ class VerilogParser final : private detail::ParserBase {
     return result;
   }
 
+  GenerateRegion parse_iterative_generate(const Token& start) {
+    GenerateRegion result;
+    result.kind = GenerateKind::Iterative;
+    expect(
+        TokenKind::LeftParen,
+        "'(' after generate for",
+        "FSIM-SV-PARSE-065");
+    expect_keyword("genvar", false, "FSIM-SV-PARSE-066");
+    const auto variable = expect_identifier("generate loop variable");
+    result.variable = variable.text;
+    ++current_generate_names_[result.variable];
+    expect(
+        TokenKind::Assign,
+        "'=' after generate loop variable",
+        "FSIM-SV-PARSE-067");
+    result.initial = parse_expression();
+    expect(
+        TokenKind::Semicolon,
+        "';' after generate loop initializer",
+        "FSIM-SV-PARSE-068");
+    result.condition = parse_expression();
+    expect(
+        TokenKind::Semicolon,
+        "';' after generate loop condition",
+        "FSIM-SV-PARSE-069");
+    const auto iteration_variable =
+        expect_identifier("generate iteration variable");
+    if (iteration_variable.text != result.variable) {
+      error(
+          iteration_variable,
+          "FSIM-SV-PARSE-070",
+          "generate iteration must assign loop variable '"
+              + result.variable + "'");
+    }
+    expect(
+        TokenKind::Assign,
+        "'=' in generate loop iteration",
+        "FSIM-SV-PARSE-071");
+    result.iteration = parse_expression();
+    expect(
+        TokenKind::RightParen,
+        "')' after generate loop header",
+        "FSIM-SV-PARSE-072");
+    parse_generate_branch(
+        result.then_scope,
+        result.then_instances,
+        result.then_generates);
+    const auto generate_name =
+        current_generate_names_.find(result.variable);
+    if (generate_name != current_generate_names_.end()
+        && --generate_name->second == 0) {
+      current_generate_names_.erase(generate_name);
+    }
+    result.span = span_from(start, previous());
+    return result;
+  }
+
   void parse_generate_branch(
       std::string& scope,
       std::vector<Instance>& instances,
-      std::vector<ConditionalGenerate>& nested) {
+      std::vector<GenerateRegion>& nested) {
     if (!match_keyword("begin")) {
       error(
           current(),
@@ -793,6 +859,9 @@ class VerilogParser final : private detail::ParserBase {
       if (match_keyword("if")) {
         nested.push_back(
             parse_conditional_generate(previous()));
+      } else if (match_keyword("for")) {
+        nested.push_back(
+            parse_iterative_generate(previous()));
       } else if (
           at(TokenKind::Identifier)
           && ((at(TokenKind::Identifier, 1)
@@ -805,8 +874,8 @@ class VerilogParser final : private detail::ParserBase {
         error(
             unsupported,
             "FSIM-SV-UNSUPPORTED-021",
-            "conditional generate branches currently admit only "
-            "instances and nested generate-if regions");
+            "generate branches currently admit only instances and "
+            "nested conditional or canonical genvar-for regions");
         skip_to_semicolon();
       }
     }
@@ -2215,6 +2284,8 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> body_port_declarations_;
   std::unordered_set<std::string> port_type_refinements_;
   std::unordered_set<std::string> current_procedural_names_;
+  std::unordered_map<std::string, std::size_t>
+      current_generate_names_;
   std::vector<ImplicitNetReference> implicit_net_references_;
   std::string current_default_nettype_{"wire"};
   bool current_cell_define_{};
