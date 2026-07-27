@@ -161,6 +161,21 @@ inequality and relational comparisons require equal operand widths and return
 The interpreter supports arbitrary packed widths while LLVM uses the common
 single-word fast path and falls back for wider value-bearing processes.
 
+Logical conjunction and disjunction reduce each operand independently, so
+packed operands need not have the same width. The resulting scalar uses the
+standard four-state controlling-value rules: a known false controls `&&`, a
+known true controls `||`, and `X` is produced only when neither controlling
+value determines the result. Supported operand expressions are currently
+side-effect free; observable function/task short-circuit behavior remains
+pending with executable calls.
+
+Unary reduction `&`, `|`, and `^` fold every packed source bit into one
+four-state result. Logical `<<` and `>>` preserve the left operand's width and
+four-state data independently of the shift-amount width. A known amount at
+least as large as the value width produces zero; any `X` or `Z` bit in the
+amount produces an all-`X` result. These rules are implemented identically in
+the interpreter and the LLVM single-word path.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

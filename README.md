@@ -46,6 +46,11 @@ The current tree contains:
   four-state unknown-condition bit merging;
 - vector-aware SystemVerilog logical negation and unsigned
   equality/relational comparisons with four-state unknown propagation;
+- mixed-width SystemVerilog logical conjunction/disjunction with controlling
+  known-value and four-state indeterminate semantics;
+- SystemVerilog unary reductions and mixed-width logical shifts, including
+  four-state reduction rules and deterministic unknown/oversized shift
+  handling;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

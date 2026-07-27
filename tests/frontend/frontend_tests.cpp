@@ -1000,6 +1000,8 @@ void test_systemverilog_comparison_expressions() {
 module comparisons;
   logic [3:0] lhs;
   logic [3:0] rhs;
+  logic [2:0] amount;
+  logic [3:0] shifted;
   logic result;
   always_comb begin
     result = !lhs;
@@ -1008,6 +1010,13 @@ module comparisons;
     result = lhs <= rhs;
     result = lhs > rhs;
     result = lhs >= rhs;
+    result = lhs && result;
+    result = result || rhs;
+    result = &lhs;
+    result = |lhs;
+    result = ^lhs;
+    shifted = lhs << amount;
+    shifted = lhs >> amount;
   end
 endmodule
 )",
@@ -1017,7 +1026,7 @@ endmodule
   const auto& statements =
       result.design.units.front().processes.front().statements;
   require(
-      statements.size() == 6
+      statements.size() == 13
           && statements[0].value.kind == ExpressionKind::Unary
           && statements[0].value.text == "!",
       "logical-negation expression node");
@@ -1031,6 +1040,26 @@ endmodule
                 == operators[index],
         "comparison expression node");
   }
+  require(
+      statements[6].value.kind == ExpressionKind::Binary
+          && statements[6].value.text == "&&"
+          && statements[7].value.kind == ExpressionKind::Binary
+          && statements[7].value.text == "||",
+      "logical binary expression nodes");
+  require(
+      statements[8].value.kind == ExpressionKind::Unary
+          && statements[8].value.text == "&"
+          && statements[9].value.kind == ExpressionKind::Unary
+          && statements[9].value.text == "|"
+          && statements[10].value.kind == ExpressionKind::Unary
+          && statements[10].value.text == "^",
+      "reduction expression nodes");
+  require(
+      statements[11].value.kind == ExpressionKind::Binary
+          && statements[11].value.text == "<<"
+          && statements[12].value.kind == ExpressionKind::Binary
+          && statements[12].value.text == ">>",
+      "logical-shift expression nodes");
 }
 
 }  // namespace

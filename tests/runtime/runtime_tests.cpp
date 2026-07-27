@@ -435,6 +435,88 @@ void test_simir_wide_truth_and_comparison() {
       "wide unknown-only truth value remains unknown");
 }
 
+void test_simir_wide_reduction_and_shift() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto reduced_and = interpreter.add_signal(
+      {"top.reduced_and", PackedLogic4::from_msb_string("X")});
+  const auto reduced_or = interpreter.add_signal(
+      {"top.reduced_or", PackedLogic4::from_msb_string("X")});
+  const auto reduced_xor = interpreter.add_signal(
+      {"top.reduced_xor", PackedLogic4::from_msb_string("0")});
+  const auto shifted_left = interpreter.add_signal(
+      {"top.shifted_left", PackedLogic4(65, Logic4::x)});
+  const auto shifted_right = interpreter.add_signal(
+      {"top.shifted_right", PackedLogic4(65, Logic4::x)});
+  const auto shifted_unknown = interpreter.add_signal(
+      {"top.shifted_unknown", PackedLogic4(65, Logic4::zero)});
+  const auto shifted_oversized = interpreter.add_signal(
+      {"top.shifted_oversized", PackedLogic4(65, Logic4::x)});
+
+  const auto source_text =
+      "1" + std::string(63, '0') + "Z";
+  Process process;
+  process.id = 0;
+  process.name = "wide_reduction_and_shift";
+  process.register_count = 11;
+  process.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_msb_string(source_text)},
+      LoadConstant{
+          1, PackedLogic4::from_msb_string("0000001")},
+      Reduction{ReductionOperator::bit_and, 2, 0},
+      WriteBlocking{reduced_and, 2},
+      Reduction{ReductionOperator::bit_or, 3, 0},
+      WriteBlocking{reduced_or, 3},
+      Reduction{ReductionOperator::bit_xor, 4, 0},
+      WriteBlocking{reduced_xor, 4},
+      Shift{ShiftOperator::logical_left, 5, 0, 1},
+      WriteBlocking{shifted_left, 5},
+      Shift{ShiftOperator::logical_right, 6, 0, 1},
+      WriteBlocking{shifted_right, 6},
+      LoadConstant{
+          7, PackedLogic4::from_msb_string("00000X1")},
+      Shift{ShiftOperator::logical_left, 8, 0, 7},
+      WriteBlocking{shifted_unknown, 8},
+      LoadConstant{
+          9, PackedLogic4::from_msb_string("1000001")},
+      Shift{ShiftOperator::logical_right, 10, 0, 9},
+      WriteBlocking{shifted_oversized, 10},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "wide reduction and shift process completes");
+  require(
+      interpreter.signal_value(reduced_and).to_msb_string() == "0"
+          && interpreter.signal_value(reduced_or).to_msb_string()
+              == "1"
+          && interpreter.signal_value(reduced_xor).to_msb_string()
+              == "X",
+      "wide four-state reductions honor controlling values");
+  require(
+      interpreter.signal_value(shifted_left).to_msb_string()
+          == std::string(63, '0') + "Z0",
+      "wide logical left shift crosses packed storage words");
+  require(
+      interpreter.signal_value(shifted_right).to_msb_string()
+          == "01" + std::string(63, '0'),
+      "wide logical right shift crosses packed storage words");
+  require(
+      interpreter.signal_value(shifted_unknown).to_msb_string()
+          == std::string(65, 'X'),
+      "wide shift with an unknown amount produces all unknown bits");
+  require(
+      interpreter.signal_value(shifted_oversized).to_msb_string()
+          == std::string(65, '0'),
+      "wide oversized shift produces zero");
+}
+
 void test_simir_force_release() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1367,6 +1449,7 @@ int main() {
     test_simir_update_coalescing();
     test_simir_expressions_and_edges();
     test_simir_wide_truth_and_comparison();
+    test_simir_wide_reduction_and_shift();
     test_simir_force_release();
     test_simir_design_stop_identity();
     test_simir_alternate_executor_context_and_boundaries();

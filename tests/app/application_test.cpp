@@ -239,6 +239,48 @@ module comparison_app;
 endmodule
 )";
   }
+  const auto logical_source = directory / "logical.sv";
+  {
+    std::ofstream output(logical_source);
+    output << R"(
+module logical_app;
+  logic [3:0] lhs;
+  logic [1:0] rhs;
+  logic [2:0] amount;
+  logic conjunction;
+  logic disjunction;
+  logic reduced_and;
+  logic reduced_or;
+  logic reduced_xor;
+  logic [3:0] shifted_left;
+  logic [3:0] shifted_right;
+  always_comb begin
+    conjunction = lhs && rhs;
+    disjunction = lhs || rhs;
+    reduced_and = &lhs;
+    reduced_or = |lhs;
+    reduced_xor = ^lhs;
+    shifted_left = lhs << amount;
+    shifted_right = lhs >> amount;
+  end
+  initial begin
+    lhs = 4'b0000;
+    rhs = 2'bx1;
+    amount = 3'b001;
+    #1 lhs = 4'b00x0;
+    rhs = 2'b00;
+    amount = 3'b0x1;
+    #1 rhs = 2'b01;
+    amount = 3'b100;
+    #1 lhs = 4'b0010;
+    rhs = 2'bzz;
+    #1 rhs = 2'b01;
+    amount = 3'b001;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
   const auto partial_group_source = directory / "partial_group.sv";
   {
     std::ofstream output(partial_group_source);
@@ -1137,6 +1179,53 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       comparison_hybrid.final_values
       == std::vector<std::string>{
           "01Z0", "0011", "X", "X", "X", "X", "X", "0"}));
+
+  auto logical_config = config;
+  logical_config.project.name = "logical-expression-test";
+  logical_config.project.top = "sv:work.logical_app";
+  logical_config.build.optimization =
+      fsim::project::Optimization::o2;
+  logical_config.build.cache_path =
+      directory / "logical-cache";
+  logical_config.source_sets.clear();
+  fsim::project::SourceSet logical_sources;
+  logical_sources.language =
+      fsim::project::Language::system_verilog;
+  logical_sources.standard = "2017";
+  logical_sources.library = "work";
+  logical_sources.files.push_back(logical_source);
+  logical_config.source_sets.push_back(
+      std::move(logical_sources));
+  fsim::diagnostic::Engine logical_diagnostics;
+  auto logical_reference_project =
+      fsim::app::build_project(
+          logical_config, logical_diagnostics);
+  auto logical_hybrid_project =
+      fsim::app::build_project(
+          logical_config, logical_diagnostics);
+  assert(logical_reference_project);
+  assert(logical_hybrid_project);
+  const auto logical_reference = capture_simulation(
+      std::move(*logical_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto logical_hybrid = capture_simulation(
+      std::move(*logical_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(logical_reference, logical_hybrid);
+  assert(
+      logical_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(logical_hybrid.result.time == 5);
+  assert(logical_hybrid.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(logical_hybrid.compiled_processes == 2);
+  assert(logical_hybrid.compiled_modules == 1);
+#endif
+  assert((
+      logical_hybrid.final_values
+      == std::vector<std::string>{
+          "0010", "01", "001", "1", "1",
+          "0", "1", "1", "0100", "0001"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =

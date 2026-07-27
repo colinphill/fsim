@@ -1386,6 +1386,168 @@ endmodule
     assert(has_diagnostic(
         rejected_signed_comparison, "FSIM-ELAB-066"));
 
+    const auto logical_process = fsim::frontend::parse_text(
+        "logical_process.sv",
+        R"(
+module logical_process;
+  logic [3:0] lhs;
+  logic [1:0] rhs;
+  logic conjunction;
+  logic disjunction;
+  always_comb begin
+    conjunction = lhs && rhs;
+    disjunction = lhs || rhs;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(logical_process.ok());
+    const auto elaborated_logical =
+        fsim::elaboration::elaborate(
+            logical_process.design, "sv:work.logical_process");
+    assert(elaborated_logical.ok());
+    const auto logical_lhs =
+        elaborated_logical.design->find_signal("lhs");
+    const auto logical_rhs =
+        elaborated_logical.design->find_signal("rhs");
+    const auto logical_and =
+        elaborated_logical.design->find_signal("conjunction");
+    const auto logical_or =
+        elaborated_logical.design->find_signal("disjunction");
+    assert(logical_lhs && logical_rhs && logical_and && logical_or);
+    auto logical_interpreter =
+        elaborated_logical.design->create_interpreter();
+    const auto run_logical =
+        [&](const std::string_view lhs,
+            const std::string_view rhs,
+            const std::string_view expected_and,
+            const std::string_view expected_or) {
+          logical_interpreter->deposit_signal(
+              *logical_lhs,
+              fsim::runtime::PackedLogic4::from_msb_string(lhs));
+          logical_interpreter->deposit_signal(
+              *logical_rhs,
+              fsim::runtime::PackedLogic4::from_msb_string(rhs));
+          (void)logical_interpreter->run();
+          assert(
+              logical_interpreter
+                  ->signal_value(*logical_and)
+                  .to_msb_string()
+              == expected_and);
+          assert(
+              logical_interpreter
+                  ->signal_value(*logical_or)
+                  .to_msb_string()
+              == expected_or);
+        };
+    run_logical("0000", "X1", "0", "1");
+    run_logical("00X0", "00", "0", "X");
+    run_logical("00X0", "01", "X", "1");
+    run_logical("0010", "ZZ", "X", "1");
+    run_logical("0010", "01", "1", "1");
+
+    const auto reduction_shift_process =
+        fsim::frontend::parse_text(
+            "reduction_shift_process.sv",
+            R"(
+module reduction_shift_process;
+  logic [3:0] value;
+  logic [2:0] amount;
+  logic reduced_and;
+  logic reduced_or;
+  logic reduced_xor;
+  logic [3:0] shifted_left;
+  logic [3:0] shifted_right;
+  always_comb begin
+    reduced_and = &value;
+    reduced_or = |value;
+    reduced_xor = ^value;
+    shifted_left = value << amount;
+    shifted_right = value >> amount;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(reduction_shift_process.ok());
+    const auto elaborated_reduction_shift =
+        fsim::elaboration::elaborate(
+            reduction_shift_process.design,
+            "sv:work.reduction_shift_process");
+    assert(elaborated_reduction_shift.ok());
+    const auto reduction_value =
+        elaborated_reduction_shift.design->find_signal("value");
+    const auto shift_amount =
+        elaborated_reduction_shift.design->find_signal("amount");
+    const auto reduced_and =
+        elaborated_reduction_shift.design->find_signal("reduced_and");
+    const auto reduced_or =
+        elaborated_reduction_shift.design->find_signal("reduced_or");
+    const auto reduced_xor =
+        elaborated_reduction_shift.design->find_signal("reduced_xor");
+    const auto shifted_left =
+        elaborated_reduction_shift.design->find_signal("shifted_left");
+    const auto shifted_right =
+        elaborated_reduction_shift.design->find_signal("shifted_right");
+    assert(
+        reduction_value && shift_amount && reduced_and
+        && reduced_or && reduced_xor && shifted_left
+        && shifted_right);
+    auto reduction_shift_interpreter =
+        elaborated_reduction_shift.design->create_interpreter();
+    const auto run_reduction_shift =
+        [&](const std::string_view value,
+            const std::string_view amount,
+            const std::string_view expected_and,
+            const std::string_view expected_or,
+            const std::string_view expected_xor,
+            const std::string_view expected_left,
+            const std::string_view expected_right) {
+          reduction_shift_interpreter->deposit_signal(
+              *reduction_value,
+              fsim::runtime::PackedLogic4::from_msb_string(value));
+          reduction_shift_interpreter->deposit_signal(
+              *shift_amount,
+              fsim::runtime::PackedLogic4::from_msb_string(amount));
+          (void)reduction_shift_interpreter->run();
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*reduced_and)
+                  .to_msb_string()
+              == expected_and);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*reduced_or)
+                  .to_msb_string()
+              == expected_or);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*reduced_xor)
+                  .to_msb_string()
+              == expected_xor);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*shifted_left)
+                  .to_msb_string()
+              == expected_left);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*shifted_right)
+                  .to_msb_string()
+              == expected_right);
+        };
+    run_reduction_shift(
+        "1111", "001", "1", "1", "0", "1110", "0111");
+    run_reduction_shift(
+        "1011", "000", "0", "1", "1", "1011", "1011");
+    run_reduction_shift(
+        "10X1", "001", "0", "1", "X", "0X10", "010X");
+    run_reduction_shift(
+        "11X1", "011", "X", "1", "X", "1000", "0001");
+    run_reduction_shift(
+        "00X0", "0X1", "0", "X", "X", "XXXX", "XXXX");
+    run_reduction_shift(
+        "Z001", "100", "0", "1", "X", "0000", "0000");
+
     const auto empty_wildcard = fsim::frontend::parse_text(
         "empty_wildcard.sv",
         R"(

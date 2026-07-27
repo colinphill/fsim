@@ -57,18 +57,90 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return result;
 }
 
-[[nodiscard]] PackedLogic4 logical_not(const PackedLogic4& source) {
+[[nodiscard]] Logic4 truth_value(const PackedLogic4& source) {
   bool has_unknown = false;
   for (std::size_t index = 0; index < source.width(); ++index) {
     const auto value = source.get(index);
     if (value == Logic4::one) {
-      return PackedLogic4(1, Logic4::zero);
+      return Logic4::one;
     }
     has_unknown =
         has_unknown || value == Logic4::x || value == Logic4::z;
   }
+  return has_unknown ? Logic4::x : Logic4::zero;
+}
+
+[[nodiscard]] PackedLogic4 logical_not(const PackedLogic4& source) {
+  return PackedLogic4(1, logic_not(truth_value(source)));
+}
+
+[[nodiscard]] PackedLogic4 logical_binary(
+    const LogicalBinaryOperator operation,
+    const PackedLogic4& lhs,
+    const PackedLogic4& rhs) {
+  const auto left = truth_value(lhs);
+  const auto right = truth_value(rhs);
   return PackedLogic4(
-      1, has_unknown ? Logic4::x : Logic4::one);
+      1,
+      operation == LogicalBinaryOperator::logical_and
+          ? logic_and(left, right)
+          : logic_or(left, right));
+}
+
+[[nodiscard]] PackedLogic4 reduce_value(
+    const ReductionOperator operation,
+    const PackedLogic4& source) {
+  auto result =
+      operation == ReductionOperator::bit_and
+          ? Logic4::one
+          : Logic4::zero;
+  for (std::size_t index = 0; index < source.width(); ++index) {
+    if (operation == ReductionOperator::bit_and) {
+      result = logic_and(result, source.get(index));
+    } else if (operation == ReductionOperator::bit_or) {
+      result = logic_or(result, source.get(index));
+    } else {
+      result = logic_xor(result, source.get(index));
+    }
+  }
+  return PackedLogic4(1, result);
+}
+
+[[nodiscard]] PackedLogic4 shift_value(
+    const ShiftOperator operation,
+    const PackedLogic4& value,
+    const PackedLogic4& amount_value) {
+  std::size_t amount = 0;
+  for (std::size_t index = 0; index < amount_value.width(); ++index) {
+    const auto bit = amount_value.get(index);
+    if (bit == Logic4::x || bit == Logic4::z) {
+      return PackedLogic4(value.width(), Logic4::x);
+    }
+    if (bit != Logic4::one) {
+      continue;
+    }
+    if (index >= std::numeric_limits<std::size_t>::digits
+        || (std::size_t{1} << index) >= value.width()) {
+      amount = value.width();
+      break;
+    }
+    amount |= std::size_t{1} << index;
+  }
+
+  PackedLogic4 result(value.width(), Logic4::zero);
+  if (amount >= value.width()) {
+    return result;
+  }
+  for (std::size_t index = 0; index < value.width(); ++index) {
+    if (operation == ShiftOperator::logical_left) {
+      if (index >= amount) {
+        result.set(index, value.get(index - amount));
+      }
+    } else if (index + amount < value.width()) {
+      result.set(index, value.get(index + amount));
+    }
+  }
+  return result;
 }
 
 [[nodiscard]] PackedLogic4 binary_value(BinaryOperator operation,
@@ -785,6 +857,29 @@ void Interpreter::Impl::execute(ProcessId id) {
             [&](const LogicalNot& op) {
               get_register(process, op.destination) =
                   logical_not(get_register(process, op.source));
+              ++process.pc;
+            },
+            [&](const LogicalBinary& op) {
+              get_register(process, op.destination) =
+                  logical_binary(
+                      op.operation,
+                      get_register(process, op.lhs),
+                      get_register(process, op.rhs));
+              ++process.pc;
+            },
+            [&](const Reduction& op) {
+              get_register(process, op.destination) =
+                  reduce_value(
+                      op.operation,
+                      get_register(process, op.source));
+              ++process.pc;
+            },
+            [&](const Shift& op) {
+              get_register(process, op.destination) =
+                  shift_value(
+                      op.operation,
+                      get_register(process, op.value),
+                      get_register(process, op.amount));
               ++process.pc;
             },
             [&](const Binary &op) {

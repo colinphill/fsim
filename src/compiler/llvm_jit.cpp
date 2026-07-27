@@ -56,11 +56,17 @@ using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
 using runtime::simir::Jump;
 using runtime::simir::LoadConstant;
+using runtime::simir::LogicalBinary;
+using runtime::simir::LogicalBinaryOperator;
 using runtime::simir::LogicalNot;
 using runtime::simir::Operation;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
+using runtime::simir::Reduction;
+using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
+using runtime::simir::Shift;
+using runtime::simir::ShiftOperator;
 using runtime::simir::Stop;
 using runtime::simir::UnaryNot;
 using runtime::simir::UnknownBranchPolicy;
@@ -517,6 +523,51 @@ validate_process(const Process &process,
               record_use(operation.source, index);
               constrain_width(operation.destination, 1U, index);
             },
+            [&](const LogicalBinary& operation) {
+              switch (operation.operation) {
+              case LogicalBinaryOperator::logical_and:
+              case LogicalBinaryOperator::logical_or:
+                break;
+              default:
+                reject(
+                    process, index,
+                    "LogicalBinary has an invalid operator");
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.lhs, index);
+              record_use(operation.rhs, index);
+              constrain_width(operation.destination, 1U, index);
+            },
+            [&](const Reduction& operation) {
+              switch (operation.operation) {
+              case ReductionOperator::bit_and:
+              case ReductionOperator::bit_or:
+              case ReductionOperator::bit_xor:
+                break;
+              default:
+                reject(
+                    process, index,
+                    "Reduction has an invalid operator");
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              constrain_width(operation.destination, 1U, index);
+            },
+            [&](const Shift& operation) {
+              switch (operation.operation) {
+              case ShiftOperator::logical_left:
+              case ShiftOperator::logical_right:
+                break;
+              default:
+                reject(
+                    process, index, "Shift has an invalid operator");
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.value, index);
+              record_use(operation.amount, index);
+              unify_registers(
+                  operation.destination, operation.value, index);
+            },
             [&](const Binary &operation) {
               switch (operation.operation) {
               case BinaryOperator::bit_and:
@@ -950,6 +1001,37 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "source", value.source);
             },
+            [&](const LogicalBinary& value) {
+              builder.add("operation", "LogicalBinary");
+              add_key_u64(
+                  builder, "logical-binary-operator",
+                  static_cast<
+                      std::underlying_type_t<LogicalBinaryOperator>>(
+                      value.operation));
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "lhs", value.lhs);
+              add_key_u64(builder, "rhs", value.rhs);
+            },
+            [&](const Reduction& value) {
+              builder.add("operation", "Reduction");
+              add_key_u64(
+                  builder, "reduction-operator",
+                  static_cast<
+                      std::underlying_type_t<ReductionOperator>>(
+                      value.operation));
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const Shift& value) {
+              builder.add("operation", "Shift");
+              add_key_u64(
+                  builder, "shift-operator",
+                  static_cast<std::underlying_type_t<ShiftOperator>>(
+                      value.operation));
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "value", value.value);
+              add_key_u64(builder, "amount", value.amount);
+            },
             [&](const Binary &value) {
               builder.add("operation", "Binary");
               add_key_u64(
@@ -1181,6 +1263,24 @@ struct EncodedBit {
   auto *bval = builder.CreateTrunc(builder.CreateLShr(value.bval, shift),
                                    llvm::Type::getInt1Ty(context));
   return {aval, bval};
+}
+
+[[nodiscard]] EncodedBit truth_bit(
+    llvm::IRBuilder<>& builder,
+    const EncodedValue value) {
+  auto& context = builder.getContext();
+  auto* mask = constant_i64(context, width_mask(value.width));
+  auto* known_ones = builder.CreateAnd(
+      builder.CreateAnd(value.aval, mask),
+      builder.CreateNot(value.bval));
+  auto* has_one = builder.CreateICmpNE(
+      known_ones, constant_i64(context, 0));
+  auto* has_unknown = builder.CreateICmpNE(
+      builder.CreateAnd(value.bval, mask),
+      constant_i64(context, 0));
+  auto* unknown =
+      builder.CreateAnd(builder.CreateNot(has_one), has_unknown);
+  return {builder.CreateOr(has_one, unknown), unknown};
 }
 
 [[nodiscard]] EncodedBit bit_xor(llvm::IRBuilder<> &builder,
@@ -1661,6 +1761,112 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                           unknown,
                           llvm::Type::getInt64Ty(context)),
                       1});
+              branch_to_next();
+            },
+            [&](const LogicalBinary& operation) {
+              const auto left = truth_bit(
+                  builder,
+                  load_register(builder, registers, operation.lhs));
+              const auto right = truth_bit(
+                  builder,
+                  load_register(builder, registers, operation.rhs));
+              const auto result =
+                  operation.operation
+                          == LogicalBinaryOperator::logical_and
+                      ? bit_and(builder, left, right)
+                      : bit_or(builder, left, right);
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateZExt(
+                          result.aval,
+                          llvm::Type::getInt64Ty(context)),
+                      builder.CreateZExt(
+                          result.bval,
+                          llvm::Type::getInt64Ty(context)),
+                      1});
+              branch_to_next();
+            },
+            [&](const Reduction& operation) {
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              EncodedBit result{
+                  operation.operation == ReductionOperator::bit_and
+                      ? llvm::ConstantInt::getTrue(context)
+                      : llvm::ConstantInt::getFalse(context),
+                  llvm::ConstantInt::getFalse(context)};
+              for (std::uint32_t bit = 0; bit < source.width; ++bit) {
+                const auto value = bit_at(builder, source, bit);
+                if (operation.operation
+                    == ReductionOperator::bit_and) {
+                  result = bit_and(builder, result, value);
+                } else if (
+                    operation.operation
+                    == ReductionOperator::bit_or) {
+                  result = bit_or(builder, result, value);
+                } else {
+                  result = bit_xor(builder, result, value);
+                }
+              }
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateZExt(
+                          result.aval,
+                          llvm::Type::getInt64Ty(context)),
+                      builder.CreateZExt(
+                          result.bval,
+                          llvm::Type::getInt64Ty(context)),
+                      1});
+              branch_to_next();
+            },
+            [&](const Shift& operation) {
+              const auto value =
+                  load_register(
+                      builder, registers, operation.value);
+              const auto amount =
+                  load_register(
+                      builder, registers, operation.amount);
+              auto* value_mask =
+                  constant_i64(context, width_mask(value.width));
+              auto* amount_mask =
+                  constant_i64(context, width_mask(amount.width));
+              auto* amount_unknown = builder.CreateICmpNE(
+                  builder.CreateAnd(amount.bval, amount_mask),
+                  constant_i64(context, 0));
+              auto* amount_bits =
+                  builder.CreateAnd(amount.aval, amount_mask);
+              auto* amount_too_large = builder.CreateICmpUGE(
+                  amount_bits, constant_i64(context, value.width));
+              auto* safe_amount = builder.CreateSelect(
+                  amount_too_large,
+                  constant_i64(context, 0),
+                  amount_bits);
+              auto* shifted_aval =
+                  operation.operation == ShiftOperator::logical_left
+                      ? builder.CreateShl(value.aval, safe_amount)
+                      : builder.CreateLShr(value.aval, safe_amount);
+              auto* shifted_bval =
+                  operation.operation == ShiftOperator::logical_left
+                      ? builder.CreateShl(value.bval, safe_amount)
+                      : builder.CreateLShr(value.bval, safe_amount);
+              auto* known_aval = builder.CreateSelect(
+                  amount_too_large,
+                  constant_i64(context, 0),
+                  builder.CreateAnd(shifted_aval, value_mask));
+              auto* known_bval = builder.CreateSelect(
+                  amount_too_large,
+                  constant_i64(context, 0),
+                  builder.CreateAnd(shifted_bval, value_mask));
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateSelect(
+                          amount_unknown, value_mask, known_aval),
+                      builder.CreateSelect(
+                          amount_unknown, value_mask, known_bval),
+                      value.width});
               branch_to_next();
             },
             [&](const Binary &operation) {

@@ -1019,6 +1019,39 @@ private:
         }
         if (expression.kind == ExpressionKind::Unary
             && expression.operands.size() == 1
+            && (expression.text == "&"
+                || expression.text == "|"
+                || expression.text == "^")) {
+            const auto source_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            const auto source =
+                lower_expression(
+                    expression.operands[0], source_width);
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto source_domain = register_domain(*source);
+            const auto result_domain =
+                source_domain == frontend::ValueDomain::Bit2
+                        || source_domain
+                            == frontend::ValueDomain::Boolean
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            auto operation = ReductionOperator::bit_xor;
+            if (expression.text == "&") {
+                operation = ReductionOperator::bit_and;
+            } else if (expression.text == "|") {
+                operation = ReductionOperator::bit_or;
+            }
+            const auto destination =
+                allocate_register(1, result_domain);
+            process_.operations.emplace_back(
+                Reduction{operation, destination, *source});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Unary
+            && expression.operands.size() == 1
             && (expression.text == "not" || expression.text == "~")) {
             const auto source = lower_expression(expression.operands[0], expected_width);
             if (!source) {
@@ -1098,6 +1131,85 @@ private:
                 *condition,
                 *when_true,
                 *when_false});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2
+            && (expression.text == "&&"
+                || expression.text == "||")) {
+            const auto lhs_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            const auto rhs_width =
+                infer_width(expression.operands[1])
+                    .value_or(expected_width);
+            const auto lhs =
+                lower_expression(expression.operands[0], lhs_width);
+            const auto rhs =
+                lower_expression(expression.operands[1], rhs_width);
+            if (!lhs || !rhs) {
+                return std::nullopt;
+            }
+            const auto is_two_state =
+                [](const frontend::ValueDomain domain) {
+                    return domain == frontend::ValueDomain::Bit2
+                        || domain == frontend::ValueDomain::Boolean;
+                };
+            const auto result_domain =
+                is_two_state(register_domain(*lhs))
+                        && is_two_state(register_domain(*rhs))
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            const auto destination =
+                allocate_register(1, result_domain);
+            process_.operations.emplace_back(LogicalBinary{
+                expression.text == "&&"
+                    ? LogicalBinaryOperator::logical_and
+                    : LogicalBinaryOperator::logical_or,
+                destination,
+                *lhs,
+                *rhs});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2
+            && (expression.text == "<<"
+                || expression.text == ">>")) {
+            const auto value_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            const auto amount_width =
+                infer_width(expression.operands[1])
+                    .value_or(expected_width);
+            const auto value =
+                lower_expression(
+                    expression.operands[0], value_width);
+            const auto amount =
+                lower_expression(
+                    expression.operands[1], amount_width);
+            if (!value || !amount) {
+                return std::nullopt;
+            }
+            const auto is_two_state =
+                [](const frontend::ValueDomain domain) {
+                    return domain == frontend::ValueDomain::Bit2
+                        || domain == frontend::ValueDomain::Boolean;
+                };
+            const auto result_domain =
+                is_two_state(register_domain(*value))
+                        && is_two_state(register_domain(*amount))
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            const auto destination =
+                allocate_register(
+                    register_width(*value), result_domain);
+            process_.operations.emplace_back(Shift{
+                expression.text == "<<"
+                    ? ShiftOperator::logical_left
+                    : ShiftOperator::logical_right,
+                destination,
+                *value,
+                *amount});
             return destination;
         }
         if (expression.kind == ExpressionKind::Binary && expression.operands.size() == 2) {

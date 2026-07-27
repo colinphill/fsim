@@ -49,6 +49,47 @@ struct LogicalNot {
   RegisterId source{};
 };
 
+enum class LogicalBinaryOperator : std::uint8_t {
+  logical_and,
+  logical_or,
+};
+
+/// SystemVerilog logical conjunction/disjunction. Each operand is reduced to
+/// a scalar truth value independently, so operand widths may differ.
+struct LogicalBinary {
+  LogicalBinaryOperator operation{
+      LogicalBinaryOperator::logical_and};
+  RegisterId destination{};
+  RegisterId lhs{};
+  RegisterId rhs{};
+};
+
+enum class ReductionOperator : std::uint8_t {
+  bit_and,
+  bit_or,
+  bit_xor,
+};
+
+/// SystemVerilog unary reduction over every bit of one packed operand.
+struct Reduction {
+  ReductionOperator operation{ReductionOperator::bit_and};
+  RegisterId destination{};
+  RegisterId source{};
+};
+
+enum class ShiftOperator : std::uint8_t {
+  logical_left,
+  logical_right,
+};
+
+/// Logical shift with independently sized value and shift-count operands.
+struct Shift {
+  ShiftOperator operation{ShiftOperator::logical_left};
+  RegisterId destination{};
+  RegisterId value{};
+  RegisterId amount{};
+};
+
 enum class BinaryOperator : std::uint8_t {
   bit_and,
   bit_or,
@@ -192,9 +233,10 @@ struct Halt {};
 
 using Operation =
     std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, LogicalNot,
-                 Binary, ConditionalSelect, WriteBlocking, WriteUpdate,
-                 WriteAfter, WaitFor, WaitOn, WaitSensitivity, Yield, Jump,
-                 Branch, DebugPoint, Assert, Stop, Halt>;
+                 LogicalBinary, Reduction, Shift, Binary,
+                 ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
+                 WaitFor, WaitOn, WaitSensitivity, Yield, Jump, Branch,
+                 DebugPoint, Assert, Stop, Halt>;
 
 struct Signal {
   std::string name;

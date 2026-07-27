@@ -101,6 +101,11 @@ The following foundation is implemented:
 - vector-aware SystemVerilog logical negation and unsigned
   inequality/relational comparisons with exact four-state unknown
   propagation and interpreter/O0/O2 evidence;
+- mixed-width SystemVerilog logical conjunction/disjunction with controlling
+  known-value truth tables and interpreter/O0/O2 evidence;
+- SystemVerilog unary reductions and mixed-width logical left/right shifts
+  with four-state unknown and oversized-amount semantics tested across the
+  interpreter and LLVM O0/O2 paths;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
 - a stable catalog covering 281 unique current production diagnostic codes.
