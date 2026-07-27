@@ -617,10 +617,12 @@ struct Interpreter::Impl {
     std::vector<PackedLogic4> registers;
     std::unique_ptr<ProcessExecutor> executor;
     std::vector<Sensitivity> dynamic_sensitivity;
+    std::vector<bool> dynamic_triggered;
     SourceLocation current_source;
     bool queued{};
     bool waiting_on_static{};
     bool waiting_on_signal{};
+    bool dynamic_wait_all{};
     bool halted{};
   };
 
@@ -709,7 +711,31 @@ struct Interpreter::Impl {
           fanout.end());
     }
     process.dynamic_sensitivity.clear();
+    process.dynamic_triggered.clear();
     process.waiting_on_signal = false;
+    process.dynamic_wait_all = false;
+  }
+
+  [[nodiscard]] bool dynamic_wait_satisfied(
+      ProcessState& process,
+      const SignalId signal,
+      const EdgeKind edge) {
+    if (!process.dynamic_wait_all) {
+      return true;
+    }
+    for (std::size_t index = 0;
+         index < process.dynamic_sensitivity.size(); ++index) {
+      const auto& sensitivity =
+          process.dynamic_sensitivity[index];
+      if (sensitivity.signal == signal
+          && sensitivity.edge == edge) {
+        process.dynamic_triggered[index] = true;
+      }
+    }
+    return std::all_of(
+        process.dynamic_triggered.begin(),
+        process.dynamic_triggered.end(),
+        [](const bool triggered) { return triggered; });
   }
 
   void handle_boundary(ProcessState& process,
@@ -801,7 +827,11 @@ struct Interpreter::Impl {
     // Copy because queue_active_current removes dynamic registrations.
     const auto dynamic = dynamic_fanout[event];
     for (const auto& sensitivity : dynamic) {
-      queue_active_current(sensitivity.process);
+      auto& process = get_process(sensitivity.process);
+      if (dynamic_wait_satisfied(
+              process, event, sensitivity.edge)) {
+        queue_active_current(sensitivity.process);
+      }
     }
   }
 
@@ -955,7 +985,11 @@ struct Interpreter::Impl {
                   signal.initial_value.get(0)))) {
         continue;
       }
-      queue_next_delta(sensitivity.process);
+      auto& process = get_process(sensitivity.process);
+      if (dynamic_wait_satisfied(
+              process, signal_id, sensitivity.edge)) {
+        queue_next_delta(sensitivity.process);
+      }
     }
   }
 
@@ -1284,6 +1318,9 @@ void Interpreter::Impl::handle_external_boundary(
             process.dynamic_sensitivity.begin(),
             process.dynamic_sensitivity.end()),
         process.dynamic_sensitivity.end());
+    process.dynamic_wait_all = suspension.wait_all;
+    process.dynamic_triggered.assign(
+        process.dynamic_sensitivity.size(), false);
     for (const auto& sensitivity : process.dynamic_sensitivity) {
       (void)get_signal(sensitivity.signal);
       if (sensitivity.edge != EdgeKind::any) {

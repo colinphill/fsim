@@ -22,6 +22,10 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, notify_event_mode),
     "event cancellation must remain an append-only host field");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, wait_event_list)
+        > offsetof(fsim_sc_host_v1, cancel_event),
+    "event-list waits must remain an append-only host field");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");

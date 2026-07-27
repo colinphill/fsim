@@ -86,9 +86,13 @@ class SystemCMethodExecutor final
     case systemc::MethodSuspendKind::wait_event:
       result.external.kind =
           runtime::simir::ExternalSuspendKind::wait_on;
-      result.external.sensitivity.push_back(
-          {suspension.event_signal,
-           runtime::simir::EdgeKind::any});
+      result.external.wait_all = suspension.wait_all;
+      result.external.sensitivity.reserve(
+          suspension.event_signals.size());
+      for (const auto event : suspension.event_signals) {
+        result.external.sensitivity.push_back(
+            {event, runtime::simir::EdgeKind::any});
+      }
       break;
     }
     return result;

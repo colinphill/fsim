@@ -23,6 +23,22 @@ interfaces or test scaffolding exist.
 - **Pending**: implementation is absent or limited to enabling infrastructure.
 - **Deferred**: intentionally outside the v1 scope.
 
+## Locked architecture decisions
+
+- SystemC is a peer hierarchy language, not a leaf-only foreign-model
+  interface. VHDL and Verilog/SystemVerilog instances can bind to SystemC
+  factories, and SystemC factories can declare elaboration-time children bound
+  to VHDL or Verilog/SystemVerilog targets.
+- Mixed SystemC/HDL hierarchy is recursive in both directions and any supported
+  language may be the selected top. Every such instance, port, alias, process,
+  and debug-visible object enters the common `DesignIR` and scheduler.
+- The native SystemC plug-in ABI is the C++ compilation boundary, not a
+  simulation-boundary shortcut. It may register typed factories and foreign
+  child placeholders during elaboration, but cannot create HDL hierarchy after
+  simulation starts.
+- Cross-language selection remains explicit through `fsim.toml`; fsim never
+  guesses a SystemC, VHDL, or Verilog/SystemVerilog target by name.
+
 ## Current validated baseline
 
 The following foundation is implemented:
@@ -131,8 +147,8 @@ The following foundation is implemented:
   scheduler/update semantics and contained native exceptions;
 - dynamic `SC_METHOD` time/event `next_trigger`, opaque named-event
   elaboration, immediate/delta/timed notifications, earliest-notification
-  replacement, and cancellation owned by the common scheduler with
-  interpreter/hybrid equivalence; and
+  replacement, cancellation, and dynamic OR/AND event expressions owned by
+  the common scheduler with interpreter/hybrid equivalence; and
 - a stable catalog covering 304 unique current production diagnostic codes.
 
 Current Linux validation:
@@ -336,7 +352,8 @@ Completed groundwork:
   `dont_initialize()`, static any-change/scalar-edge sensitivities, packed
   runtime port access, common update-phase writes, dynamic time/event
   `next_trigger`, and immediate/delta/timed named-event notification,
-  replacement, and cancellation through the common scheduler; and
+  replacement, cancellation, and OR/AND list sensitivity through the common
+  scheduler; and
 - compiler-emitted dependency closure for GCC-like SystemC builds.
 
 Planned implementation sequence:
@@ -346,9 +363,9 @@ Planned implementation sequence:
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
-3. Complete SystemC event lists/expressions and internal primitive-channel
-   registration; dynamic method sensitivity, pending-notification rules, and
-   cancellation now use the common scheduler.
+3. Complete SystemC internal primitive-channel registration and
+   `notify_delayed`; dynamic method sensitivity, OR/AND event expressions,
+   pending-notification rules, and cancellation now use the common scheduler.
 4. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
 5. Complete nested/scoped debug locals and add call safe points.
@@ -426,6 +443,9 @@ fsim v1 may be declared only when:
 - Ubuntu x86-64/GCC and Windows x86-64/MSVC Debug and Release gates pass;
 - LLVM 22.1.8, cache, SystemC plug-in, VCD, debugger, sanitizer, and fuzz gates
   are green;
+- recursive VHDL/SystemVerilog/SystemC hierarchy passes elaboration and runtime
+  matrices in every parent-to-child language direction, including mixed
+  hierarchy rooted at SystemC;
 - no promised syntax is silently ignored; and
 - remaining unsupported features are explicitly documented as deferred rather
   than implied to be part of v1.

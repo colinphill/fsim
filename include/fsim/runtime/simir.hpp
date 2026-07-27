@@ -472,6 +472,7 @@ struct ExternalSuspension {
   ExternalSuspendKind kind{ExternalSuspendKind::simir_boundary};
   SimulationTick delay{};
   std::vector<Sensitivity> sensitivity;
+  bool wait_all{};
 };
 
 /// Describes the boundary at which an alternate executor returned control.

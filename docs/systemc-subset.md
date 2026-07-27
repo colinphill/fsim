@@ -14,9 +14,9 @@ elaboration. A project build collects the configured SystemC sources into one
 shared library, loads it, constructs the requested factory instances, and
 retains their native objects for the design lifetime. Common-kernel SystemC
 execution now covers statically sensitive `SC_METHOD` callbacks, dynamic
-time/event `next_trigger`, named-event notification/replacement/cancellation,
-and port updates. Event lists/expressions, internal primitive channels, and
-fiber-backed thread execution are still work in progress.
+time/event and OR/AND-list `next_trigger`, named-event
+notification/replacement/cancellation, and port updates. Internal primitive
+channels and fiber-backed thread execution are still work in progress.
 
 ## Source inclusion
 
@@ -35,6 +35,7 @@ The current facade defines:
 
 - `sc_core::sc_time`, `sc_time_unit`, and `SC_ZERO_TIME`;
 - `sc_core::sc_event`, `wait`, and `next_trigger`;
+- `sc_core::sc_event_or_list` and `sc_event_and_list` expressions;
 - `sc_core::sc_module`, `sc_module_name`, `sc_sensitive`, and
   `sc_gen_unique_name`;
 - `sc_core::sc_interface`, `sc_export<IF>`, `sc_signal<T>`, `sc_in<T>`,
@@ -173,11 +174,13 @@ factory.
 
 The current common-kernel path executes `SC_METHOD` callbacks to completion
 with default time-zero initialization or `dont_initialize()`, static
-any-change/scalar-edge sensitivity, and dynamic `next_trigger(sc_time)` or
-`next_trigger(sc_event)` selection. Reads observe committed common-runtime
-values; writes enter the common update phase and awaken dependent HDL or
-SystemC processes in the next delta. Callback exceptions are contained at the
-native boundary and poison only the affected simulation session.
+any-change/scalar-edge sensitivity, and dynamic `next_trigger` selection for
+time, a single event, an OR list, or an AND list. OR waits wake on the first
+listed event; AND waits retain progress until every distinct listed event has
+occurred. Reads observe committed common-runtime values; writes enter the
+common update phase and awaken dependent HDL or SystemC processes in the next
+delta. Callback exceptions are contained at the native boundary and poison
+only the affected simulation session.
 
 Named `sc_event` objects receive opaque elaboration handles. `notify()` is
 immediate, `notify(SC_ZERO_TIME)` enters the next delta, and a non-zero timed
@@ -189,8 +192,7 @@ An already-pending delta notification wins. A timed notification is replaced
 only by an earlier due time. Immediate notification cancels pending work before
 triggering, and `sc_event::cancel()` invalidates a pending delta or timed
 notification. Canceled/replaced timestamp-heap entries are generation-checked
-no-ops when eventually dequeued. Event lists/expressions and
-`notify_delayed` are not implemented yet.
+no-ops when eventually dequeued. `notify_delayed` is not implemented yet.
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0
 fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
@@ -206,8 +208,8 @@ SystemC work participates in fsim's common phase policy:
 
 The facade and native host callbacks implement dynamic method sensitivity,
 port reads, update-phase port writes, and named-event notification and
-cancellation. It does not yet provide event lists/expressions, internal
-primitive-channel registration, or fiber suspension.
+cancellation, including OR/AND dynamic event expressions. It does not yet
+provide internal primitive-channel registration or fiber suspension.
 
 ## Deliberately outside v1
 

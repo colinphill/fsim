@@ -728,6 +728,58 @@ SC_MODULE(DynamicEvents) {
   }
 };
 
+SC_MODULE(EventLists) {
+  sc_core::sc_out<sc_dt::sc_uint<8>> or_seen{"or_seen"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> and_seen{"and_seen"};
+  sc_core::sc_event first{"first"};
+  sc_core::sc_event second{"second"};
+  sc_core::sc_event third{"third"};
+  unsigned producer_state{};
+  bool or_initialized{};
+  bool and_initialized{};
+
+  SC_CTOR(EventLists) {
+    SC_METHOD(produce);
+    SC_METHOD(observe_or);
+    SC_METHOD(observe_and);
+  }
+
+  void produce() {
+    if (producer_state == 0) {
+      ++producer_state;
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else if (producer_state == 1) {
+      ++producer_state;
+      first.notify();
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else if (producer_state == 2) {
+      ++producer_state;
+      second.notify();
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else {
+      third.notify();
+    }
+  }
+
+  void observe_or() {
+    if (!or_initialized) {
+      or_initialized = true;
+      next_trigger(first | second);
+      return;
+    }
+    or_seen.write(sc_dt::sc_uint<8>{producer_state - 1});
+  }
+
+  void observe_and() {
+    if (!and_initialized) {
+      and_initialized = true;
+      next_trigger(first & second & third);
+      return;
+    }
+    and_seen.write(sc_dt::sc_uint<8>{producer_state});
+  }
+};
+
 namespace {
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
@@ -861,8 +913,14 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (throwing_status != FSIM_SC_OK) {
     return throwing_status;
   }
-  return fsim::systemc::register_module_factory<DynamicEvents>(
-      host, registrar, "dynamic_events");
+  const auto dynamic_status =
+      fsim::systemc::register_module_factory<DynamicEvents>(
+          host, registrar, "dynamic_events");
+  if (dynamic_status != FSIM_SC_OK) {
+    return dynamic_status;
+  }
+  return fsim::systemc::register_module_factory<EventLists>(
+      host, registrar, "event_lists");
 }
 )";
   }
@@ -1371,6 +1429,63 @@ end architecture rtl;
   assert(dynamic_reference.first.status == dynamic_compiled.first.status);
   assert(dynamic_reference.first.time == dynamic_compiled.first.time);
   assert(dynamic_reference.second == dynamic_compiled.second);
+
+  auto event_list_config = systemc_method_top_config;
+  event_list_config.project.top =
+      "systemc:models.event_lists";
+  fsim::diagnostic::Engine event_list_diagnostics;
+  auto event_list_reference = fsim::app::build_project(
+      event_list_config, event_list_diagnostics);
+  auto event_list_compiled = fsim::app::build_project(
+      event_list_config, event_list_diagnostics);
+  assert(event_list_reference);
+  assert(event_list_compiled);
+  assert(
+      event_list_reference->design.systemc_instances().front()
+          .events.size()
+      == 3);
+  const auto run_event_lists =
+      [&](fsim::app::BuiltProject project,
+          const fsim::app::SimulationEngine engine) {
+        const auto or_seen =
+            project.design.find_signal("event_lists.or_seen");
+        const auto and_seen =
+            project.design.find_signal("event_lists.and_seen");
+        assert(or_seen && and_seen);
+        fsim::app::Simulation simulation{
+            std::move(project),
+            event_list_config.run.max_deltas,
+            engine};
+        const auto result = simulation.run();
+        return std::tuple{
+            result,
+            simulation.read_signal(*or_seen).to_msb_string(),
+            simulation.read_signal(*and_seen).to_msb_string()};
+      };
+  const auto event_lists_reference = run_event_lists(
+      std::move(*event_list_reference),
+      fsim::app::SimulationEngine::interpreter);
+  const auto event_lists_compiled = run_event_lists(
+      std::move(*event_list_compiled),
+      fsim::app::SimulationEngine::compiled);
+  assert(
+      std::get<0>(event_lists_reference).status
+      == fsim::runtime::RunStatus::completed);
+  assert(std::get<0>(event_lists_reference).time == 3);
+  assert(std::get<1>(event_lists_reference) == "00000001");
+  assert(std::get<2>(event_lists_reference) == "00000011");
+  assert(
+      std::get<0>(event_lists_reference).status
+      == std::get<0>(event_lists_compiled).status);
+  assert(
+      std::get<0>(event_lists_reference).time
+      == std::get<0>(event_lists_compiled).time);
+  assert(
+      std::get<1>(event_lists_reference)
+      == std::get<1>(event_lists_compiled));
+  assert(
+      std::get<2>(event_lists_reference)
+      == std::get<2>(event_lists_compiled));
 
   struct CapturedSimulation {
     fsim::runtime::RunResult result;

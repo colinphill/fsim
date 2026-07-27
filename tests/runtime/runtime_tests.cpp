@@ -1765,6 +1765,130 @@ void test_simir_alternate_executor_event_replacement_and_cancel() {
       "only the earliest timed and final immediate event must trigger");
 }
 
+void test_simir_alternate_executor_event_lists() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  class Producer final : public ProcessExecutor {
+  public:
+    explicit Producer(const std::array<SignalId, 3> events)
+        : events_(events) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        InstructionIndex) override {
+      for (std::size_t index = 0; index < events_.size(); ++index) {
+        context.notify_event(
+            events_[index],
+            static_cast<SimulationTick>(index + 1),
+            EventNotificationKind::timed);
+      }
+      ProcessResumeResult result{0, 1};
+      result.external.kind = ExternalSuspendKind::halt;
+      return result;
+    }
+
+  private:
+    std::array<SignalId, 3> events_;
+  };
+
+  class ListConsumer final : public ProcessExecutor {
+  public:
+    ListConsumer(
+        std::vector<SignalId> events,
+        const bool wait_all,
+        std::size_t& wakeups)
+        : events_(std::move(events)),
+          wait_all_(wait_all),
+          wakeups_(wakeups) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext&,
+        InstructionIndex) override {
+      ProcessResumeResult result{0, 1};
+      if (initialized_) {
+        ++wakeups_;
+        result.external.kind = ExternalSuspendKind::halt;
+        return result;
+      }
+      initialized_ = true;
+      result.external.kind = ExternalSuspendKind::wait_on;
+      result.external.wait_all = wait_all_;
+      for (const auto event : events_) {
+        result.external.sensitivity.push_back(
+            {event, EdgeKind::any});
+      }
+      return result;
+    }
+
+  private:
+    std::vector<SignalId> events_;
+    bool wait_all_{};
+    std::size_t& wakeups_;
+    bool initialized_{};
+  };
+
+  Interpreter interpreter;
+  const std::array events{
+      interpreter.add_signal(
+          {"event_a", PackedLogic4::from_msb_string("0")}),
+      interpreter.add_signal(
+          {"event_b", PackedLogic4::from_msb_string("0")}),
+      interpreter.add_signal(
+          {"event_c", PackedLogic4::from_msb_string("0")}),
+  };
+
+  Process producer;
+  producer.id = 0;
+  producer.name = "event_list_producer";
+  producer.operations = {Halt{}};
+  const auto producer_id =
+      interpreter.add_process(std::move(producer));
+
+  Process or_consumer;
+  or_consumer.id = 1;
+  or_consumer.name = "event_or_consumer";
+  or_consumer.operations = {Halt{}};
+  const auto or_id =
+      interpreter.add_process(std::move(or_consumer));
+
+  Process and_consumer;
+  and_consumer.id = 2;
+  and_consumer.name = "event_and_consumer";
+  and_consumer.operations = {Halt{}};
+  const auto and_id =
+      interpreter.add_process(std::move(and_consumer));
+
+  std::size_t or_wakeups = 0;
+  std::size_t and_wakeups = 0;
+  interpreter.set_process_executor(
+      producer_id, std::make_unique<Producer>(events));
+  interpreter.set_process_executor(
+      or_id,
+      std::make_unique<ListConsumer>(
+          std::vector<SignalId>{events[0], events[1]},
+          false,
+          or_wakeups));
+  interpreter.set_process_executor(
+      and_id,
+      std::make_unique<ListConsumer>(
+          std::vector<SignalId>{
+              events[0], events[1], events[2]},
+          true,
+          and_wakeups));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 3,
+      "event-list waits must retain deterministic timed progress");
+  require(
+      or_wakeups == 1,
+      "an OR-list wait must wake on its first event");
+  require(
+      and_wakeups == 1,
+      "an AND-list wait must wake only after every event");
+}
+
 void test_simir_assertion_metadata() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1920,6 +2044,7 @@ int main() {
     test_simir_alternate_executor_cpp_exception_containment();
     test_simir_alternate_executor_validation();
     test_simir_alternate_executor_event_replacement_and_cancel();
+    test_simir_alternate_executor_event_lists();
     test_simir_assertion_metadata();
     test_simir_execution_point_ordering();
     test_vcd();

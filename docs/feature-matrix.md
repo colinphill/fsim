@@ -194,11 +194,11 @@ version is development evidence only.
 | SC-009 | Common fixed-width signed/unsigned operations and logic-vector semantics needed by signal-level models | v1 target | [facade smoke coverage only](../tests/systemc/systemc_header_test.cpp) | — | — | — |
 | SC-010 | Manifest SystemC source sets compiled, cached, loaded, and retained through application build/simulation lifetime | execute | [application SystemC source test](../tests/app/application_test.cpp) | [legacy untyped factory rejection](../tests/app/application_test.cpp) | [application build and typed construction](../tests/app/application_test.cpp) | [cold/warm build plus executable callbacks](../tests/app/application_test.cpp) |
 | SC-011 | Peer, bidirectional elaboration-time hierarchy: VHDL/SV instance to SystemC factory and SystemC typed foreign-child placeholder to VHDL/SV target, covering all six parent→child language directions | execute | [typed sample factory](../tests/systemc/sample_plugin.cpp) | [missing foreign-child binding](../tests/elaboration/elaborator_test.cpp) | [SV and VHDL hierarchy paths](../tests/elaboration/elaborator_test.cpp) | [compiled plug-in in both directions](../tests/app/application_test.cpp) |
-| SC-012 | Dynamic time/event `next_trigger`; immediate, delta, and exactly representable timed named-event notification; earliest-pending replacement; and cancellation in `SC_METHOD`; event lists/expressions and internal primitive channels remain | execute | [facade dynamic-event module](../tests/app/application_test.cpp) | [unbound-event notify/cancel rejection](../tests/systemc/systemc_header_test.cpp) | [opaque event metadata and append-only cancellation ABI](../tests/systemc/systemc_abi_c_test.c) | [kernel replacement/cancel test](../tests/runtime/runtime_tests.cpp) and [interpreter/hybrid ordering equivalence](../tests/app/application_test.cpp) |
+| SC-012 | Dynamic time/event and OR/AND-list `next_trigger`; immediate, delta, and exactly representable timed named-event notification; earliest-pending replacement; and cancellation in `SC_METHOD`; `notify_delayed` and internal primitive channels remain | execute | [facade dynamic-event/list modules](../tests/app/application_test.cpp) | [unbound-event and list-trigger rejection](../tests/systemc/systemc_header_test.cpp) | [append-only event-list ABI](../tests/systemc/systemc_abi_c_test.c) | [kernel replacement/cancel/list tests](../tests/runtime/runtime_tests.cpp) and [interpreter/hybrid ordering equivalence](../tests/app/application_test.cpp) |
 
 “Execute” in these rows is bounded by the named evidence. SC-012 does not yet
-claim event lists/expressions, `notify_delayed`, or internal primitive
-channels, and it does not imply the fibers tracked by SC-008.
+claim `notify_delayed` or internal primitive channels, and it does not imply
+the fibers tracked by SC-008.
 
 ## Mixed-language behavior
 

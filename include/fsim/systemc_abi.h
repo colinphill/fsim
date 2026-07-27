@@ -58,6 +58,11 @@ typedef enum fsim_sc_notification_kind_v1 {
     FSIM_SC_NOTIFY_TIMED = 2
 } fsim_sc_notification_kind_v1;
 
+typedef enum fsim_sc_event_list_kind_v1 {
+    FSIM_SC_EVENT_OR_LIST = 0,
+    FSIM_SC_EVENT_AND_LIST = 1
+} fsim_sc_event_list_kind_v1;
+
 typedef struct fsim_sc_value_view_v1 {
     /*
      * Packed planes are byte-addressed, least-significant bit first.
@@ -168,6 +173,11 @@ typedef struct fsim_sc_host_v1 {
     fsim_sc_status_v1 (*cancel_event)(
         void* context,
         fsim_sc_handle_v1 event);
+    fsim_sc_status_v1 (*wait_event_list)(
+        void* context,
+        const fsim_sc_handle_v1* events,
+        size_t event_count,
+        fsim_sc_event_list_kind_v1 kind);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

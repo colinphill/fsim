@@ -81,7 +81,8 @@ enum class MethodSuspendKind : std::uint8_t {
 struct MethodSuspendResult {
     MethodSuspendKind kind{MethodSuspendKind::halt};
     std::uint64_t delay_ticks{};
-    std::uint32_t event_signal{};
+    std::vector<std::uint32_t> event_signals;
+    bool wait_all{};
 };
 
 /// Owns one loaded SystemC plug-in and every module object constructed from

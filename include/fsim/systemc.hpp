@@ -226,6 +226,149 @@ private:
     fsim_sc_handle_v1 handle_{};
 };
 
+class sc_event_or_list {
+public:
+    sc_event_or_list() = default;
+    explicit sc_event_or_list(const sc_event& event) {
+        append(event.native_handle());
+    }
+
+    sc_event_or_list& operator|=(const sc_event& event) {
+        append(event.native_handle());
+        return *this;
+    }
+    sc_event_or_list& operator|=(const sc_event_or_list& events) {
+        for (const auto event : events.events_) {
+            append(event);
+        }
+        return *this;
+    }
+
+    [[nodiscard]] const std::vector<fsim_sc_handle_v1>&
+    native_handles() const noexcept {
+        return events_;
+    }
+
+private:
+    void append(const fsim_sc_handle_v1 event) {
+        if (std::find(events_.begin(), events_.end(), event)
+            == events_.end()) {
+            events_.push_back(event);
+        }
+    }
+
+    std::vector<fsim_sc_handle_v1> events_;
+};
+
+class sc_event_and_list {
+public:
+    sc_event_and_list() = default;
+    explicit sc_event_and_list(const sc_event& event) {
+        append(event.native_handle());
+    }
+
+    sc_event_and_list& operator&=(const sc_event& event) {
+        append(event.native_handle());
+        return *this;
+    }
+    sc_event_and_list& operator&=(const sc_event_and_list& events) {
+        for (const auto event : events.events_) {
+            append(event);
+        }
+        return *this;
+    }
+
+    [[nodiscard]] const std::vector<fsim_sc_handle_v1>&
+    native_handles() const noexcept {
+        return events_;
+    }
+
+private:
+    void append(const fsim_sc_handle_v1 event) {
+        if (std::find(events_.begin(), events_.end(), event)
+            == events_.end()) {
+            events_.push_back(event);
+        }
+    }
+
+    std::vector<fsim_sc_handle_v1> events_;
+};
+
+inline sc_event_or_list operator|(
+    const sc_event& left, const sc_event& right) {
+    sc_event_or_list result{left};
+    result |= right;
+    return result;
+}
+
+inline sc_event_or_list operator|(
+    sc_event_or_list left, const sc_event& right) {
+    left |= right;
+    return left;
+}
+
+inline sc_event_or_list operator|(
+    const sc_event& left, sc_event_or_list right) {
+    sc_event_or_list result{left};
+    result |= right;
+    return result;
+}
+
+inline sc_event_or_list operator|(
+    sc_event_or_list left, const sc_event_or_list& right) {
+    left |= right;
+    return left;
+}
+
+inline sc_event_and_list operator&(
+    const sc_event& left, const sc_event& right) {
+    sc_event_and_list result{left};
+    result &= right;
+    return result;
+}
+
+inline sc_event_and_list operator&(
+    sc_event_and_list left, const sc_event& right) {
+    left &= right;
+    return left;
+}
+
+inline sc_event_and_list operator&(
+    const sc_event& left, sc_event_and_list right) {
+    sc_event_and_list result{left};
+    result &= right;
+    return result;
+}
+
+inline sc_event_and_list operator&(
+    sc_event_and_list left, const sc_event_and_list& right) {
+    left &= right;
+    return left;
+}
+
+namespace detail {
+
+inline void set_event_list_trigger(
+    const std::vector<fsim_sc_handle_v1>& events,
+    const fsim_sc_event_list_kind_v1 kind,
+    const char* operation) {
+    if (current_host == nullptr
+        || current_host->wait_event_list == nullptr) {
+        throw std::logic_error{
+            std::string{"sc_core::"} + operation
+            + " requires an active fsim SystemC process"};
+    }
+    check_status(
+        current_host->wait_event_list(
+            current_host->context,
+            events.data(),
+            events.size(),
+            kind),
+        operation);
+}
+
+} // namespace detail
+
 inline void wait(const sc_time delay) {
     if (detail::current_host == nullptr || detail::current_host->wait_time == nullptr) {
         throw std::logic_error{"sc_core::wait requires an active fsim SystemC process"};
@@ -251,6 +394,28 @@ inline void wait(const sc_event& event) {
         detail::current_host->wait_event(
             detail::current_host->context, event.native_handle()),
         "wait for event");
+}
+
+inline void wait(const sc_event_or_list& events) {
+    if (detail::current_process_kind == FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "SC_METHOD cannot call wait; use next_trigger"};
+    }
+    detail::set_event_list_trigger(
+        events.native_handles(),
+        FSIM_SC_EVENT_OR_LIST,
+        "wait for event OR list");
+}
+
+inline void wait(const sc_event_and_list& events) {
+    if (detail::current_process_kind == FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "SC_METHOD cannot call wait; use next_trigger"};
+    }
+    detail::set_event_list_trigger(
+        events.native_handles(),
+        FSIM_SC_EVENT_AND_LIST,
+        "wait for event AND list");
 }
 
 inline void wait() {
@@ -279,6 +444,20 @@ inline void next_trigger(const sc_event& event) {
         detail::current_host->wait_event(
             detail::current_host->context, event.native_handle()),
         "set next event trigger");
+}
+
+inline void next_trigger(const sc_event_or_list& events) {
+    detail::set_event_list_trigger(
+        events.native_handles(),
+        FSIM_SC_EVENT_OR_LIST,
+        "set next event OR trigger");
+}
+
+inline void next_trigger(const sc_event_and_list& events) {
+    detail::set_event_list_trigger(
+        events.native_handles(),
+        FSIM_SC_EVENT_AND_LIST,
+        "set next event AND trigger");
 }
 
 class sc_module_name {
@@ -1193,7 +1372,8 @@ template <typename Module>
         || host->set_process_initialize == nullptr
         || host->register_event == nullptr
         || host->notify_event_mode == nullptr
-        || host->cancel_event == nullptr) {
+        || host->cancel_event == nullptr
+        || host->wait_event_list == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

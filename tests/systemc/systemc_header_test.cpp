@@ -110,6 +110,21 @@ int main() {
         rejected_cancel = true;
     }
     assert(rejected_cancel);
+    sc_core::sc_event second_event;
+    bool rejected_or_trigger = false;
+    try {
+        sc_core::next_trigger(event | second_event);
+    } catch (const std::logic_error&) {
+        rejected_or_trigger = true;
+    }
+    assert(rejected_or_trigger);
+    bool rejected_and_trigger = false;
+    try {
+        sc_core::next_trigger(event & second_event);
+    } catch (const std::logic_error&) {
+        rejected_and_trigger = true;
+    }
+    assert(rejected_and_trigger);
 
     ValueImplementation implementation;
     sc_core::sc_export<ValueInterface> exported{"exported"};

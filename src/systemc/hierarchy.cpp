@@ -600,7 +600,7 @@ extern "C" fsim_sc_status_v1 registry_wait_time(
         }
         active_invocation->suspension =
             MethodSuspendResult{
-                MethodSuspendKind::wait_for, ticks, 0};
+                MethodSuspendKind::wait_for, ticks, {}, false};
         return FSIM_SC_OK;
     } catch (...) {
         active_invocation->failure =
@@ -626,11 +626,59 @@ extern "C" fsim_sc_status_v1 registry_wait_event(
         }
         active_invocation->suspension =
             MethodSuspendResult{
-                MethodSuspendKind::wait_event, 0, binding->second};
+                MethodSuspendKind::wait_event,
+                0,
+                {binding->second},
+                false};
         return FSIM_SC_OK;
     } catch (...) {
         active_invocation->failure =
             "SystemC next event trigger could not be recorded";
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_wait_event_list(
+    void* context,
+    const fsim_sc_handle_v1* events,
+    const std::size_t event_count,
+    const fsim_sc_event_list_kind_v1 kind) noexcept {
+    if (context == nullptr || events == nullptr || event_count == 0
+        || active_invocation == nullptr
+        || active_invocation->registry != context
+        || (kind != FSIM_SC_EVENT_OR_LIST
+            && kind != FSIM_SC_EVENT_AND_LIST)) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        std::vector<std::uint32_t> signals;
+        signals.reserve(event_count);
+        for (std::size_t index = 0; index < event_count; ++index) {
+            const auto metadata = registry.events.find(events[index]);
+            const auto binding =
+                registry.runtime_objects.find(events[index]);
+            if (metadata == registry.events.end()
+                || binding == registry.runtime_objects.end()) {
+                return FSIM_SC_INVALID_ARGUMENT;
+            }
+            signals.push_back(binding->second);
+        }
+        std::sort(signals.begin(), signals.end());
+        signals.erase(
+            std::unique(signals.begin(), signals.end()),
+            signals.end());
+        active_invocation->suspension =
+            MethodSuspendResult{
+                MethodSuspendKind::wait_event,
+                0,
+                std::move(signals),
+                kind == FSIM_SC_EVENT_AND_LIST};
+        return FSIM_SC_OK;
+    } catch (...) {
+        active_invocation->failure =
+            "SystemC event-list trigger could not be recorded";
         return FSIM_SC_RUNTIME_ERROR;
     }
 }
@@ -858,6 +906,7 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.register_event = registry_register_event;
     host.notify_event_mode = registry_notify_mode;
     host.cancel_event = registry_cancel_event;
+    host.wait_event_list = registry_wait_event_list;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -1063,7 +1112,8 @@ MethodSuspendResult HierarchyRegistry::invoke_method(
             ? MethodSuspendKind::halt
             : MethodSuspendKind::static_sensitivity,
         0,
-        0};
+        {},
+        false};
 }
 
 const std::filesystem::path& HierarchyRegistry::path() const noexcept {
