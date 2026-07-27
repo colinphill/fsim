@@ -181,6 +181,8 @@ struct Signal {
 struct Sensitivity {
   SignalId signal{};
   EdgeKind edge = EdgeKind::any;
+
+  bool operator==(const Sensitivity&) const = default;
 };
 
 struct DebugLocal {

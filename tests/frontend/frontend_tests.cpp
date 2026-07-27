@@ -788,6 +788,82 @@ endmodule
       "wildcard procedural event diagnostic");
 }
 
+void test_wildcard_and_always_comb_processes() {
+  const auto result = parse_text(
+      "combinational.sv",
+      R"(
+module combinational;
+  logic a;
+  logic q;
+  logic y;
+  always @* q = a;
+  always_comb y = ~q;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "wildcard always and bounded always_comb must parse");
+  const auto& processes = result.design.units.front().processes;
+  require(
+      processes.size() == 2
+          && processes[0].kind == ProcessKind::VerilogAlways
+          && processes[0].sensitivities.size() == 1
+          && processes[0].sensitivities.front().signal == "*"
+          && processes[1].kind
+              == ProcessKind::SystemVerilogAlwaysComb
+          && processes[1].sensitivities.size() == 1
+          && processes[1].sensitivities.front().signal == "*",
+      "wildcard process metadata");
+
+  const auto invalid_system_verilog = parse_text(
+      "bad_comb.sv",
+      R"(
+module bad_comb;
+  logic a;
+  logic q;
+  always_comb @(a) q = a;
+  always_comb #1 q = a;
+  always_comb q <= a;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid_system_verilog.ok(), "invalid always_comb forms");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-SEM-011"},
+           std::string_view{"FSIM-SV-SEM-012"},
+           std::string_view{"FSIM-SV-SEM-013"}}) {
+    require(
+        std::any_of(
+            invalid_system_verilog.diagnostics.begin(),
+            invalid_system_verilog.diagnostics.end(),
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted always_comb diagnostic");
+  }
+
+  const auto invalid_verilog = parse_text(
+      "bad_comb.v",
+      R"(
+module bad_comb;
+  reg q;
+  always_comb q = 1'b0;
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      !invalid_verilog.ok()
+          && std::any_of(
+              invalid_verilog.diagnostics.begin(),
+              invalid_verilog.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-002";
+              }),
+      "always_comb language-version diagnostic");
+}
+
 }  // namespace
 
 int main() {
@@ -812,6 +888,7 @@ int main() {
     test_immediate_assertions();
     test_process_variable_declarations();
     test_procedural_wait_statements();
+    test_wildcard_and_always_comb_processes();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

@@ -238,7 +238,12 @@ public:
                    ? "process_" + std::to_string(process_.id)
                    : source.name);
         initialize_variables(source.variables);
+        bool wildcard_sensitivity = false;
         for (const auto& sensitivity : source.sensitivities) {
+            if (sensitivity.signal == "*") {
+                wildcard_sensitivity = true;
+                continue;
+            }
             const auto found = signals_.find(sensitivity.signal);
             if (found == signals_.end()) {
                 report(
@@ -255,10 +260,35 @@ public:
             }
             process_.static_sensitivity.push_back({found->second, edge});
         }
+        if (wildcard_sensitivity) {
+            std::set<std::string> dependencies;
+            collect_statement_identifiers(
+                source.statements, dependencies);
+            for (const auto& dependency : dependencies) {
+                if (locals_.contains(dependency)) {
+                    continue;
+                }
+                if (const auto found = signals_.find(dependency);
+                    found != signals_.end()) {
+                    process_.static_sensitivity.push_back(
+                        {found->second,
+                         runtime::simir::EdgeKind::any});
+                }
+            }
+            if (process_.static_sensitivity.empty()) {
+                report(
+                    "FSIM-ELAB-061",
+                    "wildcard process sensitivity has no readable signal "
+                    "dependencies",
+                    source.span);
+            }
+        }
 
         const bool verilog_event_process =
             language != frontend::Language::Vhdl2008
             && source.kind != ProcessKind::Initial
+            && source.kind
+                != ProcessKind::SystemVerilogAlwaysComb
             && !process_.static_sensitivity.empty();
         const Statement* vhdl_edge_guard =
             language == frontend::Language::Vhdl2008
@@ -950,6 +980,32 @@ private:
         }
         for (const auto& operand : expression.operands) {
             collect_identifiers(operand, output);
+        }
+    }
+
+    static void collect_statement_identifiers(
+        const std::vector<Statement>& statements,
+        std::set<std::string>& output) {
+        for (const auto& statement : statements) {
+            switch (statement.kind) {
+            case StatementKind::Assignment:
+                collect_identifiers(statement.value, output);
+                break;
+            case StatementKind::If:
+            case StatementKind::Assert:
+                collect_identifiers(statement.condition, output);
+                break;
+            case StatementKind::Delay:
+            case StatementKind::WaitOn:
+            case StatementKind::Finish:
+            case StatementKind::Block:
+            case StatementKind::Null:
+                break;
+            }
+            collect_statement_identifiers(
+                statement.statements, output);
+            collect_statement_identifiers(
+                statement.else_statements, output);
         }
     }
 

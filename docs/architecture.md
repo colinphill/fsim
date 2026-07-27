@@ -129,6 +129,12 @@ predicate. A VHDL process containing explicit waits jumps back to its
 post-initializer entry when its body completes, preserving implicit process
 repetition without reinitializing locals.
 
+For bounded `always @*` and `always_comb`, elaboration walks executable
+statement expressions, excludes assignment targets, and converts the sorted
+set of readable signals into static any-change sensitivities. `always_comb`
+enters its body once at time zero before using that inferred list; `always @*`
+waits for the first change. Function/task body dependencies remain pending.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

@@ -179,6 +179,7 @@ enum class ProcessKind {
   VhdlProcess,
   VerilogAlways,
   SystemVerilogAlwaysFF,
+  SystemVerilogAlwaysComb,
   Initial,
 };
 

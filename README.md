@@ -38,6 +38,8 @@ The current tree contains:
 - bounded source-level VHDL `wait for`/`wait on` and Verilog/SystemVerilog
   integer-delay, any-change, `posedge`, and `negedge` procedural event
   controls;
+- deterministic simple-expression sensitivity inference for `always @*` and
+  time-zero `always_comb`;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

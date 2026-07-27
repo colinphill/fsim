@@ -138,6 +138,24 @@ begin
 end architecture;
 )";
   }
+  const auto wildcard_source = directory / "wildcard.sv";
+  {
+    std::ofstream output(wildcard_source);
+    output << R"(
+module wildcard_app;
+  logic a;
+  logic q;
+  logic y;
+  always @* q = a;
+  always_comb y = ~q;
+  initial begin
+    a = 1'b0;
+    #1 a = 1'b1;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
   const auto partial_group_source = directory / "partial_group.sv";
   {
     std::ofstream output(partial_group_source);
@@ -800,6 +818,76 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert((
       vhdl_wait_hybrid.final_values
       == std::vector<std::string>{"0"}));
+
+  auto wildcard_config = config;
+  wildcard_config.project.name = "wildcard-sensitivity-test";
+  wildcard_config.project.top = "sv:work.wildcard_app";
+  wildcard_config.build.optimization =
+      fsim::project::Optimization::o2;
+  wildcard_config.build.cache_path =
+      directory / "wildcard-cache";
+  wildcard_config.source_sets.clear();
+  fsim::project::SourceSet wildcard_sources;
+  wildcard_sources.language =
+      fsim::project::Language::system_verilog;
+  wildcard_sources.standard = "2017";
+  wildcard_sources.library = "work";
+  wildcard_sources.files.push_back(wildcard_source);
+  wildcard_config.source_sets.push_back(
+      std::move(wildcard_sources));
+  fsim::diagnostic::Engine wildcard_diagnostics;
+  auto wildcard_reference_project =
+      fsim::app::build_project(
+          wildcard_config, wildcard_diagnostics);
+  auto wildcard_hybrid_project =
+      fsim::app::build_project(
+          wildcard_config, wildcard_diagnostics);
+  assert(wildcard_reference_project);
+  assert(wildcard_hybrid_project);
+  const auto wildcard_a =
+      wildcard_reference_project->design.find_signal(
+          "wildcard_app.a");
+  const auto wildcard_q =
+      wildcard_reference_project->design.find_signal(
+          "wildcard_app.q");
+  const auto wildcard_y =
+      wildcard_reference_project->design.find_signal(
+          "wildcard_app.y");
+  assert(wildcard_a && wildcard_q && wildcard_y);
+  const auto wildcard_reference = capture_simulation(
+      std::move(*wildcard_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto wildcard_hybrid = capture_simulation(
+      std::move(*wildcard_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(wildcard_reference, wildcard_hybrid);
+  assert(
+      wildcard_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(wildcard_hybrid.result.time == 2);
+  assert(wildcard_hybrid.process_count == 3);
+#if defined(FSIM_HAS_LLVM)
+  assert(wildcard_hybrid.compiled_processes == 3);
+  assert(wildcard_hybrid.compiled_modules == 1);
+#endif
+  const decltype(wildcard_reference.changes)
+      expected_wildcard_changes = {
+          {*wildcard_a, "0", 0, 0},
+          {*wildcard_q, "0", 0, 1},
+          {*wildcard_y, "1", 0, 2},
+          {*wildcard_a, "1", 1, 0},
+          {*wildcard_q, "1", 1, 1},
+          {*wildcard_y, "0", 1, 2},
+      };
+  assert(
+      wildcard_reference.changes
+      == expected_wildcard_changes);
+  assert(
+      wildcard_hybrid.changes
+      == expected_wildcard_changes);
+  assert((
+      wildcard_hybrid.final_values
+      == std::vector<std::string>{"1", "1", "0"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =
