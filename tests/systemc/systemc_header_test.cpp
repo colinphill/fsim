@@ -4,6 +4,7 @@
 #include <cassert>
 #include <iostream>
 #include <string_view>
+#include <type_traits>
 
 SC_MODULE(Counter) {
     sc_core::sc_in<bool> clock{"clock"};
@@ -88,6 +89,20 @@ int main() {
 
     sc_core::sc_signal<bool> clock;
     sc_core::sc_signal<sc_dt::sc_uint<8>> value;
+    static_assert(
+        std::is_base_of_v<
+            sc_core::sc_prim_channel,
+            sc_core::sc_signal<bool>>);
+    sc_core::sc_signal<sc_dt::sc_uint<8>> initialized{
+        "initialized", sc_dt::sc_uint<8>{7}};
+    assert(initialized.read().to_uint64() == 7);
+    initialized.write(sc_dt::sc_uint<8>{9});
+    assert(
+        initialized.read().to_uint64() == 9
+        && initialized.event());
+    assert(
+        initialized.value_changed_event().native_handle()
+        == initialized.native_handle());
     Counter counter{"counter"};
     counter.clock(clock);
     counter.value(value);

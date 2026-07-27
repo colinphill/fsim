@@ -201,6 +201,24 @@ typedef struct fsim_sc_host_v1 {
     fsim_sc_status_v1 (*request_update)(
         void* context,
         fsim_sc_handle_v1 channel);
+
+    /*
+     * Append-only typed primitive-signal attachment. `channel` must have
+     * already been registered through register_primitive_channel; attaching
+     * value metadata makes the same handle a common-runtime signal object.
+     */
+    fsim_sc_status_v1 (*register_signal)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        fsim_sc_handle_v1 channel,
+        const char* name,
+        fsim_sc_value_encoding_v1 encoding,
+        uint32_t width,
+        const fsim_sc_value_view_v1* initial_value);
+    fsim_sc_status_v1 (*value_changed)(
+        void* context,
+        fsim_sc_handle_v1 object,
+        uint8_t* result);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

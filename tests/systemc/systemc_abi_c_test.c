@@ -38,6 +38,14 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, register_primitive_channel),
     "primitive-channel updates must remain append-only");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, register_signal)
+        > offsetof(fsim_sc_host_v1, request_update),
+    "typed signal registration must remain append-only");
+_Static_assert(
+    offsetof(fsim_sc_host_v1, value_changed)
+        > offsetof(fsim_sc_host_v1, register_signal),
+    "signal event queries must remain append-only");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");

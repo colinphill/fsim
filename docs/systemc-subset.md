@@ -16,8 +16,9 @@ retains their native objects for the design lifetime. Common-kernel SystemC
 execution now covers statically sensitive `SC_METHOD` callbacks, dynamic
 time/event and OR/AND-list `next_trigger`, named-event
 notification/replacement/cancellation, strict `notify_delayed`, port updates,
-and registered primitive-channel update callbacks. Standard signal/channel
-internals and fiber-backed thread execution are still work in progress.
+registered primitive-channel update callbacks, and kernel-backed module-local
+`sc_signal` objects. Standard hierarchical channel binding/lifecycle and
+fiber-backed thread execution are still work in progress.
 
 ## Source inclusion
 
@@ -48,9 +49,11 @@ The current facade defines:
   `SC_CTHREAD`;
 - `sc_dt::sc_logic`, `sc_bv<N>`, `sc_lv<N>`, `sc_uint<N>`, and `sc_int<N>`.
 
-`sc_uint` and `sc_int` currently support widths 1 through 64. The facade's
-standalone signal operations are useful for compiling and testing plug-ins,
-but they do not yet represent complete scheduler/channel semantics.
+`sc_uint` and `sc_int` currently support widths 1 through 64. Outside an fsim
+elaboration/process host, `sc_signal` retains a deliberately local standalone
+behavior useful for compiling and testing plug-ins. A module-local
+`sc_signal` constructed by a registered factory instead attaches typed value
+metadata to its primitive-channel handle and enters the common kernel.
 
 The v1 subset also requires named hierarchy, exports, static and dynamic
 sensitivity, port binding, channel update semantics, event cancellation rules,
@@ -208,6 +211,16 @@ request for another channel made during that phase is deferred to the next
 delta, and a self-request made from `update()` is ignored while the original
 request remains pending. Channel callbacks can use registered ports and events
 through the same contained native invocation boundary as `SC_METHOD`.
+
+A module-local `sc_signal<T>` becomes a typed, debug-visible common-runtime
+signal with its declared initial value. `write()` retains only the last value
+requested before the channel update; `read()` continues to return the committed
+value until that update completes. A committed change awakens static
+sensitivity and dynamic `value_changed_event()` waits in the next delta.
+`event()` is true only during that awakened evaluation delta. The internal
+signal and its primitive channel share one opaque handle, avoiding a private
+SystemC event queue or duplicate value store.
+
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0
 fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
@@ -224,9 +237,10 @@ SystemC work participates in fsim's common phase policy:
 The facade and native host callbacks implement dynamic method sensitivity,
 port reads, update-phase port writes, named-event notification/cancellation,
 OR/AND dynamic event expressions, and primitive-channel registration/update
-dispatch. It does not yet provide full `sc_signal` kernel integration,
-arbitrary user-defined channel binding semantics, lifecycle phase callbacks,
-asynchronous updates, or fiber suspension.
+dispatch. Module-local `sc_signal` values, sensitivities, and event queries use
+the common kernel. It does not yet provide hierarchical channel-to-port alias
+registration, arbitrary user-defined channel binding semantics, lifecycle
+phase callbacks, asynchronous updates, or fiber suspension.
 
 ## Deliberately outside v1
 

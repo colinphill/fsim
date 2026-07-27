@@ -449,6 +449,12 @@ public:
         "alternate process executor does not support event cancellation"};
   }
 
+  /// True only in the evaluation delta caused by the signal's most recent
+  /// committed value change.
+  [[nodiscard]] virtual bool signal_event(SignalId) const {
+    return false;
+  }
+
   /// Request one alternate-language primitive-channel update. `channel` is a
   /// stable executor-owned identity. The kernel deduplicates it until the
   /// corresponding update callback finishes and invokes that callback in the

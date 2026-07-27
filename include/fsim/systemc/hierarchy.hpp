@@ -67,6 +67,14 @@ struct PrimitiveChannelDescription {
     void* user{};
 };
 
+struct InternalSignalDescription {
+    fsim_sc_handle_v1 handle{};
+    std::string name;
+    fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
+    std::uint32_t width{};
+    std::vector<std::uint8_t> initial_value;
+};
+
 struct ModuleDescription {
     fsim_sc_handle_v1 handle{};
     fsim_sc_handle_v1 parent{};
@@ -77,6 +85,7 @@ struct ModuleDescription {
     std::vector<ProcessDescription> processes;
     std::vector<EventDescription> events;
     std::vector<PrimitiveChannelDescription> primitive_channels;
+    std::vector<InternalSignalDescription> internal_signals;
 };
 
 enum class MethodSuspendKind : std::uint8_t {

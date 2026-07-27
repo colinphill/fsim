@@ -168,6 +168,14 @@ template <typename T>
 template <typename T>
 void write_object(fsim_sc_handle_v1 object, const T& value);
 
+template <typename T>
+void register_signal(
+    fsim_sc_handle_v1 channel,
+    const char* name,
+    const T& initial_value);
+
+[[nodiscard]] bool object_event(fsim_sc_handle_v1 object);
+
 [[nodiscard]] fsim_sc_handle_v1 register_event(const char* name);
 [[nodiscard]] fsim_sc_handle_v1 register_primitive_channel(
     const char* name,
@@ -783,30 +791,82 @@ sc_sensitive& sc_sensitive::operator<<(const T& object) {
 }
 
 template <typename T>
-class sc_signal {
+class sc_signal : public sc_interface, public sc_prim_channel {
 public:
     using value_type = T;
 
-    sc_signal() = default;
-    explicit sc_signal(const char*) {}
-
-    [[nodiscard]] const T& read() const noexcept { return value_; }
-    void write(const T& value) {
-        event_ = value_ != value;
-        value_ = value;
+    sc_signal()
+        : sc_prim_channel(),
+          value_changed_event_(native_handle()) {
+        detail::register_signal<T>(
+            native_handle(), nullptr, value_);
     }
-    [[nodiscard]] bool event() const noexcept { return event_; }
-    [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept { return handle_; }
 
-    operator const T&() const noexcept { return read(); }
+    explicit sc_signal(const char* name)
+        : sc_prim_channel(name),
+          value_changed_event_(native_handle()) {
+        detail::register_signal<T>(
+            native_handle(), name, value_);
+    }
+
+    sc_signal(const char* name, const T& initial_value)
+        : sc_prim_channel(name),
+          value_(initial_value),
+          pending_(initial_value),
+          value_changed_event_(native_handle()) {
+        detail::register_signal<T>(
+            native_handle(), name, value_);
+    }
+
+    [[nodiscard]] const T& read() const {
+        if (native_handle() != 0 && detail::current_host != nullptr) {
+            value_ = detail::read_object<T>(native_handle());
+        }
+        return value_;
+    }
+    void write(const T& value) {
+        if (native_handle() == 0) {
+            event_ = value_ != value;
+            value_ = value;
+            pending_ = value;
+            return;
+        }
+        pending_ = value;
+        request_update();
+    }
+    [[nodiscard]] bool event() const {
+        return native_handle() == 0
+            ? event_
+            : detail::object_event(native_handle());
+    }
+    [[nodiscard]] const sc_event& default_event() const noexcept {
+        return value_changed_event_;
+    }
+    [[nodiscard]] const sc_event& value_changed_event() const noexcept {
+        return value_changed_event_;
+    }
+    [[nodiscard]] sc_event_finder pos() const noexcept {
+        return {native_handle(), FSIM_SC_POSEDGE};
+    }
+    [[nodiscard]] sc_event_finder neg() const noexcept {
+        return {native_handle(), FSIM_SC_NEGEDGE};
+    }
+
+    operator const T&() const { return read(); }
     sc_signal& operator=(const T& value) {
         write(value);
         return *this;
     }
 
+protected:
+    void update() override {
+        detail::write_object(native_handle(), pending_);
+    }
+
 private:
-    T value_{};
-    fsim_sc_handle_v1 handle_{};
+    mutable T value_{};
+    T pending_{};
+    sc_event value_changed_event_;
     bool event_{};
 };
 
@@ -1349,6 +1409,86 @@ inline fsim_sc_handle_v1 register_primitive_channel(
 }
 
 template <typename T>
+[[nodiscard]] std::vector<std::uint8_t> encode_value(
+    const T& value) {
+    using traits = value_traits<std::remove_cv_t<T>>;
+    static_assert(
+        traits::supported,
+        "this fsim SystemC value type is not supported");
+    const auto bytes = value_plane_size(traits::width);
+    const bool four_state = traits::encoding != FSIM_SC_BIT2;
+    std::vector<std::uint8_t> storage(
+        bytes * (four_state ? 2U : 1U), 0);
+    for (std::size_t bit = 0; bit < traits::width; ++bit) {
+        const auto state = traits::state(value, bit);
+        const auto byte = bit / 8U;
+        const auto mask =
+            static_cast<std::uint8_t>(1U << (bit % 8U));
+        if (state == '1' || state == 'X') {
+            storage[byte] |= mask;
+        }
+        if (state == 'X' || state == 'Z') {
+            if (!four_state) {
+                throw std::logic_error{
+                    "two-state SystemC value contains X or Z"};
+            }
+            storage[bytes + byte] |= mask;
+        }
+    }
+    return storage;
+}
+
+template <typename T>
+void register_signal(
+    const fsim_sc_handle_v1 channel,
+    const char* name,
+    const T& initial_value) {
+    using traits = value_traits<std::remove_cv_t<T>>;
+    static_assert(
+        traits::supported,
+        "this fsim SystemC signal value type is not supported");
+    if (channel == 0) {
+        return;
+    }
+    if (current_host == nullptr || current_module == 0
+        || current_host->register_signal == nullptr) {
+        throw std::logic_error{
+            "SystemC signal requires a signal-capable elaboration host"};
+    }
+    const auto storage = encode_value(initial_value);
+    const fsim_sc_value_view_v1 view{
+        sizeof(fsim_sc_value_view_v1),
+        traits::encoding,
+        traits::width,
+        storage.data(),
+        storage.size()};
+    check_status(
+        current_host->register_signal(
+            current_host->context,
+            current_module,
+            channel,
+            name,
+            traits::encoding,
+            traits::width,
+            &view),
+        "register signal");
+}
+
+inline bool object_event(const fsim_sc_handle_v1 object) {
+    if (current_host == nullptr || current_host->value_changed == nullptr
+        || object == 0) {
+        throw std::logic_error{
+            "SystemC signal event query requires an active process"};
+    }
+    std::uint8_t result = 0;
+    check_status(
+        current_host->value_changed(
+            current_host->context, object, &result),
+        "query signal event");
+    return result != 0;
+}
+
+template <typename T>
 [[nodiscard]] T read_object(const fsim_sc_handle_v1 object) {
     using traits = value_traits<std::remove_cv_t<T>>;
     static_assert(
@@ -1400,26 +1540,7 @@ void write_object(
         throw std::logic_error{
             "SystemC port write requires an active process"};
     }
-    const auto bytes = value_plane_size(traits::width);
-    const bool four_state = traits::encoding != FSIM_SC_BIT2;
-    std::vector<std::uint8_t> storage(
-        bytes * (four_state ? 2U : 1U), 0);
-    for (std::size_t bit = 0; bit < traits::width; ++bit) {
-        const auto state = traits::state(value, bit);
-        const auto byte = bit / 8U;
-        const auto mask =
-            static_cast<std::uint8_t>(1U << (bit % 8U));
-        if (state == '1' || state == 'X') {
-            storage[byte] |= mask;
-        }
-        if (state == 'X' || state == 'Z') {
-            if (!four_state) {
-                throw std::logic_error{
-                    "two-state SystemC value contains X or Z"};
-            }
-            storage[bytes + byte] |= mask;
-        }
-    }
+    const auto storage = encode_value(value);
     const fsim_sc_value_view_v1 view{
         sizeof(fsim_sc_value_view_v1),
         traits::encoding,
@@ -1498,7 +1619,9 @@ template <typename Module>
         || host->wait_event_list == nullptr
         || host->notify_event_delayed == nullptr
         || host->register_primitive_channel == nullptr
-        || host->request_update == nullptr) {
+        || host->request_update == nullptr
+        || host->register_signal == nullptr
+        || host->value_changed == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

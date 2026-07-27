@@ -151,7 +151,10 @@ The following foundation is implemented:
   expressions owned by the common scheduler with interpreter/hybrid
   equivalence;
 - registered primitive channels with stable hierarchy metadata and
-  deduplicated common-update-phase callbacks; and
+  deduplicated common-update-phase callbacks;
+- typed module-local `sc_signal` elaboration with initial values, committed
+  reads, coalesced update-phase writes, static/dynamic sensitivity, and
+  delta-scoped `event()` state; and
 - a stable catalog covering 304 unique current production diagnostic codes.
 
 Current Linux validation:
@@ -357,7 +360,10 @@ Completed groundwork:
   `next_trigger`, and immediate/delta/timed named-event notification,
   replacement, cancellation, strict `notify_delayed`, OR/AND list
   sensitivity, and registered primitive-channel updates through the common
-  scheduler; and
+  scheduler;
+- module-local `sc_signal` objects backed by common DesignIR signals,
+  including initial values, coalesced writes, committed reads, static/dynamic
+  sensitivity, and delta-scoped change events; and
 - compiler-emitted dependency closure for GCC-like SystemC builds.
 
 Planned implementation sequence:
@@ -367,11 +373,11 @@ Planned implementation sequence:
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
-3. Complete SystemC `sc_signal` kernel integration, primitive-channel
-   lifecycle callbacks, and standard channel binding; primitive-channel
-   registration/update dispatch, `notify_delayed`, dynamic method sensitivity,
-   OR/AND event expressions, pending-notification rules, and cancellation now
-   use the common scheduler.
+3. Complete SystemC hierarchical channel-to-port alias registration,
+   primitive-channel lifecycle callbacks, and standard channel binding;
+   module-local `sc_signal`, primitive-channel update dispatch,
+   `notify_delayed`, dynamic method sensitivity, OR/AND event expressions,
+   pending-notification rules, and cancellation now use the common scheduler.
 4. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
 5. Complete nested/scoped debug locals and add call safe points.

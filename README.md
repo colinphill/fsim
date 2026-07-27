@@ -92,7 +92,8 @@ The current tree contains:
   dynamic time/event `next_trigger`, immediate/delta/timed named events with
   pending replacement/cancellation, strict `notify_delayed`, dynamic OR/AND
   event expressions, registered primitive-channel update callbacks,
-  canonical packed port reads, and common update-phase writes.
+  kernel-backed module-local `sc_signal` objects, canonical packed port reads,
+  and common update-phase writes.
 
 The implemented SystemC hierarchy spine is bidirectional: HDL instances may
 bind to typed SystemC factories, and those factories may declare
@@ -101,8 +102,9 @@ targets. Either HDL or SystemC may be the selected top. The resulting ports,
 aliases, HDL descendants, and stable SystemC instance metadata enter the common
 elaborated design. Static `SC_METHOD` callbacks and deduplicated
 `sc_prim_channel::request_update()` callbacks execute in that hierarchy;
-standard channel internals and fiber-backed `SC_THREAD`/`SC_CTHREAD`
-suspension remain planned.
+module-local `sc_signal` objects use the common signal store and scheduler.
+Standard hierarchical channel binding/lifecycle callbacks and fiber-backed
+`SC_THREAD`/`SC_CTHREAD` suspension remain planned.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

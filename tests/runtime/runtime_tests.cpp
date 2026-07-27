@@ -1959,6 +1959,102 @@ void test_simir_alternate_executor_primitive_channel_updates() {
       "primitive-channel writes must commit through the common update phase");
 }
 
+void test_simir_alternate_executor_signal_event_window() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  class Producer final : public ProcessExecutor {
+  public:
+    Producer(
+        const SignalId signal,
+        bool& expired)
+        : signal_(signal), expired_(expired) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        InstructionIndex) override {
+      ProcessResumeResult result{0, 1};
+      if (state_++ == 0) {
+        context.write_update(
+            signal_, PackedLogic4::from_msb_string("1"));
+        result.external.kind = ExternalSuspendKind::wait_for;
+        result.external.delay = 2;
+      } else {
+        expired_ = !context.signal_event(signal_);
+        result.external.kind = ExternalSuspendKind::halt;
+      }
+      return result;
+    }
+
+  private:
+    SignalId signal_{};
+    bool& expired_;
+    std::size_t state_{};
+  };
+
+  class Consumer final : public ProcessExecutor {
+  public:
+    Consumer(
+        const SignalId signal,
+        bool& observed)
+        : signal_(signal), observed_(observed) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        InstructionIndex) override {
+      observed_ = context.signal_event(signal_);
+      ProcessResumeResult result{0, 1};
+      result.external.kind = ExternalSuspendKind::halt;
+      return result;
+    }
+
+  private:
+    SignalId signal_{};
+    bool& observed_;
+  };
+
+  Interpreter interpreter;
+  const auto signal = interpreter.add_signal(
+      {"event_window", PackedLogic4::from_msb_string("0")});
+
+  Process producer;
+  producer.id = 0;
+  producer.name = "signal_event_producer";
+  producer.operations = {Halt{}};
+  const auto producer_id =
+      interpreter.add_process(std::move(producer));
+
+  Process consumer;
+  consumer.id = 1;
+  consumer.name = "signal_event_consumer";
+  consumer.initialize = false;
+  consumer.static_sensitivity.push_back(
+      {signal, EdgeKind::any});
+  consumer.operations = {WaitSensitivity{}};
+  const auto consumer_id =
+      interpreter.add_process(std::move(consumer));
+
+  bool observed = false;
+  bool expired = false;
+  interpreter.set_process_executor(
+      producer_id,
+      std::make_unique<Producer>(signal, expired));
+  interpreter.set_process_executor(
+      consumer_id,
+      std::make_unique<Consumer>(signal, observed));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 2,
+      "signal event-window test must reach its later observation");
+  require(
+      observed,
+      "a signal event must be visible in the awakened evaluation delta");
+  require(
+      expired,
+      "a signal event must expire after its awakened evaluation delta");
+}
+
 void test_simir_alternate_executor_event_lists() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2240,6 +2336,7 @@ int main() {
     test_simir_alternate_executor_event_replacement_and_cancel();
     test_simir_alternate_executor_notify_delayed();
     test_simir_alternate_executor_primitive_channel_updates();
+    test_simir_alternate_executor_signal_event_window();
     test_simir_alternate_executor_event_lists();
     test_simir_assertion_metadata();
     test_simir_execution_point_ordering();

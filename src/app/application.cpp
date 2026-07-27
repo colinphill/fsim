@@ -816,6 +816,37 @@ frontend::Type systemc_type(
   return result;
 }
 
+PackedLogic4 systemc_value(
+    const fsim_sc_value_encoding_v1 encoding,
+    const std::uint32_t width,
+    const std::span<const std::uint8_t> storage) {
+  const auto bytes =
+      (static_cast<std::size_t>(width) + 7U) / 8U;
+  const bool four_state = encoding != FSIM_SC_BIT2;
+  if (width == 0
+      || storage.size() != bytes * (four_state ? 2U : 1U)) {
+    throw std::invalid_argument{
+        "invalid packed SystemC initial value"};
+  }
+  PackedLogic4 result(width);
+  for (std::size_t bit = 0; bit < width; ++bit) {
+    const auto byte = bit / 8U;
+    const auto mask =
+        static_cast<std::uint8_t>(1U << (bit % 8U));
+    const bool aval = (storage[byte] & mask) != 0;
+    const bool bval = four_state
+        && (storage[bytes + byte] & mask) != 0;
+    result.set(
+        bit,
+        !bval
+            ? (aval ? runtime::Logic4::one
+                    : runtime::Logic4::zero)
+            : (aval ? runtime::Logic4::x
+                    : runtime::Logic4::z));
+  }
+  return result;
+}
+
 elaboration::SystemCInstanceDescription systemc_description(
     const std::string_view path,
     const std::string_view target,
@@ -874,6 +905,18 @@ elaboration::SystemCInstanceDescription systemc_description(
   for (const auto& channel : module.primitive_channels) {
     result.primitive_channels.push_back(
         {channel.handle, channel.name});
+  }
+  result.internal_signals.reserve(module.internal_signals.size());
+  for (const auto& signal : module.internal_signals) {
+    result.internal_signals.push_back({
+        signal.handle,
+        signal.name,
+        systemc_type(signal.encoding, signal.width),
+        systemc_value(
+            signal.encoding,
+            signal.width,
+            signal.initial_value),
+    });
   }
   return result;
 }
@@ -2981,6 +3024,10 @@ std::optional<BuiltProject> build_project(
         for (const auto& event : instance.events) {
           systemc_hierarchy->bind_runtime_object(
               event.native_handle, event.signal);
+        }
+        for (const auto& signal : instance.internal_signals) {
+          systemc_hierarchy->bind_runtime_object(
+              signal.native_handle, signal.signal);
         }
       }
     } catch (const std::exception& error) {

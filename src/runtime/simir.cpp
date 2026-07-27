@@ -662,6 +662,8 @@ struct Interpreter::Impl {
   std::vector<std::vector<Fanout>> static_fanout;
   std::vector<std::vector<Fanout>> dynamic_fanout;
   std::vector<EventState> event_states;
+  std::vector<std::optional<std::pair<
+      SimulationTick, std::uint64_t>>> signal_events;
   std::vector<PendingUpdate> pending_updates;
   std::unordered_set<std::uint64_t> pending_channel_updates;
   SignalChangeHook signal_change_hook;
@@ -975,6 +977,8 @@ struct Interpreter::Impl {
     }
     const auto old_value = signal.initial_value;
     signal.initial_value = std::move(value);
+    signal_events[signal_id] =
+        std::pair{scheduler.now(), scheduler.delta() + 1};
     scheduler.note_signal_change(signal_id);
     if (signal_change_hook) {
       signal_change_hook(signal_id, signal.initial_value, scheduler.now());
@@ -1264,6 +1268,15 @@ struct Interpreter::Impl::ExecutionContext final
 
   void cancel_event(const SignalId event) override {
     owner.cancel_event(event);
+  }
+
+  [[nodiscard]] bool
+  signal_event(const SignalId signal) const override {
+    (void)owner.get_signal(signal);
+    const auto& event = owner.signal_events[signal];
+    return event
+        && event->first == owner.scheduler.now()
+        && event->second == owner.scheduler.delta();
   }
 
   void request_channel_update(
@@ -1855,6 +1868,7 @@ SignalId Interpreter::add_signal(Signal signal) {
   impl_->static_fanout.emplace_back();
   impl_->dynamic_fanout.emplace_back();
   impl_->event_states.emplace_back();
+  impl_->signal_events.emplace_back();
   return id;
 }
 

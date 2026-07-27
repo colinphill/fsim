@@ -196,10 +196,12 @@ version is development evidence only.
 | SC-011 | Peer, bidirectional elaboration-time hierarchy: VHDL/SV instance to SystemC factory and SystemC typed foreign-child placeholder to VHDL/SV target, covering all six parent→child language directions | execute | [typed sample factory](../tests/systemc/sample_plugin.cpp) | [missing foreign-child binding](../tests/elaboration/elaborator_test.cpp) | [SV and VHDL hierarchy paths](../tests/elaboration/elaborator_test.cpp) | [compiled plug-in in both directions](../tests/app/application_test.cpp) |
 | SC-012 | Dynamic time/event and OR/AND-list `next_trigger`; immediate, delta, and exactly representable timed named-event notification; earliest-pending replacement; cancellation; and strict no-pending `notify_delayed` in `SC_METHOD` | execute | [facade dynamic-event/list/channel modules](../tests/app/application_test.cpp) | [unbound event/list rejection](../tests/systemc/systemc_header_test.cpp), [kernel duplicate-pending test](../tests/runtime/runtime_tests.cpp) | [append-only event ABI](../tests/systemc/systemc_abi_c_test.c) | [kernel replacement/cancel/list/delayed tests](../tests/runtime/runtime_tests.cpp) and [interpreter/hybrid ordering equivalence](../tests/app/application_test.cpp) |
 | SC-013 | Elaboration-time `sc_prim_channel` registration with stable hierarchy metadata and deduplicated `request_update()` callbacks in the common update phase; full standard channel binding/lifecycle remains | execute | [facade channel module](../tests/app/application_test.cpp) | [request outside an active kernel](../tests/systemc/systemc_header_test.cpp) | [append-only channel ABI and hierarchy metadata](../tests/systemc/systemc_abi_c_test.c) | [common-kernel phase/dedup test](../tests/runtime/runtime_tests.cpp), [interpreter/hybrid application differential](../tests/app/application_test.cpp) |
+| SC-014 | Typed module-local `sc_signal` elaboration with declared initial values, committed reads, last-write coalescing, static and dynamic value-change sensitivity, and delta-scoped `event()` | execute | [standalone and factory-backed facade signals](../tests/systemc/systemc_header_test.cpp), [module-local signal model](../tests/app/application_test.cpp) | — | [append-only typed-signal ABI and DesignIR metadata](../tests/systemc/systemc_abi_c_test.c), [application hierarchy assertions](../tests/app/application_test.cpp) | [kernel event-window test](../tests/runtime/runtime_tests.cpp), [interpreter/hybrid application differential](../tests/app/application_test.cpp) |
 
-“Execute” in these rows is bounded by the named evidence. SC-013 does not claim
-complete `sc_signal` kernel semantics, arbitrary custom channel binding,
-lifecycle callbacks, asynchronous updates, or the fibers tracked by SC-008.
+“Execute” in these rows is bounded by the named evidence. SC-013/SC-014 do not
+claim hierarchical channel-to-port alias registration, arbitrary custom
+channel binding, lifecycle callbacks, asynchronous updates, or the fibers
+tracked by SC-008.
 
 ## Mixed-language behavior
 

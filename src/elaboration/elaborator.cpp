@@ -3091,6 +3091,21 @@ private:
                 objects.emplace(event.handle, *signal);
             }
         }
+        for (const auto& signal : instance.internal_signals) {
+            const frontend::SignalDeclaration declaration{
+                signal.name,
+                signal.type,
+                frontend::PortDirection::Unknown,
+                false,
+                {}};
+            const auto runtime_signal =
+                add_owned_signal(declaration, path, aliases);
+            if (runtime_signal) {
+                design_.signals_.at(*runtime_signal).initial_value =
+                    signal.initial_value;
+                objects.emplace(signal.handle, *runtime_signal);
+            }
+        }
 
         SystemCInstanceInfo info;
         info.id = static_cast<std::uint32_t>(
@@ -3115,6 +3130,16 @@ private:
         for (const auto& channel : instance.primitive_channels) {
             info.primitive_channels.push_back(
                 {channel.name, channel.handle});
+        }
+        for (const auto& signal : instance.internal_signals) {
+            if (const auto runtime_signal =
+                    objects.find(signal.handle);
+                runtime_signal != objects.end()) {
+                info.internal_signals.push_back(
+                    {signal.name,
+                     signal.handle,
+                     runtime_signal->second});
+            }
         }
         design_.systemc_instances_.push_back(std::move(info));
 

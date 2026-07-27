@@ -851,6 +851,64 @@ SC_MODULE(KernelChannels) {
   }
 };
 
+SC_MODULE(InternalSignals) {
+  sc_core::sc_out<sc_dt::sc_uint<8>> observed{"observed"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> event_count{"event_count"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> dynamic_count{
+      "dynamic_count"};
+  sc_core::sc_signal<sc_dt::sc_uint<8>> internal{
+      "internal", sc_dt::sc_uint<8>{5}};
+  unsigned producer_state{};
+  unsigned static_events{};
+  unsigned dynamic_events{};
+  bool dynamic_initialized{};
+
+  SC_CTOR(InternalSignals) {
+    SC_METHOD(produce);
+    SC_METHOD(observe_static);
+    sensitive << internal;
+    dont_initialize();
+    SC_METHOD(observe_dynamic);
+  }
+
+  void produce() {
+    if (producer_state == 0) {
+      ++producer_state;
+      if (internal.read().to_uint64() != 5) {
+        throw std::runtime_error{
+            "SystemC internal signal lost its initial value"};
+      }
+      internal.write(sc_dt::sc_uint<8>{1});
+      internal.write(sc_dt::sc_uint<8>{2});
+      if (internal.read().to_uint64() != 5) {
+        throw std::runtime_error{
+            "SystemC signal write became visible before update"};
+      }
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else {
+      internal.write(sc_dt::sc_uint<8>{3});
+    }
+  }
+
+  void observe_static() {
+    observed.write(internal.read());
+    if (internal.event()) {
+      ++static_events;
+    }
+    event_count.write(sc_dt::sc_uint<8>{static_events});
+  }
+
+  void observe_dynamic() {
+    if (dynamic_initialized) {
+      ++dynamic_events;
+      dynamic_count.write(
+          sc_dt::sc_uint<8>{dynamic_events});
+    }
+    dynamic_initialized = true;
+    next_trigger(internal.value_changed_event());
+  }
+};
+
 namespace {
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
@@ -996,8 +1054,14 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (event_list_status != FSIM_SC_OK) {
     return event_list_status;
   }
-  return fsim::systemc::register_module_factory<KernelChannels>(
-      host, registrar, "kernel_channels");
+  const auto kernel_channel_status =
+      fsim::systemc::register_module_factory<KernelChannels>(
+          host, registrar, "kernel_channels");
+  if (kernel_channel_status != FSIM_SC_OK) {
+    return kernel_channel_status;
+  }
+  return fsim::systemc::register_module_factory<InternalSignals>(
+      host, registrar, "internal_signals");
 }
 )";
   }
@@ -1628,6 +1692,85 @@ end architecture rtl;
   assert(
       std::get<3>(kernel_reference)
       == std::get<3>(kernel_compiled));
+
+  auto internal_signal_config = systemc_method_top_config;
+  internal_signal_config.project.top =
+      "systemc:models.internal_signals";
+  fsim::diagnostic::Engine internal_signal_diagnostics;
+  auto internal_signal_reference = fsim::app::build_project(
+      internal_signal_config, internal_signal_diagnostics);
+  auto internal_signal_compiled = fsim::app::build_project(
+      internal_signal_config, internal_signal_diagnostics);
+  assert(internal_signal_reference);
+  assert(internal_signal_compiled);
+  const auto& internal_instance =
+      internal_signal_reference->design.systemc_instances().front();
+  assert(internal_instance.internal_signals.size() == 1);
+  assert(internal_instance.primitive_channels.size() == 1);
+  const auto run_internal_signals =
+      [&](fsim::app::BuiltProject project,
+          const fsim::app::SimulationEngine engine) {
+        const auto internal =
+            project.design.find_signal(
+                "internal_signals.internal");
+        const auto observed =
+            project.design.find_signal(
+                "internal_signals.observed");
+        const auto event_count =
+            project.design.find_signal(
+                "internal_signals.event_count");
+        const auto dynamic_count =
+            project.design.find_signal(
+                "internal_signals.dynamic_count");
+        assert(
+            internal && observed && event_count && dynamic_count);
+        fsim::app::Simulation simulation{
+            std::move(project),
+            internal_signal_config.run.max_deltas,
+            engine};
+        assert(
+            simulation.read_signal(*internal).to_msb_string()
+            == "00000101");
+        const auto result = simulation.run();
+        return std::tuple{
+            result,
+            simulation.read_signal(*internal).to_msb_string(),
+            simulation.read_signal(*observed).to_msb_string(),
+            simulation.read_signal(*event_count).to_msb_string(),
+            simulation.read_signal(*dynamic_count).to_msb_string()};
+      };
+  const auto internal_reference = run_internal_signals(
+      std::move(*internal_signal_reference),
+      fsim::app::SimulationEngine::interpreter);
+  const auto internal_compiled = run_internal_signals(
+      std::move(*internal_signal_compiled),
+      fsim::app::SimulationEngine::compiled);
+  assert(
+      std::get<0>(internal_reference).status
+      == fsim::runtime::RunStatus::completed);
+  assert(std::get<0>(internal_reference).time == 1);
+  assert(std::get<1>(internal_reference) == "00000011");
+  assert(std::get<2>(internal_reference) == "00000011");
+  assert(std::get<3>(internal_reference) == "00000010");
+  assert(std::get<4>(internal_reference) == "00000010");
+  assert(
+      std::get<0>(internal_reference).status
+      == std::get<0>(internal_compiled).status);
+  assert(
+      std::get<0>(internal_reference).time
+      == std::get<0>(internal_compiled).time);
+  assert(
+      std::get<1>(internal_reference)
+      == std::get<1>(internal_compiled));
+  assert(
+      std::get<2>(internal_reference)
+      == std::get<2>(internal_compiled));
+  assert(
+      std::get<3>(internal_reference)
+      == std::get<3>(internal_compiled));
+  assert(
+      std::get<4>(internal_reference)
+      == std::get<4>(internal_compiled));
 
   struct CapturedSimulation {
     fsim::runtime::RunResult result;

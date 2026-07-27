@@ -66,6 +66,7 @@ struct HierarchyRegistry::Impl {
     std::unordered_map<fsim_sc_handle_v1, Event> events;
     std::unordered_map<fsim_sc_handle_v1, PrimitiveChannel>
         primitive_channels;
+    std::unordered_set<fsim_sc_handle_v1> internal_signals;
     std::unordered_map<fsim_sc_handle_v1, std::uint32_t> runtime_objects;
     std::vector<LiveModule> live;
     fsim_sc_handle_v1 next_handle{1};
@@ -95,6 +96,10 @@ struct HierarchyRegistry::Impl {
         }
         for (const auto& channel : description.primitive_channels) {
             primitive_channels.erase(channel.handle);
+        }
+        for (const auto& signal : description.internal_signals) {
+            objects.erase(signal.handle);
+            internal_signals.erase(signal.handle);
         }
         pending.erase(description.handle);
     }
@@ -500,6 +505,89 @@ extern "C" fsim_sc_status_v1 registry_set_process_initialize(
     return (static_cast<std::size_t>(width) + 7U) / 8U;
 }
 
+extern "C" fsim_sc_status_v1 registry_register_signal(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const fsim_sc_handle_v1 channel,
+    const char* name,
+    const fsim_sc_value_encoding_v1 encoding,
+    const std::uint32_t width,
+    const fsim_sc_value_view_v1* initial_value) noexcept {
+    if (context == nullptr || width == 0
+        || !valid_encoding(encoding) || initial_value == nullptr
+        || initial_value->struct_size < sizeof(fsim_sc_value_view_v1)
+        || initial_value->encoding != encoding
+        || initial_value->width != width
+        || initial_value->data == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto pending = registry.pending.find(module);
+        const auto registered =
+            registry.primitive_channels.find(channel);
+        if (pending == registry.pending.end()
+            || registered == registry.primitive_channels.end()
+            || registered->second.module != module
+            || registered->second.channel
+                >= pending->second.primitive_channels.size()
+            || registry.objects.contains(channel)) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto bytes = plane_size(width);
+        const bool four_state = encoding != FSIM_SC_BIT2;
+        const auto expected = bytes * (four_state ? 2U : 1U);
+        if (initial_value->data_size != expected) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        std::string signal_name =
+            name == nullptr || *name == '\0'
+                ? pending->second
+                      .primitive_channels[registered->second.channel]
+                      .name
+                : std::string{name};
+        if (std::any_of(
+                pending->second.internal_signals.begin(),
+                pending->second.internal_signals.end(),
+                [&](const InternalSignalDescription& signal) {
+                    return signal.name == signal_name;
+                })
+            || std::any_of(
+                pending->second.ports.begin(),
+                pending->second.ports.end(),
+                [&](const PortDescription& port) {
+                    return port.name == signal_name;
+                })
+            || std::any_of(
+                pending->second.events.begin(),
+                pending->second.events.end(),
+                [&](const EventDescription& event) {
+                    return event.name == signal_name;
+                })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto index = pending->second.internal_signals.size();
+        pending->second.internal_signals.push_back({
+            channel,
+            std::move(signal_name),
+            encoding,
+            width,
+            std::vector<std::uint8_t>(
+                initial_value->data,
+                initial_value->data + expected),
+        });
+        registry.objects.emplace(
+            channel,
+            HierarchyRegistry::Impl::Object{
+                module, index, encoding, width});
+        registry.internal_signals.insert(channel);
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
 extern "C" fsim_sc_status_v1 registry_read(
     void* context,
     const fsim_sc_handle_v1 object,
@@ -557,6 +645,35 @@ extern "C" fsim_sc_status_v1 registry_read(
         result->width = metadata->second.width;
         result->data = active_invocation->read_buffer.data();
         result->data_size = active_invocation->read_buffer.size();
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_value_changed(
+    void* context,
+    const fsim_sc_handle_v1 object,
+    std::uint8_t* result) noexcept {
+    if (context == nullptr || result == nullptr
+        || active_invocation == nullptr
+        || active_invocation->registry != context
+        || active_invocation->context == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto metadata = registry.objects.find(object);
+        const auto binding = registry.runtime_objects.find(object);
+        if (metadata == registry.objects.end()
+            || binding == registry.runtime_objects.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        *result = active_invocation->context->signal_event(
+                      binding->second)
+            ? 1
+            : 0;
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -680,8 +797,10 @@ extern "C" fsim_sc_status_v1 registry_wait_event(
         auto& registry =
             *static_cast<HierarchyRegistry::Impl*>(context);
         const auto metadata = registry.events.find(event);
+        const bool signal_event =
+            registry.internal_signals.contains(event);
         const auto binding = registry.runtime_objects.find(event);
-        if (metadata == registry.events.end()
+        if ((metadata == registry.events.end() && !signal_event)
             || binding == registry.runtime_objects.end()) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
@@ -718,9 +837,11 @@ extern "C" fsim_sc_status_v1 registry_wait_event_list(
         signals.reserve(event_count);
         for (std::size_t index = 0; index < event_count; ++index) {
             const auto metadata = registry.events.find(events[index]);
+            const bool signal_event =
+                registry.internal_signals.contains(events[index]);
             const auto binding =
                 registry.runtime_objects.find(events[index]);
-            if (metadata == registry.events.end()
+            if ((metadata == registry.events.end() && !signal_event)
                 || binding == registry.runtime_objects.end()) {
                 return FSIM_SC_INVALID_ARGUMENT;
             }
@@ -1036,6 +1157,8 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.register_primitive_channel =
         registry_register_primitive_channel;
     host.request_update = registry_request_update;
+    host.register_signal = registry_register_signal;
+    host.value_changed = registry_value_changed;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -1105,6 +1228,7 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
         parent,
         std::string{factory},
         std::string{instance},
+        {},
         {},
         {},
         {},
