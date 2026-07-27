@@ -17,8 +17,10 @@ execution now covers statically sensitive `SC_METHOD` callbacks, dynamic
 time/event and OR/AND-list `next_trigger`, named-event
 notification/replacement/cancellation, strict `notify_delayed`, port updates,
 registered primitive-channel update callbacks, and kernel-backed module-local
-`sc_signal` objects. Standard hierarchical channel binding/lifecycle and
-fiber-backed thread execution are still work in progress.
+`sc_signal` objects. Typed port-to-signal bindings enter the same DesignIR
+alias graph, including across an HDL/SystemC instance boundary. Native SystemC
+module nesting, lifecycle callbacks, and fiber-backed thread execution are
+still work in progress.
 
 ## Source inclusion
 
@@ -221,6 +223,16 @@ sensitivity and dynamic `value_changed_event()` waits in the next delta.
 signal and its primitive channel share one opaque handle, avoiding a private
 SystemC event queue or duplicate value store.
 
+Binding `sc_in<T>`, `sc_out<T>`, or `sc_inout<T>` to a module-local
+`sc_signal<T>` registers an elaboration-time alias. The registry requires both
+objects to belong to the same module with identical encoding and width.
+DesignIR then maps the port handle and channel handle to one dense signal ID.
+An HDL parent can therefore drive a bound `sc_in` channel and observe a bound
+`sc_out` channel without a copy callback or an extra delta. Input bindings
+preserve the parent signal's initial value; output and inout bindings publish
+the internal channel's declared initial value. If multiple bound ports connect
+one channel to different parent signals, elaboration rejects the design.
+
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0
 fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
@@ -238,9 +250,10 @@ The facade and native host callbacks implement dynamic method sensitivity,
 port reads, update-phase port writes, named-event notification/cancellation,
 OR/AND dynamic event expressions, and primitive-channel registration/update
 dispatch. Module-local `sc_signal` values, sensitivities, and event queries use
-the common kernel. It does not yet provide hierarchical channel-to-port alias
-registration, arbitrary user-defined channel binding semantics, lifecycle
-phase callbacks, asynchronous updates, or fiber suspension.
+the common kernel, and typed port-to-signal bindings use common DesignIR
+aliases. It does not yet provide native nested SystemC module construction,
+arbitrary user-defined channel binding semantics, lifecycle phase callbacks,
+asynchronous updates, or fiber suspension.
 
 ## Deliberately outside v1
 

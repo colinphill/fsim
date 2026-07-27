@@ -219,6 +219,15 @@ typedef struct fsim_sc_host_v1 {
         void* context,
         fsim_sc_handle_v1 object,
         uint8_t* result);
+
+    /*
+     * Append-only elaboration-time port/channel binding. Both handles must
+     * belong to the same pending module and have identical value metadata.
+     */
+    fsim_sc_status_v1 (*bind_port)(
+        void* context,
+        fsim_sc_handle_v1 port,
+        fsim_sc_handle_v1 channel);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

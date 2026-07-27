@@ -24,6 +24,7 @@ struct PortDescription {
     fsim_sc_port_direction_v1 direction{FSIM_SC_INPUT};
     fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
     std::uint32_t width{};
+    fsim_sc_handle_v1 bound_object{};
 };
 
 struct ForeignPortDescription {

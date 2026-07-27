@@ -83,8 +83,10 @@ and SDF.
 The SystemC v1 target is the signal-level subset described in
 [systemc-subset.md](systemc-subset.md). Arbitrary ordinary C++ may run inside
 registered callbacks. Module-local typed `sc_signal` objects already use the
-common kernel; hierarchical channel-to-port alias registration is still a v1
-target. TLM, AMS, CCI, dynamic processes, arbitrary custom primitive-channel
+common kernel, and typed bindings from module ports to those signals share the
+same DesignIR object across HDL/SystemC boundaries. Native nested SystemC
+module construction and broader standard channel behavior remain v1 targets.
+TLM, AMS, CCI, dynamic processes, arbitrary custom primitive-channel
 interfaces/binding beyond the bounded registered `sc_prim_channel` update
 callback, and Accellera kernel/ABI compatibility are deferred.
 

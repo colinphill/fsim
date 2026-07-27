@@ -175,6 +175,9 @@ void register_signal(
     const T& initial_value);
 
 [[nodiscard]] bool object_event(fsim_sc_handle_v1 object);
+void bind_port(
+    fsim_sc_handle_v1 port,
+    fsim_sc_handle_v1 channel);
 
 [[nodiscard]] fsim_sc_handle_v1 register_event(const char* name);
 [[nodiscard]] fsim_sc_handle_v1 register_primitive_channel(
@@ -878,8 +881,11 @@ public:
         : handle_(
               detail::register_port<T>(name, FSIM_SC_INPUT)) {}
 
-    void bind(const sc_signal<T>& signal) noexcept { signal_ = &signal; }
-    void operator()(const sc_signal<T>& signal) noexcept { bind(signal); }
+    void bind(const sc_signal<T>& signal) {
+        detail::bind_port(handle_, signal.native_handle());
+        signal_ = &signal;
+    }
+    void operator()(const sc_signal<T>& signal) { bind(signal); }
     [[nodiscard]] const T& read() const {
         if (signal_ != nullptr) {
             return signal_->read();
@@ -923,8 +929,11 @@ protected:
 
 public:
 
-    void bind(sc_signal<T>& signal) noexcept { signal_ = &signal; }
-    void operator()(sc_signal<T>& signal) noexcept { bind(signal); }
+    void bind(sc_signal<T>& signal) {
+        detail::bind_port(handle_, signal.native_handle());
+        signal_ = &signal;
+    }
+    void operator()(sc_signal<T>& signal) { bind(signal); }
     void write(const T& value) {
         if (signal_ != nullptr) {
             signal_->write(value);
@@ -955,11 +964,11 @@ public:
     explicit sc_inout(const char* name)
         : sc_out<T>(name, FSIM_SC_INOUT) {}
 
-    void bind(sc_signal<T>& signal) noexcept {
+    void bind(sc_signal<T>& signal) {
         sc_out<T>::bind(signal);
         input_.bind(signal);
     }
-    void operator()(sc_signal<T>& signal) noexcept { bind(signal); }
+    void operator()(sc_signal<T>& signal) { bind(signal); }
     [[nodiscard]] const T& read() const {
         if (this->native_handle() != 0) {
             value_ = detail::read_object<T>(this->native_handle());
@@ -1488,6 +1497,22 @@ inline bool object_event(const fsim_sc_handle_v1 object) {
     return result != 0;
 }
 
+inline void bind_port(
+    const fsim_sc_handle_v1 port,
+    const fsim_sc_handle_v1 channel) {
+    if (port == 0 || channel == 0) {
+        return;
+    }
+    if (current_host == nullptr || current_host->bind_port == nullptr) {
+        throw std::logic_error{
+            "SystemC port binding requires an active elaboration host"};
+    }
+    check_status(
+        current_host->bind_port(
+            current_host->context, port, channel),
+        "bind port to channel");
+}
+
 template <typename T>
 [[nodiscard]] T read_object(const fsim_sc_handle_v1 object) {
     using traits = value_traits<std::remove_cv_t<T>>;
@@ -1621,7 +1646,8 @@ template <typename Module>
         || host->register_primitive_channel == nullptr
         || host->request_update == nullptr
         || host->register_signal == nullptr
-        || host->value_changed == nullptr) {
+        || host->value_changed == nullptr
+        || host->bind_port == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

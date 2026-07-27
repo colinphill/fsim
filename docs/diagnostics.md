@@ -338,6 +338,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-043` | error | A SystemC process sensitivity references an unknown registered object. |
 | `FSIM-ELAB-BIND-044` | error | A SystemC process registered an invalid sensitivity edge. |
 | `FSIM-ELAB-BIND-045` | error | A SystemC edge sensitivity references a non-scalar object. |
+| `FSIM-ELAB-BIND-046` | error | A SystemC port/channel binding references an unknown internal signal or aliases one internal signal to conflicting parent signals. |
 
 ## Time, runtime, trace, and design cache
 

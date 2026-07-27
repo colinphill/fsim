@@ -33,6 +33,7 @@ struct ExternalPort {
     frontend::Type type;
     frontend::PortDirection direction{
         frontend::PortDirection::Unknown};
+    std::uint64_t bound_object{};
 };
 
 struct ForeignPort {

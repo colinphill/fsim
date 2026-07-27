@@ -197,11 +197,12 @@ version is development evidence only.
 | SC-012 | Dynamic time/event and OR/AND-list `next_trigger`; immediate, delta, and exactly representable timed named-event notification; earliest-pending replacement; cancellation; and strict no-pending `notify_delayed` in `SC_METHOD` | execute | [facade dynamic-event/list/channel modules](../tests/app/application_test.cpp) | [unbound event/list rejection](../tests/systemc/systemc_header_test.cpp), [kernel duplicate-pending test](../tests/runtime/runtime_tests.cpp) | [append-only event ABI](../tests/systemc/systemc_abi_c_test.c) | [kernel replacement/cancel/list/delayed tests](../tests/runtime/runtime_tests.cpp) and [interpreter/hybrid ordering equivalence](../tests/app/application_test.cpp) |
 | SC-013 | Elaboration-time `sc_prim_channel` registration with stable hierarchy metadata and deduplicated `request_update()` callbacks in the common update phase; full standard channel binding/lifecycle remains | execute | [facade channel module](../tests/app/application_test.cpp) | [request outside an active kernel](../tests/systemc/systemc_header_test.cpp) | [append-only channel ABI and hierarchy metadata](../tests/systemc/systemc_abi_c_test.c) | [common-kernel phase/dedup test](../tests/runtime/runtime_tests.cpp), [interpreter/hybrid application differential](../tests/app/application_test.cpp) |
 | SC-014 | Typed module-local `sc_signal` elaboration with declared initial values, committed reads, last-write coalescing, static and dynamic value-change sensitivity, and delta-scoped `event()` | execute | [standalone and factory-backed facade signals](../tests/systemc/systemc_header_test.cpp), [module-local signal model](../tests/app/application_test.cpp) | — | [append-only typed-signal ABI and DesignIR metadata](../tests/systemc/systemc_abi_c_test.c), [application hierarchy assertions](../tests/app/application_test.cpp) | [kernel event-window test](../tests/runtime/runtime_tests.cpp), [interpreter/hybrid application differential](../tests/app/application_test.cpp) |
+| SC-015 | Same-module typed `sc_in`/`sc_out`/`sc_inout` binding to internal `sc_signal`, represented as one DesignIR signal across an HDL/SystemC boundary with direction-aware initialization | execute | [facade-bound SystemC module](../tests/app/application_test.cpp) | [conflicting parent aliases](../tests/elaboration/elaborator_test.cpp) | [append-only binding ABI and signal-ID equality](../tests/systemc/systemc_abi_c_test.c), [application hierarchy assertions](../tests/app/application_test.cpp) | [SystemVerilog-driven interpreter/hybrid differential](../tests/app/application_test.cpp) |
 
-“Execute” in these rows is bounded by the named evidence. SC-013/SC-014 do not
-claim hierarchical channel-to-port alias registration, arbitrary custom
-channel binding, lifecycle callbacks, asynchronous updates, or the fibers
-tracked by SC-008.
+“Execute” in these rows is bounded by the named evidence. SC-013 through
+SC-015 do not claim native nested SystemC module construction, arbitrary
+custom channel binding, lifecycle callbacks, asynchronous updates, or the
+fibers tracked by SC-008.
 
 ## Mixed-language behavior
 
@@ -218,6 +219,7 @@ tracked by SC-008.
 | ML-009 | Explicit VHDL-parent/SV-child binding with whole-vector port aliases and delta propagation | execute | [both instance ASTs](../tests/frontend/frontend_tests.cpp) | [bounded VHDL association rejection](../tests/frontend/frontend_tests.cpp) | [reverse mixed hierarchy test](../tests/elaboration/elaborator_test.cpp) | [`1010` → inverted `0101`](../tests/elaboration/elaborator_test.cpp) |
 | ML-010 | Mixed parameters/generics, broader delay interaction, and complete cross-language failure diagnostics | v1 target | — | — | — | — |
 | ML-011 | Recursive bidirectional SystemC hierarchy using explicit HDL-to-factory bindings and factory-registered foreign HDL child placeholders, with any language as top | execute | [typed factory and manifest bindings](../tests/app/application_test.cpp) | [missing foreign-child binding](../tests/elaboration/elaborator_test.cpp) | [SV → SystemC → SV, VHDL → SystemC → VHDL, and SystemC → HDL](../tests/elaboration/elaborator_test.cpp) | [real compiled plug-in in both top-level directions](../tests/app/application_test.cpp) |
+| ML-012 | HDL-connected SystemC ports bound to module-local `sc_signal` channels preserve one common signal identity and scheduler path | execute | [SystemVerilog host and bound SystemC factory](../tests/app/application_test.cpp) | [one channel connected to conflicting HDL actuals](../tests/elaboration/elaborator_test.cpp) | [port/channel/HDL signal-ID equality](../tests/app/application_test.cpp) | [interpreter/hybrid boundary differential](../tests/app/application_test.cpp) |
 
 The files under
 [examples/vertical_slice](../examples/vertical_slice/README.md) are an

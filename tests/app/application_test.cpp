@@ -909,6 +909,32 @@ SC_MODULE(InternalSignals) {
   }
 };
 
+SC_MODULE(BoundPorts) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  sc_core::sc_signal<sc_dt::sc_logic> value_channel{
+      "value_channel", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
+      "inverted_channel", sc_dt::sc_logic{'1'}};
+
+  SC_CTOR(BoundPorts) {
+    value(value_channel);
+    inverted(inverted_channel);
+    SC_METHOD(evaluate);
+    sensitive << value_channel;
+    dont_initialize();
+  }
+
+  void evaluate() {
+    const auto input = value.read().to_char();
+    inverted.write(
+        sc_dt::sc_logic{
+            input == '0' ? '1'
+            : input == '1' ? '0'
+                           : 'X'});
+  }
+};
+
 namespace {
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
@@ -1060,8 +1086,14 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (kernel_channel_status != FSIM_SC_OK) {
     return kernel_channel_status;
   }
-  return fsim::systemc::register_module_factory<InternalSignals>(
-      host, registrar, "internal_signals");
+  const auto internal_signal_status =
+      fsim::systemc::register_module_factory<InternalSignals>(
+          host, registrar, "internal_signals");
+  if (internal_signal_status != FSIM_SC_OK) {
+    return internal_signal_status;
+  }
+  return fsim::systemc::register_module_factory<BoundPorts>(
+      host, registrar, "bound_ports");
 }
 )";
   }
@@ -1117,6 +1149,19 @@ module systemc_edge_host;
     #1 clock = 1'b1;
     #1 clock = 1'b0;
     #1 clock = 1'b1;
+    #1 $finish;
+  end
+endmodule
+
+module systemc_bound_port_host;
+  logic value;
+  logic inverted;
+  bound_ports_placeholder u_bound(
+      .value(value),
+      .inverted(inverted));
+  initial begin
+    value = 1'b0;
+    #1 value = 1'b1;
     #1 $finish;
   end
 endmodule
@@ -1232,6 +1277,81 @@ end architecture rtl;
           ->signal_value(*hdl_systemc_inverted)
           .to_msb_string()
       == "0");
+
+  auto bound_port_config = hdl_systemc_config;
+  bound_port_config.project.top =
+      "sv:work.systemc_bound_port_host";
+  bound_port_config.bindings = {
+      {"systemc_bound_port_host.u_bound",
+       "systemc:models.bound_ports",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine bound_port_diagnostics;
+  auto bound_port_reference = fsim::app::build_project(
+      bound_port_config, bound_port_diagnostics);
+  auto bound_port_compiled = fsim::app::build_project(
+      bound_port_config, bound_port_diagnostics);
+  assert(bound_port_reference);
+  assert(bound_port_compiled);
+  const auto bound_input =
+      bound_port_reference->design.find_signal("value");
+  const auto bound_input_channel =
+      bound_port_reference->design.find_signal(
+          "systemc_bound_port_host.u_bound.value_channel");
+  const auto bound_output =
+      bound_port_reference->design.find_signal("inverted");
+  const auto bound_output_channel =
+      bound_port_reference->design.find_signal(
+          "systemc_bound_port_host.u_bound.inverted_channel");
+  assert(
+      bound_input && bound_input_channel
+      && bound_output && bound_output_channel);
+  assert(*bound_input == *bound_input_channel);
+  assert(*bound_output == *bound_output_channel);
+  const auto& bound_instance =
+      bound_port_reference->design.systemc_instances().front();
+  assert(bound_instance.ports.size() == 2);
+  assert(bound_instance.internal_signals.size() == 2);
+  assert(
+      bound_instance.ports[0].signal
+      == bound_instance.internal_signals[0].signal);
+  assert(
+      bound_instance.ports[1].signal
+      == bound_instance.internal_signals[1].signal);
+  const auto run_bound_ports =
+      [&](fsim::app::BuiltProject project,
+          const fsim::app::SimulationEngine engine) {
+        const auto output =
+            project.design.find_signal("inverted");
+        assert(output);
+        fsim::app::Simulation simulation{
+            std::move(project),
+            bound_port_config.run.max_deltas,
+            engine};
+        assert(
+            simulation.read_signal(*output).to_msb_string()
+            == "1");
+        const auto result = simulation.run();
+        return std::pair{
+            result,
+            simulation.read_signal(*output).to_msb_string()};
+      };
+  const auto bound_reference = run_bound_ports(
+      std::move(*bound_port_reference),
+      fsim::app::SimulationEngine::interpreter);
+  const auto bound_compiled = run_bound_ports(
+      std::move(*bound_port_compiled),
+      fsim::app::SimulationEngine::compiled);
+  assert(
+      bound_reference.first.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(bound_reference.first.time == 2);
+  assert(bound_reference.second == "0");
+  assert(
+      bound_reference.first.status
+      == bound_compiled.first.status);
+  assert(bound_reference.first.time == bound_compiled.first.time);
+  assert(bound_reference.second == bound_compiled.second);
 
   auto legacy_systemc_config = hdl_systemc_config;
   legacy_systemc_config.bindings.front().target =

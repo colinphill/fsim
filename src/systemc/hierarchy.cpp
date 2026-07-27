@@ -23,10 +23,16 @@ struct HierarchyRegistry::Impl {
     };
 
     struct Object {
+        enum class Kind : std::uint8_t {
+            port,
+            signal,
+        };
+
         fsim_sc_handle_v1 module{};
-        std::size_t port{};
+        std::size_t index{};
         fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
         std::uint32_t width{};
+        Kind kind{Kind::port};
     };
 
     struct Child {
@@ -175,11 +181,15 @@ extern "C" fsim_sc_status_v1 registry_register_port(
         }
         const auto index = found->second.ports.size();
         found->second.ports.push_back(
-            {*handle, name, direction, encoding, width});
+            {*handle, name, direction, encoding, width, 0});
         registry.objects.emplace(
             *handle,
             HierarchyRegistry::Impl::Object{
-                module, index, encoding, width});
+                module,
+                index,
+                encoding,
+                width,
+                HierarchyRegistry::Impl::Object::Kind::port});
         *result = *handle;
         return FSIM_SC_OK;
     } catch (...) {
@@ -580,8 +590,58 @@ extern "C" fsim_sc_status_v1 registry_register_signal(
         registry.objects.emplace(
             channel,
             HierarchyRegistry::Impl::Object{
-                module, index, encoding, width});
+                module,
+                index,
+                encoding,
+                width,
+                HierarchyRegistry::Impl::Object::Kind::signal});
         registry.internal_signals.insert(channel);
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_bind_port(
+    void* context,
+    const fsim_sc_handle_v1 port,
+    const fsim_sc_handle_v1 channel) noexcept {
+    if (context == nullptr || port == 0 || channel == 0) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto port_object = registry.objects.find(port);
+        const auto channel_object = registry.objects.find(channel);
+        if (port_object == registry.objects.end()
+            || channel_object == registry.objects.end()
+            || port_object->second.kind
+                != HierarchyRegistry::Impl::Object::Kind::port
+            || channel_object->second.kind
+                != HierarchyRegistry::Impl::Object::Kind::signal
+            || port_object->second.module
+                != channel_object->second.module
+            || port_object->second.encoding
+                != channel_object->second.encoding
+            || port_object->second.width
+                != channel_object->second.width) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto pending =
+            registry.pending.find(port_object->second.module);
+        if (pending == registry.pending.end()
+            || port_object->second.index
+                >= pending->second.ports.size()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        auto& description =
+            pending->second.ports[port_object->second.index];
+        if (description.bound_object != 0
+            && description.bound_object != channel) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        description.bound_object = channel;
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -1159,6 +1219,7 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.request_update = registry_request_update;
     host.register_signal = registry_register_signal;
     host.value_changed = registry_value_changed;
+    host.bind_port = registry_bind_port;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;

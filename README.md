@@ -103,7 +103,9 @@ aliases, HDL descendants, and stable SystemC instance metadata enter the common
 elaborated design. Static `SC_METHOD` callbacks and deduplicated
 `sc_prim_channel::request_update()` callbacks execute in that hierarchy;
 module-local `sc_signal` objects use the common signal store and scheduler.
-Standard hierarchical channel binding/lifecycle callbacks and fiber-backed
+Typed `sc_in`/`sc_out`/`sc_inout` bindings to those signals alias one common
+DesignIR object, including when HDL instantiates the SystemC module. Native
+SystemC module nesting, lifecycle callbacks, and fiber-backed
 `SC_THREAD`/`SC_CTHREAD` suspension remain planned.
 
 The full v1 language coverage described in

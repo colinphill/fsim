@@ -3062,6 +3062,26 @@ private:
         stack_.push_back(instance.target);
         used_systemc_instances_.insert(path);
 
+        std::unordered_set<std::uint64_t> connected_ports;
+        for (const auto& port : instance.ports) {
+            if (objects.contains(port.handle)) {
+                connected_ports.insert(port.handle);
+            }
+            if (port.bound_object != 0
+                && std::none_of(
+                    instance.internal_signals.begin(),
+                    instance.internal_signals.end(),
+                    [&](const ExternalInternalSignal& signal) {
+                        return signal.handle == port.bound_object;
+                    })) {
+                report(
+                    "FSIM-ELAB-BIND-046",
+                    "SystemC port '" + path + "." + port.name
+                        + "' binds an unknown internal signal handle",
+                    {});
+            }
+        }
+
         for (const auto& port : instance.ports) {
             if (!aliases.contains(port.name)) {
                 const auto declaration =
@@ -3092,6 +3112,68 @@ private:
             }
         }
         for (const auto& signal : instance.internal_signals) {
+            std::optional<SignalId> bound_signal;
+            bool use_internal_initial = false;
+            bool conflicting_aliases = false;
+            for (const auto& port : instance.ports) {
+                if (port.bound_object != signal.handle) {
+                    continue;
+                }
+                const auto runtime_port = objects.find(port.handle);
+                if (runtime_port == objects.end()) {
+                    continue;
+                }
+                if (bound_signal
+                    && *bound_signal != runtime_port->second) {
+                    report(
+                        "FSIM-ELAB-BIND-046",
+                        "SystemC ports bound to internal signal '"
+                            + path + "." + signal.name
+                            + "' connect to different parent signals",
+                        {});
+                    conflicting_aliases = true;
+                    break;
+                }
+                bound_signal = runtime_port->second;
+                use_internal_initial =
+                    use_internal_initial
+                    || !connected_ports.contains(port.handle)
+                    || port.direction
+                        != frontend::PortDirection::Input;
+            }
+            if (conflicting_aliases) {
+                continue;
+            }
+            if (bound_signal) {
+                const auto full_name = path + "." + signal.name;
+                const auto local =
+                    aliases.emplace(signal.name, *bound_signal);
+                const auto full =
+                    aliases.emplace(full_name, *bound_signal);
+                if ((!local.second
+                     && local.first->second != *bound_signal)
+                    || (!full.second
+                        && full.first->second != *bound_signal)) {
+                    report(
+                        "FSIM-ELAB-BIND-046",
+                        "SystemC internal signal alias '" + full_name
+                            + "' conflicts with another object",
+                        {});
+                    continue;
+                }
+                design_.signal_by_name_.emplace(
+                    full_name, *bound_signal);
+                if (path == design_.top_) {
+                    design_.signal_by_name_.emplace(
+                        signal.name, *bound_signal);
+                }
+                objects.emplace(signal.handle, *bound_signal);
+                if (use_internal_initial) {
+                    design_.signals_.at(*bound_signal).initial_value =
+                        signal.initial_value;
+                }
+                continue;
+            }
             const frontend::SignalDeclaration declaration{
                 signal.name,
                 signal.type,

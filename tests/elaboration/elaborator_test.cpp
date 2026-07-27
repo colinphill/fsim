@@ -355,9 +355,9 @@ endmodule
             0,
             {
                 {101, "clock", systemc_bit,
-                 fsim::frontend::PortDirection::Input},
+                 fsim::frontend::PortDirection::Input, 0},
                 {102, "value", systemc_unsigned,
-                 fsim::frontend::PortDirection::Output},
+                 fsim::frontend::PortDirection::Output, 0},
             },
             {
                 {"u_hdl",
@@ -543,9 +543,9 @@ end architecture rtl;
             0,
             {
                 {201, "value", systemc_logic,
-                 fsim::frontend::PortDirection::Input},
+                 fsim::frontend::PortDirection::Input, 0},
                 {202, "inverted", systemc_logic,
-                 fsim::frontend::PortDirection::Output},
+                 fsim::frontend::PortDirection::Output, 0},
             },
             {
                 {"u_hdl",
@@ -2956,6 +2956,62 @@ endmodule
             != std::string_view::npos;
     }
     assert(saw_vector_assertion);
+
+    const auto conflicting_systemc_alias_source =
+        fsim::frontend::parse_text(
+            "conflicting_systemc_alias.sv",
+            R"(
+module conflict_host;
+  logic first;
+  logic second;
+  conflict_placeholder u_conflict(
+    .first(first),
+    .second(second));
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(conflicting_systemc_alias_source.ok());
+    const fsim::elaboration::SystemCInstanceDescription
+        conflicting_systemc_instance{
+            "conflict_host.u_conflict",
+            "systemc:models.conflict",
+            1000,
+            0,
+            {
+                {1001,
+                 "first",
+                 systemc_logic,
+                 fsim::frontend::PortDirection::Input,
+                 1003},
+                {1002,
+                 "second",
+                 systemc_logic,
+                 fsim::frontend::PortDirection::Input,
+                 1003},
+            },
+            {},
+            {},
+            {},
+            {{1003, "shared"}},
+            {{1003,
+              "shared",
+              systemc_logic,
+              fsim::runtime::PackedLogic4::from_msb_string("0")}}};
+    const std::vector<fsim::elaboration::Binding>
+        conflicting_systemc_bindings{
+            {"conflict_host.u_conflict",
+             "systemc:models.conflict",
+             std::nullopt},
+        };
+    const auto rejected_systemc_alias =
+        fsim::elaboration::elaborate(
+            conflicting_systemc_alias_source.design,
+            "sv:work.conflict_host",
+            conflicting_systemc_bindings,
+            std::span{&conflicting_systemc_instance, 1});
+    assert(!rejected_systemc_alias.ok());
+    assert(has_diagnostic(
+        rejected_systemc_alias, "FSIM-ELAB-BIND-046"));
 
     std::cout << "elaborator tests passed\n";
 }

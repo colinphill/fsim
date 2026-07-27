@@ -863,6 +863,7 @@ elaboration::SystemCInstanceDescription systemc_description(
         port.name,
         systemc_type(port.encoding, port.width),
         systemc_direction(port.direction),
+        port.bound_object,
     });
   }
   result.foreign_children.reserve(module.foreign_children.size());
