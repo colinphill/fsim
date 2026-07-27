@@ -692,6 +692,27 @@ endmodule
     assert(has_diagnostic(
         rejected_process_drivers, "FSIM-ELAB-DRV-001"));
 
+    const auto selected_process_drivers =
+        fsim::frontend::parse_text(
+            "selected_process_drivers.sv",
+            R"(
+module selected_process_drivers;
+  logic [3:0] q;
+  initial q[0] = 1'b0;
+  initial q[3:2] = 2'b11;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(selected_process_drivers.ok());
+    const auto rejected_selected_process_drivers =
+        fsim::elaboration::elaborate(
+            selected_process_drivers.design,
+            "selected_process_drivers");
+    assert(!rejected_selected_process_drivers.ok());
+    assert(has_diagnostic(
+        rejected_selected_process_drivers,
+        "FSIM-ELAB-DRV-001"));
+
     const auto local_variables = fsim::frontend::parse_text(
         "local_variables.sv",
         R"(
@@ -1729,6 +1750,99 @@ endmodule
           == expected_select_concat[index]);
     }
 
+    const auto selected_assignment =
+        fsim::frontend::parse_text(
+            "selected_assignment.sv",
+            R"(
+module selected_assignment;
+  logic [15:8] descending;
+  logic [0:7] ascending;
+  logic [5:2] local_result;
+  initial begin
+    logic [5:2] local_copy;
+    descending[8] <= 1'b1;
+    descending = 8'b00000000;
+    descending[9] = 1'b1;
+    descending[15:12] = 4'b10xz;
+    ascending <= 8'b10101010;
+    ascending[4:5] <= 2'bxz;
+    local_copy = 4'b0000;
+    local_copy[3] = 1'b1;
+    local_copy[5:4] = 2'bxz;
+    local_result = local_copy;
+    descending[11:10] <= #5 2'b11;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(selected_assignment.ok());
+    const auto elaborated_selected_assignment =
+        fsim::elaboration::elaborate(
+            selected_assignment.design,
+            "sv:work.selected_assignment");
+    if (!elaborated_selected_assignment.ok()) {
+      for (const auto& diagnostic :
+           elaborated_selected_assignment.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_selected_assignment.ok());
+    const auto selected_descending =
+        elaborated_selected_assignment.design->find_signal(
+            "descending");
+    const auto selected_ascending =
+        elaborated_selected_assignment.design->find_signal(
+            "ascending");
+    const auto selected_local =
+        elaborated_selected_assignment.design->find_signal(
+            "local_result");
+    assert(
+        selected_descending && selected_ascending
+        && selected_local);
+    auto selected_assignment_interpreter =
+        elaborated_selected_assignment.design->create_interpreter();
+    const auto selected_assignment_result =
+        selected_assignment_interpreter->run();
+    assert(
+        selected_assignment_result.status
+            == fsim::runtime::RunStatus::completed
+        && selected_assignment_result.time == 5);
+    assert(
+        selected_assignment_interpreter
+            ->signal_value(*selected_descending)
+            .to_msb_string()
+        == "10XZ1111");
+    assert(
+        selected_assignment_interpreter
+            ->signal_value(*selected_ascending)
+            .to_msb_string()
+        == "1010XZ10");
+    assert(
+        selected_assignment_interpreter
+            ->signal_value(*selected_local)
+            .to_msb_string()
+        == "XZ10");
+
+    const auto reversed_assignment_select =
+        fsim::frontend::parse_text(
+            "reversed_assignment_select.sv",
+            R"(
+module reversed_assignment_select;
+  logic [0:7] value;
+  initial value[5:2] = 4'b1010;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(reversed_assignment_select.ok());
+    const auto rejected_reversed_assignment_select =
+        fsim::elaboration::elaborate(
+            reversed_assignment_select.design,
+            "sv:work.reversed_assignment_select");
+    assert(!rejected_reversed_assignment_select.ok());
+    assert(has_diagnostic(
+        rejected_reversed_assignment_select, "FSIM-ELAB-068"));
+
     const auto reversed_select = fsim::frontend::parse_text(
         "reversed_select.sv",
         R"(
@@ -1868,6 +1982,86 @@ end architecture;
               .to_msb_string()
           == expected_vhdl_select_concat[index]);
     }
+
+    const auto vhdl_selected_assignment =
+        fsim::frontend::parse_text(
+            "vhdl_selected_assignment.vhd",
+            R"(
+entity vhdl_selected_assignment is
+end entity;
+
+architecture rtl of vhdl_selected_assignment is
+  signal trigger : std_logic;
+  signal descending : std_logic_vector(15 downto 8);
+  signal ascending : std_logic_vector(0 to 7);
+  signal local_result : std_logic_vector(5 downto 2);
+begin
+  update: process(trigger)
+    variable local_copy : std_logic_vector(5 downto 2);
+  begin
+    descending <= "00000000";
+    descending(9) <= '1';
+    descending(15 downto 12) <= "10XZ";
+    ascending <= "10101010";
+    ascending(4 to 5) <= "XZ";
+    local_copy := "0000";
+    local_copy(3) := '1';
+    local_copy(5 downto 4) := "XZ";
+    local_result <= local_copy;
+    descending(11 downto 10) <= "11" after 5 ns;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_selected_assignment.ok());
+    const auto elaborated_vhdl_selected_assignment =
+        fsim::elaboration::elaborate(
+            vhdl_selected_assignment.design,
+            "vhdl:work.vhdl_selected_assignment(rtl)");
+    if (!elaborated_vhdl_selected_assignment.ok()) {
+      for (const auto& diagnostic :
+           elaborated_vhdl_selected_assignment.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_vhdl_selected_assignment.ok());
+    const auto vhdl_assigned_descending =
+        elaborated_vhdl_selected_assignment.design->find_signal(
+            "descending");
+    const auto vhdl_assigned_ascending =
+        elaborated_vhdl_selected_assignment.design->find_signal(
+            "ascending");
+    const auto vhdl_assigned_local =
+        elaborated_vhdl_selected_assignment.design->find_signal(
+            "local_result");
+    assert(
+        vhdl_assigned_descending && vhdl_assigned_ascending
+        && vhdl_assigned_local);
+    auto vhdl_selected_assignment_interpreter =
+        elaborated_vhdl_selected_assignment.design
+            ->create_interpreter();
+    const auto vhdl_selected_assignment_result =
+        vhdl_selected_assignment_interpreter->run();
+    assert(
+        vhdl_selected_assignment_result.status
+            == fsim::runtime::RunStatus::completed
+        && vhdl_selected_assignment_result.time == 5);
+    assert(
+        vhdl_selected_assignment_interpreter
+            ->signal_value(*vhdl_assigned_descending)
+            .to_msb_string()
+        == "10XZ1110");
+    assert(
+        vhdl_selected_assignment_interpreter
+            ->signal_value(*vhdl_assigned_ascending)
+            .to_msb_string()
+        == "1010XZ10");
+    assert(
+        vhdl_selected_assignment_interpreter
+            ->signal_value(*vhdl_assigned_local)
+            .to_msb_string()
+        == "XZ10");
 
     const auto reversed_vhdl_select =
         fsim::frontend::parse_text(

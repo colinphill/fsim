@@ -90,6 +90,9 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
         context.execution_points_enabled()
             ? FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS
             : 0;
+    runtime.write_signal_slice = write_signal_slice;
+    runtime.write_update_slice = write_update_slice;
+    runtime.write_after_slice = write_after_slice;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -320,6 +323,70 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_signal_slice(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const std::uint64_t aval,
+      const std::uint64_t bval) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value = checked_slice_word(
+          state, signal, offset, width, aval, bval);
+      state.context->write_blocking_slice_word(
+          signal, value, offset);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_update_slice(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const std::uint64_t aval,
+      const std::uint64_t bval) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value = checked_slice_word(
+          state, signal, offset, width, aval, bval);
+      state.context->write_update_slice_word(
+          signal, value, offset);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_after_slice(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const std::uint64_t aval,
+      const std::uint64_t bval,
+      const std::uint64_t delay) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value = checked_slice_word(
+          state, signal, offset, width, aval, bval);
+      state.context->write_after_slice_word(
+          signal, value, offset, delay);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   [[nodiscard]] static runtime::Logic4Word checked_write_word(
       const CallbackState& state,
       const std::uint32_t signal,
@@ -333,6 +400,28 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     if (width == 0 || width > 64) {
       throw std::logic_error(
           "generated write-signal callback received an invalid width");
+    }
+    return {width, aval, bval};
+  }
+
+  [[nodiscard]] static runtime::Logic4Word checked_slice_word(
+      const CallbackState& state,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const std::uint64_t aval,
+      const std::uint64_t bval) {
+    if (state.context == nullptr
+        || signal >= state.signal_widths.size()
+        || width == 0 || width > 64) {
+      throw std::logic_error(
+          "invalid generated partial-write callback");
+    }
+    const auto target_width = state.signal_widths[signal];
+    if (offset > target_width
+        || width > target_width - offset) {
+      throw std::logic_error(
+          "generated partial-write range is outside its target");
     }
     return {width, aval, bval};
   }

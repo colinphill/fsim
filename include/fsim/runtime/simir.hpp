@@ -98,6 +98,14 @@ struct Extract {
   std::uint32_t width{1};
 };
 
+/// Replace a contiguous normalized range in a packed value.
+struct Insert {
+  RegisterId destination{};
+  RegisterId target{};
+  RegisterId source{};
+  std::uint32_t offset{};
+};
+
 /// Concatenate packed operands in source order. The first operand occupies
 /// the most-significant result bits.
 struct Concatenate {
@@ -157,6 +165,28 @@ struct WriteUpdate {
 struct WriteAfter {
   SignalId signal{};
   RegisterId source{};
+  SimulationTick delay{};
+};
+
+/// Replace a contiguous packed range immediately in the active phase.
+struct WriteBlockingSlice {
+  SignalId signal{};
+  RegisterId source{};
+  std::uint32_t offset{};
+};
+
+/// Stage a contiguous packed range for the common update phase.
+struct WriteUpdateSlice {
+  SignalId signal{};
+  RegisterId source{};
+  std::uint32_t offset{};
+};
+
+/// Stage a contiguous packed range after a simulation-time delay.
+struct WriteAfterSlice {
+  SignalId signal{};
+  RegisterId source{};
+  std::uint32_t offset{};
   SimulationTick delay{};
 };
 
@@ -254,9 +284,10 @@ struct Halt {};
 using Operation =
     std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, LogicalNot,
                  LogicalBinary, Reduction, Shift, Extract, Concatenate, Binary,
-                 ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
-                 WaitFor, WaitOn, WaitSensitivity, Yield, Jump, Branch,
-                 DebugPoint, Assert, Stop, Halt>;
+                 Insert, ConditionalSelect, WriteBlocking, WriteUpdate,
+                 WriteAfter, WriteBlockingSlice, WriteUpdateSlice,
+                 WriteAfterSlice, WaitFor, WaitOn, WaitSensitivity, Yield, Jump,
+                 Branch, DebugPoint, Assert, Stop, Halt>;
 
 struct Signal {
   std::string name;
@@ -317,6 +348,20 @@ public:
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval));
   }
+  virtual void write_blocking_slice(
+      SignalId signal,
+      PackedLogic4 value,
+      std::size_t offset) = 0;
+  virtual void write_blocking_slice_word(
+      SignalId signal,
+      const Logic4Word value,
+      std::uint32_t offset) {
+    write_blocking_slice(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset);
+  }
 
   virtual void write_update(SignalId signal, PackedLogic4 value) = 0;
   virtual void write_update_word(
@@ -325,6 +370,20 @@ public:
         signal,
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval));
+  }
+  virtual void write_update_slice(
+      SignalId signal,
+      PackedLogic4 value,
+      std::size_t offset) = 0;
+  virtual void write_update_slice_word(
+      SignalId signal,
+      const Logic4Word value,
+      std::uint32_t offset) {
+    write_update_slice(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset);
   }
 
   virtual void write_after(SignalId signal, PackedLogic4 value,
@@ -336,6 +395,23 @@ public:
         signal,
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval),
+        delay);
+  }
+  virtual void write_after_slice(
+      SignalId signal,
+      PackedLogic4 value,
+      std::size_t offset,
+      SimulationTick delay) = 0;
+  virtual void write_after_slice_word(
+      SignalId signal,
+      const Logic4Word value,
+      std::uint32_t offset,
+      SimulationTick delay) {
+    write_after_slice(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset,
         delay);
   }
 

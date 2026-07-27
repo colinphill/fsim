@@ -81,6 +81,33 @@ typedef struct fsim_jit_runtime_v1 {
    */
   uint32_t flags;
   uint32_t reserved;
+
+  /*
+   * Append-only v1 extension for packed partial writes. offset and width
+   * select normalized low-bit-first positions within the target signal.
+   */
+  void (*write_signal_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      uint64_t aval,
+      uint64_t bval);
+  void (*write_update_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      uint64_t aval,
+      uint64_t bval);
+  void (*write_after_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      uint64_t aval,
+      uint64_t bval,
+      uint64_t delay);
 } fsim_jit_runtime_v1;
 
 /*

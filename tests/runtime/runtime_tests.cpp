@@ -628,6 +628,100 @@ void test_simir_wide_extract_and_concatenate() {
       "wide concatenation preserves source operand order");
 }
 
+void test_simir_insert_and_partial_writes() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto inserted = interpreter.add_signal(
+      {"top.inserted", PackedLogic4(8, Logic4::zero)});
+  const auto blocking = interpreter.add_signal(
+      {"top.blocking", PackedLogic4(8, Logic4::zero)});
+  const auto updated = interpreter.add_signal(
+      {"top.updated", PackedLogic4::from_msb_string("11110000")});
+  const auto ordered = interpreter.add_signal(
+      {"top.ordered", PackedLogic4(8, Logic4::zero)});
+  const auto intervening = interpreter.add_signal(
+      {"top.intervening", PackedLogic4(8, Logic4::zero)});
+  const auto delayed = interpreter.add_signal(
+      {"top.delayed", PackedLogic4::from_msb_string("10101010")});
+  const auto wide = interpreter.add_signal(
+      {"top.wide", PackedLogic4(70, Logic4::zero)});
+  const auto wide_partial = interpreter.add_signal(
+      {"top.wide_partial", PackedLogic4(70, Logic4::zero)});
+
+  Process process;
+  process.id = 0;
+  process.name = "insert_and_partial_writes";
+  process.register_count = 8;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("00000000")},
+      LoadConstant{1, PackedLogic4::from_msb_string("XZ")},
+      Insert{0, 0, 1, 3},
+      WriteBlocking{inserted, 0},
+      LoadConstant{2, PackedLogic4::from_msb_string("11")},
+      WriteBlockingSlice{blocking, 2, 0},
+      LoadConstant{3, PackedLogic4::from_msb_string("10")},
+      WriteBlockingSlice{blocking, 3, 2},
+      WriteUpdateSlice{updated, 2, 0},
+      LoadConstant{4, PackedLogic4::from_msb_string("00")},
+      WriteUpdateSlice{updated, 4, 4},
+      WriteUpdateSlice{ordered, 2, 0},
+      LoadConstant{5, PackedLogic4::from_msb_string("10101010")},
+      WriteUpdate{ordered, 5},
+      WriteUpdateSlice{ordered, 1, 4},
+      WriteUpdateSlice{intervening, 2, 0},
+      WriteBlocking{intervening, 5},
+      WriteUpdateSlice{intervening, 1, 4},
+      WriteAfterSlice{delayed, 1, 2, 5},
+      WriteAfterSlice{delayed, 3, 4, 5},
+      LoadConstant{6, PackedLogic4(70, Logic4::zero)},
+      LoadConstant{7, PackedLogic4::from_msb_string("XZ10")},
+      Insert{6, 6, 7, 64},
+      WriteBlocking{wide, 6},
+      WriteUpdateSlice{wide_partial, 7, 64},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 5,
+      "partial-write process completes after its delayed updates");
+  require(
+      interpreter.signal_value(inserted).to_msb_string()
+          == "000XZ000",
+      "Insert replaces only its normalized destination range");
+  require(
+      interpreter.signal_value(blocking).to_msb_string()
+          == "00001011",
+      "blocking partial writes observe prior active-phase writes");
+  require(
+      interpreter.signal_value(updated).to_msb_string()
+          == "11000011",
+      "disjoint update writes merge in stable source order");
+  require(
+      interpreter.signal_value(ordered).to_msb_string()
+          == "10XZ1010",
+      "whole and partial updates obey last-assignment ordering");
+  require(
+      interpreter.signal_value(intervening).to_msb_string()
+          == "10XZ1011",
+      "partial updates merge at commit after intervening blocking writes");
+  require(
+      interpreter.signal_value(delayed).to_msb_string()
+          == "1010XZ10",
+      "same-time delayed partial writes merge during the update phase");
+  require(
+      interpreter.signal_value(wide).to_msb_string()
+          == "00XZ10" + std::string(64, '0'),
+      "wide Insert retains packed bits outside the selected range");
+  require(
+      interpreter.signal_value(wide_partial).to_msb_string()
+          == "00XZ10" + std::string(64, '0'),
+      "wide partial update uses the arbitrary-width kernel");
+}
+
 void test_simir_force_release() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1563,6 +1657,7 @@ int main() {
     test_simir_wide_reduction_and_shift();
     test_simir_wide_unsigned_arithmetic();
     test_simir_wide_extract_and_concatenate();
+    test_simir_insert_and_partial_writes();
     test_simir_force_release();
     test_simir_design_stop_identity();
     test_simir_alternate_executor_context_and_boundaries();

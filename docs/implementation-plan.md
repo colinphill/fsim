@@ -116,6 +116,9 @@ The following foundation is implemented:
   same range-aware SimIR operations, including packed procedural locals,
   ascending ranges, nine-state source typing, and interpreter/O2 differential
   evidence;
+- constant selected SystemVerilog/VHDL assignment targets lower to typed
+  `Insert` and partial blocking/update/delayed writes, with stable overlap
+  merging and interpreter/LLVM O0/O2 differential evidence;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
 - a stable catalog covering 284 unique current production diagnostic codes.
@@ -320,7 +323,10 @@ Planned implementation sequence:
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
-3. Instantiate registered SystemC factories into DesignIR.
+3. Instantiate registered SystemC factories into DesignIR and add
+   bidirectional hierarchy: HDL instances bind to SystemC factories, while a
+   SystemC factory registers typed foreign-child placeholders whose explicit
+   manifest bindings resolve to VHDL architectures or SV modules.
 4. Implement SystemC channel updates, sensitivity, `SC_METHOD`, and event
    notification in the common scheduler.
 5. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
@@ -332,6 +338,8 @@ Planned implementation sequence:
 
 TLM, AMS, CCI, dynamic SystemC process creation, arbitrary custom primitive
 channels, and Accellera ABI/kernel compatibility remain deferred.
+Foreign HDL children are elaboration-time hierarchy objects, not dynamic
+SystemC process-time module creation.
 
 ### 5. Release hardening — In progress
 

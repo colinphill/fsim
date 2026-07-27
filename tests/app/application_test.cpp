@@ -328,6 +328,8 @@ module select_concat_app;
   logic [3:0] descending_part;
   logic [3:0] ascending_part;
   logic [8:0] joined;
+  logic [7:0] assigned;
+  logic [5:2] local_assigned;
   always_comb begin
     logic [5:2] local_copy;
     local_copy = descending[15:12];
@@ -341,8 +343,18 @@ module select_concat_app;
     };
   end
   initial begin
+    logic [5:2] assignment_local;
     descending = 8'b10xz0110;
     ascending = 8'b01zx1100;
+    assigned[0] <= 1'b1;
+    assigned = 8'b00000000;
+    assigned[1] = 1'b1;
+    assigned[7:4] = 4'b10xz;
+    assigned[3:2] <= #1 2'b11;
+    assignment_local = 4'b0000;
+    assignment_local[3] = 1'b1;
+    assignment_local[5:4] = 2'bxz;
+    local_assigned = assignment_local;
     #1 descending = 8'bz10100x1;
     ascending = 8'b1100xz01;
     #1 $finish;
@@ -368,6 +380,8 @@ architecture rtl of vhdl_select_concat_app is
   signal descending_part : std_logic_vector(1 downto 0);
   signal ascending_part : std_logic_vector(1 downto 0);
   signal joined : std_logic_vector(5 downto 0);
+  signal assigned : std_logic_vector(7 downto 0);
+  signal local_assigned : std_logic_vector(5 downto 2);
 begin
   descending <= "1XZ0";
   ascending <= "01Z1";
@@ -375,6 +389,7 @@ begin
 
   observe: process(descending, ascending)
     variable local_copy : std_logic_vector(9 downto 8);
+    variable assignment_local : std_logic_vector(5 downto 2);
   begin
     local_copy := descending(7 downto 6);
     selected_descending <= descending(5);
@@ -383,6 +398,14 @@ begin
     descending_part <= descending(7 downto 6);
     ascending_part <= ascending(3 to 4);
     joined <= descending(7 downto 6) & "10" & ascending(4 to 5);
+    assigned <= "00000000";
+    assigned(1) <= '1';
+    assigned(7 downto 4) <= "10XZ";
+    assigned(3 downto 2) <= "11" after 5 ns;
+    assignment_local := "0000";
+    assignment_local(3) := '1';
+    assignment_local(5 downto 4) := "XZ";
+    local_assigned <= assignment_local;
   end process;
 end architecture;
 )";
@@ -1427,7 +1450,8 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       select_concat_hybrid.final_values
       == std::vector<std::string>{
           "Z10100X1", "1100XZ01", "0", "0", "0",
-          "Z101", "00XZ", "Z1010XZ01"}));
+          "Z101", "00XZ", "Z1010XZ01", "10XZ1111",
+          "XZ10"}));
 
   auto vhdl_select_concat_config = config;
   vhdl_select_concat_config.project.name =
@@ -1473,7 +1497,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert(
       vhdl_select_concat_hybrid.result.status
       == fsim::runtime::RunStatus::completed);
-  assert(vhdl_select_concat_hybrid.result.time == 0);
+  assert(vhdl_select_concat_hybrid.result.time == 5);
   assert(vhdl_select_concat_hybrid.process_count == 4);
 #if defined(FSIM_HAS_LLVM)
   assert(vhdl_select_concat_hybrid.compiled_processes == 4);
@@ -1483,7 +1507,8 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       vhdl_select_concat_hybrid.final_values
       == std::vector<std::string>{
           "1XZ0", "01Z1", "Z", "Z", "Z", "X",
-          "1X", "1Z", "1X10Z1"}));
+          "1X", "1Z", "1X10Z1", "10XZ1110",
+          "XZ10"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =

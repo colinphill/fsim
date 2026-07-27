@@ -159,6 +159,21 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return result;
 }
 
+[[nodiscard]] PackedLogic4 insert_value(
+    PackedLogic4 target,
+    const PackedLogic4& source,
+    const std::size_t offset) {
+  if (source.width() == 0 || offset > target.width()
+      || source.width() > target.width() - offset) {
+    throw std::invalid_argument(
+        "insert range is outside its target value");
+  }
+  for (std::size_t bit = 0; bit < source.width(); ++bit) {
+    target.set(offset + bit, source.get(bit));
+  }
+  return target;
+}
+
 [[nodiscard]] PackedLogic4 concatenate_values(
     const std::vector<PackedLogic4>& operands,
     const std::size_t expected_width) {
@@ -503,6 +518,12 @@ struct Interpreter::Impl {
     EdgeKind edge = EdgeKind::any;
   };
 
+  struct PendingUpdate {
+    SignalId signal{};
+    std::optional<std::size_t> offset;
+    PackedLogic4 value;
+  };
+
   explicit Impl(SchedulerOptions options) : scheduler(options) {}
 
   Scheduler scheduler;
@@ -512,7 +533,7 @@ struct Interpreter::Impl {
   std::vector<ProcessState> processes;
   std::vector<std::vector<Fanout>> static_fanout;
   std::vector<std::vector<Fanout>> dynamic_fanout;
-  std::unordered_map<SignalId, PackedLogic4> pending_updates;
+  std::vector<PendingUpdate> pending_updates;
   SignalChangeHook signal_change_hook;
   ExecutionPointHook execution_point_hook;
   bool update_commit_scheduled{};
@@ -689,12 +710,18 @@ struct Interpreter::Impl {
     }
   }
 
-  void stage_update(SignalId signal_id, PackedLogic4 staged_value) {
+  void commit_slice(
+      const SignalId signal_id,
+      PackedLogic4 value,
+      const std::size_t offset) {
     (void)get_signal(signal_id);
-    if (driven_values[signal_id].width() != staged_value.width()) {
-      throw std::invalid_argument("SimIR signal assignment width mismatch");
-    }
-    pending_updates.insert_or_assign(signal_id, std::move(staged_value));
+    commit(
+        signal_id,
+        insert_value(
+            driven_values[signal_id], value, offset));
+  }
+
+  void schedule_update_commit() {
     if (update_commit_scheduled) {
       return;
     }
@@ -703,13 +730,31 @@ struct Interpreter::Impl {
         SchedulerPhase::update,
         std::numeric_limits<StableOrder>::max(),
         [this](Scheduler&) {
-          std::vector<std::pair<SignalId, PackedLogic4>> updates;
-          updates.reserve(pending_updates.size());
-          for (auto& [signal, value] : pending_updates) {
-            updates.emplace_back(signal, std::move(value));
+          std::unordered_map<SignalId, PackedLogic4> coalesced;
+          coalesced.reserve(pending_updates.size());
+          for (auto& pending : pending_updates) {
+            auto entry =
+                coalesced
+                    .try_emplace(
+                        pending.signal,
+                        driven_values[pending.signal])
+                    .first;
+            if (pending.offset) {
+              entry->second = insert_value(
+                  std::move(entry->second),
+                  pending.value,
+                  *pending.offset);
+            } else {
+              entry->second = std::move(pending.value);
+            }
           }
           pending_updates.clear();
           update_commit_scheduled = false;
+          std::vector<std::pair<SignalId, PackedLogic4>> updates;
+          updates.reserve(coalesced.size());
+          for (auto& [signal, value] : coalesced) {
+            updates.emplace_back(signal, std::move(value));
+          }
           std::sort(
               updates.begin(),
               updates.end(),
@@ -720,6 +765,32 @@ struct Interpreter::Impl {
             commit(signal, std::move(value));
           }
         });
+  }
+
+  void stage_update(SignalId signal_id, PackedLogic4 staged_value) {
+    (void)get_signal(signal_id);
+    if (driven_values[signal_id].width() != staged_value.width()) {
+      throw std::invalid_argument("SimIR signal assignment width mismatch");
+    }
+    pending_updates.push_back(PendingUpdate{
+        signal_id, std::nullopt, std::move(staged_value)});
+    schedule_update_commit();
+  }
+
+  void stage_update_slice(
+      const SignalId signal_id,
+      PackedLogic4 value,
+      const std::size_t offset) {
+    (void)get_signal(signal_id);
+    const auto target_width = driven_values[signal_id].width();
+    if (value.width() == 0 || offset > target_width
+        || value.width() > target_width - offset) {
+      throw std::invalid_argument(
+          "partial update range is outside its target signal");
+    }
+    pending_updates.push_back(PendingUpdate{
+        signal_id, offset, std::move(value)});
+    schedule_update_commit();
   }
 
   [[noreturn]] void fail(const ProcessState &process,
@@ -932,6 +1003,24 @@ void Interpreter::Impl::execute(ProcessId id) {
                 value.width, value.aval, value.bval));
       }
 
+      void write_blocking_slice(
+          const SignalId signal,
+          PackedLogic4 value,
+          const std::size_t offset) override {
+        owner.commit_slice(signal, std::move(value), offset);
+      }
+
+      void write_blocking_slice_word(
+          const SignalId signal,
+          const Logic4Word value,
+          const std::uint32_t offset) override {
+        owner.commit_slice(
+            signal,
+            PackedLogic4::from_aval_bval(
+                value.width, value.aval, value.bval),
+            offset);
+      }
+
       void write_update(
           const SignalId signal, PackedLogic4 value) override {
         owner.stage_update(signal, std::move(value));
@@ -944,6 +1033,25 @@ void Interpreter::Impl::execute(ProcessId id) {
             signal,
             PackedLogic4::from_aval_bval(
                 value.width, value.aval, value.bval));
+      }
+
+      void write_update_slice(
+          const SignalId signal,
+          PackedLogic4 value,
+          const std::size_t offset) override {
+        owner.stage_update_slice(
+            signal, std::move(value), offset);
+      }
+
+      void write_update_slice_word(
+          const SignalId signal,
+          const Logic4Word value,
+          const std::uint32_t offset) override {
+        owner.stage_update_slice(
+            signal,
+            PackedLogic4::from_aval_bval(
+                value.width, value.aval, value.bval),
+            offset);
       }
 
       void write_after(
@@ -974,6 +1082,37 @@ void Interpreter::Impl::execute(ProcessId id) {
                 Scheduler&) mutable {
               owner.stage_update(signal, std::move(value));
             });
+      }
+
+      void write_after_slice(
+          const SignalId signal,
+          PackedLogic4 value,
+          const std::size_t offset,
+          const SimulationTick delay) override {
+        owner.scheduler.schedule_after(
+            delay,
+            SchedulerPhase::update,
+            process,
+            [&owner = owner,
+             signal,
+             value = std::move(value),
+             offset](Scheduler&) mutable {
+              owner.stage_update_slice(
+                  signal, std::move(value), offset);
+            });
+      }
+
+      void write_after_slice_word(
+          const SignalId signal,
+          const Logic4Word value,
+          const std::uint32_t offset,
+          const SimulationTick delay) override {
+        write_after_slice(
+            signal,
+            PackedLogic4::from_aval_bval(
+                value.width, value.aval, value.bval),
+            offset,
+            delay);
       }
 
       [[nodiscard]] bool
@@ -1065,6 +1204,18 @@ void Interpreter::Impl::execute(ProcessId id) {
               }
               ++process.pc;
             },
+            [&](const Insert& op) {
+              try {
+                get_register(process, op.destination) =
+                    insert_value(
+                        get_register(process, op.target),
+                        get_register(process, op.source),
+                        op.offset);
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
             [&](const Concatenate& op) {
               std::vector<PackedLogic4> operands;
               operands.reserve(op.operands.size());
@@ -1119,6 +1270,34 @@ void Interpreter::Impl::execute(ProcessId id) {
                   [this, signal = op.signal,
                    value = std::move(value)](Scheduler &) mutable {
                     stage_update(signal, std::move(value));
+                  });
+            },
+            [&](const WriteBlockingSlice& op) {
+              auto value = get_register(process, op.source);
+              ++process.pc;
+              commit_slice(
+                  op.signal, std::move(value), op.offset);
+            },
+            [&](const WriteUpdateSlice& op) {
+              auto value = get_register(process, op.source);
+              ++process.pc;
+              stage_update_slice(
+                  op.signal, std::move(value), op.offset);
+            },
+            [&](const WriteAfterSlice& op) {
+              auto value = get_register(process, op.source);
+              ++process.pc;
+              scheduler.schedule_after(
+                  op.delay,
+                  SchedulerPhase::update,
+                  process.program.id,
+                  [this,
+                   signal = op.signal,
+                   offset = op.offset,
+                   value = std::move(value)](
+                      Scheduler&) mutable {
+                    stage_update_slice(
+                        signal, std::move(value), offset);
                   });
             },
             [&](const WaitFor &op) {

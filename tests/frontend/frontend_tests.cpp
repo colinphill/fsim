@@ -210,6 +210,8 @@ begin
     selected <= descending(5);
     part <= ascending(3 to 4);
     joined <= descending(7 downto 6) & "10" & ascending(4 to 5);
+    descending(4) <= selected;
+    ascending(4 to 5) <= part;
   end process;
 end architecture;
 )",
@@ -229,9 +231,9 @@ end architecture;
   const auto* architecture =
       result.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(
-      architecture != nullptr
+          architecture != nullptr
           && architecture->processes.size() == 1
-          && architecture->processes.front().statements.size() == 3,
+          && architecture->processes.front().statements.size() == 5,
       "VHDL select/concatenation process");
   const auto& statements =
       architecture->processes.front().statements;
@@ -251,6 +253,13 @@ end architecture;
           && statements[2].value.operands[0].kind
               == ExpressionKind::Binary,
       "left-associated VHDL concatenation expression");
+  require(
+      statements[3].target.kind == ExpressionKind::Index
+          && statements[3].target.operands.size() == 2
+          && statements[3].target.operands[1].text == "4"
+          && statements[4].target.kind == ExpressionKind::Slice
+          && statements[4].target.text == "to",
+      "VHDL selected assignment target nodes");
 }
 
 void test_systemverilog_vertical_slice() {
@@ -1184,6 +1193,8 @@ module select_concat;
     combined = {
       descending[15:12], descending[10], ascending[4:7]
     };
+    descending[9] = selected;
+    ascending[4:5] = part;
   end
 endmodule
 )",
@@ -1207,7 +1218,7 @@ endmodule
   const auto& statements =
       result.design.units.front().processes.front().statements;
   require(
-      statements.size() == 3
+      statements.size() == 5
           && statements[0].value.kind == ExpressionKind::Index
           && statements[0].value.operands.size() == 2
           && statements[0].value.operands[1].text == "10",
@@ -1228,6 +1239,13 @@ endmodule
           && statements[2].value.operands[2].kind
               == ExpressionKind::Slice,
       "concatenation expression node and operand order");
+  require(
+      statements[3].target.kind == ExpressionKind::Index
+          && statements[3].target.operands.size() == 2
+          && statements[3].target.operands[1].text == "9"
+          && statements[4].target.kind == ExpressionKind::Slice
+          && statements[4].target.operands.size() == 3,
+      "SystemVerilog selected assignment target nodes");
 }
 
 }  // namespace

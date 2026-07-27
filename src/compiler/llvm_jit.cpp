@@ -56,6 +56,7 @@ using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
+using runtime::simir::Insert;
 using runtime::simir::Jump;
 using runtime::simir::LoadConstant;
 using runtime::simir::LogicalBinary;
@@ -76,8 +77,11 @@ using runtime::simir::WaitFor;
 using runtime::simir::WaitOn;
 using runtime::simir::WaitSensitivity;
 using runtime::simir::WriteAfter;
+using runtime::simir::WriteAfterSlice;
 using runtime::simir::WriteBlocking;
+using runtime::simir::WriteBlockingSlice;
 using runtime::simir::WriteUpdate;
+using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
 
 using NativeProcess = fsim_jit_process_v1;
@@ -100,7 +104,10 @@ static_assert(offsetof(fsim_jit_runtime_v1, write_update) == 40);
 static_assert(offsetof(fsim_jit_runtime_v1, write_after) == 48);
 static_assert(offsetof(fsim_jit_runtime_v1, flags) == 56);
 static_assert(offsetof(fsim_jit_runtime_v1, reserved) == 60);
-static_assert(sizeof(fsim_jit_runtime_v1) == 64);
+static_assert(offsetof(fsim_jit_runtime_v1, write_signal_slice) == 64);
+static_assert(offsetof(fsim_jit_runtime_v1, write_update_slice) == 72);
+static_assert(offsetof(fsim_jit_runtime_v1, write_after_slice) == 80);
+static_assert(sizeof(fsim_jit_runtime_v1) == 88);
 static_assert(sizeof(fsim_jit_frame_v1) == 56);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -297,6 +304,9 @@ struct ValidatedProcess {
   bool requires_resume{};
   bool uses_write_update{};
   bool uses_write_after{};
+  bool uses_write_blocking_slice{};
+  bool uses_write_update_slice{};
+  bool uses_write_after_slice{};
   bool uses_debug_points{};
 };
 
@@ -581,6 +591,13 @@ validate_process(const Process &process,
               constrain_width(
                   operation.destination, operation.width, index);
             },
+            [&](const Insert& operation) {
+              record_definition(operation.destination, index);
+              record_use(operation.target, index);
+              record_use(operation.source, index);
+              unify_registers(
+                  operation.destination, operation.target, index);
+            },
             [&](const Concatenate& operation) {
               if (operation.operands.empty()) {
                 reject(
@@ -693,6 +710,21 @@ validate_process(const Process &process,
                               signal_width(operation.signal, index), index);
               result.uses_write_after = true;
             },
+            [&](const WriteBlockingSlice& operation) {
+              record_use(operation.source, index);
+              (void)signal_width(operation.signal, index);
+              result.uses_write_blocking_slice = true;
+            },
+            [&](const WriteUpdateSlice& operation) {
+              record_use(operation.source, index);
+              (void)signal_width(operation.signal, index);
+              result.uses_write_update_slice = true;
+            },
+            [&](const WriteAfterSlice& operation) {
+              record_use(operation.source, index);
+              (void)signal_width(operation.signal, index);
+              result.uses_write_after_slice = true;
+            },
             [&](const WaitFor &) {},
             [&](const WaitOn &operation) {
               if (operation.signals.empty()) {
@@ -776,6 +808,20 @@ validate_process(const Process &process,
             "Extract range is outside its source register");
       }
     }
+    if (const auto* insert =
+            std::get_if<Insert>(&process.operations[index])) {
+      const auto target_width =
+          result.register_widths[insert->target];
+      const auto source_width =
+          result.register_widths[insert->source];
+      if (insert->offset > target_width
+          || source_width
+              > target_width - insert->offset) {
+        reject(
+            process, index,
+            "Insert range is outside its target register");
+      }
+    }
     if (const auto* concatenate =
             std::get_if<Concatenate>(&process.operations[index])) {
       std::uint64_t width = 0;
@@ -787,6 +833,33 @@ validate_process(const Process &process,
             process, index,
             "Concatenate operand widths do not match its result width");
       }
+    }
+    const auto validate_slice_write =
+        [&](const auto& write) {
+          const auto target_width =
+              signal_widths[write.signal];
+          const auto source_width =
+              result.register_widths[write.source];
+          if (write.offset > target_width
+              || source_width
+                  > target_width - write.offset) {
+            reject(
+                process, index,
+                "partial write range is outside its target signal");
+          }
+        };
+    if (const auto* blocking_write =
+            std::get_if<WriteBlockingSlice>(
+                &process.operations[index])) {
+      validate_slice_write(*blocking_write);
+    } else if (const auto* update_write =
+                   std::get_if<WriteUpdateSlice>(
+                       &process.operations[index])) {
+      validate_slice_write(*update_write);
+    } else if (const auto* delayed_write =
+                   std::get_if<WriteAfterSlice>(
+                       &process.operations[index])) {
+      validate_slice_write(*delayed_write);
     }
   }
 
@@ -1098,6 +1171,13 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "offset", value.offset);
               add_key_u64(builder, "width", value.width);
             },
+            [&](const Insert& value) {
+              builder.add("operation", "Insert");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "offset", value.offset);
+            },
             [&](const Concatenate& value) {
               builder.add("operation", "Concatenate");
               add_key_u64(builder, "destination", value.destination);
@@ -1145,6 +1225,31 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(
                   builder, "signal-width", signal_widths[value.signal]);
               add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "delay", value.delay);
+            },
+            [&](const WriteBlockingSlice& value) {
+              builder.add("operation", "WriteBlockingSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "offset", value.offset);
+            },
+            [&](const WriteUpdateSlice& value) {
+              builder.add("operation", "WriteUpdateSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "offset", value.offset);
+            },
+            [&](const WriteAfterSlice& value) {
+              builder.add("operation", "WriteAfterSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "offset", value.offset);
               add_key_u64(builder, "delay", value.delay);
             },
             [&](const Assert &value) {
@@ -1657,7 +1762,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
   auto *runtime_type = llvm::StructType::create(
       context,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       i32, i32},
+       i32, i32, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -1704,6 +1809,30 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         pointer, builder.CreateStructGEP(runtime_type, runtime_argument, 7),
         "write_after");
   }
+  llvm::Value* write_blocking_slice_callback = nullptr;
+  if (validated.uses_write_blocking_slice) {
+    write_blocking_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 10),
+        "write_signal_slice");
+  }
+  llvm::Value* write_update_slice_callback = nullptr;
+  if (validated.uses_write_update_slice) {
+    write_update_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 11),
+        "write_update_slice");
+  }
+  llvm::Value* write_after_slice_callback = nullptr;
+  if (validated.uses_write_after_slice) {
+    write_after_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 12),
+        "write_after_slice");
+  }
   llvm::Value* runtime_flags = nullptr;
   if (validated.uses_debug_points) {
     runtime_flags = builder.CreateLoad(
@@ -1722,6 +1851,16 @@ void lower_process(llvm::Module &module, const std::string &symbol,
   auto *write_after_type =
       llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                               {pointer, i32, i64, i64, i64}, false);
+  auto* write_slice_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, i64, i64},
+          false);
+  auto* write_after_slice_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, i64, i64, i64},
+          false);
 
   auto *register_aval = builder.CreateLoad(
       pointer, builder.CreateStructGEP(frame_type, frame_argument, 8),
@@ -2012,6 +2151,41 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       operation.width});
               branch_to_next();
             },
+            [&](const Insert& operation) {
+              const auto target =
+                  load_register(
+                      builder, registers, operation.target);
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              auto* source_mask =
+                  constant_i64(context, width_mask(source.width));
+              auto* shifted_mask =
+                  builder.CreateShl(
+                      source_mask,
+                      constant_i64(context, operation.offset));
+              auto* keep_mask =
+                  builder.CreateAnd(
+                      builder.CreateNot(shifted_mask),
+                      constant_i64(
+                          context, width_mask(target.width)));
+              auto* shift =
+                  constant_i64(context, operation.offset);
+              auto* aval = builder.CreateOr(
+                  builder.CreateAnd(target.aval, keep_mask),
+                  builder.CreateShl(
+                      builder.CreateAnd(source.aval, source_mask),
+                      shift));
+              auto* bval = builder.CreateOr(
+                  builder.CreateAnd(target.bval, keep_mask),
+                  builder.CreateShl(
+                      builder.CreateAnd(source.bval, source_mask),
+                      shift));
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{aval, bval, target.width});
+              branch_to_next();
+            },
             [&](const Concatenate& operation) {
               llvm::Value* aval = constant_i64(context, 0);
               llvm::Value* bval = constant_i64(context, 0);
@@ -2133,6 +2307,65 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   {context_pointer,
                    llvm::ConstantInt::get(i32, operation.signal), source.aval,
                    source.bval, constant_i64(context, operation.delay)});
+              branch_to_next();
+            },
+            [&](const WriteBlockingSlice& operation) {
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              builder.CreateCall(
+                  write_slice_type,
+                  write_blocking_slice_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(
+                          i32, operation.signal),
+                      llvm::ConstantInt::get(
+                          i32, operation.offset),
+                      llvm::ConstantInt::get(
+                          i32, source.width),
+                      source.aval,
+                      source.bval});
+              branch_to_next();
+            },
+            [&](const WriteUpdateSlice& operation) {
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              builder.CreateCall(
+                  write_slice_type,
+                  write_update_slice_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(
+                          i32, operation.signal),
+                      llvm::ConstantInt::get(
+                          i32, operation.offset),
+                      llvm::ConstantInt::get(
+                          i32, source.width),
+                      source.aval,
+                      source.bval});
+              branch_to_next();
+            },
+            [&](const WriteAfterSlice& operation) {
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              builder.CreateCall(
+                  write_after_slice_type,
+                  write_after_slice_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(
+                          i32, operation.signal),
+                      llvm::ConstantInt::get(
+                          i32, operation.offset),
+                      llvm::ConstantInt::get(
+                          i32, source.width),
+                      source.aval,
+                      source.bval,
+                      constant_i64(
+                          context, operation.delay)});
               branch_to_next();
             },
             [&](const Assert &operation) {
@@ -2301,6 +2534,9 @@ struct LlvmJit::Impl {
     bool requires_resume{};
     bool uses_write_update{};
     bool uses_write_after{};
+    bool uses_write_blocking_slice{};
+    bool uses_write_update_slice{};
+    bool uses_write_after_slice{};
     bool uses_debug_points{};
   };
 
@@ -2435,6 +2671,9 @@ void LlvmJit::add_process_module(
         validated.requires_resume,
         validated.uses_write_update,
         validated.uses_write_after,
+        validated.uses_write_blocking_slice,
+        validated.uses_write_update_slice,
+        validated.uses_write_after_slice,
         validated.uses_debug_points,
     };
     process_keys.push_back(cache_key);
@@ -2627,6 +2866,46 @@ LlvmJit::resume(const JitProcessHandle process,
     if (runtime.write_after == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires write_after for this process");
+    }
+  }
+  if (entry.info.uses_write_blocking_slice) {
+    if (runtime.struct_size
+        < offsetof(
+            fsim_jit_runtime_v1, write_update_slice)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include "
+          "write_signal_slice");
+    }
+    if (runtime.write_signal_slice == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_signal_slice for this "
+          "process");
+    }
+  }
+  if (entry.info.uses_write_update_slice) {
+    if (runtime.struct_size
+        < offsetof(
+            fsim_jit_runtime_v1, write_after_slice)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include "
+          "write_update_slice");
+    }
+    if (runtime.write_update_slice == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_update_slice for this "
+          "process");
+    }
+  }
+  if (entry.info.uses_write_after_slice) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include "
+          "write_after_slice");
+    }
+    if (runtime.write_after_slice == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_after_slice for this "
+          "process");
     }
   }
   if (entry.info.uses_debug_points

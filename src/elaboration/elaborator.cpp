@@ -763,15 +763,116 @@ private:
     }
 
     void lower_assignment(const Statement& statement) {
-        if (statement.target.kind != ExpressionKind::Identifier) {
+        const Expression* base = &statement.target;
+        std::optional<std::uint32_t> selected_offset;
+        std::optional<std::size_t> selected_width;
+        if (statement.target.kind == ExpressionKind::Index
+            && statement.target.operands.size() == 2) {
+            base = &statement.target.operands[0];
+        } else if (
+            statement.target.kind == ExpressionKind::Slice
+            && statement.target.operands.size() == 3) {
+            base = &statement.target.operands[0];
+        } else if (statement.target.kind != ExpressionKind::Identifier) {
             report(
                 "FSIM-ELAB-031",
-                "only whole-signal assignment targets are supported by this executable slice",
+                "an assignment target must be a packed object, bit-select, "
+                "or constant part-select",
                 statement.target.span);
             return;
         }
-        if (const auto local = locals_.find(statement.target.text);
-            local != locals_.end()) {
+        if (base->kind != ExpressionKind::Identifier) {
+            report(
+                "FSIM-ELAB-031",
+                "nested or aggregate selected assignment targets are not "
+                "executable yet",
+                statement.target.span);
+            return;
+        }
+
+        const auto target_name = base->text;
+        const auto local = locals_.find(target_name);
+        const auto signal = signals_.find(target_name);
+        if (local == locals_.end() && signal == signals_.end()) {
+            report(
+                "FSIM-ELAB-032",
+                "unknown assignment target '" + target_name + "'",
+                statement.target.span);
+            return;
+        }
+        const auto whole_width =
+            local != locals_.end()
+                ? register_width(local->second)
+                : design_.signal_info_[signal->second].width;
+
+        if (statement.target.kind == ExpressionKind::Index) {
+            const auto index =
+                constant_index(statement.target.operands[1]);
+            const auto offset =
+                index
+                    ? select_offset(*base, *index, whole_width)
+                    : std::nullopt;
+            if (!index || !offset
+                || *offset
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-068",
+                    "an assignment bit-select requires a constant index "
+                    "inside the target's declared packed range",
+                    statement.target.span);
+                return;
+            }
+            selected_offset =
+                static_cast<std::uint32_t>(*offset);
+            selected_width = 1;
+        } else if (statement.target.kind == ExpressionKind::Slice) {
+            const auto left =
+                constant_index(statement.target.operands[1]);
+            const auto right =
+                constant_index(statement.target.operands[2]);
+            if (!left || !right) {
+                report(
+                    "FSIM-ELAB-068",
+                    "an assignment part-select requires constant integer "
+                    "bounds",
+                    statement.target.span);
+                return;
+            }
+            const auto range = expression_range(*base, whole_width);
+            const auto offset =
+                select_offset(*base, *right, whole_width);
+            const auto left_offset =
+                select_offset(*base, *left, whole_width);
+            const auto width = index_distance(*left, *right) + 1;
+            const bool selected_descending = *left >= *right;
+            const bool direction_matches =
+                *left == *right
+                || (range
+                    && selected_descending
+                        == (range->left >= range->right));
+            if (!offset || !left_offset || !direction_matches
+                || *offset
+                    > std::numeric_limits<std::uint32_t>::max()
+                || width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-068",
+                    "assignment part-select bounds "
+                        + std::to_string(*left) + ":"
+                        + std::to_string(*right)
+                        + " are outside or reverse the target's declared "
+                          "packed range",
+                    statement.target.span);
+                return;
+            }
+            selected_offset =
+                static_cast<std::uint32_t>(*offset);
+            selected_width = static_cast<std::size_t>(width);
+        }
+
+        const auto target_width =
+            selected_width.value_or(whole_width);
+        if (local != locals_.end()) {
             if (statement.assignment_kind != AssignmentKind::Blocking
                 || statement.delay) {
                 report(
@@ -781,7 +882,6 @@ private:
                     statement.span);
                 return;
             }
-            const auto target_width = register_width(local->second);
             const auto value =
                 lower_expression(statement.value, target_width);
             if (!value) {
@@ -791,7 +891,7 @@ private:
                 report(
                     "FSIM-ELAB-057",
                     "local variable assignment width mismatch for '"
-                        + statement.target.text + "'",
+                        + target_name + "'",
                     statement.span);
                 return;
             }
@@ -806,24 +906,23 @@ private:
                 report(
                     "FSIM-ELAB-058",
                     "assignment to two-state local variable '"
-                        + statement.target.text
+                        + target_name
                         + "' requires an explicit conversion",
                     statement.span);
                 return;
             }
-            process_.operations.emplace_back(
-                CopyRegister{local->second, *value});
+            if (selected_offset) {
+                process_.operations.emplace_back(Insert{
+                    local->second,
+                    local->second,
+                    *value,
+                    *selected_offset});
+            } else {
+                process_.operations.emplace_back(
+                    CopyRegister{local->second, *value});
+            }
             return;
         }
-        const auto target = signals_.find(statement.target.text);
-        if (target == signals_.end()) {
-            report(
-                "FSIM-ELAB-032",
-                "unknown assignment target '" + statement.target.text + "'",
-                statement.target.span);
-            return;
-        }
-        const auto target_width = design_.signal_info_[target->second].width;
         const auto value = lower_expression(statement.value, target_width);
         if (!value) {
             return;
@@ -832,7 +931,7 @@ private:
             report(
                 "FSIM-ELAB-047",
                 "assignment width mismatch: target '"
-                    + statement.target.text + "' is "
+                    + target_name + "' is "
                     + std::to_string(target_width)
                     + " bits but the expression is "
                     + std::to_string(register_width(*value)) + " bits",
@@ -840,7 +939,7 @@ private:
             return;
         }
         const auto target_domain =
-            design_.signal_info_[target->second].source_domain;
+            design_.signal_info_[signal->second].source_domain;
         if ((target_domain == frontend::ValueDomain::Bit2
              || target_domain == frontend::ValueDomain::Boolean)
             && register_domain(*value) != frontend::ValueDomain::Bit2
@@ -848,7 +947,7 @@ private:
             report(
                 "FSIM-ELAB-050",
                 "assignment to two-state target '"
-                    + statement.target.text
+                    + target_name
                     + "' requires an explicit conversion from a "
                       "four-/nine-state expression",
                 statement.span);
@@ -865,13 +964,35 @@ private:
             return;
         }
         if (statement.delay) {
-            process_.operations.emplace_back(
-                WriteAfter{target->second, *value, statement.delay->magnitude});
+            if (selected_offset) {
+                process_.operations.emplace_back(WriteAfterSlice{
+                    signal->second,
+                    *value,
+                    *selected_offset,
+                    statement.delay->magnitude});
+            } else {
+                process_.operations.emplace_back(WriteAfter{
+                    signal->second,
+                    *value,
+                    statement.delay->magnitude});
+            }
         } else if (
             statement.assignment_kind == AssignmentKind::Blocking) {
-            process_.operations.emplace_back(WriteBlocking{target->second, *value});
+            if (selected_offset) {
+                process_.operations.emplace_back(WriteBlockingSlice{
+                    signal->second, *value, *selected_offset});
+            } else {
+                process_.operations.emplace_back(
+                    WriteBlocking{signal->second, *value});
+            }
         } else {
-            process_.operations.emplace_back(WriteUpdate{target->second, *value});
+            if (selected_offset) {
+                process_.operations.emplace_back(WriteUpdateSlice{
+                    signal->second, *value, *selected_offset});
+            } else {
+                process_.operations.emplace_back(
+                    WriteUpdate{signal->second, *value});
+            }
         }
     }
 
@@ -2183,6 +2304,18 @@ private:
                 } else if (const auto* delayed =
                                std::get_if<WriteAfter>(&operation)) {
                     process_outputs.insert(delayed->signal);
+                } else if (const auto* blocking_slice =
+                               std::get_if<WriteBlockingSlice>(
+                                   &operation)) {
+                    process_outputs.insert(blocking_slice->signal);
+                } else if (const auto* update_slice =
+                               std::get_if<WriteUpdateSlice>(
+                                   &operation)) {
+                    process_outputs.insert(update_slice->signal);
+                } else if (const auto* delayed_slice =
+                               std::get_if<WriteAfterSlice>(
+                                   &operation)) {
+                    process_outputs.insert(delayed_slice->signal);
                 }
             }
             for (const auto signal : process_outputs) {

@@ -54,6 +54,17 @@ boundary drivers. Generic/parameter specialization, expression actuals,
 unpacked/record boundaries, SystemC factories, and actual multi-driver
 resolution remain outside this slice.
 
+The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
+path may bind to a registered SystemC factory. During its elaboration, a
+SystemC factory may register a named, typed foreign-child placeholder; the
+manifest binding at that full path resolves the placeholder to a VHDL
+architecture or SV module. The common elaborator remains authoritative in
+both directions and supports recursive alternation between languages while
+retaining one stable-ID namespace, one port-conversion policy, and recursion
+detection. Foreign children can be created only during elaboration, never
+dynamically after simulation starts. Factory instantiation and the
+append-only placeholder callback are not implemented in the current slice.
+
 ## Runtime values
 
 The runtime distinguishes three logic domains:
@@ -115,7 +126,8 @@ SimIR processes are explicit state machines. The current operation set includes:
 - constant loads and signal reads;
 - unary/logical/reduction operations plus typed bitwise, fixed-width
   arithmetic, shift, conditional-select, and comparison operations;
-- blocking writes, update-phase writes, and delayed writes;
+- whole and normalized partial blocking writes, update-phase writes, and
+  delayed writes;
 - timed, dynamic-signal, and static-sensitivity waits;
 - next-delta yields;
 - jumps and branches;
@@ -196,6 +208,17 @@ normalized offsets, while `Concatenate` places ordered source operands from
 most to least significant. SystemVerilog brace concatenation and VHDL `&`
 share that operation; the interpreter supports arbitrary widths and LLVM
 lowers the single-word case.
+
+Constant selected assignment targets use the same declared-range mapping.
+SimIR `Insert` handles packed procedural-local updates. Signal targets lower to
+typed partial blocking, common-update, or delayed writes. The kernel merges
+the ordered whole/partial update sequence against the driven value during the
+common update phase, so overlapping assignments retain stable process/source
+order while an intervening active-phase blocking write remains visible.
+Delayed partial writes enter that same sequence at their due timestamp rather
+than capturing unrelated bits when the assignment is issued. The appended
+plain-C runtime callbacks carry only normalized offset, width, and one-word
+`aval`/`bval` data.
 
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
@@ -391,7 +414,8 @@ The compiler recomputes the plan and key after compilation and discards an
 output when a tracked input changed before publication. A project build loads
 the resulting library, checks `fsim_plugin_init_v1`, contains initialization
 exceptions, and requires at least one valid factory registration. Instantiating
-those factories into a common SystemC elaboration/kernel remains planned.
+those factories into the common hierarchy, including HDL-to-SystemC bindings
+and SystemC-registered foreign HDL children, remains planned.
 
 This cache boundary does not yet fingerprint every helper behind the selected
 compiler driver or every environment-injected code-generation setting. The

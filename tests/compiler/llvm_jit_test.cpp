@@ -45,6 +45,8 @@ struct EncodedSignal {
 enum class ScheduledWriteKind : std::uint8_t {
   update,
   after,
+  slice_update,
+  slice_after,
 };
 
 struct ScheduledWrite {
@@ -54,6 +56,8 @@ struct ScheduledWrite {
   std::uint64_t scheduled_at{};
   std::uint64_t delay{};
   std::uint64_t due{};
+  std::uint32_t offset{};
+  std::uint32_t width{};
 
   friend bool operator==(ScheduledWrite, ScheduledWrite) = default;
 };
@@ -130,7 +134,79 @@ extern "C" void write_after(void *opaque, const std::uint32_t signal,
          std::numeric_limits<std::uint64_t>::max() - runtime.current_time);
   runtime.scheduled_writes.push_back(
       {ScheduledWriteKind::after, signal, {aval, bval},
-       runtime.current_time, delay, runtime.current_time + delay});
+      runtime.current_time, delay, runtime.current_time + delay});
+}
+
+[[nodiscard]] std::uint64_t low_mask(const std::uint32_t width) {
+  assert(width > 0 && width <= 64);
+  return width == 64
+             ? std::numeric_limits<std::uint64_t>::max()
+             : (UINT64_C(1) << width) - UINT64_C(1);
+}
+
+extern "C" void write_signal_slice(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const std::uint64_t aval,
+    const std::uint64_t bval) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  assert(offset < 64 && width <= 64 - offset);
+  const auto mask = low_mask(width) << offset;
+  runtime.signals[signal].aval =
+      (runtime.signals[signal].aval & ~mask)
+      | ((aval << offset) & mask);
+  runtime.signals[signal].bval =
+      (runtime.signals[signal].bval & ~mask)
+      | ((bval << offset) & mask);
+  runtime.writes.emplace_back(
+      signal, runtime.signals[signal]);
+}
+
+extern "C" void write_update_slice(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const std::uint64_t aval,
+    const std::uint64_t bval) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  runtime.scheduled_writes.push_back(
+      {ScheduledWriteKind::slice_update,
+       signal,
+       {aval, bval},
+       runtime.current_time,
+       0,
+       runtime.current_time,
+       offset,
+       width});
+}
+
+extern "C" void write_after_slice(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const std::uint64_t aval,
+    const std::uint64_t bval,
+    const std::uint64_t delay) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  assert(delay
+         <= std::numeric_limits<std::uint64_t>::max()
+                - runtime.current_time);
+  runtime.scheduled_writes.push_back(
+      {ScheduledWriteKind::slice_after,
+       signal,
+       {aval, bval},
+       runtime.current_time,
+       delay,
+       runtime.current_time + delay,
+       offset,
+       width});
 }
 
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
@@ -145,6 +221,9 @@ extern "C" void write_after(void *opaque, const std::uint32_t signal,
       &write_after,
       0,
       0,
+      &write_signal_slice,
+      &write_update_slice,
+      &write_after_slice,
   };
 }
 
@@ -1537,6 +1616,90 @@ void test_extract_and_concatenate_at_level(
   }
 }
 
+void test_insert_and_partial_writes_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 4;
+  process.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_msb_string("11000011")},
+      LoadConstant{1, PackedLogic4::from_msb_string("XZ")},
+      Insert{2, 0, 1, 3},
+      WriteBlocking{0, 2},
+      LoadConstant{3, PackedLogic4::from_msb_string("10")},
+      WriteBlockingSlice{1, 3, 1},
+      WriteUpdateSlice{2, 1, 4},
+      WriteAfterSlice{3, 3, 2, 7},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 4> widths{8, 8, 8, 8};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  TestRuntime runtime;
+  runtime.signals[1] = {UINT64_C(0xff), 0};
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(handle, descriptor)
+      == JitExecutionStatus::completed);
+  const auto inserted =
+      PackedLogic4::from_msb_string("110XZ011").low_word();
+  assert((
+      runtime.signals[0]
+      == EncodedSignal{inserted.aval, inserted.bval}));
+  assert((runtime.signals[1] == EncodedSignal{UINT64_C(0xfd), 0}));
+  assert(runtime.scheduled_writes.size() == 2);
+  assert((
+      runtime.scheduled_writes[0]
+      == ScheduledWrite{
+          ScheduledWriteKind::slice_update,
+          2,
+          encode(PackedLogic4::from_msb_string("XZ")),
+          0,
+          0,
+          0,
+          4,
+          2}));
+  assert((
+      runtime.scheduled_writes[1]
+      == ScheduledWrite{
+          ScheduledWriteKind::slice_after,
+          3,
+          encode(PackedLogic4::from_msb_string("10")),
+          0,
+          7,
+          7,
+          2,
+          2}));
+
+  {
+    auto legacy = descriptor;
+    legacy.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_signal_slice));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, legacy); },
+        "does not include write_signal_slice");
+  }
+  {
+    auto missing = descriptor;
+    missing.write_update_slice = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing); },
+        "requires write_update_slice");
+  }
+  {
+    auto missing = descriptor;
+    missing.write_after_slice = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing); },
+        "requires write_after_slice");
+  }
+}
+
 void test_initialized_bval_slot(const JitOptimizationLevel optimization,
                                 const std::string_view symbol) {
   LlvmJit jit{LlvmJitOptions{optimization, {}}};
@@ -2545,6 +2708,45 @@ void test_rejections() {
       },
       "Extract range is outside its source register");
 
+  Process invalid_insert;
+  invalid_insert.id = 0;
+  invalid_insert.name = "invalid_insert";
+  invalid_insert.register_count = 3;
+  invalid_insert.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_msb_string("1010")},
+      LoadConstant{
+          1, PackedLogic4::from_msb_string("11")},
+      Insert{2, 0, 1, 3},
+      Halt{},
+  };
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_insert", invalid_insert, no_signals);
+      },
+      "Insert range is outside its target register");
+
+  Process invalid_partial_write;
+  invalid_partial_write.id = 0;
+  invalid_partial_write.name = "invalid_partial_write";
+  invalid_partial_write.register_count = 1;
+  invalid_partial_write.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_msb_string("11")},
+      WriteUpdateSlice{0, 0, 3},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 1> nibble_signal{4};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_partial_write",
+            invalid_partial_write,
+            nibble_signal);
+      },
+      "partial write range is outside its target signal");
+
   Process invalid_concatenate;
   invalid_concatenate.id = 0;
   invalid_concatenate.name = "invalid_concatenate";
@@ -2761,6 +2963,10 @@ int main() {
       JitOptimizationLevel::o0, "extract_concatenate_o0");
   test_extract_and_concatenate_at_level(
       JitOptimizationLevel::o2, "extract_concatenate_o2");
+  test_insert_and_partial_writes_at_level(
+      JitOptimizationLevel::o0, "insert_partial_writes_o0");
+  test_insert_and_partial_writes_at_level(
+      JitOptimizationLevel::o2, "insert_partial_writes_o2");
   test_initialized_bval_slot(JitOptimizationLevel::o0, "initialized_bval_o0");
   test_initialized_bval_slot(JitOptimizationLevel::o2, "initialized_bval_o2");
   test_debug_point_instrumentation();

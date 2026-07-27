@@ -58,6 +58,9 @@ The current tree contains:
   concatenations, including ascending and non-zero-based source ranges;
 - declared-range-aware VHDL indexed names/slices and correct width-summing
   VHDL `&` concatenation for packed scalar/vector operands;
+- constant bit/part assignment targets for SystemVerilog and VHDL packed
+  signals and procedural locals, including blocking, common-update, and
+  delayed partial writes with stable source-order merging;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,
@@ -78,6 +81,11 @@ The current tree contains:
 - an fsim SystemC compatibility header plus a shell-free, cached host compiler
   for plug-in shared libraries, with build-time entry-point and factory
   validation.
+
+The v1 SystemC hierarchy contract is bidirectional: HDL instances may bind to
+SystemC factories, and SystemC factories may declare elaboration-time foreign
+children explicitly bound to VHDL or SystemVerilog targets. Integrated factory
+instantiation is still planned.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

@@ -49,6 +49,26 @@ sensitivity, port binding, channel update semantics, event cancellation rules,
 and the common fixed-width signed/unsigned operations needed by signal-level
 models.
 
+## Bidirectional mixed-language hierarchy
+
+SystemC is not a leaf-only integration. A VHDL component/direct instance or a
+Verilog/SystemVerilog module instance may bind explicitly to
+`systemc:PLUGIN.FACTORY`. In the reverse direction, a SystemC module factory may
+register a named foreign-child placeholder and its typed ports during
+elaboration; an `fsim.toml` binding for that full instance path then selects a
+`vhdl:LIBRARY.ENTITY(ARCHITECTURE)` or `sv:LIBRARY.MODULE` target.
+
+Both directions are elaborated recursively into the same `DesignIR`. The
+common elaborator assigns hierarchy/object/process IDs, checks every port and
+conversion, detects recursive instantiation, and applies the same explicit
+resolver policy. A SystemC parent may therefore contain an HDL child which
+contains another bound SystemC child. Any language may be the project top.
+
+The SystemC-facing API will expose this as an elaboration-only foreign-module
+wrapper backed by an append-only native host callback. It does not permit
+arbitrary HDL creation after simulation starts. Cross-language binding is
+never inferred from a C++ type or unqualified name.
+
 ## Plug-in compilation
 
 Each schema-1 manifest may select a C++ compiler and pass include directories,
@@ -109,6 +129,13 @@ The two versioned tables use only fixed-width integers, C pointers, callbacks,
 and explicit byte views. A plug-in registers module factories through the
 registrar. Factories and modules then register ports, processes, sensitivities,
 reads, writes, waits, and notifications through the host table.
+
+The first integrated-elaboration ABI extension will also let a running factory
+register a foreign-child placeholder beneath its module handle. The factory
+registers the child name and typed port surface, while the manifest—not plug-in
+C++ code—selects the HDL implementation. This keeps SystemC-to-HDL hierarchy
+recursive and symmetric with HDL-to-SystemC binding without exposing frontend
+or `DesignIR` layouts through the native ABI.
 
 The loader rejects a missing entry point, host/registrar ABI mismatch, or failed
 initialization. Factory registrations are buffered until initialization

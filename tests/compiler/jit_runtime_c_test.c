@@ -43,7 +43,13 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, flags) == 56,
                "runtime execution flags were not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, reserved) == 60,
                "runtime reserved flags tail changed");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 64,
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_signal_slice) == 64,
+               "runtime partial blocking-write callback was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_update_slice) == 72,
+               "runtime partial update callback was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_after_slice) == 80,
+               "runtime delayed partial-write callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 88,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -56,6 +62,13 @@ typedef struct callback_state {
   uint64_t after_aval;
   uint64_t after_bval;
   uint64_t after_delay;
+  uint32_t slice_count;
+  uint32_t slice_signal;
+  uint32_t slice_offset;
+  uint32_t slice_width;
+  uint64_t slice_aval;
+  uint64_t slice_bval;
+  uint64_t slice_delay;
 } callback_state;
 
 static uint64_t read_signal(
@@ -116,6 +129,34 @@ static void write_after(
   state->after_delay = delay;
 }
 
+static void write_slice(
+    void* context,
+    uint32_t signal,
+    uint32_t offset,
+    uint32_t width,
+    uint64_t aval,
+    uint64_t bval) {
+  callback_state* state = (callback_state*)context;
+  ++state->slice_count;
+  state->slice_signal = signal;
+  state->slice_offset = offset;
+  state->slice_width = width;
+  state->slice_aval = aval;
+  state->slice_bval = bval;
+}
+
+static void write_after_slice(
+    void* context,
+    uint32_t signal,
+    uint32_t offset,
+    uint32_t width,
+    uint64_t aval,
+    uint64_t bval,
+    uint64_t delay) {
+  write_slice(context, signal, offset, width, aval, bval);
+  ((callback_state*)context)->slice_delay = delay;
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -128,7 +169,10 @@ int main(void) {
       write_update,
       write_after,
       0,
-      0};
+      0,
+      write_slice,
+      write_slice,
+      write_after_slice};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -138,6 +182,15 @@ int main(void) {
   runtime.write_after(
       runtime.context, UINT32_C(5), UINT64_C(0xa5), UINT64_C(0x80),
       UINT64_MAX);
+  runtime.write_signal_slice(
+      runtime.context, UINT32_C(6), UINT32_C(7), UINT32_C(8),
+      UINT64_C(0x5a), UINT64_C(0x24));
+  runtime.write_update_slice(
+      runtime.context, UINT32_C(7), UINT32_C(9), UINT32_C(10),
+      UINT64_C(0x155), UINT64_C(0x080));
+  runtime.write_after_slice(
+      runtime.context, UINT32_C(8), UINT32_C(11), UINT32_C(12),
+      UINT64_C(0xabc), UINT64_C(0x400), UINT64_C(13));
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -154,7 +207,14 @@ int main(void) {
       state.after_signal != UINT32_C(5) ||
       state.after_aval != UINT64_C(0xa5) ||
       state.after_bval != UINT64_C(0x80) ||
-      state.after_delay != UINT64_MAX) {
+      state.after_delay != UINT64_MAX ||
+      state.slice_count != UINT32_C(3) ||
+      state.slice_signal != UINT32_C(8) ||
+      state.slice_offset != UINT32_C(11) ||
+      state.slice_width != UINT32_C(12) ||
+      state.slice_aval != UINT64_C(0xabc) ||
+      state.slice_bval != UINT64_C(0x400) ||
+      state.slice_delay != UINT64_C(13)) {
     return 3;
   }
   return 0;

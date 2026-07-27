@@ -125,16 +125,15 @@ private:
 
 /// Narrow LLVM ORC adapter for the first compiled SimIR subset.
 ///
-/// Supported processes may use LoadConstant, ReadSignal, CopyRegister,
-/// UnaryNot, Binary, WriteBlocking, WriteUpdate, WriteAfter, Assert, Jump,
-/// Branch, WaitFor,
-/// WaitOn, WaitSensitivity, Yield, Stop, Halt, and source-bearing DebugPoint
-/// operations. Control flow is lowered to LLVM basic blocks backed by a
-/// versioned caller-owned frame. O0 always returns DebugPoint boundaries; O2
-/// returns them only when the runtime enables debug points. Values crossing the
-/// native ABI must be between 1 and 64 bits; sensitivity-only signals may be
-/// wider. Control-flow cycles without a suspension safe point are rejected
-/// during module addition.
+/// Supported processes may use constant/read/copy/extract/insert/concatenate
+/// value operations, typed unary/binary operations, whole or partial
+/// blocking/update/delayed writes, assertions, control flow, waits, yields,
+/// stop/halt, and source-bearing DebugPoint operations. Control flow is lowered
+/// to LLVM basic blocks backed by a versioned caller-owned frame. O0 always
+/// returns DebugPoint boundaries; O2 returns them only when the runtime enables
+/// debug points. Values crossing the native ABI must be between 1 and 64 bits;
+/// sensitivity-only signals may be wider. Control-flow cycles without a
+/// suspension safe point are rejected during module addition.
 ///
 /// Persistent caching is opt-in through LlvmJitOptions::cache_directory.
 /// Cached native objects are checksummed and keyed to the complete supported

@@ -259,8 +259,8 @@ therefore excluded.
 | `FSIM-ELAB-011` | error | The design exceeds the dense 32-bit signal-ID limit. |
 | `FSIM-ELAB-020` | error | A process sensitivity names an unknown signal. |
 | `FSIM-ELAB-030` | error | A parsed delay statement contains no delay value. |
-| `FSIM-ELAB-031` | error | An assignment target is not a whole signal. |
-| `FSIM-ELAB-032` | error | An assignment target names an unknown signal. |
+| `FSIM-ELAB-031` | error | An assignment target is not a supported packed object, constant bit-select, or constant part-select. |
+| `FSIM-ELAB-032` | error | An assignment target names an unknown signal or local variable. |
 | `FSIM-ELAB-040` | error | An expression names an unknown identifier. |
 | `FSIM-ELAB-041` | error | A literal is malformed or unsupported by executable lowering. |
 | `FSIM-ELAB-042` | error | An operator was parsed but has no executable SimIR lowering. |
