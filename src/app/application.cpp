@@ -136,12 +136,14 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
               "compiled process reported an assertion at a non-assert "
               "instruction");
         }
-        throw runtime::simir::InterpreterError(
+        throw runtime::simir::AssertionError(
             process_.id,
             result.instruction,
             assertion->message.empty()
                 ? "assertion failed"
-                : assertion->message);
+                : assertion->message,
+            assertion->severity,
+            assertion->source);
       }
       case compiler::JitResumeStatus::wait_for: {
         const auto* wait = std::get_if<runtime::simir::WaitFor>(
@@ -1234,6 +1236,27 @@ int handle_run(
     }
     diagnostics.error(
         "FSIM-RUN-DELTA-0001", message.str());
+  } catch (const runtime::simir::AssertionError& error) {
+    diagnostic::SourceSpan span;
+    span.path = error.source().path;
+    span.begin.line = error.source().line;
+    span.begin.column = error.source().column;
+    span.end = span.begin;
+    const auto severity = [&] {
+      switch (error.severity()) {
+        case runtime::simir::AssertionSeverity::note:
+          return diagnostic::Severity::note;
+        case runtime::simir::AssertionSeverity::warning:
+          return diagnostic::Severity::warning;
+        case runtime::simir::AssertionSeverity::error:
+          return diagnostic::Severity::error;
+        case runtime::simir::AssertionSeverity::failure:
+          return diagnostic::Severity::fatal;
+      }
+      return diagnostic::Severity::error;
+    }();
+    diagnostics.report(diagnostic::Diagnostic{
+        severity, "FSIM-RUN-ASSERT-0001", error.what(), std::move(span), {}});
   } catch (const runtime::simir::InterpreterError& error) {
     diagnostics.error("FSIM-RUN-0001", error.what());
   } catch (const std::exception& error) {

@@ -161,6 +161,9 @@ Completed:
 - normalized serialized VCD equality in the bounded application differential
   harness, covering declarations, initial values, timestamps, and committed
   changes;
+- bounded VHDL/SystemVerilog immediate assertion parsing and scalar SimIR
+  lowering, with process/instruction/severity/source/message retained through
+  interpreter, O0, O2, CLI, and the synchronous C API assertion callback;
 - exact interpreter/O2-hybrid application evidence for tick-0 update and
   tick-2 delayed commits, plus interpreter/compiled overflow exception
   containment;
@@ -191,9 +194,9 @@ Remaining before the architecture gate passes:
   debug frames, and source metadata to the current O0 hybrid debugger;
 - run every supported semantic test through interpreter and JIT and compare
   final state, assertions, scheduler observations, and trace events;
-- extend the bounded mixed-language differential to O0 and assertion metadata,
-  broaden normalized trace coverage across semantic fixtures, and validate it
-  on LLVM 22.1.8 Windows; and
+- extend the bounded mixed-language differential to O0 and mixed-language
+  assertion failures, broaden normalized trace coverage across semantic
+  fixtures, and validate it on LLVM 22.1.8 Windows; and
 - complete transitive HDL include-content provenance and actual
   generic/parameter values once those frontend features exist.
 
@@ -268,8 +271,9 @@ Planned implementation sequence:
    suspension on Linux and Windows x86-64.
 6. Add statement/process stepping, source breakpoints, locals, trace
    selection, conditional breakpoints, and complete Ctrl-C testing.
-7. Complete public C API metadata, assertion callbacks, object kinds, and
-   forward-compatibility tests.
+7. Complete public C API metadata, remaining object kinds, and
+   forward-compatibility tests; the bounded assertion callback now carries
+   process, severity, source location, and message.
 
 TLM, AMS, CCI, dynamic SystemC process creation, arbitrary custom primitive
 channels, and Accellera ABI/kernel compatibility remain deferred.

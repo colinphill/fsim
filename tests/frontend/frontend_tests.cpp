@@ -508,6 +508,97 @@ endmodule
           "unimplemented `default_nettype semantics must not be ignored");
 }
 
+void test_immediate_assertions() {
+  const auto vhdl = parse_text(
+      "assertions.vhd",
+      R"(
+entity assertions is
+end entity;
+architecture rtl of assertions is
+begin
+  check: process
+  begin
+    assert 0 = 1 report "vhdl mismatch" severity failure;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(vhdl.ok(), "bounded VHDL assertion syntax");
+  const auto* architecture =
+      vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr && architecture->processes.size() == 1,
+      "VHDL assertion process");
+  const auto& vhdl_assertion =
+      architecture->processes.front().statements.front();
+  require(
+      vhdl_assertion.kind == StatementKind::Assert
+          && vhdl_assertion.assertion_message == "vhdl mismatch"
+          && vhdl_assertion.assertion_severity
+              == AssertionSeverity::Failure
+          && vhdl_assertion.span.source_name == "assertions.vhd"
+          && vhdl_assertion.span.begin.line == 8,
+      "VHDL assertion metadata");
+
+  const auto system_verilog = parse_text(
+      "assertions.sv",
+      R"(
+module assertions;
+  initial assert (1'b0) else $error("sv mismatch");
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(system_verilog.ok(), "bounded SystemVerilog assertion syntax");
+  const auto& sv_assertion =
+      system_verilog.design.units.front().processes.front().statements.front();
+  require(
+      sv_assertion.kind == StatementKind::Assert
+          && sv_assertion.assertion_message == "sv mismatch"
+          && sv_assertion.assertion_severity == AssertionSeverity::Error
+          && sv_assertion.span.source_name == "assertions.sv"
+          && sv_assertion.span.begin.line == 3,
+      "SystemVerilog assertion metadata");
+
+  const auto invalid_vhdl_severity = parse_text(
+      "bad_assertion.vhd",
+      R"(
+entity bad_assertion is end entity;
+architecture rtl of bad_assertion is begin
+  check: process begin
+    assert 1 severity panic;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_vhdl_severity.ok()
+          && std::any_of(
+              invalid_vhdl_severity.diagnostics.begin(),
+              invalid_vhdl_severity.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-011";
+              }),
+      "invalid VHDL assertion severity diagnostic");
+
+  const auto invalid_sv_action = parse_text(
+      "bad_assertion.sv",
+      R"(
+module bad_assertion;
+  initial assert (1'b0) else $fatal;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_sv_action.ok()
+          && std::any_of(
+              invalid_sv_action.diagnostics.begin(),
+              invalid_sv_action.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-041";
+              }),
+      "unsupported SystemVerilog assertion action diagnostic");
+}
+
 }  // namespace
 
 int main() {
@@ -529,6 +620,7 @@ int main() {
     test_ignored_initializers_are_rejected();
     test_duplicate_declarations_are_rejected();
     test_systemverilog_timescale_context();
+    test_immediate_assertions();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

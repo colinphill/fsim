@@ -898,6 +898,14 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               builder.add("operation", "Assert");
               add_key_u64(builder, "condition", value.condition);
               builder.add("message", value.message);
+              add_key_u64(
+                  builder, "severity",
+                  static_cast<std::underlying_type_t<
+                      runtime::simir::AssertionSeverity>>(
+                      value.severity));
+              builder.add("source-path", value.source.path);
+              add_key_u64(builder, "source-line", value.source.line);
+              add_key_u64(builder, "source-column", value.source.column);
             },
             [&](const Jump &value) {
               builder.add("operation", "Jump");

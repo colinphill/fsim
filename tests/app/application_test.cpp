@@ -97,6 +97,22 @@ module partial_group;
 endmodule
 )";
   }
+  const auto assertion_source = directory / "assertion.vhd";
+  {
+    std::ofstream output(assertion_source);
+    output << R"(
+entity assertion_test is
+end entity;
+architecture rtl of assertion_test is
+  signal trigger : std_logic;
+begin
+  check: process(trigger)
+  begin
+    assert 0 = 1 report "cross-engine mismatch" severity failure;
+  end process;
+end architecture;
+)";
+  }
   const auto provenance_source = directory / "provenance.sv";
   const auto unused_source = directory / "unused.sv";
   const auto write_provenance_source =
@@ -367,6 +383,97 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
         == fsim::app::NativeCacheStatistics{});
 #endif
   }
+
+  struct CapturedAssertion {
+    fsim::runtime::simir::ProcessId process{};
+    fsim::runtime::simir::InstructionIndex instruction{};
+    fsim::runtime::simir::AssertionSeverity severity{
+        fsim::runtime::simir::AssertionSeverity::error};
+    fsim::runtime::simir::SourceLocation source;
+    std::string message;
+    std::size_t compiled_processes{};
+    std::size_t compiled_modules{};
+  };
+  auto assertion_config = config;
+  assertion_config.project.name = "assertion-differential";
+  assertion_config.project.top = "vhdl:work.assertion_test(rtl)";
+  assertion_config.build.cache_path = directory / "assertion-cache";
+  assertion_config.source_sets.clear();
+  fsim::project::SourceSet assertion_sources;
+  assertion_sources.language = fsim::project::Language::vhdl;
+  assertion_sources.standard = "2008";
+  assertion_sources.library = "work";
+  assertion_sources.files.push_back(assertion_source);
+  assertion_config.source_sets.push_back(std::move(assertion_sources));
+  const auto capture_assertion =
+      [&](const fsim::project::Optimization optimization,
+          const fsim::app::SimulationEngine engine) {
+        assertion_config.build.optimization = optimization;
+        fsim::diagnostic::Engine assertion_diagnostics;
+        auto project =
+            fsim::app::build_project(assertion_config, assertion_diagnostics);
+        assert(project);
+        fsim::app::Simulation simulation(
+            std::move(*project), assertion_config.run.max_deltas, engine);
+        CapturedAssertion captured;
+        captured.compiled_processes =
+            simulation.compiled_process_count();
+        captured.compiled_modules = simulation.compiled_module_count();
+        try {
+          (void)simulation.run();
+        } catch (const fsim::runtime::simir::AssertionError& error) {
+          captured.process = error.process();
+          captured.instruction = error.instruction();
+          captured.severity = error.severity();
+          captured.source = error.source();
+          captured.message = error.what();
+          return captured;
+        }
+        throw std::runtime_error("false assertion completed successfully");
+      };
+  const auto assertion_reference = capture_assertion(
+      fsim::project::Optimization::o0,
+      fsim::app::SimulationEngine::interpreter);
+  const auto compare_assertion =
+      [&](const CapturedAssertion& candidate) {
+        assert(candidate.process == assertion_reference.process);
+        assert(candidate.instruction == assertion_reference.instruction);
+        assert(candidate.severity == assertion_reference.severity);
+        assert(candidate.source.path == assertion_reference.source.path);
+        assert(candidate.source.line == assertion_reference.source.line);
+        assert(candidate.source.column == assertion_reference.source.column);
+        assert(candidate.message == assertion_reference.message);
+      };
+  assert(
+      assertion_reference.severity
+      == fsim::runtime::simir::AssertionSeverity::failure);
+  assert(assertion_reference.source.path == assertion_source.string());
+  assert(assertion_reference.source.line == 9);
+  assert(assertion_reference.source.column == 5);
+  assert(
+      assertion_reference.message.find("cross-engine mismatch")
+      != std::string::npos);
+  assert(assertion_reference.compiled_processes == 0);
+  assert(assertion_reference.compiled_modules == 0);
+  const auto assertion_o0 = capture_assertion(
+      fsim::project::Optimization::o0,
+      fsim::app::SimulationEngine::compiled);
+  const auto assertion_o2 = capture_assertion(
+      fsim::project::Optimization::o2,
+      fsim::app::SimulationEngine::compiled);
+  compare_assertion(assertion_o0);
+  compare_assertion(assertion_o2);
+#if defined(FSIM_HAS_LLVM)
+  assert(assertion_o0.compiled_processes == 1);
+  assert(assertion_o0.compiled_modules == 1);
+  assert(assertion_o2.compiled_processes == 1);
+  assert(assertion_o2.compiled_modules == 1);
+#else
+  assert(assertion_o0.compiled_processes == 0);
+  assert(assertion_o0.compiled_modules == 0);
+  assert(assertion_o2.compiled_processes == 0);
+  assert(assertion_o2.compiled_modules == 0);
+#endif
 
   auto scheduled_config = config;
   scheduled_config.project.name = "scheduled-write-test";

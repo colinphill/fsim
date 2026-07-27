@@ -254,8 +254,10 @@ hierarchical signal paths; read, deposit, force, and release values; run; step
 by delta or time; request stop; and receive lifecycle, safe-point, and
 value-change callbacks. Object handles carry a build generation so a rebuild
 invalidates stale hierarchy handles, and mutating/rebuilding re-entry from a
-synchronous callback is rejected. Statement/process stepping, scope objects,
-locals, and complete assertion/source metadata are not yet wired.
+synchronous callback is rejected. False assertions invoke the assertion
+callback with the originating process handle plus severity, source
+path/line/column, and message. Statement/process stepping, scope objects,
+locals, and complete non-assertion source/debug metadata are not yet wired.
 
 Optimized `run` and instrumented `debug` are required to have identical
 simulation semantics. Debug code will use addressable process frames and safe

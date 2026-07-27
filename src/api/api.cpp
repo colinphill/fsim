@@ -268,6 +268,41 @@ void attach_callbacks(Session& session) {
 fsim_status_t runtime_failure(Session& session, const std::exception& error) {
   session.finished = true;
   session.diagnostics.error("FSIM-API-RUN-0001", error.what());
+  lifecycle(session, FSIM_LIFECYCLE_SIMULATION_STOPPED);
+  return FSIM_STATUS_RUNTIME_ERROR;
+}
+
+fsim::diagnostic::Severity assertion_severity(
+    const fsim::runtime::simir::AssertionSeverity severity) noexcept {
+  switch (severity) {
+    case fsim::runtime::simir::AssertionSeverity::note:
+      return fsim::diagnostic::Severity::note;
+    case fsim::runtime::simir::AssertionSeverity::warning:
+      return fsim::diagnostic::Severity::warning;
+    case fsim::runtime::simir::AssertionSeverity::error:
+      return fsim::diagnostic::Severity::error;
+    case fsim::runtime::simir::AssertionSeverity::failure:
+      return fsim::diagnostic::Severity::fatal;
+  }
+  return fsim::diagnostic::Severity::error;
+}
+
+fsim_status_t assertion_failure(
+    Session& session,
+    const fsim::runtime::simir::AssertionError& error) {
+  session.finished = true;
+  const auto& location = error.source();
+  fsim::diagnostic::SourceSpan span;
+  span.path = location.path;
+  span.begin.line = location.line;
+  span.begin.column = location.column;
+  span.end = span.begin;
+  session.diagnostics.report(fsim::diagnostic::Diagnostic{
+      assertion_severity(error.severity()),
+      "FSIM-API-ASSERT-0001",
+      error.what(),
+      std::move(span),
+      {}});
   if (session.callbacks.assertion) {
     const auto& source = session.diagnostics.diagnostics().back();
     fsim_diagnostic_t diagnostic{};
@@ -282,7 +317,7 @@ fsim_status_t runtime_failure(Session& session, const std::exception& error) {
     CallbackGuard guard{session};
     session.callbacks.assertion(
         session.handle,
-        FSIM_INVALID_OBJECT,
+        process_handle(session, error.process()),
         &diagnostic,
         session.callbacks.user_data);
   }
@@ -341,6 +376,8 @@ fsim_status_t run_session(
       lifecycle(session, FSIM_LIFECYCLE_SIMULATION_STOPPED);
     }
     return FSIM_STATUS_OK;
+  } catch (const fsim::runtime::simir::AssertionError& error) {
+    return assertion_failure(session, error);
   } catch (const std::exception& error) {
     return runtime_failure(session, error);
   }

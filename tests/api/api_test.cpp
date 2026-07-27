@@ -23,6 +23,14 @@ struct CallbackCounts {
   bool stop_on_safe_point{};
   bool stop_attempted{};
   fsim_status_t stop_status{FSIM_STATUS_OK};
+  int assertions{};
+  fsim_object_t assertion_process{FSIM_INVALID_OBJECT};
+  fsim_severity_t assertion_severity{FSIM_SEVERITY_NOTE};
+  std::string assertion_code;
+  std::string assertion_message;
+  std::string assertion_path;
+  std::uint32_t assertion_line{};
+  std::uint32_t assertion_column{};
   std::string manifest;
 };
 
@@ -66,6 +74,24 @@ void safe_point(
     state.stop_attempted = true;
     state.stop_status = fsim_session_request_stop(session);
   }
+}
+
+void assertion(
+    fsim_session_t,
+    fsim_object_t process,
+    const fsim_diagnostic_t* diagnostic,
+    void* user_data) {
+  auto& state = *static_cast<CallbackCounts*>(user_data);
+  ++state.assertions;
+  state.assertion_process = process;
+  state.assertion_severity = diagnostic->severity;
+  state.assertion_code.assign(diagnostic->code.data, diagnostic->code.size);
+  state.assertion_message.assign(
+      diagnostic->message.data, diagnostic->message.size);
+  state.assertion_path.assign(
+      diagnostic->path.data, diagnostic->path.size);
+  state.assertion_line = diagnostic->line;
+  state.assertion_column = diagnostic->column;
 }
 
 int visit(fsim_session_t, fsim_object_t, void* user_data) {
@@ -121,6 +147,44 @@ cache_path = "cache"
 max_deltas = 1000
 )";
   }
+  {
+    std::ofstream source(directory / "assertion.vhd");
+    source << R"(
+entity assertion_test is
+end entity;
+architecture rtl of assertion_test is
+  signal trigger : std_logic;
+begin
+  check: process(trigger)
+  begin
+    assert 0 = 1 report "api mismatch" severity failure;
+  end process;
+end architecture;
+)";
+  }
+  const auto assertion_manifest_path = directory / "assertion.toml";
+  {
+    std::ofstream manifest(assertion_manifest_path);
+    manifest << R"TOML(
+schema = 1
+[project]
+name = "api-assertion-test"
+top = "vhdl:work.assertion_test(rtl)"
+time_resolution = "1ns"
+
+[[source_set]]
+language = "vhdl"
+standard = "2008"
+library = "work"
+files = ["assertion.vhd"]
+
+[build]
+cache_path = "assertion-cache"
+
+[run]
+max_deltas = 1000
+)TOML";
+  }
 
   fsim_session_options_t options{};
   options.struct_size = sizeof(options);
@@ -139,6 +203,7 @@ max_deltas = 1000
   callbacks.user_data = &counts;
   callbacks.safe_point = safe_point;
   callbacks.value_change = value_change;
+  callbacks.assertion = assertion;
   callbacks.lifecycle = lifecycle;
   assert(fsim_session_set_callbacks(session, &callbacks) == FSIM_STATUS_OK);
 
@@ -275,6 +340,25 @@ max_deltas = 1000
           session, stopped_q, value, sizeof(value), &required)
       == FSIM_STATUS_OK);
   assert(std::string(value) == "1");
+
+  counts.manifest = assertion_manifest_path.string();
+  assert(
+      fsim_session_load_project(
+          session, assertion_manifest_path.string().c_str())
+      == FSIM_STATUS_OK);
+  assert(fsim_session_check(session) == FSIM_STATUS_OK);
+  assert(fsim_session_build(session) == FSIM_STATUS_OK);
+  assert(fsim_session_run(session, 10) == FSIM_STATUS_RUNTIME_ERROR);
+  assert(counts.assertions == 1);
+  assert(counts.assertion_process != FSIM_INVALID_OBJECT);
+  assert(counts.assertion_severity == FSIM_SEVERITY_FATAL);
+  assert(counts.assertion_code == "FSIM-API-ASSERT-0001");
+  assert(
+      counts.assertion_message.find("api mismatch")
+      != std::string::npos);
+  assert(counts.assertion_path == (directory / "assertion.vhd").string());
+  assert(counts.assertion_line == 9);
+  assert(counts.assertion_column == 5);
 
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
 

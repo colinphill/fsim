@@ -56,6 +56,14 @@ class VhdlParser final : private detail::ParserBase {
     return cover(first.span, last.span);
   }
 
+  static std::string string_literal_text(const Token& token) {
+    if (token.text.size() >= 2 && token.text.front() == '"'
+        && token.text.back() == '"') {
+      return token.text.substr(1, token.text.size() - 2);
+    }
+    return token.text;
+  }
+
   std::optional<VhdlContextItem> parse_context_item() {
     const auto start = advance();
     const auto context_kind =
@@ -665,6 +673,39 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   std::optional<Statement> parse_sequential_statement() {
+    if (match_keyword("assert", true)) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::Assert;
+      statement.condition = parse_expression();
+      if (match_keyword("report", true)) {
+        const auto message = expect(
+            TokenKind::StringLiteral, "string literal after report",
+            "FSIM-VHDL-PARSE-045");
+        statement.assertion_message = string_literal_text(message);
+      }
+      if (match_keyword("severity", true)) {
+        const auto severity = expect_identifier("assertion severity");
+        const auto canonical = detail::ascii_lower(severity.text);
+        if (canonical == "note") {
+          statement.assertion_severity = AssertionSeverity::Note;
+        } else if (canonical == "warning") {
+          statement.assertion_severity = AssertionSeverity::Warning;
+        } else if (canonical == "error") {
+          statement.assertion_severity = AssertionSeverity::Error;
+        } else if (canonical == "failure") {
+          statement.assertion_severity = AssertionSeverity::Failure;
+        } else {
+          error(
+              severity, "FSIM-VHDL-SEM-011",
+              "assertion severity must be note, warning, error, or failure");
+        }
+      }
+      expect(TokenKind::Semicolon, "';' after assertion",
+             "FSIM-VHDL-PARSE-046");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     if (match_keyword("if", true)) {
       const auto start = previous();
       auto statement = parse_if_branch(start);

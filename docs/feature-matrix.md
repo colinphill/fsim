@@ -50,6 +50,7 @@ without an automated test is also identified as a gap.
 | VH-014 | Nine-state VHDL frontend typing and literal collapse into the current four-state executable IR | execute | [frontend domain check](../tests/frontend/frontend_tests.cpp) | — | [literal lowering test](../tests/elaboration/elaborator_test.cpp) | [literal mapping test](../tests/elaboration/elaborator_test.cpp) |
 | VH-015 | Full nine-state VHDL execution and standard resolution | v1 target | — | — | — | [value-kernel component evidence only](../tests/runtime/runtime_tests.cpp) |
 | VH-016 | Direct-entity/component instance nodes with named or positional whole-signal `port map` associations | parse | [frontend instance test](../tests/frontend/frontend_tests.cpp) | [generic-map and complex-actual rejection](../tests/frontend/frontend_tests.cpp) | [VHDL-parent cross-library elaboration](../tests/elaboration/elaborator_test.cpp) | — |
+| VH-017 | Sequential `assert CONDITION [report "literal"] [severity note\|warning\|error\|failure]` with scalar conditions and retained failure metadata | execute | [frontend assertion test](../tests/frontend/frontend_tests.cpp) | [invalid-severity test](../tests/frontend/frontend_tests.cpp) | [application assertion fixture](../tests/app/application_test.cpp) | [interpreter/O0/O2 failure differential](../tests/app/application_test.cpp), [C API callback test](../tests/api/api_test.cpp) |
 
 The executable VHDL path currently uses the common four-state SimIR
 representation. VH-013 therefore does not imply that `U`, `W`, `L`, `H`, and
@@ -75,6 +76,7 @@ representation. VH-013 therefore does not imply that `U`, `W`, `L`, `H`, and
 | SV-014 | Malformed assignment produces a span-bearing stable diagnostic | parse | — | [frontend test](../tests/frontend/frontend_tests.cpp) | — | — |
 | SV-015 | Module instance node with named whole-signal connections | execute | [frontend instance test](../tests/frontend/frontend_tests.cpp) | — | [mixed hierarchy test](../tests/elaboration/elaborator_test.cpp) | [mixed hierarchy test](../tests/elaboration/elaborator_test.cpp) |
 | SV-016 | `` `default_nettype`` recognition without silently ignoring unimplemented implicit-net semantics | parse | — | [targeted unsupported diagnostic](../tests/frontend/frontend_tests.cpp) | — | — |
+| SV-017 | Immediate `assert (CONDITION);` and `assert (CONDITION) else $error("literal");` represented with scalar lowering and retained failure metadata | execute | [frontend assertion test](../tests/frontend/frontend_tests.cpp) | [unsupported-action test](../tests/frontend/frontend_tests.cpp) | [shared assertion lowering](../src/elaboration/elaborator.cpp) | [common SimIR metadata test](../tests/runtime/runtime_tests.cpp) |
 
 SV-011 has operation-kernel evidence, not complete per-language evidence.
 Atomic SystemVerilog tests are still required before those operators can
@@ -106,7 +108,7 @@ targeted rejection, not implemented `` `default_nettype`` semantics.
 | CM-015 | LLVM 22.1.8 ORC O0/O2 Logic4 CFGs through versioned plain-C runtime/frame/result ABIs and the checked allocation-free ≤64-bit `Logic4Word` path, including size-gated append-only v1 scheduled-write callbacks, layout-preserving appended dynamic/static wait statuses, suspension-safe loops, grouped specialization modules, and cache identity for scheduled writes and wait metadata | execute | [LLVM resume, CFG, scheduled-write, signal-wait, and grouped-module tests](../tests/compiler/llvm_jit_test.cpp), [scheduled word-path runtime test](../tests/runtime/runtime_tests.cpp), [C ABI layout/status/callback test](../tests/compiler/jit_runtime_c_test.c) | [wait-list/signal/width/edge, scheduled-tail, malformed IR, ABI/layout, group/symbol, zero-time-cycle, and cache-corruption rejection](../tests/compiler/llvm_jit_test.cpp) | [LLVM process/group and scheduled/wait-kind/operand/width/static-edge cache tests](../tests/compiler/llvm_jit_test.cpp) | [O0/O2 scheduled-write, signal-wait, and grouped-module tests](../tests/compiler/llvm_jit_test.cpp), [exact application scheduled-write/overflow/posedge differentials](../tests/app/application_test.cpp), [exact-version CI job](../.github/workflows/ci.yml) |
 | CM-016 | Interpreter/LLVM differential execution of every semantic simulation test | v1 target | — | — | — | [bounded application fixtures compare normalized VCD in addition to status/state/callbacks](../tests/app/application_test.cpp) |
 | CM-017 | Application check/build/cache path, per-specialization LLVM module grouping and native-cache telemetry, O0/O2 interpreter-versus-hybrid execution for a bounded SystemVerilog hierarchy, O2 differential execution for the bounded SV/VHDL/SV hierarchy, exact fully compiled O2 scheduled writes, normalized VCD equality, and a two-process/one-module O2 positive-edge comparison at tick 0, tick 1/delta 1, and tick 2; typed capability misses remain on the reference evaluator without blocking supported siblings | execute | [application test](../tests/app/application_test.cpp) | — | [dense specialization ownership test](../tests/elaboration/elaborator_test.cpp) | [O0/O2 application and normalized-VCD differential, partial specialization-group fallback, O2 mixed-language/scheduled-write/posedge differentials, overflow containment, and per-module cold/warm telemetry test](../tests/app/application_test.cpp) |
-| CM-018 | C ABI session lifecycle, generation-checked object handles, bounded hierarchy/value access, deposit/force/release/run, delta/time stepping, asynchronous stop, synchronous callbacks, and callback re-entry guards | execute | [C API test](../tests/api/api_test.cpp) | [stale-handle and callback-mutation rejection](../tests/api/api_test.cpp) | [C API test](../tests/api/api_test.cpp) | [step/stop/resume and terminal-stop precedence test](../tests/api/api_test.cpp) |
+| CM-018 | C ABI session lifecycle, generation-checked object handles, bounded hierarchy/value access, deposit/force/release/run, delta/time stepping, asynchronous stop, synchronous callbacks including source-bearing assertion callbacks, and callback re-entry guards | execute | [C API test](../tests/api/api_test.cpp) | [stale-handle and callback-mutation rejection](../tests/api/api_test.cpp) | [C API test](../tests/api/api_test.cpp) | [step/stop/resume, terminal-stop precedence, and assertion callback test](../tests/api/api_test.cpp) |
 | CM-019 | Bounded command driver for `check`, `build`, `run`, `debug`, direct sources, and traditional aliases | execute | [CLI/application test](../tests/app/application_test.cpp) | [JSON argument and standard rejection](../tests/app/application_test.cpp) | [CLI/application test](../tests/app/application_test.cpp) | [CLI/application test](../tests/app/application_test.cpp) |
 | CM-020 | Full interactive debugger command set and statement/process/delta/time semantics | v1 target | [bounded REPL commands and forced-O0 hybrid mode](../tests/app/application_test.cpp) | — | [O0 cache-mode identity](../tests/app/application_test.cpp) | [interpreter/O0 transcript, lifecycle, callback-count, and final-state equivalence](../tests/app/application_test.cpp) |
 | CM-021 | Ctrl-C handoff through an atomic request to the next safe point | v1 target | — | — | — | — |
@@ -114,6 +116,7 @@ targeted rejection, not implemented `` `default_nettype`` semantics.
 | CM-023 | REPL relative/absolute time runs, delta/time stepping, time/signal breakpoints, scope/signal navigation, value mutation, and finished/poisoned lifecycle | execute | [application REPL test](../tests/app/application_test.cpp) | [unsupported source stepping and poisoned-session checks](../tests/app/application_test.cpp) | — | [application REPL test](../tests/app/application_test.cpp) |
 | CM-024 | SimIR `WaitOn`/`WaitSensitivity` O0/O2 suspension using appended v1 statuses while immutable SimIR owns dynamic operands/static edge rules; sensitivity-only signals may exceed 64 bits | execute | [O0/O2 signal-wait test](../tests/compiler/llvm_jit_test.cpp) | [empty-list, invalid-signal/width/edge, and scalar-edge validation](../tests/compiler/llvm_jit_test.cpp) | [wait-kind/operand/referenced-width/static-edge cache invalidation](../tests/compiler/llvm_jit_test.cpp) | [interpreter/external-executor dynamic `WaitOn` differential with duplicate normalization and tick-1/tick-2 delta-1 wakeups](../tests/runtime/runtime_tests.cpp), [O0/O2 suspension-safe loop test](../tests/compiler/llvm_jit_test.cpp), [two-of-two compiled positive-edge application differential](../tests/app/application_test.cpp) |
 | CM-025 | Exact parsed-byte source hashing and per-specialization native provenance for source path/content, source-set semantics, bundled-library version, and represented parameter values | execute | [checked-source and specialization metadata tests](../tests/app/application_test.cpp), [elaboration ownership test](../tests/elaboration/elaborator_test.cpp) | — | [owning-source and standard invalidation](../tests/app/application_test.cpp) | [cold/warm reuse, unrelated-source reuse, and comment-only owning-source invalidation](../tests/app/application_test.cpp) |
+| CM-026 | False SimIR assertions retain process/instruction, severity, source path/line/column, and message across reference, O0, and O2 execution; assertion metadata participates in native cache identity | execute | [VHDL/SV frontend tests](../tests/frontend/frontend_tests.cpp) | — | [typed assertion lowering](../src/elaboration/elaborator.cpp) | [SimIR metadata test](../tests/runtime/runtime_tests.cpp), [interpreter/O0/O2 application differential](../tests/app/application_test.cpp) |
 
 CM-015 is a bounded compiled-engine slice. `WaitFor`, `WaitOn`,
 `WaitSensitivity`, `Yield`, `Stop`, and loops cut by those suspension points
@@ -137,7 +140,7 @@ differential evidence, including an identical interpreter/O0 debugger
 transcript and the exact tick-0/tick-1-delta-1/tick-2 positive-edge case with
 two of two processes compiled, but do not satisfy CM-016 or complete HDL
 event-control/debug requirements: statement/call instrumentation, the full
-semantic fixture set, assertion metadata, exhaustive trace fixtures, O0
+semantic fixture set, exhaustive assertion/trace fixtures, O0
 application wait coverage, and Windows execution evidence remain open. The release build must
 use LLVM 22.1.8; a test compiled against another LLVM version is development
 evidence only.
@@ -182,8 +185,9 @@ The files under
 executable demonstration of ML-003 and ML-004. They are not evidence for
 general vector-direction conversion, runtime resolver behavior, or the
 opposite mixed hierarchy direction. The application suite now uses this
-example as bounded O2 interpreter/hybrid differential evidence; it does not
-yet compare assertion metadata or normalized VCD, run the mixed case at O0, or
+example as bounded O2 interpreter/hybrid differential evidence and separately
+compares normalized VCD plus assertion metadata. It does not yet run the mixed
+case at O0, combine mixed-language behavior with assertion failures, or
 provide Windows execution evidence.
 
 ## Required v1 rows not yet implemented
@@ -200,7 +204,7 @@ They do not become supported when a permissive parser happens to consume them.
 | V1-VH-03 | Complete synthesizable sequential/concurrent statement set, including case and loops | v1 target | — | — | — | — |
 | V1-VH-04 | Arrays, records, aggregates, access types, protected types, and attributes | v1 target | — | — | — | — |
 | V1-VH-05 | Name resolution, overload resolution, constant evaluation, legality, and resolution functions | v1 target | — | — | — | — |
-| V1-VH-06 | Wait/assert/report, files, and TextIO | v1 target | — | — | — | — |
+| V1-VH-06 | Wait/assert/report, files, and TextIO | v1 target | [bounded literal-report assertion form](../tests/frontend/frontend_tests.cpp) | [bounded assertion diagnostics](diagnostics.md) | [scalar assertion lowering](../tests/app/application_test.cpp) | [bounded interpreter/O0/O2 assertion differential](../tests/app/application_test.cpp) |
 | V1-VH-07 | Inertial/transport/reject transactions and physical-time normalization | v1 target | — | — | — | — |
 | V1-VH-08 | Reviewed Apache-2.0 IEEE logic, numeric, bit, fixed, and floating-point packages | v1 target | — | — | — | — |
 
@@ -216,7 +220,7 @@ They do not become supported when a permissive parser happens to consume them.
 | V1-SV-06 | All `always` forms, functions/tasks, `final`, case/loops, and complete expression semantics | v1 target | — | — | — | — |
 | V1-SV-07 | Delays/events, fork/join, named events, and complete NBA/delta behavior | v1 target | — | — | — | — |
 | V1-SV-08 | Strings, files, dynamic/associative arrays, queues, and `$readmem*` | v1 target | — | — | — | — |
-| V1-SV-09 | Deterministic basic random functions, display/stop tasks, and immediate assertions | v1 target | — | — | — | — |
+| V1-SV-09 | Deterministic basic random functions, display/stop tasks, and immediate assertions | v1 target | [bounded immediate assertion form](../tests/frontend/frontend_tests.cpp) | [bounded assertion diagnostics](diagnostics.md) | [shared scalar assertion lowering](../src/elaboration/elaborator.cpp) | [common SimIR metadata test](../tests/runtime/runtime_tests.cpp) |
 
 ### Common engines and release hardening
 

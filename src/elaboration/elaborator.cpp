@@ -381,6 +381,9 @@ private:
         case StatementKind::If:
             lower_if(statement);
             break;
+        case StatementKind::Assert:
+            lower_assert(statement);
+            break;
         case StatementKind::Delay:
             if (!statement.delay) {
                 report("FSIM-ELAB-030", "delay statement has no delay", statement.span);
@@ -398,6 +401,44 @@ private:
         case StatementKind::Null:
             break;
         }
+    }
+
+    void lower_assert(const Statement& statement) {
+        const auto condition = lower_expression(statement.condition, 1);
+        if (!condition) {
+            return;
+        }
+        if (register_width(*condition) != 1) {
+            report(
+                "FSIM-ELAB-051",
+                "an assertion condition must produce one bit in this "
+                "executable slice",
+                statement.condition.span);
+            return;
+        }
+        AssertionSeverity severity = AssertionSeverity::error;
+        switch (statement.assertion_severity) {
+        case frontend::AssertionSeverity::Note:
+            severity = AssertionSeverity::note;
+            break;
+        case frontend::AssertionSeverity::Warning:
+            severity = AssertionSeverity::warning;
+            break;
+        case frontend::AssertionSeverity::Error:
+            severity = AssertionSeverity::error;
+            break;
+        case frontend::AssertionSeverity::Failure:
+            severity = AssertionSeverity::failure;
+            break;
+        }
+        process_.operations.emplace_back(Assert{
+            *condition,
+            statement.assertion_message,
+            severity,
+            SourceLocation{
+                statement.span.source_name,
+                static_cast<std::uint32_t>(statement.span.begin.line),
+                static_cast<std::uint32_t>(statement.span.begin.column)}});
     }
 
     void lower_assignment(const Statement& statement) {

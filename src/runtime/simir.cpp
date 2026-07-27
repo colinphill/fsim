@@ -122,6 +122,16 @@ InterpreterError::InterpreterError(ProcessId process,
     : std::runtime_error(error_text(process, instruction, message)),
       process_(process), instruction_(instruction) {}
 
+AssertionError::AssertionError(ProcessId process,
+                               InstructionIndex instruction,
+                               std::string message,
+                               AssertionSeverity severity,
+                               SourceLocation source)
+    : InterpreterError(
+          process, instruction,
+          message.empty() ? "assertion failed" : std::move(message)),
+      severity_(severity), source_(std::move(source)) {}
+
 struct Interpreter::Impl {
   struct ProcessState {
     Process program;
@@ -600,8 +610,9 @@ void Interpreter::Impl::execute(ProcessId id) {
               const auto &condition = get_register(process, op.condition);
               if (condition.width() != 1 ||
                   condition.get(0) != Logic4::one) {
-                fail(process, op.message.empty() ? "assertion failed"
-                                                 : op.message);
+                throw AssertionError(
+                    process.program.id, process.pc, op.message, op.severity,
+                    op.source);
               }
               ++process.pc;
             },

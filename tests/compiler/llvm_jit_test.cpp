@@ -178,7 +178,11 @@ extern "C" void write_after(void *opaque, const std::uint32_t signal,
       WriteBlocking{7, 7},
       LoadConstant{8, PackedLogic4::from_msb_string("01000100")},
       Binary{BinaryOperator::equal, 9, 5, 8},
-      Assert{9, "unexpected sum"},
+      Assert{
+          9,
+          "unexpected sum",
+          AssertionSeverity::error,
+          SourceLocation{}},
       Halt{},
   };
   return process;
@@ -1198,6 +1202,25 @@ make_cached_wait_process(const bool static_wait,
   return process;
 }
 
+[[nodiscard]] Process make_cached_assertion_process(
+    const AssertionSeverity severity,
+    const std::uint32_t source_line) {
+  Process process;
+  process.id = 15;
+  process.name = "cached_assertion_process";
+  process.register_count = 1;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      Assert{
+          0,
+          "cached assertion",
+          severity,
+          SourceLocation{"cache_assertion.sv", source_line, 3}},
+      Halt{},
+  };
+  return process;
+}
+
 void expect_cache_statistics(const LlvmJit &jit, const std::uint64_t hits,
                              const std::uint64_t misses,
                              const std::uint64_t stores,
@@ -1228,6 +1251,16 @@ void run_cached_signal_process(LlvmJit &jit,
   runtime.signals[1] = {UINT64_C(0x3c), 0};
   auto descriptor = abi(runtime);
   assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
+}
+
+void run_cached_assertion_process(
+    LlvmJit& jit, const std::string_view symbol) {
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(jit.lookup(symbol), descriptor)
+      == JitExecutionStatus::completed);
+  assert(runtime.assertion_count == 0);
 }
 
 void run_cached_scheduled_process(
@@ -1683,6 +1716,42 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     expect_cache_statistics(changed_edge, 0, 1, 1);
   }
   assert(cached_object_paths(cache_directory).size() == 13);
+
+  constexpr std::string_view assertion_symbol =
+      "persistent_cache_assertion_process";
+  const std::array<std::uint32_t, 0> no_signals{};
+  {
+    LlvmJit cold{options};
+    cold.add_process(
+        assertion_symbol,
+        make_cached_assertion_process(AssertionSeverity::error, 7),
+        no_signals);
+    run_cached_assertion_process(cold, assertion_symbol);
+    expect_cache_statistics(cold, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 14);
+  {
+    LlvmJit warm{options};
+    warm.add_process(
+        assertion_symbol,
+        make_cached_assertion_process(AssertionSeverity::error, 7),
+        no_signals);
+    run_cached_assertion_process(warm, assertion_symbol);
+    expect_cache_statistics(warm, 1, 0, 0);
+  }
+
+  // Assertion diagnostic metadata is immutable generated behavior and must
+  // therefore participate in native object identity.
+  {
+    LlvmJit changed_metadata{options};
+    changed_metadata.add_process(
+        assertion_symbol,
+        make_cached_assertion_process(AssertionSeverity::failure, 8),
+        no_signals);
+    run_cached_assertion_process(changed_metadata, assertion_symbol);
+    expect_cache_statistics(changed_metadata, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 15);
 }
 
 void test_optimization_cache_invalidation(

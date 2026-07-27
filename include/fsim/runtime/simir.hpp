@@ -104,9 +104,24 @@ struct Branch {
   UnknownBranchPolicy unknown_policy{UnknownBranchPolicy::error};
 };
 
+enum class AssertionSeverity : std::uint8_t {
+  note,
+  warning,
+  error,
+  failure,
+};
+
+struct SourceLocation {
+  std::string path;
+  std::uint32_t line{1};
+  std::uint32_t column{1};
+};
+
 struct Assert {
   RegisterId condition{};
   std::string message;
+  AssertionSeverity severity{AssertionSeverity::error};
+  SourceLocation source;
 };
 
 /// Stop the complete simulation, as requested by `$finish` or an equivalent
@@ -233,6 +248,24 @@ public:
 private:
   ProcessId process_{};
   InstructionIndex instruction_{};
+};
+
+class AssertionError final : public InterpreterError {
+public:
+  AssertionError(ProcessId process, InstructionIndex instruction,
+                 std::string message, AssertionSeverity severity,
+                 SourceLocation source);
+
+  [[nodiscard]] AssertionSeverity severity() const noexcept {
+    return severity_;
+  }
+  [[nodiscard]] const SourceLocation& source() const noexcept {
+    return source_;
+  }
+
+private:
+  AssertionSeverity severity_{AssertionSeverity::error};
+  SourceLocation source_;
 };
 
 /// Small reference interpreter for differential testing of generated code.

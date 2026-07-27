@@ -1149,6 +1149,45 @@ void test_simir_alternate_executor_validation() {
   }
 }
 
+void test_simir_assertion_metadata() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  Process process;
+  process.id = 0;
+  process.name = "assertion";
+  process.register_count = 1;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("0")},
+      Assert{
+          0,
+          "metadata survived",
+          AssertionSeverity::failure,
+          SourceLocation{"assertions.sv", 17, 9}},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+  try {
+    (void)interpreter.run();
+    throw std::runtime_error("a false SimIR assertion was accepted");
+  } catch (const AssertionError& error) {
+    require(error.process() == 0 && error.instruction() == 1,
+            "assertion process and instruction");
+    require(error.severity() == AssertionSeverity::failure,
+            "assertion severity");
+    require(
+        error.source().path == "assertions.sv"
+            && error.source().line == 17
+            && error.source().column == 9,
+        "assertion source location");
+    require(
+        std::string_view{error.what()}.find("metadata survived")
+            != std::string_view::npos,
+        "assertion message");
+  }
+}
+
 void test_vcd() {
   using namespace fsim::runtime;
 
@@ -1198,6 +1237,7 @@ int main() {
     test_simir_alternate_executor_zero_delay_and_frame();
     test_simir_alternate_executor_cpp_exception_containment();
     test_simir_alternate_executor_validation();
+    test_simir_assertion_metadata();
     test_vcd();
   } catch (const std::exception &error) {
     std::cerr << "runtime test failure: " << error.what() << '\n';

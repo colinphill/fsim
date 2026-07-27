@@ -54,6 +54,14 @@ class VerilogParser final : private detail::ParserBase {
     return cover(first.span, last.span);
   }
 
+  static std::string string_literal_text(const Token& token) {
+    if (token.text.size() >= 2 && token.text.front() == '"'
+        && token.text.back() == '"') {
+      return token.text.substr(1, token.text.size() - 2);
+    }
+    return token.text;
+  }
+
   Token expect_identifier(std::string_view description) {
     return expect(TokenKind::Identifier, description, "FSIM-SV-PARSE-001");
   }
@@ -683,6 +691,32 @@ class VerilogParser final : private detail::ParserBase {
   }
 
   std::optional<Statement> parse_statement() {
+    if (language_ == Language::SystemVerilog2017
+        && match_keyword("assert")) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::Assert;
+      expect(TokenKind::LeftParen, "'(' after assert",
+             "FSIM-SV-PARSE-039");
+      statement.condition = parse_expression();
+      expect(TokenKind::RightParen, "')' after assertion condition",
+             "FSIM-SV-PARSE-040");
+      if (match_keyword("else")) {
+        expect_keyword("$error", false, "FSIM-SV-PARSE-041");
+        if (match(TokenKind::LeftParen)) {
+          const auto message = expect(
+              TokenKind::StringLiteral, "string literal passed to $error",
+              "FSIM-SV-PARSE-042");
+          statement.assertion_message = string_literal_text(message);
+          expect(TokenKind::RightParen, "')' after $error message",
+                 "FSIM-SV-PARSE-043");
+        }
+      }
+      expect(TokenKind::Semicolon, "';' after assertion",
+             "FSIM-SV-PARSE-044");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     if (match_keyword("begin")) {
       const auto start = previous();
       if (match(TokenKind::Colon)) {

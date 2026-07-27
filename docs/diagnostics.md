@@ -23,6 +23,7 @@ therefore excluded.
 | `FSIM-CLI-0003` | error | An exception escaped command dispatch. |
 | `FSIM-API-0002` | error | A C API check or build was requested before loading a project. |
 | `FSIM-API-0003` | error | A C API operation requires a successfully built design. |
+| `FSIM-API-ASSERT-0001` | assertion severity | A false HDL assertion stopped simulation through the C API; the diagnostic carries its process, source location, severity, and message. |
 | `FSIM-API-RUN-0001` | error | Simulation invoked through the C API failed at runtime. |
 | `FSIM-API-STEP-0001` | error | Statement or process stepping was requested without debug source maps. |
 | `FSIM-API-VALUE-0001` | error | A C API deposit or force value is invalid for the selected signal. |
@@ -109,6 +110,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-042` | error | Expected `)` after port associations. |
 | `FSIM-VHDL-PARSE-043` | error | Expected `;` after a VHDL instance. |
 | `FSIM-VHDL-PARSE-044` | error | A VHDL library, use, or context-reference clause is malformed or unterminated. |
+| `FSIM-VHDL-PARSE-045` | error | Expected a string literal after an assertion `report`. |
+| `FSIM-VHDL-PARSE-046` | error | Expected `;` after an assertion. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -118,6 +121,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-002` | error | Duplicate port declaration. |
 | `FSIM-VHDL-SEM-003` | error | Duplicate signal declaration. |
 | `FSIM-VHDL-SEM-004` | error | A delay magnitude is not an integer literal. |
+| `FSIM-VHDL-SEM-011` | error | An assertion severity is not `note`, `warning`, `error`, or `failure`. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-002` | error | Generic clauses are not implemented in this frontend slice. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
@@ -178,6 +182,12 @@ therefore excluded.
 | `FSIM-SV-PARSE-036` | error | Expected `)` after a named port connection. |
 | `FSIM-SV-PARSE-037` | error | Expected `)` after instance connections. |
 | `FSIM-SV-PARSE-038` | error | Expected `;` after a module instance. |
+| `FSIM-SV-PARSE-039` | error | Expected `(` after `assert`. |
+| `FSIM-SV-PARSE-040` | error | Expected `)` after an assertion condition. |
+| `FSIM-SV-PARSE-041` | error | Expected `$error` after an assertion `else`. |
+| `FSIM-SV-PARSE-042` | error | Expected a string literal argument to `$error`. |
+| `FSIM-SV-PARSE-043` | error | Expected `)` after an assertion `$error` message. |
+| `FSIM-SV-PARSE-044` | error | Expected `;` after an assertion. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -241,6 +251,7 @@ therefore excluded.
 | `FSIM-ELAB-048` | error | An executable `if` condition does not produce one bit. |
 | `FSIM-ELAB-049` | error | Binary operands have different widths and would require implicit sizing. |
 | `FSIM-ELAB-050` | error | Assignment into a two-state target would implicitly lose four- or nine-state values. |
+| `FSIM-ELAB-051` | error | An executable assertion condition does not produce one bit. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
@@ -285,6 +296,7 @@ therefore excluded.
 | `FSIM-TIME-0004` | error | A declared SystemVerilog time precision is not representable at project resolution. |
 | `FSIM-RUN-0001` | error | The SimIR interpreter failed during a CLI run. |
 | `FSIM-RUN-0002` | error | Another exception terminated a CLI run. |
+| `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |
 | `FSIM-VCD-0001` | error | The trace output directory could not be created. |
 | `FSIM-VCD-0002` | error | The VCD trace file could not be opened. |

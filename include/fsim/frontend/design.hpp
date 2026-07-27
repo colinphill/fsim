@@ -120,10 +120,18 @@ struct Delay {
 enum class StatementKind {
   Assignment,
   If,
+  Assert,
   Delay,
   Finish,
   Block,
   Null,
+};
+
+enum class AssertionSeverity {
+  Note,
+  Warning,
+  Error,
+  Failure,
 };
 
 struct Statement {
@@ -135,6 +143,8 @@ struct Statement {
   Expression value;
   Expression condition;
   std::optional<Delay> delay;
+  std::string assertion_message;
+  AssertionSeverity assertion_severity{AssertionSeverity::Error};
 
   // Block contents or the true branch/delayed statement.
   std::vector<Statement> statements;

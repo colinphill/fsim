@@ -112,11 +112,13 @@ rising trigger at tick 1/delta 0, the observer update at tick 1/delta 1, and
 the falling trigger at tick 2/delta 0. Those two processes share one
 specialization module and therefore require exactly one cold cache miss/store
 and one warm hit. The suite also asserts per-module cold/warm telemetry at O0
-and O2. This remains bounded architecture evidence: complete HDL event
-controls, generic/parameter specialization identity, assertion metadata, O0
-mixed-language/application scheduled-write/application sensitivity coverage,
-exhaustive semantic and trace fixtures, and Windows execution evidence remain
-outstanding.
+and O2. A VHDL assertion fixture separately requires identical process,
+instruction, severity, source location, and message from the interpreter and
+compiled O0/O2 engines. This remains bounded architecture evidence: complete
+HDL event controls, generic/parameter specialization identity, exhaustive
+assertion fixtures, O0 mixed-language/application scheduled-write/application
+sensitivity coverage, exhaustive semantic and trace fixtures, and Windows
+execution evidence remain outstanding.
 
 A separate two-process fixture places a supported scalar process beside a
 65-bit value-bearing process in one specialization. The hybrid application
