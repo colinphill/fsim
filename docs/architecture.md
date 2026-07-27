@@ -121,6 +121,13 @@ SimIR processes are explicit state machines. The current operation set includes:
 - assertions; and
 - process halt and simulation stop.
 
+Bounded frontend lowering reaches these suspension operations from VHDL
+`wait for`/`wait on`, SystemVerilog integer `#` delay and any-change
+`@(signal-list)` statements, and static process sensitivities. A VHDL process
+containing explicit waits jumps back to its post-initializer entry when its
+body completes, preserving implicit process repetition without reinitializing
+locals.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

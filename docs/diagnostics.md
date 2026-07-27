@@ -113,6 +113,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-046` | error | Expected `;` after an assertion. |
 | `FSIM-VHDL-PARSE-047` | error | Expected `:` after process-variable names. |
 | `FSIM-VHDL-PARSE-048` | error | Expected `;` after a process-variable declaration. |
+| `FSIM-VHDL-PARSE-049` | error | Expected `;` after a wait statement. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -123,6 +124,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-003` | error | Duplicate signal declaration. |
 | `FSIM-VHDL-SEM-004` | error | A delay magnitude is not an integer literal. |
 | `FSIM-VHDL-SEM-011` | error | An assertion severity is not `note`, `warning`, `error`, or `failure`. |
+| `FSIM-VHDL-SEM-012` | error | A process combines a sensitivity list with an explicit wait statement. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-002` | error | Generic clauses are not implemented in this frontend slice. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
@@ -138,6 +140,8 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-013` | error | A subtype requires semantic type resolution not implemented in this slice. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family object is parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | VHDL context declarations are not implemented in this frontend slice. |
+| `FSIM-VHDL-UNSUPPORTED-016` | error | A wait form requires unsupported bare, `until`, or combined-clause semantics. |
+| `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -226,6 +230,8 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-013` | error | `` `default_nettype`` is recognized but implicit-net legality is not implemented. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-015` | error | A nested procedural block declaration requires unsupported local-scope semantics. |
+| `FSIM-SV-UNSUPPORTED-016` | error | A procedural event control uses unsupported edge qualification. |
+| `FSIM-SV-UNSUPPORTED-017` | error | A procedural event control uses wildcard dependency inference. |
 
 ## Elaboration and SimIR lowering
 
@@ -263,6 +269,8 @@ therefore excluded.
 | `FSIM-ELAB-056` | error | A local variable assignment is delayed or nonblocking. |
 | `FSIM-ELAB-057` | error | A local variable assignment has the wrong packed width. |
 | `FSIM-ELAB-058` | error | A local variable initializer or assignment would implicitly lose four- or nine-state values. |
+| `FSIM-ELAB-059` | error | A dynamic wait names an unknown signal. |
+| `FSIM-ELAB-060` | error | Dynamic edge-qualified wait metadata reached executable lowering. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

@@ -266,6 +266,9 @@ public:
                 : nullptr;
         const bool waits_before_first_execution =
             verilog_event_process || vhdl_edge_guard != nullptr;
+        const bool vhdl_explicit_wait =
+            language == frontend::Language::Vhdl2008
+            && contains_explicit_wait(source.statements);
         const auto resume_entry =
             static_cast<InstructionIndex>(process_.operations.size());
         if (waits_before_first_execution) {
@@ -289,6 +292,13 @@ public:
             // Event-controlled processes wait before their first execution.
             // Returning directly to operation zero preserves one body
             // execution per matching event.
+            process_.operations.emplace_back(Jump{resume_entry});
+        } else if (
+            language == frontend::Language::Vhdl2008
+            && source.sensitivities.empty()
+            && vhdl_explicit_wait) {
+            // A VHDL process implicitly repeats. Explicit waits inside the
+            // body provide the required suspension boundary.
             process_.operations.emplace_back(Jump{resume_entry});
         } else {
             // A VHDL process with a sensitivity list executes once at time
@@ -342,6 +352,18 @@ public:
     }
 
 private:
+    static bool contains_explicit_wait(
+        const std::vector<Statement>& statements) {
+        return std::any_of(
+            statements.begin(), statements.end(),
+            [](const Statement& statement) {
+                return statement.kind == StatementKind::Delay
+                    || statement.kind == StatementKind::WaitOn
+                    || contains_explicit_wait(statement.statements)
+                    || contains_explicit_wait(statement.else_statements);
+            });
+    }
+
     void initialize_variables(
         const std::vector<frontend::VariableDeclaration>& variables) {
         struct Pending {
@@ -487,7 +509,9 @@ private:
             auto kind = DebugPointKind::statement;
             if (statement.kind == StatementKind::Assert) {
                 kind = DebugPointKind::assertion;
-            } else if (statement.kind == StatementKind::Delay) {
+            } else if (
+                statement.kind == StatementKind::Delay
+                || statement.kind == StatementKind::WaitOn) {
                 kind = DebugPointKind::wait;
             }
             emit_debug_point(kind, statement.span);
@@ -510,6 +534,35 @@ private:
             process_.operations.emplace_back(WaitFor{statement.delay->magnitude});
             lower_statements(statement.statements);
             break;
+        case StatementKind::WaitOn: {
+            std::vector<SignalId> signals;
+            signals.reserve(statement.sensitivities.size());
+            for (const auto& sensitivity : statement.sensitivities) {
+                if (sensitivity.edge != frontend::EdgeKind::Any) {
+                    report(
+                        "FSIM-ELAB-060",
+                        "dynamic edge-qualified waits are not executable in "
+                        "this slice",
+                        sensitivity.span);
+                    continue;
+                }
+                const auto found = signals_.find(sensitivity.signal);
+                if (found == signals_.end()) {
+                    report(
+                        "FSIM-ELAB-059",
+                        "unknown wait signal '" + sensitivity.signal + "'",
+                        sensitivity.span);
+                    continue;
+                }
+                signals.push_back(found->second);
+            }
+            if (!signals.empty()) {
+                process_.operations.emplace_back(
+                    WaitOn{std::move(signals)});
+            }
+            lower_statements(statement.statements);
+            break;
+        }
         case StatementKind::Finish:
             process_.operations.emplace_back(Stop{});
             break;

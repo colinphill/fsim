@@ -655,6 +655,135 @@ endmodule
       "SystemVerilog procedural-variable metadata");
 }
 
+void test_procedural_wait_statements() {
+  const auto vhdl = parse_text(
+      "waits.vhd",
+      R"(
+entity waits is end entity;
+architecture rtl of waits is
+  signal trigger : std_logic;
+begin
+  timer: process
+  begin
+    wait for 2 ns;
+    wait on trigger;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(vhdl.ok(), "bounded VHDL wait statements must parse");
+  const auto& vhdl_statements =
+      vhdl.design.units.back().processes.front().statements;
+  require(
+      vhdl_statements.size() == 2
+          && vhdl_statements[0].kind == StatementKind::Delay
+          && vhdl_statements[0].delay
+          && vhdl_statements[0].delay->magnitude == 2
+          && vhdl_statements[0].delay->unit == "ns"
+          && vhdl_statements[1].kind == StatementKind::WaitOn
+          && vhdl_statements[1].sensitivities.size() == 1
+          && vhdl_statements[1].sensitivities.front().signal
+              == "trigger",
+      "VHDL wait metadata");
+
+  const auto system_verilog = parse_text(
+      "events.sv",
+      R"(
+module events;
+  logic trigger;
+  logic observed;
+  initial begin
+    @(trigger);
+    @(trigger) observed = trigger;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      system_verilog.ok(),
+      "bounded SystemVerilog procedural event controls must parse");
+  const auto& sv_statements =
+      system_verilog.design.units.front().processes.front().statements;
+  require(
+      sv_statements.size() == 2
+          && sv_statements[0].kind == StatementKind::WaitOn
+          && sv_statements[0].sensitivities.size() == 1
+          && sv_statements[0].sensitivities.front().signal == "trigger"
+          && sv_statements[0].statements.empty()
+          && sv_statements[1].kind == StatementKind::WaitOn
+          && sv_statements[1].statements.size() == 1
+          && sv_statements[1].statements.front().kind
+              == StatementKind::Assignment,
+      "SystemVerilog procedural event metadata");
+
+  const auto invalid_vhdl = parse_text(
+      "bad_wait.vhd",
+      R"(
+entity bad_wait is end entity;
+architecture rtl of bad_wait is
+  signal trigger : std_logic;
+begin
+  worker: process(trigger)
+  begin
+    wait on trigger;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_vhdl.ok()
+          && std::any_of(
+              invalid_vhdl.diagnostics.begin(),
+              invalid_vhdl.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-012";
+              }),
+      "VHDL sensitivity-list/wait conflict diagnostic");
+
+  const auto nested_vhdl = parse_text(
+      "nested_wait.vhd",
+      R"(
+entity nested_wait is end entity;
+architecture rtl of nested_wait is begin
+  worker: process begin
+    if 1 = 1 then
+      wait for 1 ns;
+    end if;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !nested_vhdl.ok()
+          && std::any_of(
+              nested_vhdl.diagnostics.begin(),
+              nested_vhdl.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-017";
+              }),
+      "nested VHDL wait diagnostic");
+
+  const auto invalid_sv = parse_text(
+      "bad_event.sv",
+      R"(
+module bad_event;
+  logic trigger;
+  initial @(posedge trigger);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_sv.ok()
+          && std::any_of(
+              invalid_sv.diagnostics.begin(),
+              invalid_sv.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-UNSUPPORTED-016";
+              }),
+      "edge-qualified procedural event diagnostic");
+}
+
 }  // namespace
 
 int main() {
@@ -678,6 +807,7 @@ int main() {
     test_systemverilog_timescale_context();
     test_immediate_assertions();
     test_process_variable_declarations();
+    test_procedural_wait_statements();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

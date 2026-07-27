@@ -824,6 +824,35 @@ class VerilogParser final : private detail::ParserBase {
       return statement;
     }
 
+    if (match(TokenKind::At)) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::WaitOn;
+      statement.sensitivities = parse_sensitivity();
+      for (const auto& sensitivity : statement.sensitivities) {
+        if (sensitivity.signal == "*") {
+          error(
+              start,
+              "FSIM-SV-UNSUPPORTED-017",
+              "wildcard procedural event controls require expression "
+              "dependency analysis not implemented in this frontend slice");
+        } else if (sensitivity.edge != EdgeKind::Any) {
+          error(
+              start,
+              "FSIM-SV-UNSUPPORTED-016",
+              "edge-qualified procedural event controls are not implemented "
+              "in this frontend slice");
+        }
+      }
+      if (!match(TokenKind::Semicolon)) {
+        if (auto controlled = parse_statement()) {
+          statement.statements.push_back(std::move(*controlled));
+        }
+      }
+      statement.span = span_from(start, previous());
+      return statement;
+    }
+
     if (match(TokenKind::Hash)) {
       const auto start = previous();
       Statement statement;

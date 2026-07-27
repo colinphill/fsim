@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -102,6 +103,7 @@ endmodule
 module sensitivity;
   logic trigger;
   logic observed;
+  logic dynamic_observed;
   initial begin
     trigger = 1'b0;
     #1 trigger = 1'b1;
@@ -109,7 +111,31 @@ module sensitivity;
     #1 $finish;
   end
   always @(posedge trigger) observed <= trigger;
+  initial begin
+    @(trigger);
+    dynamic_observed = trigger;
+    @(trigger) dynamic_observed = trigger;
+  end
 endmodule
+)";
+  }
+  const auto vhdl_wait_source = directory / "vhdl_wait.vhd";
+  {
+    std::ofstream output(vhdl_wait_source);
+    output << R"(
+entity vhdl_wait is
+end entity;
+architecture rtl of vhdl_wait is
+  signal q : std_logic;
+begin
+  worker: process
+  begin
+    q <= '0';
+    wait for 1 ns;
+    q <= '1';
+    wait for 1 ns;
+  end process;
+end architecture;
 )";
   }
   const auto partial_group_source = directory / "partial_group.sv";
@@ -266,7 +292,9 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   };
   const auto capture_simulation =
       [&](fsim::app::BuiltProject project,
-          const fsim::app::SimulationEngine engine) {
+          const fsim::app::SimulationEngine engine,
+          const std::optional<fsim::runtime::SimulationTick> until =
+              std::nullopt) {
         CapturedSimulation captured;
         captured.process_count = project.design.processes().size();
         fsim::app::Simulation candidate(
@@ -302,7 +330,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
               vcd.set_time(time);
               vcd.change(vcd_signals.at(signal), value);
             });
-        captured.result = candidate.run();
+        captured.result = candidate.run(until);
         vcd.flush();
         captured.normalized_vcd = vcd_output.str();
         captured.final_values.reserve(
@@ -648,8 +676,12 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   const auto sensitivity_observed =
       sensitivity_reference_project->design.find_signal(
           "sensitivity.observed");
+  const auto sensitivity_dynamic_observed =
+      sensitivity_reference_project->design.find_signal(
+          "sensitivity.dynamic_observed");
   assert(sensitivity_trigger);
   assert(sensitivity_observed);
+  assert(sensitivity_dynamic_observed);
   const auto sensitivity_reference = capture_simulation(
       std::move(*sensitivity_reference_project),
       fsim::app::SimulationEngine::interpreter);
@@ -658,9 +690,9 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       fsim::app::SimulationEngine::compiled);
   compare_captures(
       sensitivity_reference, sensitivity_hybrid);
-  assert(sensitivity_hybrid.process_count == 2);
+  assert(sensitivity_hybrid.process_count == 3);
 #if defined(FSIM_HAS_LLVM)
-  assert(sensitivity_hybrid.compiled_processes == 2);
+  assert(sensitivity_hybrid.compiled_processes == 3);
   assert(sensitivity_hybrid.compiled_modules == 1);
 #endif
   assert(
@@ -671,8 +703,10 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       expected_sensitivity_changes = {
           {*sensitivity_trigger, "0", 0, 0},
           {*sensitivity_trigger, "1", 1, 0},
+          {*sensitivity_dynamic_observed, "1", 1, 1},
           {*sensitivity_observed, "1", 1, 1},
           {*sensitivity_trigger, "0", 2, 0},
+          {*sensitivity_dynamic_observed, "0", 2, 1},
       };
   assert(
       sensitivity_reference.changes
@@ -682,7 +716,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       == expected_sensitivity_changes);
   assert((
       sensitivity_hybrid.final_values
-      == std::vector<std::string>{"0", "1"}));
+      == std::vector<std::string>{"0", "1", "0"}));
 #if defined(FSIM_HAS_LLVM)
   assert(sensitivity_hybrid.native_cache.hits == 0);
   assert(sensitivity_hybrid.native_cache.misses == 1);
@@ -696,12 +730,76 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       fsim::app::SimulationEngine::compiled);
   compare_captures(
       sensitivity_reference, sensitivity_warm);
-  assert(sensitivity_warm.compiled_processes == 2);
+  assert(sensitivity_warm.compiled_processes == 3);
   assert(sensitivity_warm.compiled_modules == 1);
   assert(sensitivity_warm.native_cache.hits == 1);
   assert(sensitivity_warm.native_cache.misses == 0);
   assert(sensitivity_warm.native_cache.stores == 0);
 #endif
+
+  auto vhdl_wait_config = config;
+  vhdl_wait_config.project.name = "vhdl-explicit-wait-test";
+  vhdl_wait_config.project.top = "vhdl:work.vhdl_wait(rtl)";
+  vhdl_wait_config.build.optimization =
+      fsim::project::Optimization::o2;
+  vhdl_wait_config.build.cache_path =
+      directory / "vhdl-wait-cache";
+  vhdl_wait_config.source_sets.clear();
+  fsim::project::SourceSet vhdl_wait_sources;
+  vhdl_wait_sources.language = fsim::project::Language::vhdl;
+  vhdl_wait_sources.standard = "2008";
+  vhdl_wait_sources.library = "work";
+  vhdl_wait_sources.files.push_back(vhdl_wait_source);
+  vhdl_wait_config.source_sets.push_back(
+      std::move(vhdl_wait_sources));
+  fsim::diagnostic::Engine vhdl_wait_diagnostics;
+  auto vhdl_wait_reference_project =
+      fsim::app::build_project(
+          vhdl_wait_config, vhdl_wait_diagnostics);
+  auto vhdl_wait_hybrid_project =
+      fsim::app::build_project(
+          vhdl_wait_config, vhdl_wait_diagnostics);
+  assert(vhdl_wait_reference_project);
+  assert(vhdl_wait_hybrid_project);
+  const auto vhdl_wait_q =
+      vhdl_wait_reference_project->design.find_signal(
+          "vhdl_wait.q");
+  assert(vhdl_wait_q);
+  const auto vhdl_wait_reference = capture_simulation(
+      std::move(*vhdl_wait_reference_project),
+      fsim::app::SimulationEngine::interpreter,
+      4);
+  const auto vhdl_wait_hybrid = capture_simulation(
+      std::move(*vhdl_wait_hybrid_project),
+      fsim::app::SimulationEngine::compiled,
+      4);
+  compare_captures(vhdl_wait_reference, vhdl_wait_hybrid);
+  assert(
+      vhdl_wait_hybrid.result.status
+      == fsim::runtime::RunStatus::time_limit);
+  assert(vhdl_wait_hybrid.result.time == 4);
+  assert(vhdl_wait_hybrid.process_count == 1);
+#if defined(FSIM_HAS_LLVM)
+  assert(vhdl_wait_hybrid.compiled_processes == 1);
+  assert(vhdl_wait_hybrid.compiled_modules == 1);
+#endif
+  const decltype(vhdl_wait_reference.changes)
+      expected_vhdl_wait_changes = {
+          {*vhdl_wait_q, "0", 0, 0},
+          {*vhdl_wait_q, "1", 1, 0},
+          {*vhdl_wait_q, "0", 2, 0},
+          {*vhdl_wait_q, "1", 3, 0},
+          {*vhdl_wait_q, "0", 4, 0},
+      };
+  assert(
+      vhdl_wait_reference.changes
+      == expected_vhdl_wait_changes);
+  assert(
+      vhdl_wait_hybrid.changes
+      == expected_vhdl_wait_changes);
+  assert((
+      vhdl_wait_hybrid.final_values
+      == std::vector<std::string>{"0"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =

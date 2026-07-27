@@ -671,6 +671,42 @@ class VhdlParser final : private detail::ParserBase {
     }
     expect_keyword("begin", true, "FSIM-VHDL-PARSE-021");
     process.statements = parse_statement_list({"end"});
+    const auto contains_explicit_wait =
+        [&](const auto& self,
+            const std::vector<Statement>& statements) -> bool {
+          for (const auto& statement : statements) {
+            if (statement.kind == StatementKind::Delay
+                || statement.kind == StatementKind::WaitOn
+                || self(self, statement.statements)
+                || self(self, statement.else_statements)) {
+              return true;
+            }
+          }
+          return false;
+        };
+    if (!process.sensitivities.empty()
+        && contains_explicit_wait(
+            contains_explicit_wait, process.statements)) {
+      error(
+          start,
+          "FSIM-VHDL-SEM-012",
+          "a process sensitivity list cannot be combined with an explicit "
+          "wait statement");
+    }
+    for (const auto& statement : process.statements) {
+      if (contains_explicit_wait(
+              contains_explicit_wait, statement.statements)
+          || contains_explicit_wait(
+              contains_explicit_wait, statement.else_statements)) {
+        error(
+            start,
+            "FSIM-VHDL-UNSUPPORTED-017",
+            "wait statements nested in conditional control flow require "
+            "suspension-path analysis not implemented in this frontend "
+            "slice");
+        break;
+      }
+    }
     expect_keyword("end", true, "FSIM-VHDL-PARSE-022");
     match_keyword("process", true);
     if (at(TokenKind::Identifier)) {
@@ -706,6 +742,43 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   std::optional<Statement> parse_sequential_statement() {
+    if (match_keyword("wait", true)) {
+      const auto start = previous();
+      Statement statement;
+      if (match_keyword("for", true)) {
+        statement.kind = StatementKind::Delay;
+        statement.delay = parse_vhdl_delay(previous());
+      } else if (match_keyword("on", true)) {
+        statement.kind = StatementKind::WaitOn;
+        do {
+          const auto signal = expect_identifier("wait sensitivity name");
+          statement.sensitivities.push_back(Sensitivity{
+              EdgeKind::Any, vhdl_name(signal.text), signal.span});
+        } while (match(TokenKind::Comma));
+        if (keyword("until", 0, true) || keyword("for", 0, true)) {
+          error(
+              current(),
+              "FSIM-VHDL-UNSUPPORTED-016",
+              "combined wait on/until/for clauses are not implemented in "
+              "this frontend slice");
+          skip_to_semicolon();
+          return std::nullopt;
+        }
+      } else {
+        error(
+            current(),
+            "FSIM-VHDL-UNSUPPORTED-016",
+            "this frontend slice supports only 'wait for' and 'wait on'");
+        skip_to_semicolon();
+        return std::nullopt;
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after wait statement",
+          "FSIM-VHDL-PARSE-049");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     if (match_keyword("assert", true)) {
       const auto start = previous();
       Statement statement;

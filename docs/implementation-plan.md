@@ -84,9 +84,12 @@ The following foundation is implemented:
 - bounded VHDL/SystemVerilog process variables lowered to named persistent
   SimIR registers, interpreter/O0/O2 `CopyRegister`, and engine-neutral
   debugger `locals` reads;
+- source-level VHDL `wait for`/`wait on` and SystemVerilog any-change
+  procedural event controls lowered to resumable `WaitFor`/`WaitOn`, with
+  interpreter/O2 timing and wakeup differentials;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 260 current production diagnostic codes.
+- a stable catalog covering 268 current production diagnostic codes.
 
 Current Linux validation:
 
@@ -258,6 +261,8 @@ Completed groundwork:
   work;
 - delayed/update and dynamic/static wait operations in the SimIR interpreter
   and bounded LLVM compiled subset;
+- bounded VHDL timed/any-change waits with implicit process repetition and
+  SystemVerilog any-change procedural event controls;
 - deterministic project seed handling;
 - scope/signal navigation, source/time/signal-change breakpoints including
   exact-state signal conditions, all four step modes, live debug-trace
@@ -277,7 +282,8 @@ Completed groundwork:
 Planned implementation sequence:
 
 1. Complete procedural SV/VHDL testbench data, files, random facilities,
-   events, fork/join, waits, assertions, and display/report behavior.
+   edge-qualified and named events, fork/join, remaining waits, assertions,
+   and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
 3. Instantiate registered SystemC factories into DesignIR.

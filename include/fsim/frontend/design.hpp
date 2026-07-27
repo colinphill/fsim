@@ -129,6 +129,7 @@ enum class StatementKind {
   If,
   Assert,
   Delay,
+  WaitOn,
   Finish,
   Block,
   Null,
@@ -141,26 +142,6 @@ enum class AssertionSeverity {
   Failure,
 };
 
-struct Statement {
-  StatementKind kind{StatementKind::Null};
-  SourceSpan span;
-
-  AssignmentKind assignment_kind{AssignmentKind::Blocking};
-  Expression target;
-  Expression value;
-  Expression condition;
-  std::optional<Delay> delay;
-  std::string assertion_message;
-  AssertionSeverity assertion_severity{AssertionSeverity::Error};
-
-  // Block contents or the true branch/delayed statement.
-  std::vector<Statement> statements;
-  // The false branch of an If statement.
-  std::vector<Statement> else_statements;
-  // Declarations directly owned by a procedural block.
-  std::vector<VariableDeclaration> declarations;
-};
-
 enum class EdgeKind {
   Any,
   Positive,
@@ -171,6 +152,27 @@ struct Sensitivity {
   EdgeKind edge{EdgeKind::Any};
   std::string signal;
   SourceSpan span;
+};
+
+struct Statement {
+  StatementKind kind{StatementKind::Null};
+  SourceSpan span;
+
+  AssignmentKind assignment_kind{AssignmentKind::Blocking};
+  Expression target;
+  Expression value;
+  Expression condition;
+  std::optional<Delay> delay;
+  std::vector<Sensitivity> sensitivities;
+  std::string assertion_message;
+  AssertionSeverity assertion_severity{AssertionSeverity::Error};
+
+  // Block contents or the true branch/delayed statement.
+  std::vector<Statement> statements;
+  // The false branch of an If statement.
+  std::vector<Statement> else_statements;
+  // Declarations directly owned by a procedural block.
+  std::vector<VariableDeclaration> declarations;
 };
 
 enum class ProcessKind {

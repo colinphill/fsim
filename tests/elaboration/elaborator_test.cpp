@@ -771,5 +771,153 @@ end architecture;
             .to_msb_string()
         == "0");
 
+    const auto vhdl_waits = fsim::frontend::parse_text(
+        "waits.vhd",
+        R"(
+entity waits is end entity;
+architecture rtl of waits is
+  signal trigger : std_logic;
+  signal q : std_logic;
+begin
+  worker: process
+  begin
+    q <= '0';
+    wait for 2 ns;
+    q <= '1';
+    wait on trigger;
+    q <= '0';
+    wait on trigger;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_waits.ok());
+    const auto elaborated_vhdl_waits =
+        fsim::elaboration::elaborate(
+            vhdl_waits.design, "vhdl:work.waits(rtl)");
+    assert(elaborated_vhdl_waits.ok());
+    const auto& vhdl_wait_process =
+        elaborated_vhdl_waits.design->processes().front();
+    assert(std::count_if(
+               vhdl_wait_process.operations.begin(),
+               vhdl_wait_process.operations.end(),
+               [](const fsim::runtime::simir::Operation& operation) {
+                 return std::holds_alternative<
+                            fsim::runtime::simir::WaitFor>(operation)
+                     || std::holds_alternative<
+                            fsim::runtime::simir::WaitOn>(operation);
+               })
+           == 3);
+    assert(std::holds_alternative<fsim::runtime::simir::Jump>(
+        vhdl_wait_process.operations.back()));
+    auto vhdl_wait_interpreter =
+        elaborated_vhdl_waits.design->create_interpreter();
+    const auto vhdl_wait_trigger =
+        elaborated_vhdl_waits.design->find_signal("trigger");
+    const auto vhdl_wait_q =
+        elaborated_vhdl_waits.design->find_signal("q");
+    assert(vhdl_wait_trigger && vhdl_wait_q);
+    vhdl_wait_interpreter->schedule_signal_at(
+        *vhdl_wait_trigger,
+        fsim::runtime::PackedLogic4::from_msb_string("1"),
+        3);
+    const auto vhdl_wait_mid = vhdl_wait_interpreter->run(2);
+    assert(
+        vhdl_wait_mid.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        vhdl_wait_interpreter
+            ->signal_value(*vhdl_wait_q)
+            .to_msb_string()
+        == "1");
+    const auto vhdl_wait_end = vhdl_wait_interpreter->run(4);
+    assert(
+        vhdl_wait_end.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        vhdl_wait_interpreter
+            ->signal_value(*vhdl_wait_q)
+            .to_msb_string()
+        == "0");
+
+    const auto sv_events = fsim::frontend::parse_text(
+        "events.sv",
+        R"(
+module events;
+  logic trigger;
+  logic observed;
+  initial begin
+    trigger = 1'b0;
+    #1 trigger = 1'b1;
+    #1 trigger = 1'b0;
+    #1 $finish;
+  end
+  initial begin
+    @(trigger);
+    observed = trigger;
+    @(trigger) observed = trigger;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(sv_events.ok());
+    const auto elaborated_sv_events =
+        fsim::elaboration::elaborate(
+            sv_events.design, "sv:work.events");
+    assert(elaborated_sv_events.ok());
+    assert(elaborated_sv_events.design->processes().size() == 2);
+    const auto& observer_process =
+        elaborated_sv_events.design->processes().back();
+    assert(std::count_if(
+               observer_process.operations.begin(),
+               observer_process.operations.end(),
+               [](const fsim::runtime::simir::Operation& operation) {
+                 return std::holds_alternative<
+                     fsim::runtime::simir::WaitOn>(operation);
+               })
+           == 2);
+    auto sv_event_interpreter =
+        elaborated_sv_events.design->create_interpreter();
+    const auto sv_observed =
+        elaborated_sv_events.design->find_signal("observed");
+    assert(sv_observed);
+    const auto sv_event_mid = sv_event_interpreter->run(1);
+    assert(
+        sv_event_mid.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        sv_event_interpreter
+            ->signal_value(*sv_observed)
+            .to_msb_string()
+        == "1");
+    const auto sv_event_end = sv_event_interpreter->run();
+    assert(
+        sv_event_end.status
+        == fsim::runtime::RunStatus::stopped);
+    assert(
+        sv_event_interpreter
+            ->signal_value(*sv_observed)
+            .to_msb_string()
+        == "0");
+
+    const auto unknown_wait = fsim::frontend::parse_text(
+        "unknown_wait.vhd",
+        R"(
+entity unknown_wait is end entity;
+architecture rtl of unknown_wait is begin
+  worker: process begin
+    wait on missing;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(unknown_wait.ok());
+    const auto rejected_unknown_wait =
+        fsim::elaboration::elaborate(
+            unknown_wait.design,
+            "vhdl:work.unknown_wait(rtl)");
+    assert(!rejected_unknown_wait.ok());
+    assert(has_diagnostic(rejected_unknown_wait, "FSIM-ELAB-059"));
+
     std::cout << "elaborator tests passed\n";
 }
