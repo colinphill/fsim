@@ -95,6 +95,7 @@ struct SystemCInstanceDescription {
     std::vector<ExternalEvent> events;
     std::vector<ExternalPrimitiveChannel> primitive_channels;
     std::vector<ExternalInternalSignal> internal_signals;
+    std::vector<SystemCInstanceDescription> native_children;
 };
 
 [[nodiscard]] ElaborationResult elaborate(

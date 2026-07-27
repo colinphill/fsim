@@ -919,6 +919,13 @@ elaboration::SystemCInstanceDescription systemc_description(
             signal.initial_value),
     });
   }
+  result.native_children.reserve(module.native_children.size());
+  for (const auto& child : module.native_children) {
+    const auto child_path =
+        std::string{path} + "." + child.instance;
+    result.native_children.push_back(
+        systemc_description(child_path, target, child));
+  }
   return result;
 }
 
@@ -1026,7 +1033,19 @@ construct_systemc_instances(
               + "': " + error);
       continue;
     }
-    handles.emplace(request.path, module->handle);
+    const auto record_handles =
+        [&](const auto& self,
+            const std::string& path,
+            const systemc::ModuleDescription& description) -> void {
+          handles.emplace(path, description.handle);
+          for (const auto& child : description.native_children) {
+            self(
+                self,
+                path + "." + child.instance,
+                child);
+          }
+        };
+    record_handles(record_handles, request.path, *module);
     result.push_back(systemc_description(
         request.path, request.target, *module));
   }

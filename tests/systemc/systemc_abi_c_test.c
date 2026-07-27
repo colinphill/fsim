@@ -50,6 +50,10 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, value_changed),
     "port/channel binding must remain append-only");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, register_native_module)
+        > offsetof(fsim_sc_host_v1, bind_port),
+    "native module registration must remain append-only");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");

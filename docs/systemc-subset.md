@@ -18,9 +18,11 @@ time/event and OR/AND-list `next_trigger`, named-event
 notification/replacement/cancellation, strict `notify_delayed`, port updates,
 registered primitive-channel update callbacks, and kernel-backed module-local
 `sc_signal` objects. Typed port-to-signal bindings enter the same DesignIR
-alias graph, including across an HDL/SystemC instance boundary. Native SystemC
-module nesting, lifecycle callbacks, and fiber-backed thread execution are
-still work in progress.
+alias graph, including across an HDL/SystemC instance boundary.
+Constructor-time native SystemC child members elaborate recursively and may
+bind their ports directly to parent signals. Lifecycle callbacks,
+export/interface binding, and fiber-backed thread execution are still work in
+progress.
 
 ## Source inclusion
 
@@ -233,6 +235,24 @@ preserve the parent signal's initial value; output and inout bindings publish
 the internal channel's declared initial value. If multiple bound ports connect
 one channel to different parent signals, elaboration rejects the design.
 
+An `sc_module` data member constructed with a non-empty `sc_module_name`
+registers a native child beneath the module currently under construction. The
+constructor scope remains active through all of the child's member
+initializers and constructor body, so its ports, channels, events, and
+processes receive the child handle. Native children elaborate recursively;
+their processes are assigned stable IDs before processes owned directly by
+the parent. A child port may bind a type-identical `sc_signal` owned by its
+direct parent, producing one common signal ID rather than a copy process or
+extra delta. Duplicate child names fail factory construction, and inconsistent
+parent/path metadata is rejected during DesignIR elaboration.
+
+The root factory object owns native C++ child members, so native children are
+not selected by a separate manifest binding. Crossings from either the root
+or a native child into VHDL or Verilog/SystemVerilog continue to require an
+explicit foreign-child binding. Dynamic module creation after construction,
+port-to-port chains, exports, and arbitrary interface binding are not yet
+implemented.
+
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0
 fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
@@ -251,8 +271,9 @@ port reads, update-phase port writes, named-event notification/cancellation,
 OR/AND dynamic event expressions, and primitive-channel registration/update
 dispatch. Module-local `sc_signal` values, sensitivities, and event queries use
 the common kernel, and typed port-to-signal bindings use common DesignIR
-aliases. It does not yet provide native nested SystemC module construction,
-arbitrary user-defined channel binding semantics, lifecycle phase callbacks,
+aliases. Native child modules use the same recursive hierarchy and runtime
+registry. It does not yet provide dynamic module construction, arbitrary
+user-defined channel binding semantics, lifecycle phase callbacks,
 asynchronous updates, or fiber suspension.
 
 ## Deliberately outside v1

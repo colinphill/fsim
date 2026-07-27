@@ -371,6 +371,7 @@ endmodule
             {},
             {},
             {},
+            {},
             {}};
     const std::vector<fsim::elaboration::Binding>
         hdl_to_systemc_bindings{
@@ -556,6 +557,7 @@ end architecture rtl;
                       fsim::frontend::PortDirection::Output, 202},
                  }},
             },
+            {},
             {},
             {},
             {},
@@ -2996,7 +2998,8 @@ endmodule
             {{1003,
               "shared",
               systemc_logic,
-              fsim::runtime::PackedLogic4::from_msb_string("0")}}};
+              fsim::runtime::PackedLogic4::from_msb_string("0")}},
+            {}};
     const std::vector<fsim::elaboration::Binding>
         conflicting_systemc_bindings{
             {"conflict_host.u_conflict",
@@ -3012,6 +3015,29 @@ endmodule
     assert(!rejected_systemc_alias.ok());
     assert(has_diagnostic(
         rejected_systemc_alias, "FSIM-ELAB-BIND-046"));
+
+    auto invalid_native_hierarchy = conflicting_systemc_instance;
+    for (auto& port : invalid_native_hierarchy.ports) {
+        port.bound_object = 0;
+    }
+    fsim::elaboration::SystemCInstanceDescription invalid_native_child;
+    invalid_native_child.path = "conflict_host.u_conflict.leaf";
+    invalid_native_child.target = "systemc:models.conflict";
+    invalid_native_child.handle = 2000;
+    invalid_native_child.parent = 9999;
+    invalid_native_hierarchy.native_children.push_back(
+        std::move(invalid_native_child));
+    const std::array invalid_native_instances{
+        invalid_native_hierarchy};
+    const auto rejected_native_hierarchy =
+        fsim::elaboration::elaborate(
+            conflicting_systemc_alias_source.design,
+            "sv:work.conflict_host",
+            conflicting_systemc_bindings,
+            invalid_native_instances);
+    assert(!rejected_native_hierarchy.ok());
+    assert(has_diagnostic(
+        rejected_native_hierarchy, "FSIM-ELAB-BIND-047"));
 
     std::cout << "elaborator tests passed\n";
 }

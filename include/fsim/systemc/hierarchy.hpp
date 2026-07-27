@@ -87,6 +87,7 @@ struct ModuleDescription {
     std::vector<EventDescription> events;
     std::vector<PrimitiveChannelDescription> primitive_channels;
     std::vector<InternalSignalDescription> internal_signals;
+    std::vector<ModuleDescription> native_children;
 };
 
 enum class MethodSuspendKind : std::uint8_t {

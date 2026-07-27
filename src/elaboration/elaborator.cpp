@@ -3041,7 +3041,8 @@ private:
         const SystemCInstanceDescription& instance,
         const std::string& path,
         SignalMap aliases,
-        ObjectMap objects) {
+        ObjectMap objects,
+        const bool native_child = false) {
         if (!instance_paths_.insert(path).second) {
             report(
                 "FSIM-ELAB-HIER-001",
@@ -3049,8 +3050,13 @@ private:
                 {});
             return;
         }
+        const auto stack_identity =
+            native_child
+                ? instance.target + "#native:"
+                    + std::to_string(instance.handle)
+                : instance.target;
         if (std::find(
-                stack_.begin(), stack_.end(), instance.target)
+                stack_.begin(), stack_.end(), stack_identity)
             != stack_.end()) {
             report(
                 "FSIM-ELAB-HIER-002",
@@ -3059,7 +3065,7 @@ private:
                 {});
             return;
         }
-        stack_.push_back(instance.target);
+        stack_.push_back(stack_identity);
         used_systemc_instances_.insert(path);
 
         std::unordered_set<std::uint64_t> connected_ports;
@@ -3068,6 +3074,7 @@ private:
                 connected_ports.insert(port.handle);
             }
             if (port.bound_object != 0
+                && !objects.contains(port.bound_object)
                 && std::none_of(
                     instance.internal_signals.begin(),
                     instance.internal_signals.end(),
@@ -3077,7 +3084,7 @@ private:
                 report(
                     "FSIM-ELAB-BIND-046",
                     "SystemC port '" + path + "." + port.name
-                        + "' binds an unknown internal signal handle",
+                        + "' binds an unknown signal handle",
                     {});
             }
         }
@@ -3314,6 +3321,41 @@ private:
             design_.systemc_processes_.push_back(
                 {process.id, external.handle});
             design_.processes_.push_back(std::move(process));
+        }
+
+        for (const auto& child : instance.native_children) {
+            const auto prefix = path + ".";
+            if (child.parent != instance.handle
+                || child.path.size() <= prefix.size()
+                || child.path.rfind(prefix, 0) != 0
+                || child.path.find('.', prefix.size())
+                    != std::string::npos) {
+                report(
+                    "FSIM-ELAB-BIND-047",
+                    "native SystemC child under '" + path
+                        + "' has inconsistent hierarchy metadata",
+                    {});
+                continue;
+            }
+            SignalMap child_aliases;
+            ObjectMap child_objects = objects;
+            for (const auto& port : child.ports) {
+                if (port.bound_object == 0) {
+                    continue;
+                }
+                const auto signal = objects.find(port.bound_object);
+                if (signal == objects.end()) {
+                    continue;
+                }
+                child_aliases.emplace(port.name, signal->second);
+                child_objects.emplace(port.handle, signal->second);
+            }
+            instantiate_systemc(
+                child,
+                child.path,
+                std::move(child_aliases),
+                std::move(child_objects),
+                true);
         }
 
         for (const auto& child : instance.foreign_children) {

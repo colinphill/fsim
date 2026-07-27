@@ -819,7 +819,7 @@ SC_MODULE(KernelChannels) {
   unsigned producer_state{};
   unsigned observed_events{};
 
-  SC_CTOR(KernelChannels), deferred{"deferred", value, updates} {
+  SC_CTOR(KernelChannels) : deferred{"deferred", value, updates} {
     SC_METHOD(produce);
     SC_METHOD(consume);
   }
@@ -933,6 +933,53 @@ SC_MODULE(BoundPorts) {
             : input == '1' ? '0'
                            : 'X'});
   }
+};
+
+SC_MODULE(NativeLeaf) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+
+  SC_CTOR(NativeLeaf) {
+    SC_METHOD(evaluate);
+    sensitive << value;
+    dont_initialize();
+  }
+
+  void evaluate() {
+    const auto input = value.read().to_char();
+    inverted.write(
+        sc_dt::sc_logic{
+            input == '0' ? '1'
+            : input == '1' ? '0'
+                           : 'X'});
+  }
+};
+
+SC_MODULE(NativeHierarchy) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  sc_core::sc_signal<sc_dt::sc_logic> value_channel{
+      "value_channel", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
+      "inverted_channel", sc_dt::sc_logic{'1'}};
+  NativeLeaf leaf;
+
+  SC_CTOR(NativeHierarchy)
+      : leaf{"leaf"} {
+    value(value_channel);
+    inverted(inverted_channel);
+    leaf.value(value_channel);
+    leaf.inverted(inverted_channel);
+  }
+};
+
+SC_MODULE(DuplicateNativeHierarchy) {
+  NativeLeaf first;
+  NativeLeaf second;
+
+  SC_CTOR(DuplicateNativeHierarchy)
+      : first{"duplicate"},
+        second{"duplicate"} {}
 };
 
 namespace {
@@ -1092,8 +1139,21 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (internal_signal_status != FSIM_SC_OK) {
     return internal_signal_status;
   }
-  return fsim::systemc::register_module_factory<BoundPorts>(
-      host, registrar, "bound_ports");
+  const auto bound_port_status =
+      fsim::systemc::register_module_factory<BoundPorts>(
+          host, registrar, "bound_ports");
+  if (bound_port_status != FSIM_SC_OK) {
+    return bound_port_status;
+  }
+  const auto native_hierarchy_status =
+      fsim::systemc::register_module_factory<NativeHierarchy>(
+          host, registrar, "native_hierarchy");
+  if (native_hierarchy_status != FSIM_SC_OK) {
+    return native_hierarchy_status;
+  }
+  return fsim::systemc::register_module_factory<
+      DuplicateNativeHierarchy>(
+          host, registrar, "duplicate_native_hierarchy");
 }
 )";
   }
@@ -1165,6 +1225,19 @@ module systemc_bound_port_host;
     #1 $finish;
   end
 endmodule
+
+module systemc_native_hierarchy_host;
+  logic value;
+  logic inverted;
+  native_hierarchy_placeholder u_native(
+      .value(value),
+      .inverted(inverted));
+  initial begin
+    value = 1'b0;
+    #1 value = 1'b1;
+    #1 $finish;
+  end
+endmodule
 )";
   }
   const auto systemc_method_vhdl_source =
@@ -1217,6 +1290,15 @@ end architecture rtl;
   assert(checked->parsed.units.size() == 2);
 
   auto first = fsim::app::build_project(config, diagnostics);
+  if (!first) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+      for (const auto& note : diagnostic.notes) {
+        std::cerr << note.message << '\n';
+      }
+    }
+  }
   assert(first);
   assert(first->systemc_plugins.size() == 1);
   assert(!first->cache_hit);
@@ -1352,6 +1434,109 @@ end architecture rtl;
       == bound_compiled.first.status);
   assert(bound_reference.first.time == bound_compiled.first.time);
   assert(bound_reference.second == bound_compiled.second);
+
+  auto native_hierarchy_config = hdl_systemc_config;
+  native_hierarchy_config.project.top =
+      "sv:work.systemc_native_hierarchy_host";
+  native_hierarchy_config.bindings = {
+      {"systemc_native_hierarchy_host.u_native",
+       "systemc:models.native_hierarchy",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine native_hierarchy_diagnostics;
+  auto native_hierarchy_reference = fsim::app::build_project(
+      native_hierarchy_config, native_hierarchy_diagnostics);
+  auto native_hierarchy_compiled = fsim::app::build_project(
+      native_hierarchy_config, native_hierarchy_diagnostics);
+  assert(native_hierarchy_reference);
+  assert(native_hierarchy_compiled);
+  assert(
+      native_hierarchy_reference->design.systemc_instances().size()
+      == 2);
+  const auto native_parent = std::find_if(
+      native_hierarchy_reference->design.systemc_instances().begin(),
+      native_hierarchy_reference->design.systemc_instances().end(),
+      [](const fsim::elaboration::SystemCInstanceInfo& instance) {
+        return instance.instance
+            == "systemc_native_hierarchy_host.u_native";
+      });
+  const auto native_leaf = std::find_if(
+      native_hierarchy_reference->design.systemc_instances().begin(),
+      native_hierarchy_reference->design.systemc_instances().end(),
+      [](const fsim::elaboration::SystemCInstanceInfo& instance) {
+        return instance.instance
+            == "systemc_native_hierarchy_host.u_native.leaf";
+      });
+  assert(
+      native_parent
+      != native_hierarchy_reference->design.systemc_instances().end());
+  assert(
+      native_leaf
+      != native_hierarchy_reference->design.systemc_instances().end());
+  assert(native_parent->ports.size() == 2);
+  assert(native_parent->internal_signals.size() == 2);
+  assert(native_leaf->ports.size() == 2);
+  assert(
+      native_leaf->ports[0].signal
+      == native_parent->internal_signals[0].signal);
+  assert(
+      native_leaf->ports[1].signal
+      == native_parent->internal_signals[1].signal);
+  assert(std::any_of(
+      native_hierarchy_reference->design.processes().begin(),
+      native_hierarchy_reference->design.processes().end(),
+      [](const fsim::runtime::simir::Process& process) {
+        return process.name
+            == "systemc_native_hierarchy_host.u_native.leaf.evaluate";
+      }));
+  const auto run_native_hierarchy =
+      [&](fsim::app::BuiltProject project,
+          const fsim::app::SimulationEngine engine) {
+        const auto output =
+            project.design.find_signal("inverted");
+        assert(output);
+        fsim::app::Simulation simulation{
+            std::move(project),
+            native_hierarchy_config.run.max_deltas,
+            engine};
+        assert(
+            simulation.read_signal(*output).to_msb_string()
+            == "1");
+        const auto result = simulation.run();
+        return std::pair{
+            result,
+            simulation.read_signal(*output).to_msb_string()};
+      };
+  const auto native_reference = run_native_hierarchy(
+      std::move(*native_hierarchy_reference),
+      fsim::app::SimulationEngine::interpreter);
+  const auto native_compiled = run_native_hierarchy(
+      std::move(*native_hierarchy_compiled),
+      fsim::app::SimulationEngine::compiled);
+  assert(
+      native_reference.first.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(native_reference.first.time == 2);
+  assert(native_reference.second == "0");
+  assert(
+      native_reference.first.status
+      == native_compiled.first.status);
+  assert(native_reference.first.time == native_compiled.first.time);
+  assert(native_reference.second == native_compiled.second);
+
+  auto duplicate_native_config = hdl_systemc_config;
+  duplicate_native_config.project.top =
+      "systemc:models.duplicate_native_hierarchy";
+  duplicate_native_config.bindings.clear();
+  fsim::diagnostic::Engine duplicate_native_diagnostics;
+  assert(!fsim::app::build_project(
+      duplicate_native_config, duplicate_native_diagnostics));
+  assert(std::any_of(
+      duplicate_native_diagnostics.diagnostics().begin(),
+      duplicate_native_diagnostics.diagnostics().end(),
+      [](const fsim::diagnostic::Diagnostic& diagnostic) {
+        return diagnostic.code == "FSIM-SC-A004";
+      }));
 
   auto legacy_systemc_config = hdl_systemc_config;
   legacy_systemc_config.bindings.front().target =

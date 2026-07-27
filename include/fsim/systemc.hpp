@@ -23,6 +23,8 @@
 
 namespace sc_core {
 
+class sc_module;
+
 enum sc_time_unit {
     SC_FS,
     SC_PS,
@@ -119,6 +121,9 @@ inline thread_local const fsim_sc_host_v1* current_host = nullptr;
 inline thread_local fsim_sc_handle_v1 current_module = 0;
 inline thread_local fsim_sc_process_kind_v1 current_process_kind =
     FSIM_SC_THREAD;
+inline thread_local fsim_sc_handle_v1 construction_root_module = 0;
+inline thread_local sc_module* current_cpp_module = nullptr;
+inline thread_local const char* current_module_name = nullptr;
 
 inline void bind_host(const fsim_sc_host_v1* host) noexcept {
     current_host = host;
@@ -146,6 +151,30 @@ public:
 private:
     const fsim_sc_host_v1* previous_host_;
     fsim_sc_handle_v1 previous_module_;
+};
+
+class module_construction_scope final {
+public:
+    explicit module_construction_scope(
+        const fsim_sc_handle_v1 root_module) noexcept
+        : previous_root_(construction_root_module),
+          previous_cpp_module_(current_cpp_module) {
+        construction_root_module = root_module;
+        current_cpp_module = nullptr;
+    }
+
+    ~module_construction_scope() {
+        construction_root_module = previous_root_;
+        current_cpp_module = previous_cpp_module_;
+    }
+
+    module_construction_scope(const module_construction_scope&) = delete;
+    module_construction_scope& operator=(
+        const module_construction_scope&) = delete;
+
+private:
+    fsim_sc_handle_v1 previous_root_{};
+    sc_module* previous_cpp_module_{};
 };
 
 inline void check_status(const fsim_sc_status_v1 status, const char* operation) {
@@ -496,15 +525,85 @@ inline void next_trigger(const sc_event_and_list& events) {
 
 class sc_module_name {
 public:
-    constexpr sc_module_name(const char* name) noexcept : name_(name) {}
-    [[nodiscard]] constexpr const char* c_str() const noexcept { return name_; }
-    [[nodiscard]] constexpr operator const char*() const noexcept { return name_; }
+    sc_module_name(const char* name)
+        : state_(std::make_shared<State>()) {
+        if (name == nullptr || *name == '\0') {
+            throw std::invalid_argument{
+                "sc_module_name must not be empty"};
+        }
+        state_->name = name;
+        state_->previous_module = detail::current_module;
+        state_->previous_cpp_module = detail::current_cpp_module;
+        state_->previous_name = detail::current_module_name;
+        detail::current_module_name = state_->name.c_str();
+        if (detail::current_host == nullptr
+            || detail::current_module == 0) {
+            return;
+        }
+        if (detail::construction_root_module
+            == detail::current_module) {
+            state_->handle = detail::current_module;
+            detail::construction_root_module = 0;
+            return;
+        }
+        if (detail::current_host->register_native_module == nullptr) {
+            throw std::logic_error{
+                "nested SystemC module construction requires an "
+                "active hierarchy host"};
+        }
+        fsim_sc_handle_v1 child = 0;
+        detail::check_status(
+            detail::current_host->register_native_module(
+                detail::current_host->context,
+                detail::current_module,
+                state_->name.c_str(),
+                &child),
+            "register native child module");
+        if (child == 0) {
+            throw std::runtime_error{
+                "fsim SystemC host returned an invalid child handle"};
+        }
+        state_->handle = child;
+        state_->restore_module = true;
+        detail::current_module = child;
+    }
+
+    [[nodiscard]] const char* c_str() const noexcept {
+        return state_->name.c_str();
+    }
+    [[nodiscard]] operator const char*() const noexcept {
+        return c_str();
+    }
 
 private:
-    const char* name_;
-};
+    struct State {
+        ~State() {
+            detail::current_cpp_module = previous_cpp_module;
+            detail::current_module_name = previous_name;
+            if (restore_module) {
+                detail::current_module = previous_module;
+            }
+        }
 
-class sc_module;
+        std::string name;
+        fsim_sc_handle_v1 handle{};
+        fsim_sc_handle_v1 previous_module{};
+        sc_module* previous_cpp_module{};
+        const char* previous_name{};
+        bool restore_module{};
+    };
+
+    [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
+        return state_->handle;
+    }
+    [[nodiscard]] sc_module* previous_cpp_module() const noexcept {
+        return state_->previous_cpp_module;
+    }
+
+    std::shared_ptr<State> state_;
+
+    friend class sc_module;
+};
 
 class sc_interface {
 public:
@@ -645,13 +744,28 @@ private:
 
 class sc_module {
 public:
+    sc_module()
+        : sensitive(this),
+          name_(
+              detail::current_module_name == nullptr
+                  ? throw std::logic_error{
+                        "sc_module construction requires an active "
+                        "sc_module_name"}
+                  : detail::current_module_name),
+          handle_(detail::current_module) {
+        attach_to_current_parent();
+    }
+
     explicit sc_module(const sc_module_name name)
         : sensitive(this),
           name_(
               name.c_str() == nullptr
                   ? throw std::invalid_argument{
                         "sc_module_name must not be null"}
-                  : name.c_str()) {}
+                  : name.c_str()),
+          handle_(name.native_handle()) {
+        attach_to_parent(name.previous_cpp_module());
+    }
     virtual ~sc_module() = default;
 
     sc_module(const sc_module&) = delete;
@@ -691,6 +805,19 @@ public:
         if (host == nullptr || host->register_process == nullptr
             || host->add_sensitivity == nullptr) {
             return FSIM_SC_ABI_MISMATCH;
+        }
+        if (handle_ != 0 && handle_ != module) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        for (auto* child : children_) {
+            if (child == nullptr || child->handle_ == 0) {
+                return FSIM_SC_RUNTIME_ERROR;
+            }
+            const auto status =
+                child->fsim_elaborate(host, child->handle_);
+            if (status != FSIM_SC_OK) {
+                return status;
+            }
         }
         for (auto& process : processes_) {
             process.host = host;
@@ -752,6 +879,17 @@ protected:
     }
 
 private:
+    void attach_to_current_parent() {
+        attach_to_parent(detail::current_cpp_module);
+    }
+
+    void attach_to_parent(sc_module* parent) {
+        if (parent != nullptr) {
+            parent->children_.push_back(this);
+        }
+        detail::current_cpp_module = this;
+    }
+
     static void invoke_process(void* user) noexcept {
         auto* process = static_cast<Process*>(user);
         if (process == nullptr || process->host == nullptr) {
@@ -779,6 +917,8 @@ private:
     }
 
     std::string name_;
+    fsim_sc_handle_v1 handle_{};
+    std::vector<sc_module*> children_;
     std::vector<Process> processes_;
 };
 
@@ -1601,6 +1741,8 @@ struct module_factory_state {
         }
         try {
             sc_core::detail::host_scope scope{host, module};
+            sc_core::detail::module_construction_scope
+                construction{module};
             auto object = std::make_unique<Module>(
                 sc_core::sc_module_name{instance_name});
             const auto status = object->fsim_elaborate(host, module);
@@ -1647,7 +1789,8 @@ template <typename Module>
         || host->request_update == nullptr
         || host->register_signal == nullptr
         || host->value_changed == nullptr
-        || host->bind_port == nullptr) {
+        || host->bind_port == nullptr
+        || host->register_native_module == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(
@@ -1662,8 +1805,8 @@ template <typename Module>
 
 #define SC_MODULE(name) struct name : public ::sc_core::sc_module
 #define SC_CTOR(name) \
-    explicit name(::sc_core::sc_module_name fsim_module_name) \
-        : ::sc_core::sc_module(fsim_module_name)
+    explicit name( \
+        [[maybe_unused]] ::sc_core::sc_module_name fsim_module_name)
 #define SC_HAS_PROCESS(name)
 #define SC_METHOD(function_name) \
     this->fsim_register_process( \

@@ -221,13 +221,25 @@ typedef struct fsim_sc_host_v1 {
         uint8_t* result);
 
     /*
-     * Append-only elaboration-time port/channel binding. Both handles must
-     * belong to the same pending module and have identical value metadata.
+     * Append-only elaboration-time port/channel binding. Handles must have
+     * identical value metadata. A port may bind a signal owned by the same
+     * module or by its direct native SystemC parent.
      */
     fsim_sc_status_v1 (*bind_port)(
         void* context,
         fsim_sc_handle_v1 port,
         fsim_sc_handle_v1 channel);
+
+    /*
+     * Append-only native SystemC hierarchy construction. The child remains
+     * owned by the root factory object; this callback only allocates its
+     * stable hierarchy handle and establishes the parent relationship.
+     */
+    fsim_sc_status_v1 (*register_native_module)(
+        void* context,
+        fsim_sc_handle_v1 parent,
+        const char* name,
+        fsim_sc_handle_v1* result);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

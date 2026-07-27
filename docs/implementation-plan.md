@@ -157,8 +157,10 @@ The following foundation is implemented:
   delta-scoped `event()` state;
 - typed SystemC port-to-signal binding aliases shared with HDL parent
   connections, including direction-aware initial values and conflict
-  diagnostics; and
-- a stable catalog covering 305 unique current production diagnostic codes.
+  diagnostics;
+- recursive constructor-time native SystemC child modules with direct-parent
+  signal aliases and stable common-runtime process registration; and
+- a stable catalog covering 306 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -368,7 +370,10 @@ Completed groundwork:
   including initial values, coalesced writes, committed reads, static/dynamic
   sensitivity, and delta-scoped change events;
 - typed `sc_in`/`sc_out`/`sc_inout` bindings to internal signals represented
-  as single DesignIR aliases across HDL/SystemC instance boundaries; and
+  as single DesignIR aliases across HDL/SystemC instance boundaries;
+- native `sc_module` child members with recursive descriptions, stable
+  hierarchy handles, child process execution, and direct-parent signal
+  binding; and
 - compiler-emitted dependency closure for GCC-like SystemC builds.
 
 Planned implementation sequence:
@@ -378,9 +383,9 @@ Planned implementation sequence:
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
-3. Complete native nested SystemC module construction, primitive-channel
-   lifecycle callbacks, export/interface binding, and broader standard channel
-   behavior; typed port-to-signal aliases, module-local `sc_signal`,
+3. Complete primitive-channel lifecycle callbacks, export/interface binding,
+   port-to-port chains, and broader standard channel behavior; native module
+   construction, typed port-to-signal aliases, module-local `sc_signal`,
    primitive-channel update dispatch, `notify_delayed`, dynamic method
    sensitivity, OR/AND event expressions, pending-notification rules, and
    cancellation now use the common scheduler.

@@ -66,6 +66,9 @@ struct HierarchyRegistry::Impl {
     std::unique_ptr<Plugin> plugin;
     std::unordered_map<std::string, Factory> factories;
     std::unordered_map<fsim_sc_handle_v1, ModuleDescription> pending;
+    std::unordered_map<
+        fsim_sc_handle_v1, std::vector<fsim_sc_handle_v1>>
+        native_children;
     std::unordered_map<fsim_sc_handle_v1, Object> objects;
     std::unordered_map<fsim_sc_handle_v1, Child> children;
     std::unordered_map<fsim_sc_handle_v1, Process> processes;
@@ -87,7 +90,19 @@ struct HierarchyRegistry::Impl {
         return next_handle++;
     }
 
-    void rollback(const ModuleDescription& description) noexcept {
+    void rollback(const fsim_sc_handle_v1 module) noexcept {
+        const auto descendants = native_children.find(module);
+        if (descendants != native_children.end()) {
+            for (const auto child : descendants->second) {
+                rollback(child);
+            }
+            native_children.erase(descendants);
+        }
+        const auto found = pending.find(module);
+        if (found == pending.end()) {
+            return;
+        }
+        const auto& description = found->second;
         for (const auto& port : description.ports) {
             objects.erase(port.handle);
         }
@@ -107,7 +122,27 @@ struct HierarchyRegistry::Impl {
             objects.erase(signal.handle);
             internal_signals.erase(signal.handle);
         }
-        pending.erase(description.handle);
+        pending.erase(found);
+    }
+
+    [[nodiscard]] ModuleDescription collect(
+        const fsim_sc_handle_v1 module) {
+        auto found = pending.find(module);
+        if (found == pending.end()) {
+            throw std::logic_error{
+                "missing pending native SystemC module"};
+        }
+        auto result = std::move(found->second);
+        pending.erase(found);
+        const auto descendants = native_children.find(module);
+        if (descendants != native_children.end()) {
+            result.native_children.reserve(descendants->second.size());
+            for (const auto child : descendants->second) {
+                result.native_children.push_back(collect(child));
+            }
+            native_children.erase(descendants);
+        }
+        return result;
     }
 };
 
@@ -147,6 +182,22 @@ public:
         || encoding == FSIM_SC_LOGIC4
         || encoding == FSIM_SC_SIGNED
         || encoding == FSIM_SC_UNSIGNED;
+}
+
+[[nodiscard]] const ModuleDescription* find_module_description(
+    const ModuleDescription& root,
+    const fsim_sc_handle_v1 handle) noexcept {
+    if (root.handle == handle) {
+        return &root;
+    }
+    for (const auto& child : root.native_children) {
+        if (const auto* found =
+                find_module_description(child, handle);
+            found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
 }
 
 extern "C" fsim_sc_status_v1 registry_register_port(
@@ -306,13 +357,24 @@ extern "C" fsim_sc_status_v1 registry_register_foreign_child(
         auto& registry =
             *static_cast<HierarchyRegistry::Impl*>(context);
         const auto found = registry.pending.find(module);
+        const auto native = registry.native_children.find(module);
         if (found == registry.pending.end()
             || std::any_of(
                 found->second.foreign_children.begin(),
                 found->second.foreign_children.end(),
                 [&](const ForeignChildDescription& child) {
                     return child.name == name;
-                })) {
+                })
+            || (native != registry.native_children.end()
+                && std::any_of(
+                    native->second.begin(),
+                    native->second.end(),
+                    [&](const fsim_sc_handle_v1 child) {
+                        const auto description =
+                            registry.pending.find(child);
+                        return description != registry.pending.end()
+                            && description->second.instance == name;
+                    }))) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto handle = registry.allocate_handle();
@@ -620,8 +682,6 @@ extern "C" fsim_sc_status_v1 registry_bind_port(
                 != HierarchyRegistry::Impl::Object::Kind::port
             || channel_object->second.kind
                 != HierarchyRegistry::Impl::Object::Kind::signal
-            || port_object->second.module
-                != channel_object->second.module
             || port_object->second.encoding
                 != channel_object->second.encoding
             || port_object->second.width
@@ -631,6 +691,10 @@ extern "C" fsim_sc_status_v1 registry_bind_port(
         const auto pending =
             registry.pending.find(port_object->second.module);
         if (pending == registry.pending.end()
+            || (channel_object->second.module
+                    != port_object->second.module
+                && channel_object->second.module
+                    != pending->second.parent)
             || port_object->second.index
                 >= pending->second.ports.size()) {
             return FSIM_SC_INVALID_ARGUMENT;
@@ -642,6 +706,57 @@ extern "C" fsim_sc_status_v1 registry_bind_port(
             return FSIM_SC_INVALID_ARGUMENT;
         }
         description.bound_object = channel;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_register_native_module(
+    void* context,
+    const fsim_sc_handle_v1 parent,
+    const char* name,
+    fsim_sc_handle_v1* result) noexcept {
+    if (context == nullptr || parent == 0 || name == nullptr
+        || *name == '\0' || result == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto parent_module = registry.pending.find(parent);
+        if (parent_module == registry.pending.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto descendants = registry.native_children.find(parent);
+        if ((descendants != registry.native_children.end()
+             && std::any_of(
+                 descendants->second.begin(),
+                 descendants->second.end(),
+                 [&](const fsim_sc_handle_v1 child) {
+                     const auto found = registry.pending.find(child);
+                     return found != registry.pending.end()
+                         && found->second.instance == name;
+                 }))
+            || std::any_of(
+                parent_module->second.foreign_children.begin(),
+                parent_module->second.foreign_children.end(),
+                [&](const ForeignChildDescription& child) {
+                    return child.name == name;
+                })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto handle = registry.allocate_handle();
+        if (!handle) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+        ModuleDescription child;
+        child.handle = *handle;
+        child.parent = parent;
+        child.instance = name;
+        registry.pending.emplace(*handle, std::move(child));
+        registry.native_children[parent].push_back(*handle);
+        *result = *handle;
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -1220,6 +1335,7 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.register_signal = registry_register_signal;
     host.value_changed = registry_value_changed;
     host.bind_port = registry_bind_port;
+    host.register_native_module = registry_register_native_module;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -1284,17 +1400,11 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
         error = "SystemC hierarchy handle space is exhausted";
         return std::nullopt;
     }
-    ModuleDescription pending{
-        *handle,
-        parent,
-        std::string{factory},
-        std::string{instance},
-        {},
-        {},
-        {},
-        {},
-        {},
-        {}};
+    ModuleDescription pending;
+    pending.handle = *handle;
+    pending.parent = parent;
+    pending.factory = factory;
+    pending.instance = instance;
     impl_->pending.emplace(*handle, pending);
 
     void* object = nullptr;
@@ -1332,13 +1442,12 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
             }
         }
         if (constructed != impl_->pending.end()) {
-            impl_->rollback(constructed->second);
+            impl_->rollback(*handle);
         }
         return std::nullopt;
     }
 
-    auto description = std::move(constructed->second);
-    impl_->pending.erase(constructed);
+    auto description = impl_->collect(*handle);
     impl_->live.push_back(
         {description,
          found->second.destroy,
@@ -1385,13 +1494,13 @@ MethodSuspendResult HierarchyRegistry::invoke_method(
     }
     const ProcessDescription* description = nullptr;
     for (const auto& module : impl_->live) {
-        if (module.description.handle != found->second.module
-            || found->second.process
-                >= module.description.processes.size()) {
+        const auto* owner = find_module_description(
+            module.description, found->second.module);
+        if (owner == nullptr
+            || found->second.process >= owner->processes.size()) {
             continue;
         }
-        description =
-            &module.description.processes[found->second.process];
+        description = &owner->processes[found->second.process];
         break;
     }
     if (description == nullptr
@@ -1444,14 +1553,15 @@ void HierarchyRegistry::invoke_primitive_channel(
     }
     const PrimitiveChannelDescription* description = nullptr;
     for (const auto& module : impl_->live) {
-        if (module.description.handle != found->second.module
+        const auto* owner = find_module_description(
+            module.description, found->second.module);
+        if (owner == nullptr
             || found->second.channel
-                >= module.description.primitive_channels.size()) {
+                >= owner->primitive_channels.size()) {
             continue;
         }
         description =
-            &module.description
-                 .primitive_channels[found->second.channel];
+            &owner->primitive_channels[found->second.channel];
         break;
     }
     if (description == nullptr || description->update == nullptr) {
