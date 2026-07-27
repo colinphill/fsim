@@ -20,6 +20,9 @@ struct CallbackCounts {
   fsim_status_t reentry_status{FSIM_STATUS_OK};
   bool callback_mutation_attempted{};
   fsim_status_t callback_mutation_status{FSIM_STATUS_OK};
+  bool stop_on_safe_point{};
+  bool stop_attempted{};
+  fsim_status_t stop_status{FSIM_STATUS_OK};
   std::string manifest;
 };
 
@@ -58,6 +61,10 @@ void safe_point(
     state.reentry_attempted = true;
     state.reentry_status =
         fsim_session_load_project(session, state.manifest.c_str());
+  }
+  if (state.stop_on_safe_point && !state.stop_attempted) {
+    state.stop_attempted = true;
+    state.stop_status = fsim_session_request_stop(session);
   }
 }
 
@@ -221,6 +228,54 @@ max_deltas = 1000
       fsim_session_find_object(session, text("q"), &rebuilt_q)
       == FSIM_STATUS_OK);
   assert(rebuilt_q != old_q);
+
+  assert(
+      fsim_session_step(session, FSIM_STEP_DELTA)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, rebuilt_q, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "0");
+  assert(
+      fsim_session_step(session, FSIM_STEP_TIME)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, rebuilt_q, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "1");
+  assert(
+      fsim_session_step(session, FSIM_STEP_TIME)
+      == FSIM_STATUS_OK);
+  assert(fsim_session_run(session, 10) == FSIM_STATUS_STOPPED);
+
+  // Rebuild to obtain a fresh, resumable simulation and request a stop from
+  // the synchronous safe-point callback. request_stop is the only control
+  // operation intentionally allowed to cross this callback boundary.
+  assert(fsim_session_build(session) == FSIM_STATUS_OK);
+  fsim_object_t stopped_q = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(session, text("q"), &stopped_q)
+      == FSIM_STATUS_OK);
+  counts.stop_on_safe_point = true;
+  counts.stop_attempted = false;
+  assert(fsim_session_run(session, 10) == FSIM_STATUS_STOPPED);
+  assert(counts.stop_attempted);
+  assert(counts.stop_status == FSIM_STATUS_OK);
+  counts.stop_on_safe_point = false;
+  assert(
+      fsim_session_read_value(
+          session, stopped_q, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "0");
+  assert(fsim_session_run(session, 10) == FSIM_STATUS_STOPPED);
+  assert(
+      fsim_session_read_value(
+          session, stopped_q, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "1");
+
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
 
   std::error_code cleanup_error;

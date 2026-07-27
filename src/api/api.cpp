@@ -324,11 +324,14 @@ fsim_status_t run_session(
     if (result.status == fsim::runtime::RunStatus::stopped) {
       const auto external =
           session.external_stop_seen.load(std::memory_order_relaxed);
-      session.finished = !external;
+      // A step or asynchronous stop may be observed at the same safe point as
+      // a terminal HDL stop. The simulator's terminal lifecycle takes
+      // precedence; only a genuinely nonterminal external stop is resumable.
+      session.finished = session.simulation->finished() || !external;
       lifecycle(
           session,
-          external ? FSIM_LIFECYCLE_SIMULATION_STOPPED
-                   : FSIM_LIFECYCLE_SIMULATION_FINISHED);
+          session.finished ? FSIM_LIFECYCLE_SIMULATION_FINISHED
+                           : FSIM_LIFECYCLE_SIMULATION_STOPPED);
       return FSIM_STATUS_STOPPED;
     }
     if (result.status == fsim::runtime::RunStatus::completed) {

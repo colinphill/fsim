@@ -241,6 +241,9 @@ Completed groundwork:
   stepping, value mutation, and forced-O0 hybrid execution in the CLI
   debugger, with bounded interpreter-equivalence evidence;
 - hierarchy/value/control/callback operations in `include/fsim/api.h`;
+- automated C API delta/time stepping and callback-issued asynchronous
+  stop/resume coverage, including terminal `$finish` precedence when it
+  coincides with an external step stop;
 - buffered committed-change VCD with packed and nine-state mapping;
 - SystemC values, signals, ports, exports, time/event/process declarations in
   the compatibility facade;

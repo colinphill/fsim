@@ -174,6 +174,11 @@ remain future work. A design `$finish` is terminal for that simulation; a
 debugger or Ctrl-C stop remains resumable, while a fatal runtime error poisons
 the simulation and prevents further execution.
 
+The native C session API also exposes tested delta/time stepping and an
+asynchronous stop request that may be issued from a synchronous safe-point
+callback. A terminal HDL stop takes precedence when it coincides with an
+external step/stop request, so a finished design is never reported resumable.
+
 With LLVM enabled, `fsim build` compiles eligible processes and `fsim run`
 uses a hybrid engine. Processes whose supported value-bearing operations are
 at most 64 bits execute through LLVM at the selected O0/O2 setting—O2 by
