@@ -919,7 +919,9 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
       {1, EdgeKind::any},
   };
   process.operations = {
-      WaitOn{{2, 0, 2}},
+      WaitOn{
+          {2, 0, 2},
+          {EdgeKind::any, EdgeKind::posedge, EdgeKind::any}},
       WaitSensitivity{},
       Halt{},
   };
@@ -961,6 +963,10 @@ void test_signal_waits_at_level(
   assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
   assert((std::get<WaitOn>(process.operations[0]).signals ==
           std::vector<SignalId>{2, 0, 2}));
+  assert((
+      std::get<WaitOn>(process.operations[0]).edges
+      == std::vector<EdgeKind>{
+          EdgeKind::any, EdgeKind::posedge, EdgeKind::any}));
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::wait_sensitivity);
@@ -1259,7 +1265,8 @@ make_cached_scheduled_process(const bool delayed,
 
 [[nodiscard]] Process
 make_cached_wait_process(const bool static_wait,
-                         std::vector<SignalId> signals) {
+                         std::vector<SignalId> signals,
+                         std::vector<EdgeKind> edges = {}) {
   Process process;
   process.id = 14;
   process.name = "cached_wait_process";
@@ -1269,7 +1276,8 @@ make_cached_wait_process(const bool static_wait,
   if (static_wait) {
     process.operations = {WaitSensitivity{}, Halt{}};
   } else {
-    process.operations = {WaitOn{std::move(signals)}, Halt{}};
+    process.operations = {
+        WaitOn{std::move(signals), std::move(edges)}, Halt{}};
   }
   return process;
 }
@@ -1792,6 +1800,19 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
   }
   assert(cached_object_paths(cache_directory).size() == 12);
   {
+    LlvmJit changed_dynamic_edge{options};
+    changed_dynamic_edge.add_process(
+        wait_symbol,
+        make_cached_wait_process(
+            false, {0, 1},
+            {EdgeKind::posedge, EdgeKind::any}),
+        wait_widths);
+    materialize_cached_wait_process(
+        changed_dynamic_edge, wait_symbol);
+    expect_cache_statistics(changed_dynamic_edge, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 13);
+  {
     LlvmJit changed_edge{options};
     auto edge_process =
         make_cached_wait_process(true, {0, 1});
@@ -1802,7 +1823,7 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     materialize_cached_wait_process(changed_edge, wait_symbol);
     expect_cache_statistics(changed_edge, 0, 1, 1);
   }
-  assert(cached_object_paths(cache_directory).size() == 13);
+  assert(cached_object_paths(cache_directory).size() == 14);
 
   constexpr std::string_view assertion_symbol =
       "persistent_cache_assertion_process";
@@ -1816,7 +1837,7 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     run_cached_assertion_process(cold, assertion_symbol);
     expect_cache_statistics(cold, 0, 1, 1);
   }
-  assert(cached_object_paths(cache_directory).size() == 14);
+  assert(cached_object_paths(cache_directory).size() == 15);
   {
     LlvmJit warm{options};
     warm.add_process(
@@ -1838,7 +1859,7 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     run_cached_assertion_process(changed_metadata, assertion_symbol);
     expect_cache_statistics(changed_metadata, 0, 1, 1);
   }
-  assert(cached_object_paths(cache_directory).size() == 15);
+  assert(cached_object_paths(cache_directory).size() == 16);
 
   constexpr std::string_view debug_symbol =
       "persistent_cache_debug_point_process";
@@ -1851,7 +1872,7 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     assert(cold.lookup(debug_symbol));
     expect_cache_statistics(cold, 0, 1, 1);
   }
-  assert(cached_object_paths(cache_directory).size() == 16);
+  assert(cached_object_paths(cache_directory).size() == 17);
   {
     LlvmJit warm{options};
     warm.add_process(
@@ -1873,7 +1894,7 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     assert(changed_metadata.lookup(debug_symbol));
     expect_cache_statistics(changed_metadata, 0, 1, 1);
   }
-  assert(cached_object_paths(cache_directory).size() == 17);
+  assert(cached_object_paths(cache_directory).size() == 18);
 }
 
 void test_optimization_cache_invalidation(
@@ -1940,6 +1961,19 @@ void test_rejections() {
       [&] { jit.add_process("empty_wait_on", empty_wait_on, one_signal); },
       "WaitOn requires at least one signal");
 
+  Process mismatched_wait_edges;
+  mismatched_wait_edges.id = 0;
+  mismatched_wait_edges.name = "mismatched_wait_edges";
+  mismatched_wait_edges.operations = {
+      WaitOn{{0}, {EdgeKind::posedge, EdgeKind::negedge}}, Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "mismatched_wait_edges", mismatched_wait_edges,
+            one_signal);
+      },
+      "WaitOn edge count must match its signal count");
+
   Process empty_static_wait;
   empty_static_wait.id = 0;
   empty_static_wait.name = "empty_static_wait";
@@ -1982,6 +2016,32 @@ void test_rejections() {
   expect_fatal_error(
       [&] { jit.add_process("invalid_edge", invalid_edge, one_signal); },
       "static sensitivity has an invalid edge kind");
+
+  Process vector_dynamic_edge;
+  vector_dynamic_edge.id = 0;
+  vector_dynamic_edge.name = "vector_dynamic_edge";
+  vector_dynamic_edge.operations = {
+      WaitOn{{0}, {EdgeKind::posedge}}, Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "vector_dynamic_edge", vector_dynamic_edge,
+            vector_signal);
+      },
+      "WaitOn edge requires a scalar signal");
+
+  Process invalid_dynamic_edge;
+  invalid_dynamic_edge.id = 0;
+  invalid_dynamic_edge.name = "invalid_dynamic_edge";
+  invalid_dynamic_edge.operations = {
+      WaitOn{{0}, {static_cast<EdgeKind>(UINT8_MAX)}}, Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_dynamic_edge", invalid_dynamic_edge,
+            one_signal);
+      },
+      "WaitOn has an invalid edge kind");
 
   Process zero_width_wait;
   zero_width_wait.id = 0;

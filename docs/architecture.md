@@ -122,11 +122,12 @@ SimIR processes are explicit state machines. The current operation set includes:
 - process halt and simulation stop.
 
 Bounded frontend lowering reaches these suspension operations from VHDL
-`wait for`/`wait on`, SystemVerilog integer `#` delay and any-change
-`@(signal-list)` statements, and static process sensitivities. A VHDL process
-containing explicit waits jumps back to its post-initializer entry when its
-body completes, preserving implicit process repetition without reinitializing
-locals.
+`wait for`/`wait on`, SystemVerilog integer `#` delay and
+any-change/`posedge`/`negedge` `@(signal-list)` statements, and static process
+sensitivities. Dynamic and static edge waits share the same four-state edge
+predicate. A VHDL process containing explicit waits jumps back to its
+post-initializer entry when its body completes, preserving implicit process
+repetition without reinitializing locals.
 
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
@@ -216,8 +217,8 @@ Scheduled-write operation kind and signal/source identity participate in this
 key, as does the exact 64-bit delay for `WriteAfter`; changing a delayed write
 to an update write or changing its delay cannot reuse the object.
 Wait identity includes `WaitOn` versus `WaitSensitivity`, the ordered dynamic
-signal operands and their widths, and every static sensitivity signal, width,
-and edge kind.
+signal operands, widths, and edge kinds, plus every static sensitivity signal,
+width, and edge kind.
 Cached objects are parsed and checked for the expected architecture before
 reuse; a rejected entry is recompiled and replaced. The frame and resume-result
 ABI versions and structure sizes, including the extended runtime-table size,

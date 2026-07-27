@@ -230,7 +230,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-013` | error | `` `default_nettype`` is recognized but implicit-net legality is not implemented. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-015` | error | A nested procedural block declaration requires unsupported local-scope semantics. |
-| `FSIM-SV-UNSUPPORTED-016` | error | A procedural event control uses unsupported edge qualification. |
 | `FSIM-SV-UNSUPPORTED-017` | error | A procedural event control uses wildcard dependency inference. |
 
 ## Elaboration and SimIR lowering
@@ -270,7 +269,7 @@ therefore excluded.
 | `FSIM-ELAB-057` | error | A local variable assignment has the wrong packed width. |
 | `FSIM-ELAB-058` | error | A local variable initializer or assignment would implicitly lose four- or nine-state values. |
 | `FSIM-ELAB-059` | error | A dynamic wait names an unknown signal. |
-| `FSIM-ELAB-060` | error | Dynamic edge-qualified wait metadata reached executable lowering. |
+| `FSIM-ELAB-060` | error | An edge-qualified dynamic wait names a nonscalar signal. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

@@ -615,8 +615,11 @@ void test_simir_alternate_executor_dynamic_wait() {
     process.name = "dynamic_wait_driver";
     process.register_count = 1;
     process.operations = {
-        LoadConstant{0, PackedLogic4::from_msb_string("1")},
+        LoadConstant{0, PackedLogic4::from_msb_string("0")},
         WaitFor{1},
+        WriteBlocking{trigger, 0},
+        WaitFor{1},
+        LoadConstant{0, PackedLogic4::from_msb_string("1")},
         WriteBlocking{trigger, 0},
         WaitFor{1},
         LoadConstant{0, PackedLogic4::from_msb_string("0")},
@@ -632,10 +635,12 @@ void test_simir_alternate_executor_dynamic_wait() {
         process.name = "dynamic_waiter";
         process.register_count = 1;
         process.operations = {
-            WaitOn{{trigger, trigger}},
+            WaitOn{
+                {trigger, trigger},
+                {EdgeKind::posedge, EdgeKind::posedge}},
             ReadSignal{0, trigger},
             WriteUpdate{output, 0},
-            WaitOn{{trigger}},
+            WaitOn{{trigger}, {EdgeKind::negedge}},
             ReadSignal{0, trigger},
             WriteUpdate{output, 0},
             Halt{},
@@ -645,7 +650,7 @@ void test_simir_alternate_executor_dynamic_wait() {
 
   Interpreter reference;
   const auto reference_trigger = reference.add_signal(
-      {"top.trigger", PackedLogic4::from_msb_string("0")});
+      {"top.trigger", PackedLogic4::from_msb_string("1")});
   const auto reference_output = reference.add_signal(
       {"top.output", PackedLogic4::from_msb_string("X")});
   (void)reference.add_process(make_driver(reference_trigger));
@@ -697,7 +702,7 @@ void test_simir_alternate_executor_dynamic_wait() {
 
   Interpreter alternate;
   const auto alternate_trigger = alternate.add_signal(
-      {"top.trigger", PackedLogic4::from_msb_string("0")});
+      {"top.trigger", PackedLogic4::from_msb_string("1")});
   const auto alternate_output = alternate.add_signal(
       {"top.output", PackedLogic4::from_msb_string("X")});
   (void)alternate.add_process(make_driver(alternate_trigger));
@@ -730,8 +735,8 @@ void test_simir_alternate_executor_dynamic_wait() {
               == reference_result.callbacks_executed,
       "alternate dynamic wait must preserve run completion state");
   const std::vector<Change> expected{
-      {1, 1, "1"},
-      {2, 1, "0"},
+      {2, 1, "1"},
+      {3, 1, "0"},
   };
   require(
       reference_changes == expected
@@ -743,6 +748,29 @@ void test_simir_alternate_executor_dynamic_wait() {
       executor_probe->starts
           == std::vector<InstructionIndex>{0, 1, 4},
       "alternate dynamic-wait frame resume sequence");
+
+  Interpreter invalid_dynamic_edge;
+  const auto vector_trigger = invalid_dynamic_edge.add_signal(
+      {"top.vector_trigger",
+       PackedLogic4::from_msb_string("00000000")});
+  Process invalid_waiter;
+  invalid_waiter.id = 0;
+  invalid_waiter.name = "invalid_dynamic_edge";
+  invalid_waiter.operations = {
+      WaitOn{{vector_trigger}, {EdgeKind::posedge}}, Halt{}};
+  (void)invalid_dynamic_edge.add_process(
+      std::move(invalid_waiter));
+  try {
+    (void)invalid_dynamic_edge.run();
+    throw std::runtime_error(
+        "a vector dynamic edge wait was accepted");
+  } catch (const InterpreterError& error) {
+    require(
+        std::string_view{error.what()}.find(
+            "WaitOn edge requires a scalar signal")
+            != std::string_view::npos,
+        "dynamic edge width diagnostic");
+  }
 }
 
 void test_simir_alternate_executor_scheduled_word_writes() {

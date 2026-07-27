@@ -80,9 +80,26 @@ struct WaitFor {
   SimulationTick delay{};
 };
 
-/// Suspend until any listed signal changes.
+enum class EdgeKind : std::uint8_t {
+  any,
+  posedge,
+  negedge,
+};
+
+/// Suspend until a listed signal has its corresponding edge. An empty edge
+/// list means any change for every signal.
 struct WaitOn {
+  WaitOn() = default;
+  explicit WaitOn(std::vector<SignalId> waited_signals)
+      : signals(std::move(waited_signals)) {}
+  WaitOn(
+      std::vector<SignalId> waited_signals,
+      std::vector<EdgeKind> waited_edges)
+      : signals(std::move(waited_signals)),
+        edges(std::move(waited_edges)) {}
+
   std::vector<SignalId> signals;
+  std::vector<EdgeKind> edges;
 };
 
 /// Suspend until this process's static sensitivity condition is met.
@@ -159,12 +176,6 @@ using Operation =
 struct Signal {
   std::string name;
   PackedLogic4 initial_value;
-};
-
-enum class EdgeKind : std::uint8_t {
-  any,
-  posedge,
-  negedge,
 };
 
 struct Sensitivity {

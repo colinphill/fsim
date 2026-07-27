@@ -693,8 +693,8 @@ module events;
   logic trigger;
   logic observed;
   initial begin
-    @(trigger);
-    @(trigger) observed = trigger;
+    @(posedge trigger);
+    @(negedge trigger) observed = trigger;
   end
 endmodule
 )",
@@ -709,8 +709,12 @@ endmodule
           && sv_statements[0].kind == StatementKind::WaitOn
           && sv_statements[0].sensitivities.size() == 1
           && sv_statements[0].sensitivities.front().signal == "trigger"
+          && sv_statements[0].sensitivities.front().edge
+              == EdgeKind::Positive
           && sv_statements[0].statements.empty()
           && sv_statements[1].kind == StatementKind::WaitOn
+          && sv_statements[1].sensitivities.front().edge
+              == EdgeKind::Negative
           && sv_statements[1].statements.size() == 1
           && sv_statements[1].statements.front().kind
               == StatementKind::Assignment,
@@ -769,7 +773,7 @@ end architecture;
       R"(
 module bad_event;
   logic trigger;
-  initial @(posedge trigger);
+  initial @*;
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -779,9 +783,9 @@ endmodule
               invalid_sv.diagnostics.begin(),
               invalid_sv.diagnostics.end(),
               [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-UNSUPPORTED-016";
+                return diagnostic.code == "FSIM-SV-UNSUPPORTED-017";
               }),
-      "edge-qualified procedural event diagnostic");
+      "wildcard procedural event diagnostic");
 }
 
 }  // namespace

@@ -112,9 +112,9 @@ module sensitivity;
   end
   always @(posedge trigger) observed <= trigger;
   initial begin
-    @(trigger);
+    @(posedge trigger);
     dynamic_observed = trigger;
-    @(trigger) dynamic_observed = trigger;
+    @(negedge trigger) dynamic_observed = trigger;
   end
 endmodule
 )";

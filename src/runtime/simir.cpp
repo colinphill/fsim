@@ -139,7 +139,7 @@ struct Interpreter::Impl {
     InstructionIndex pc{};
     std::vector<PackedLogic4> registers;
     std::unique_ptr<ProcessExecutor> executor;
-    std::vector<SignalId> dynamic_sensitivity;
+    std::vector<Sensitivity> dynamic_sensitivity;
     SourceLocation current_source;
     bool queued{};
     bool waiting_on_static{};
@@ -147,7 +147,7 @@ struct Interpreter::Impl {
     bool halted{};
   };
 
-  struct StaticFanout {
+  struct Fanout {
     ProcessId process{};
     EdgeKind edge = EdgeKind::any;
   };
@@ -159,8 +159,8 @@ struct Interpreter::Impl {
   std::vector<PackedLogic4> driven_values;
   std::vector<std::optional<PackedLogic4>> forced_values;
   std::vector<ProcessState> processes;
-  std::vector<std::vector<StaticFanout>> static_fanout;
-  std::vector<std::vector<ProcessId>> dynamic_fanout;
+  std::vector<std::vector<Fanout>> static_fanout;
+  std::vector<std::vector<Fanout>> dynamic_fanout;
   std::unordered_map<SignalId, PackedLogic4> pending_updates;
   SignalChangeHook signal_change_hook;
   ExecutionPointHook execution_point_hook;
@@ -202,10 +202,15 @@ struct Interpreter::Impl {
     if (!process.waiting_on_signal) {
       return;
     }
-    for (const auto signal : process.dynamic_sensitivity) {
-      auto &fanout = dynamic_fanout[signal];
-      fanout.erase(std::remove(fanout.begin(), fanout.end(), process.program.id),
-                   fanout.end());
+    for (const auto sensitivity : process.dynamic_sensitivity) {
+      auto &fanout = dynamic_fanout[sensitivity.signal];
+      fanout.erase(
+          std::remove_if(
+              fanout.begin(), fanout.end(),
+              [&](const Fanout& entry) {
+                return entry.process == process.program.id;
+              }),
+          fanout.end());
     }
     process.dynamic_sensitivity.clear();
     process.waiting_on_signal = false;
@@ -310,8 +315,15 @@ struct Interpreter::Impl {
     }
     // Copy because queue_next_delta removes a process from every dynamic list.
     const auto dynamic = dynamic_fanout[signal_id];
-    for (const auto process : dynamic) {
-      queue_next_delta(process);
+    for (const auto sensitivity : dynamic) {
+      if (sensitivity.edge != EdgeKind::any
+          && (old_value.width() != 1
+              || !edge_matches(
+                  sensitivity.edge, old_value.get(0),
+                  signal.initial_value.get(0)))) {
+        continue;
+      }
+      queue_next_delta(sensitivity.process);
     }
   }
 
@@ -439,19 +451,55 @@ void Interpreter::Impl::handle_boundary(
       process.pc = instruction;
       fail(process, "WaitOn requires at least one signal");
     }
+    if (!wait->edges.empty()
+        && wait->edges.size() != wait->signals.size()) {
+      process.pc = instruction;
+      fail(process, "WaitOn edge count must match its signal count");
+    }
     process.waiting_on_signal = true;
-    process.dynamic_sensitivity = wait->signals;
+    process.dynamic_sensitivity.clear();
+    process.dynamic_sensitivity.reserve(wait->signals.size());
+    for (std::size_t index = 0; index < wait->signals.size(); ++index) {
+      const auto signal = wait->signals[index];
+      (void)get_signal(signal);
+      const auto edge =
+          wait->edges.empty() ? EdgeKind::any : wait->edges[index];
+      switch (edge) {
+      case EdgeKind::any:
+        break;
+      case EdgeKind::posedge:
+      case EdgeKind::negedge:
+        if (get_signal(signal).initial_value.width() != 1) {
+          process.pc = instruction;
+          fail(process, "WaitOn edge requires a scalar signal");
+        }
+        break;
+      default:
+        process.pc = instruction;
+        fail(process, "WaitOn has an invalid edge kind");
+      }
+      process.dynamic_sensitivity.push_back({signal, edge});
+    }
     std::sort(
         process.dynamic_sensitivity.begin(),
-        process.dynamic_sensitivity.end());
+        process.dynamic_sensitivity.end(),
+        [](const Sensitivity& lhs, const Sensitivity& rhs) {
+          return lhs.signal < rhs.signal
+              || (lhs.signal == rhs.signal
+                  && lhs.edge < rhs.edge);
+        });
     process.dynamic_sensitivity.erase(
         std::unique(
             process.dynamic_sensitivity.begin(),
-            process.dynamic_sensitivity.end()),
+            process.dynamic_sensitivity.end(),
+            [](const Sensitivity& lhs, const Sensitivity& rhs) {
+              return lhs.signal == rhs.signal
+                  && lhs.edge == rhs.edge;
+            }),
         process.dynamic_sensitivity.end());
-    for (const auto signal : process.dynamic_sensitivity) {
-      (void)get_signal(signal);
-      dynamic_fanout[signal].push_back(process.program.id);
+    for (const auto sensitivity : process.dynamic_sensitivity) {
+      dynamic_fanout[sensitivity.signal].push_back(
+          {process.program.id, sensitivity.edge});
     }
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,

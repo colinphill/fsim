@@ -579,8 +579,38 @@ validate_process(const Process &process,
                 reject(process, index,
                        "WaitOn requires at least one signal");
               }
-              for (const auto signal : operation.signals) {
-                (void)referenced_signal_width(signal, index);
+              if (!operation.edges.empty()
+                  && operation.edges.size()
+                      != operation.signals.size()) {
+                reject(
+                    process, index,
+                    "WaitOn edge count must match its signal count");
+              }
+              for (std::size_t signal_index = 0;
+                   signal_index < operation.signals.size();
+                   ++signal_index) {
+                const auto width = referenced_signal_width(
+                    operation.signals[signal_index], index);
+                const auto edge =
+                    operation.edges.empty()
+                        ? EdgeKind::any
+                        : operation.edges[signal_index];
+                switch (edge) {
+                case EdgeKind::any:
+                  break;
+                case EdgeKind::posedge:
+                case EdgeKind::negedge:
+                  if (width != 1) {
+                    reject(
+                        process, index,
+                        "WaitOn edge requires a scalar signal");
+                  }
+                  break;
+                default:
+                  reject(
+                      process, index,
+                      "WaitOn has an invalid edge kind");
+                }
               }
             },
             [&](const WaitSensitivity &) {
@@ -959,11 +989,21 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               builder.add("operation", "WaitOn");
               add_key_u64(
                   builder, "wait-on-signal-count", value.signals.size());
-              for (const auto signal : value.signals) {
+              for (std::size_t index = 0;
+                   index < value.signals.size(); ++index) {
+                const auto signal = value.signals[index];
+                const auto edge =
+                    value.edges.empty()
+                        ? EdgeKind::any
+                        : value.edges[index];
                 add_key_u64(builder, "wait-on-signal", signal);
                 add_key_u64(
                     builder, "wait-on-signal-width",
                     signal_widths[signal]);
+                add_key_u64(
+                    builder, "wait-on-edge",
+                    static_cast<std::underlying_type_t<EdgeKind>>(
+                        edge));
               }
             },
             [&](const WaitSensitivity &) {

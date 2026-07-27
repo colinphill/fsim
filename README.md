@@ -36,7 +36,8 @@ The current tree contains:
   validation;
 - lowering of scalar and common packed operations into SimIR;
 - bounded source-level VHDL `wait for`/`wait on` and Verilog/SystemVerilog
-  integer-delay/any-change procedural event controls;
+  integer-delay, any-change, `posedge`, and `negedge` procedural event
+  controls;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,
@@ -206,18 +207,20 @@ module identity includes a provenance key for the exact owning-source bytes
 supplied to the parser, source path, language standard, library,
 compilation-unit mode, macro/include settings, bundled-library version marker,
 and represented generic/parameter values. Each process key includes
-scheduled-write kind and the exact delayed-write delay, plus wait kind, ordered
-operands and widths, and static sensitivity signal/edge data. An unrelated,
+scheduled-write kind and the exact delayed-write delay, plus wait kind,
+ordered operands, widths, dynamic edges, and static sensitivity signal/edge
+data. An unrelated,
 uninstantiated source edit therefore retains the specialization's native
 object, while even a comment-only edit to its owning source invalidates it.
 `WaitOn` and `WaitSensitivity` use appended resume-status values while keeping
 the v1 result layout and its existing status values unchanged. The result
 identifies the boundary instruction; immutable SimIR retains the dynamic
-signal list and static edge rules for the kernel. Consequently,
-sensitivity-only signals may exceed 64 bits because no signal value crosses
-the generated ABI. Builds without LLVM execute entirely through the reference
-evaluator. The bounded O0 debug path is differentially tested against the
-interpreter for source breakpoints and statement/process/scheduler stepping.
+signal/edge list and static edge rules for the kernel. Consequently,
+any-change sensitivity-only signals may exceed 64 bits because no signal value
+crosses the generated ABI; edge-qualified sensitivities require scalar
+signals. Builds without LLVM execute entirely through the reference evaluator.
+The bounded O0 debug path is differentially tested against the interpreter for
+source breakpoints and statement/process/scheduler stepping.
 Value-bearing operations wider than 64 bits, call instrumentation and complete
 local-variable scope/type semantics, full parameter/generic specialization
 identity, and broader differential coverage remain work in progress.

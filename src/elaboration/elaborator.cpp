@@ -536,16 +536,10 @@ private:
             break;
         case StatementKind::WaitOn: {
             std::vector<SignalId> signals;
+            std::vector<runtime::simir::EdgeKind> edges;
             signals.reserve(statement.sensitivities.size());
+            edges.reserve(statement.sensitivities.size());
             for (const auto& sensitivity : statement.sensitivities) {
-                if (sensitivity.edge != frontend::EdgeKind::Any) {
-                    report(
-                        "FSIM-ELAB-060",
-                        "dynamic edge-qualified waits are not executable in "
-                        "this slice",
-                        sensitivity.span);
-                    continue;
-                }
                 const auto found = signals_.find(sensitivity.signal);
                 if (found == signals_.end()) {
                     report(
@@ -554,11 +548,31 @@ private:
                         sensitivity.span);
                     continue;
                 }
+                if (sensitivity.edge != frontend::EdgeKind::Any
+                    && design_.signal_info_[found->second].width != 1) {
+                    report(
+                        "FSIM-ELAB-060",
+                        "dynamic edge-qualified wait signal '"
+                            + sensitivity.signal
+                            + "' must be scalar",
+                        sensitivity.span);
+                    continue;
+                }
                 signals.push_back(found->second);
+                auto edge = runtime::simir::EdgeKind::any;
+                if (sensitivity.edge
+                    == frontend::EdgeKind::Positive) {
+                    edge = runtime::simir::EdgeKind::posedge;
+                } else if (
+                    sensitivity.edge
+                    == frontend::EdgeKind::Negative) {
+                    edge = runtime::simir::EdgeKind::negedge;
+                }
+                edges.push_back(edge);
             }
             if (!signals.empty()) {
                 process_.operations.emplace_back(
-                    WaitOn{std::move(signals)});
+                    WaitOn{std::move(signals), std::move(edges)});
             }
             lower_statements(statement.statements);
             break;

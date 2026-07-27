@@ -46,7 +46,7 @@ The following foundation is implemented:
 - a persistent LLVM native-object cache selected beneath the configured
   application cache, with application-visible cold/warm telemetry and
   identity for scheduled-write kind/delay and wait kind, operands, widths, and
-  static edge data;
+  dynamic/static edge data;
 - exact parsed-byte HDL source digests and per-specialization provenance keys
   for owning-source content plus current source-set/elaboration identity;
 - a shared checked allocation-free single-word `Logic4` path between generated
@@ -84,12 +84,13 @@ The following foundation is implemented:
 - bounded VHDL/SystemVerilog process variables lowered to named persistent
   SimIR registers, interpreter/O0/O2 `CopyRegister`, and engine-neutral
   debugger `locals` reads;
-- source-level VHDL `wait for`/`wait on` and SystemVerilog any-change
-  procedural event controls lowered to resumable `WaitFor`/`WaitOn`, with
-  interpreter/O2 timing and wakeup differentials;
+- source-level VHDL `wait for`/`wait on` and SystemVerilog
+  any-change/`posedge`/`negedge` procedural event controls lowered to
+  resumable `WaitFor`/`WaitOn`, with interpreter/O2 timing and filtered-wakeup
+  differentials;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 268 current production diagnostic codes.
+- a stable catalog covering 267 current production diagnostic codes.
 
 Current Linux validation:
 
@@ -163,7 +164,7 @@ Completed:
   and delayed writes;
 - appended `WaitOn`/`WaitSensitivity` v1 resume statuses without changing the
   result structure or existing numeric values; immutable SimIR owns dynamic
-  operands and static edge rules;
+  operands and dynamic/static edge rules;
 - validation of wait lists, signal IDs and widths, edge kinds/scalar edge
   rules, boundary instructions, resume PCs, and frame states, while allowing
   sensitivity-only signals wider than 64 bits;
@@ -192,7 +193,8 @@ Completed:
   a two-process/one-module sensitivity fixture;
 - persistent object-cache cold/warm, invalidation, corruption, and
   incompatible-object tests, including scheduled-write kind and delay cache
-  identity plus wait kind, operands, referenced widths, and static edge data;
+  identity plus wait kind, operands, referenced widths, and dynamic/static
+  edge data;
 - O0/O2 grouped-module cache tests proving two functions share one native
   object, a changed group member invalidates that object, and the unchanged
   member retains its per-process frame identity;
@@ -262,7 +264,7 @@ Completed groundwork:
 - delayed/update and dynamic/static wait operations in the SimIR interpreter
   and bounded LLVM compiled subset;
 - bounded VHDL timed/any-change waits with implicit process repetition and
-  SystemVerilog any-change procedural event controls;
+  SystemVerilog any-change/scalar-edge procedural event controls;
 - deterministic project seed handling;
 - scope/signal navigation, source/time/signal-change breakpoints including
   exact-state signal conditions, all four step modes, live debug-trace
@@ -282,8 +284,8 @@ Completed groundwork:
 Planned implementation sequence:
 
 1. Complete procedural SV/VHDL testbench data, files, random facilities,
-   edge-qualified and named events, fork/join, remaining waits, assertions,
-   and display/report behavior.
+   expression/wildcard and named events, fork/join, remaining waits,
+   assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
 3. Instantiate registered SystemC factories into DesignIR.

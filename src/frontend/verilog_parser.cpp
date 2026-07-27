@@ -836,12 +836,6 @@ class VerilogParser final : private detail::ParserBase {
               "FSIM-SV-UNSUPPORTED-017",
               "wildcard procedural event controls require expression "
               "dependency analysis not implemented in this frontend slice");
-        } else if (sensitivity.edge != EdgeKind::Any) {
-          error(
-              start,
-              "FSIM-SV-UNSUPPORTED-016",
-              "edge-qualified procedural event controls are not implemented "
-              "in this frontend slice");
         }
       }
       if (!match(TokenKind::Semicolon)) {

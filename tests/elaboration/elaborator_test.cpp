@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -853,9 +854,9 @@ module events;
     #1 $finish;
   end
   initial begin
-    @(trigger);
+    @(posedge trigger);
     observed = trigger;
-    @(trigger) observed = trigger;
+    @(negedge trigger) observed = trigger;
   end
 endmodule
 )",
@@ -876,6 +877,34 @@ endmodule
                      fsim::runtime::simir::WaitOn>(operation);
                })
            == 2);
+    const auto first_dynamic_wait_operation = std::find_if(
+        observer_process.operations.begin(),
+        observer_process.operations.end(),
+        [](const fsim::runtime::simir::Operation& operation) {
+          return std::holds_alternative<
+              fsim::runtime::simir::WaitOn>(operation);
+        });
+    const auto second_dynamic_wait_operation = std::find_if(
+        std::next(first_dynamic_wait_operation),
+        observer_process.operations.end(),
+        [](const fsim::runtime::simir::Operation& operation) {
+          return std::holds_alternative<
+              fsim::runtime::simir::WaitOn>(operation);
+        });
+    const auto& first_dynamic_wait =
+        std::get<fsim::runtime::simir::WaitOn>(
+            *first_dynamic_wait_operation);
+    const auto& second_dynamic_wait =
+        std::get<fsim::runtime::simir::WaitOn>(
+            *second_dynamic_wait_operation);
+    assert(
+        first_dynamic_wait.edges.size() == 1
+        && first_dynamic_wait.edges.front()
+            == fsim::runtime::simir::EdgeKind::posedge);
+    assert(
+        second_dynamic_wait.edges.size() == 1
+        && second_dynamic_wait.edges.front()
+            == fsim::runtime::simir::EdgeKind::negedge);
     auto sv_event_interpreter =
         elaborated_sv_events.design->create_interpreter();
     const auto sv_observed =
@@ -918,6 +947,23 @@ end architecture;
             "vhdl:work.unknown_wait(rtl)");
     assert(!rejected_unknown_wait.ok());
     assert(has_diagnostic(rejected_unknown_wait, "FSIM-ELAB-059"));
+
+    const auto vector_edge_wait = fsim::frontend::parse_text(
+        "vector_edge_wait.sv",
+        R"(
+module vector_edge_wait;
+  logic [1:0] trigger;
+  initial @(posedge trigger);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(vector_edge_wait.ok());
+    const auto rejected_vector_edge_wait =
+        fsim::elaboration::elaborate(
+            vector_edge_wait.design, "sv:work.vector_edge_wait");
+    assert(!rejected_vector_edge_wait.ok());
+    assert(has_diagnostic(
+        rejected_vector_edge_wait, "FSIM-ELAB-060"));
 
     std::cout << "elaborator tests passed\n";
 }
