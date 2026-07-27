@@ -216,7 +216,10 @@ differential coverage remain work in progress.
 The application suite also compares a bounded scheduled-write design exactly
 between the interpreter and O2 hybrid engine. It checks an update commit at
 tick 0, a delayed commit at tick 2, and the final value and scheduler
-observations. A separate interpreter/compiled case schedules past
+observations. The bounded differential harness also requires byte-identical
+normalized VCD output, including declarations, initial values, timestamps, and
+committed changes, across interpreter and O0/O2 hybrid execution. A separate
+interpreter/compiled case schedules past
 `UINT64_MAX`, verifies that the original scheduler overflow exception is
 contained across the generated callback boundary and rethrown, and confirms
 that the simulation is poisoned without publishing the write.

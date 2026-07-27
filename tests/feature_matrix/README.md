@@ -70,7 +70,7 @@ These suites are the evidence currently referenced by the matrix:
 | [elaboration/elaborator_test.cpp](../elaboration/elaborator_test.cpp) | Independently selected VHDL/SystemVerilog counters, executable SV-parent and VHDL-parent mixed hierarchies, dense instance-specific specialization ownership with source/language/library metadata, cross-library VHDL selection, and targeted unsupported-semantics/driver diagnostics |
 | [runtime/runtime_tests.cpp](../runtime/runtime_tests.cpp) | Packed values including the checked allocation-free ≤64-bit `Logic4Word` path, exhaustive standard-logic resolution, phase ordering, delta limit, SimIR timed/static waits and operations, update coalescing, interpreter/external-executor scheduled writes, a dynamic `WaitOn` comparison covering duplicate normalization and tick-1/tick-2 delta-1 wakeups, force/release, design-stop lifecycle, and VCD core |
 | [project/project_config_test.cpp](../project/project_config_test.cpp) | Schema-1 manifest, glob ordering, schema/unknown-key diagnostics, and JSON escaping |
-| [app/application_test.cpp](../app/application_test.cpp) | Check/build/cache/run, exact parsed-byte source digests, per-specialization provenance reuse/invalidation, bounded O0/O2 SystemVerilog and O2 mixed SV/VHDL/SV interpreter-versus-hybrid differential execution, exact fully compiled O2 scheduled-write comparison at ticks 0 and 2, interpreter/compiled scheduling-overflow containment, exact two-process/one-specialization-module positive-edge comparison at tick 0/tick 1-delta 1/tick 2, supported-sibling compilation beside a 65-bit fallback process, eligible/fallback process and compiled-module counts, per-module native-cache cold/warm telemetry, forced-O0 hybrid debugger selection with exact interpreter transcript/lifecycle/callback/final-state equivalence, SystemC compile/ABI/factory validation, exact time conversion, `` `timescale``-driven `auto` resolution/runtime scaling, scaled VCD, and value parsing |
+| [app/application_test.cpp](../app/application_test.cpp) | Check/build/cache/run, exact parsed-byte source digests, per-specialization provenance reuse/invalidation, bounded O0/O2 SystemVerilog and O2 mixed SV/VHDL/SV interpreter-versus-hybrid differential execution with normalized serialized VCD equality, exact fully compiled O2 scheduled-write comparison at ticks 0 and 2, interpreter/compiled scheduling-overflow containment, exact two-process/one-specialization-module positive-edge comparison at tick 0/tick 1-delta 1/tick 2, supported-sibling compilation beside a 65-bit fallback process, eligible/fallback process and compiled-module counts, per-module native-cache cold/warm telemetry, forced-O0 hybrid debugger selection with exact interpreter transcript/lifecycle/callback/final-state equivalence, SystemC compile/ABI/factory validation, exact time conversion, `` `timescale``-driven `auto` resolution/runtime scaling, scaled VCD, and value parsing |
 | [api/api_test.cpp](../api/api_test.cpp) | C ABI lifecycle, generation-checked hierarchy/value handles, force/deposit/release, synchronous callbacks and re-entry guards, run, delta/time stepping, callback-issued asynchronous stop/resume, and terminal-stop precedence |
 | [compiler/cache_test.cpp](../compiler/cache_test.cpp) | SHA-256 stability, process-aware locking/stale-lock recovery, atomic replacement, and cache store/load/erase |
 | [compiler/jit_runtime_c_test.c](../compiler/jit_runtime_c_test.c) | C11 compilation, preserved resume-status values 0–5, appended wait statuses 6–7, fixed ABI offsets/size, and callback use of the append-only v1 `write_update`/`write_after` runtime-table fields |
@@ -99,8 +99,9 @@ An LLVM adapter unit test by itself is not differential evidence. An
 interpreter-only language test by itself is not differential evidence.
 
 The current application differential test compares status, time, delta,
-committed-change callbacks, and final values for a bounded SystemVerilog
-hierarchy at O0 and O2 and for the vertical SV/VHDL/SV hierarchy at O2. It also
+committed-change callbacks, final values, and normalized serialized VCD for a
+bounded SystemVerilog hierarchy at O0 and O2 and for the vertical SV/VHDL/SV
+hierarchy at O2. It also
 compares a fully compiled O2 scheduled-write process with an update commit at
 tick 0 and delayed commit at tick 2. The overflow companion runs through both
 engines and checks that a scheduler exception raised in a generated callback
@@ -112,10 +113,10 @@ the falling trigger at tick 2/delta 0. Those two processes share one
 specialization module and therefore require exactly one cold cache miss/store
 and one warm hit. The suite also asserts per-module cold/warm telemetry at O0
 and O2. This remains bounded architecture evidence: complete HDL event
-controls, generic/parameter specialization identity, assertion metadata,
-normalized VCD, O0 mixed-language/application scheduled-write/application
-sensitivity coverage, exhaustive semantic fixtures, and Windows execution
-evidence remain outstanding.
+controls, generic/parameter specialization identity, assertion metadata, O0
+mixed-language/application scheduled-write/application sensitivity coverage,
+exhaustive semantic and trace fixtures, and Windows execution evidence remain
+outstanding.
 
 A separate two-process fixture places a supported scalar process beside a
 65-bit value-bearing process in one specialization. The hybrid application

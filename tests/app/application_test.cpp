@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 
 #include <cassert>
 #include <algorithm>
@@ -211,6 +212,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
         fsim::runtime::SimulationTick,
         std::uint64_t>> changes;
     std::vector<std::string> final_values;
+    std::string normalized_vcd;
     fsim::app::NativeCacheStatistics native_cache;
     std::size_t compiled_processes{};
     std::size_t compiled_modules{};
@@ -229,16 +231,34 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
             candidate.compiled_module_count();
         captured.native_cache =
             candidate.native_cache_statistics();
+        std::ostringstream vcd_output;
+        fsim::runtime::VcdWriter vcd(vcd_output, "1ns", 256);
+        std::vector<fsim::runtime::VcdSignal> vcd_signals;
+        vcd_signals.reserve(candidate.design().signals().size());
+        for (const auto& signal : candidate.design().signals()) {
+          vcd_signals.push_back(
+              vcd.declare_signal(signal.name, signal.width));
+        }
+        vcd.begin(candidate.now());
+        for (const auto& signal : candidate.design().signals()) {
+          vcd.change(
+              vcd_signals.at(signal.id),
+              candidate.read_signal(signal.id));
+        }
         candidate.set_signal_change_hook(
-            [&captured](
+            [&captured, &vcd, &vcd_signals](
                 const fsim::runtime::simir::SignalId signal,
                 const fsim::runtime::PackedLogic4& value,
                 const fsim::runtime::SimulationTick time,
                 const std::uint64_t delta) {
               captured.changes.emplace_back(
                   signal, value.to_msb_string(), time, delta);
+              vcd.set_time(time);
+              vcd.change(vcd_signals.at(signal), value);
             });
         captured.result = candidate.run();
+        vcd.flush();
+        captured.normalized_vcd = vcd_output.str();
         captured.final_values.reserve(
             candidate.design().signals().size());
         for (const auto& signal : candidate.design().signals()) {
@@ -258,6 +278,10 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
             == hybrid.result.callbacks_executed);
         assert(reference.changes == hybrid.changes);
         assert(reference.final_values == hybrid.final_values);
+        assert(reference.normalized_vcd == hybrid.normalized_vcd);
+        assert(
+            reference.normalized_vcd.find("$version fsim $end")
+            != std::string::npos);
         assert(reference.compiled_processes == 0);
         assert(reference.compiled_modules == 0);
         assert(

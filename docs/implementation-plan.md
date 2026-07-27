@@ -158,6 +158,9 @@ Completed:
   interpreter fallback for an unsupported sibling;
 - bounded O0/O2 SystemVerilog and O2 mixed-language application
   interpreter-versus-hybrid differential tests;
+- normalized serialized VCD equality in the bounded application differential
+  harness, covering declarations, initial values, timestamps, and committed
+  changes;
 - exact interpreter/O2-hybrid application evidence for tick-0 update and
   tick-2 delayed commits, plus interpreter/compiled overflow exception
   containment;
@@ -188,8 +191,9 @@ Remaining before the architecture gate passes:
   debug frames, and source metadata to the current O0 hybrid debugger;
 - run every supported semantic test through interpreter and JIT and compare
   final state, assertions, scheduler observations, and trace events;
-- extend the bounded mixed-language differential to O0, assertion metadata,
-  and normalized VCD, and validate it on LLVM 22.1.8 Windows; and
+- extend the bounded mixed-language differential to O0 and assertion metadata,
+  broaden normalized trace coverage across semantic fixtures, and validate it
+  on LLVM 22.1.8 Windows; and
 - complete transitive HDL include-content provenance and actual
   generic/parameter values once those frontend features exist.
 
