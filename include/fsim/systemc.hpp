@@ -191,6 +191,13 @@ template <typename T>
     const char* name,
     fsim_sc_port_direction_v1 direction);
 
+template <typename Interface>
+[[nodiscard]] fsim_sc_handle_v1 register_export(const char* name);
+
+void bind_export(
+    fsim_sc_handle_v1 export_handle,
+    fsim_sc_handle_v1 target);
+
 template <typename T>
 [[nodiscard]] T read_object(fsim_sc_handle_v1 object);
 
@@ -610,6 +617,58 @@ public:
     virtual ~sc_interface() = default;
 };
 
+template <typename T>
+class sc_signal_in_if : virtual public sc_interface {
+public:
+    using value_type = T;
+
+    [[nodiscard]] virtual const T& read() const = 0;
+    [[nodiscard]] virtual bool event() const = 0;
+    [[nodiscard]] virtual const sc_event& default_event() const = 0;
+    [[nodiscard]] virtual const sc_event&
+    value_changed_event() const = 0;
+    [[nodiscard]] virtual fsim_sc_handle_v1
+    native_handle() const noexcept = 0;
+};
+
+template <typename T>
+class sc_signal_write_if : virtual public sc_interface {
+public:
+    using value_type = T;
+
+    virtual void write(const T& value) = 0;
+};
+
+template <typename T>
+class sc_signal_inout_if
+    : public sc_signal_in_if<T>,
+      public sc_signal_write_if<T> {
+public:
+    using value_type = T;
+};
+
+namespace detail {
+
+template <typename Interface, typename = void>
+struct signal_interface_traits {
+    static constexpr bool supported = false;
+};
+
+template <typename Interface>
+struct signal_interface_traits<
+    Interface,
+    std::void_t<typename Interface::value_type>> {
+    using value_type = typename Interface::value_type;
+    static constexpr bool supported =
+        std::is_base_of_v<
+            sc_signal_in_if<value_type>, Interface>;
+    static constexpr bool writable =
+        std::is_base_of_v<
+            sc_signal_write_if<value_type>, Interface>;
+};
+
+} // namespace detail
+
 class sc_prim_channel {
 public:
     virtual ~sc_prim_channel() = default;
@@ -691,9 +750,15 @@ class sc_export {
 
 public:
     sc_export() = default;
-    explicit sc_export(const char*) noexcept {}
+    explicit sc_export(const char* name)
+        : handle_(detail::register_export<Interface>(name)) {}
 
-    void bind(Interface& interface) noexcept {
+    void bind(Interface& interface) {
+        if constexpr (
+            detail::signal_interface_traits<Interface>::supported) {
+            detail::bind_export(
+                handle_, interface.native_handle());
+        }
         interface_ = &interface;
         export_ = nullptr;
     }
@@ -707,6 +772,7 @@ public:
                     "cyclic sc_export binding"};
             }
         }
+        detail::bind_export(handle_, target.handle_);
         interface_ = nullptr;
         export_ = &target;
     }
@@ -726,10 +792,14 @@ public:
         return &get_interface();
     }
     operator Interface&() const { return get_interface(); }
+    [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
+        return handle_;
+    }
 
 private:
     Interface* interface_{};
     sc_export* export_{};
+    fsim_sc_handle_v1 handle_{};
 };
 
 class sc_event_finder final {
@@ -1073,7 +1143,9 @@ sc_sensitive& sc_sensitive::operator<<(const T& object) {
 }
 
 template <typename T>
-class sc_signal : public sc_interface, public sc_prim_channel {
+class sc_signal
+    : public sc_signal_inout_if<T>,
+      public sc_prim_channel {
 public:
     using value_type = T;
 
@@ -1100,13 +1172,13 @@ public:
             native_handle(), name, value_);
     }
 
-    [[nodiscard]] const T& read() const {
+    [[nodiscard]] const T& read() const override {
         if (native_handle() != 0 && detail::current_host != nullptr) {
             value_ = detail::read_object<T>(native_handle());
         }
         return value_;
     }
-    void write(const T& value) {
+    void write(const T& value) override {
         if (native_handle() == 0) {
             event_ = value_ != value;
             value_ = value;
@@ -1116,16 +1188,22 @@ public:
         pending_ = value;
         request_update();
     }
-    [[nodiscard]] bool event() const {
+    [[nodiscard]] bool event() const override {
         return native_handle() == 0
             ? event_
             : detail::object_event(native_handle());
     }
-    [[nodiscard]] const sc_event& default_event() const noexcept {
+    [[nodiscard]] const sc_event&
+    default_event() const noexcept override {
         return value_changed_event_;
     }
-    [[nodiscard]] const sc_event& value_changed_event() const noexcept {
+    [[nodiscard]] const sc_event&
+    value_changed_event() const noexcept override {
         return value_changed_event_;
+    }
+    [[nodiscard]] fsim_sc_handle_v1
+    native_handle() const noexcept override {
+        return sc_prim_channel::native_handle();
     }
     [[nodiscard]] sc_event_finder pos() const noexcept {
         return {native_handle(), FSIM_SC_POSEDGE};
@@ -1155,17 +1233,21 @@ private:
 template <typename T>
 class sc_in {
 public:
+    using value_type = T;
+
     sc_in() = default;
     explicit sc_in(const char* name)
         : handle_(
               detail::register_port<T>(name, FSIM_SC_INPUT)) {}
 
-    void bind(const sc_signal<T>& signal) {
-        detail::bind_port(handle_, signal.native_handle());
-        signal_ = &signal;
+    void bind(const sc_signal_in_if<T>& interface) {
+        detail::bind_port(handle_, interface.native_handle());
+        interface_ = &interface;
         port_ = nullptr;
     }
-    void operator()(const sc_signal<T>& signal) { bind(signal); }
+    void operator()(const sc_signal_in_if<T>& interface) {
+        bind(interface);
+    }
     void bind(const sc_in& port) {
         for (auto* current = &port;
              current != nullptr; current = current->port_) {
@@ -1174,20 +1256,28 @@ public:
             }
         }
         detail::bind_port(handle_, port.native_handle());
-        signal_ = nullptr;
+        interface_ = nullptr;
         port_ = &port;
     }
     void operator()(const sc_in& port) { bind(port); }
-    void bind(const sc_export<sc_signal<T>>& export_object) {
-        bind(export_object.get_interface());
+    template <typename Interface>
+        requires std::is_base_of_v<
+            sc_signal_in_if<T>, Interface>
+    void bind(const sc_export<Interface>& export_object) {
+        detail::bind_port(
+            handle_, export_object.native_handle());
+        interface_ = &export_object.get_interface();
+        port_ = nullptr;
     }
-    void operator()(
-        const sc_export<sc_signal<T>>& export_object) {
+    template <typename Interface>
+        requires std::is_base_of_v<
+            sc_signal_in_if<T>, Interface>
+    void operator()(const sc_export<Interface>& export_object) {
         bind(export_object);
     }
     [[nodiscard]] const T& read() const {
-        if (signal_ != nullptr) {
-            return signal_->read();
+        if (interface_ != nullptr) {
+            return interface_->read();
         }
         if (port_ != nullptr) {
             return port_->read();
@@ -1199,8 +1289,8 @@ public:
         return value_;
     }
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
-        if (signal_ != nullptr) {
-            return signal_->native_handle();
+        if (interface_ != nullptr) {
+            return interface_->native_handle();
         }
         return port_ == nullptr ? handle_ : port_->native_handle();
     }
@@ -1213,7 +1303,7 @@ public:
     operator const T&() const { return read(); }
 
 private:
-    const sc_signal<T>* signal_{};
+    const sc_signal_in_if<T>* interface_{};
     const sc_in* port_{};
     fsim_sc_handle_v1 handle_{};
     mutable T value_{};
@@ -1222,6 +1312,8 @@ private:
 template <typename T>
 class sc_out {
 public:
+    using value_type = T;
+
     sc_out() = default;
     explicit sc_out(const char* name)
         : sc_out(name, FSIM_SC_OUTPUT) {}
@@ -1235,12 +1327,14 @@ protected:
 
 public:
 
-    void bind(sc_signal<T>& signal) {
-        detail::bind_port(handle_, signal.native_handle());
-        signal_ = &signal;
+    void bind(sc_signal_inout_if<T>& interface) {
+        detail::bind_port(handle_, interface.native_handle());
+        interface_ = &interface;
         port_ = nullptr;
     }
-    void operator()(sc_signal<T>& signal) { bind(signal); }
+    void operator()(sc_signal_inout_if<T>& interface) {
+        bind(interface);
+    }
     void bind(sc_out& port) {
         for (auto* current = &port;
              current != nullptr; current = current->port_) {
@@ -1249,20 +1343,28 @@ public:
             }
         }
         detail::bind_port(handle_, port.native_handle());
-        signal_ = nullptr;
+        interface_ = nullptr;
         port_ = &port;
     }
     void operator()(sc_out& port) { bind(port); }
-    void bind(const sc_export<sc_signal<T>>& export_object) {
-        bind(export_object.get_interface());
+    template <typename Interface>
+        requires std::is_base_of_v<
+            sc_signal_inout_if<T>, Interface>
+    void bind(const sc_export<Interface>& export_object) {
+        detail::bind_port(
+            handle_, export_object.native_handle());
+        interface_ = &export_object.get_interface();
+        port_ = nullptr;
     }
-    void operator()(
-        const sc_export<sc_signal<T>>& export_object) {
+    template <typename Interface>
+        requires std::is_base_of_v<
+            sc_signal_inout_if<T>, Interface>
+    void operator()(const sc_export<Interface>& export_object) {
         bind(export_object);
     }
     void write(const T& value) {
-        if (signal_ != nullptr) {
-            signal_->write(value);
+        if (interface_ != nullptr) {
+            interface_->write(value);
             return;
         }
         if (port_ != nullptr) {
@@ -1275,8 +1377,8 @@ public:
         detail::write_object(handle_, value);
     }
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
-        if (signal_ != nullptr) {
-            return signal_->native_handle();
+        if (interface_ != nullptr) {
+            return interface_->native_handle();
         }
         return port_ == nullptr ? handle_ : port_->native_handle();
     }
@@ -1286,7 +1388,7 @@ public:
     }
 
 private:
-    sc_signal<T>* signal_{};
+    sc_signal_inout_if<T>* interface_{};
     sc_out* port_{};
     fsim_sc_handle_v1 handle_{};
 };
@@ -1298,22 +1400,31 @@ public:
     explicit sc_inout(const char* name)
         : sc_out<T>(name, FSIM_SC_INOUT) {}
 
-    void bind(sc_signal<T>& signal) {
-        sc_out<T>::bind(signal);
-        input_.bind(signal);
+    void bind(sc_signal_inout_if<T>& interface) {
+        sc_out<T>::bind(interface);
+        input_.bind(interface);
         port_ = nullptr;
     }
-    void operator()(sc_signal<T>& signal) { bind(signal); }
+    void operator()(sc_signal_inout_if<T>& interface) {
+        bind(interface);
+    }
     void bind(sc_inout& port) {
         sc_out<T>::bind(static_cast<sc_out<T>&>(port));
         port_ = &port;
     }
     void operator()(sc_inout& port) { bind(port); }
-    void bind(const sc_export<sc_signal<T>>& export_object) {
-        bind(export_object.get_interface());
+    template <typename Interface>
+        requires std::is_base_of_v<
+            sc_signal_inout_if<T>, Interface>
+    void bind(const sc_export<Interface>& export_object) {
+        sc_out<T>::bind(export_object);
+        input_.bind(export_object.get_interface());
+        port_ = nullptr;
     }
-    void operator()(
-        const sc_export<sc_signal<T>>& export_object) {
+    template <typename Interface>
+        requires std::is_base_of_v<
+            sc_signal_inout_if<T>, Interface>
+    void operator()(const sc_export<Interface>& export_object) {
         bind(export_object);
     }
     [[nodiscard]] const T& read() const {
@@ -1718,6 +1829,42 @@ template <typename T>
     return handle;
 }
 
+template <typename Interface>
+[[nodiscard]] fsim_sc_handle_v1 register_export(
+    const char* name) {
+    using interface_traits =
+        signal_interface_traits<std::remove_cv_t<Interface>>;
+    if constexpr (!interface_traits::supported) {
+        return 0;
+    } else {
+        using traits =
+            value_traits<typename interface_traits::value_type>;
+        static_assert(
+            traits::supported,
+            "this fsim SystemC export value type is not supported");
+        if (current_host == nullptr || current_module == 0) {
+            return 0;
+        }
+        if (current_host->register_export == nullptr
+            || name == nullptr || *name == '\0') {
+            throw std::logic_error{
+                "named SystemC export requires an active "
+                "elaboration host"};
+        }
+        fsim_sc_handle_v1 handle = 0;
+        check_status(
+            current_host->register_export(
+                current_host->context,
+                current_module,
+                name,
+                traits::encoding,
+                traits::width,
+                &handle),
+            "register export");
+        return handle;
+    }
+}
+
 inline fsim_sc_handle_v1 register_event(const char* name) {
     if (current_host == nullptr || current_module == 0) {
         return 0;
@@ -1864,6 +2011,23 @@ inline void bind_port(
         "bind port to channel");
 }
 
+inline void bind_export(
+    const fsim_sc_handle_v1 export_handle,
+    const fsim_sc_handle_v1 target) {
+    if (export_handle == 0 || target == 0) {
+        return;
+    }
+    if (current_host == nullptr
+        || current_host->bind_export == nullptr) {
+        throw std::logic_error{
+            "SystemC export binding requires an active elaboration host"};
+    }
+    check_status(
+        current_host->bind_export(
+            current_host->context, export_handle, target),
+        "bind export");
+}
+
 template <typename T>
 [[nodiscard]] T read_object(const fsim_sc_handle_v1 object) {
     using traits = value_traits<std::remove_cv_t<T>>;
@@ -1932,6 +2096,162 @@ void write_object(
 } // namespace sc_core::detail
 
 namespace fsim::systemc {
+
+/// An elaboration-time placeholder for a VHDL or Verilog/SystemVerilog child.
+///
+/// Construct this as a member of an sc_module, connect its typed ports to
+/// objects registered on that module, and select the actual HDL design unit
+/// with an explicit binding for the resulting hierarchy path in fsim.toml.
+class hdl_instance final {
+public:
+    explicit hdl_instance(const char* name)
+        : host_(sc_core::detail::current_host) {
+        if (host_ == nullptr || name == nullptr || *name == '\0'
+            || sc_core::detail::current_module == 0
+            || host_->register_foreign_child == nullptr
+            || host_->connect_foreign_port == nullptr) {
+            throw std::logic_error{
+                "hdl_instance construction requires an active fsim "
+                "SystemC hierarchy host"};
+        }
+        sc_core::detail::check_status(
+            host_->register_foreign_child(
+                host_->context,
+                sc_core::detail::current_module,
+                name,
+                &handle_),
+            "register HDL child instance");
+        if (handle_ == 0) {
+            throw std::runtime_error{
+                "fsim SystemC host returned an invalid HDL child handle"};
+        }
+    }
+
+    hdl_instance(const hdl_instance&) = delete;
+    hdl_instance& operator=(const hdl_instance&) = delete;
+
+    template <typename T>
+    void bind_input(
+        const char* name, const sc_core::sc_in<T>& object) {
+        connect<T>(name, FSIM_SC_INPUT, object.native_handle());
+    }
+
+    template <typename T>
+    void bind_input(
+        const char* name, const sc_core::sc_inout<T>& object) {
+        connect<T>(name, FSIM_SC_INPUT, object.native_handle());
+    }
+
+    template <typename T>
+    void bind_input(
+        const char* name,
+        const sc_core::sc_signal_in_if<T>& object) {
+        connect<T>(name, FSIM_SC_INPUT, object.native_handle());
+    }
+
+    template <typename Interface>
+        requires sc_core::detail::
+            signal_interface_traits<Interface>::supported
+    void bind_input(
+        const char* name,
+        const sc_core::sc_export<Interface>& object) {
+        using value_type = typename sc_core::detail::
+            signal_interface_traits<Interface>::value_type;
+        connect<value_type>(
+            name, FSIM_SC_INPUT, object.native_handle());
+    }
+
+    template <typename T>
+    void bind_output(
+        const char* name, const sc_core::sc_out<T>& object) {
+        connect<T>(name, FSIM_SC_OUTPUT, object.native_handle());
+    }
+
+    template <typename T>
+    void bind_output(
+        const char* name,
+        const sc_core::sc_signal_inout_if<T>& object) {
+        connect<T>(name, FSIM_SC_OUTPUT, object.native_handle());
+    }
+
+    template <typename Interface>
+        requires (
+            sc_core::detail::
+                signal_interface_traits<Interface>::supported
+            && sc_core::detail::
+                signal_interface_traits<Interface>::writable)
+    void bind_output(
+        const char* name,
+        const sc_core::sc_export<Interface>& object) {
+        using value_type = typename sc_core::detail::
+            signal_interface_traits<Interface>::value_type;
+        connect<value_type>(
+            name, FSIM_SC_OUTPUT, object.native_handle());
+    }
+
+    template <typename T>
+    void bind_inout(
+        const char* name, const sc_core::sc_inout<T>& object) {
+        connect<T>(name, FSIM_SC_INOUT, object.native_handle());
+    }
+
+    template <typename T>
+    void bind_inout(
+        const char* name,
+        const sc_core::sc_signal_inout_if<T>& object) {
+        connect<T>(name, FSIM_SC_INOUT, object.native_handle());
+    }
+
+    template <typename Interface>
+        requires (
+            sc_core::detail::
+                signal_interface_traits<Interface>::supported
+            && sc_core::detail::
+                signal_interface_traits<Interface>::writable)
+    void bind_inout(
+        const char* name,
+        const sc_core::sc_export<Interface>& object) {
+        using value_type = typename sc_core::detail::
+            signal_interface_traits<Interface>::value_type;
+        connect<value_type>(
+            name, FSIM_SC_INOUT, object.native_handle());
+    }
+
+    [[nodiscard]] fsim_sc_handle_v1
+    native_handle() const noexcept {
+        return handle_;
+    }
+
+private:
+    template <typename T>
+    void connect(
+        const char* name,
+        const fsim_sc_port_direction_v1 direction,
+        const fsim_sc_handle_v1 object) {
+        using traits =
+            sc_core::detail::value_traits<std::remove_cv_t<T>>;
+        static_assert(
+            traits::supported,
+            "this fsim SystemC value type is not supported");
+        if (name == nullptr || *name == '\0' || object == 0) {
+            throw std::invalid_argument{
+                "HDL child port name and bound object must be valid"};
+        }
+        sc_core::detail::check_status(
+            host_->connect_foreign_port(
+                host_->context,
+                handle_,
+                name,
+                direction,
+                traits::encoding,
+                traits::width,
+                object),
+            "connect HDL child port");
+    }
+
+    const fsim_sc_host_v1* host_{};
+    fsim_sc_handle_v1 handle_{};
+};
 
 template <typename Module>
 struct module_factory_state {
@@ -2007,7 +2327,11 @@ template <typename Module>
         || host->value_changed == nullptr
         || host->bind_port == nullptr
         || host->register_native_module == nullptr
-        || host->register_lifecycle == nullptr) {
+        || host->register_lifecycle == nullptr
+        || host->register_export == nullptr
+        || host->bind_export == nullptr
+        || host->register_foreign_child == nullptr
+        || host->connect_foreign_port == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

@@ -26,6 +26,7 @@ struct HierarchyRegistry::Impl {
         enum class Kind : std::uint8_t {
             port,
             signal,
+            export_object,
         };
 
         fsim_sc_handle_v1 module{};
@@ -131,6 +132,9 @@ struct HierarchyRegistry::Impl {
         for (const auto& signal : description.internal_signals) {
             objects.erase(signal.handle);
             internal_signals.erase(signal.handle);
+        }
+        for (const auto& export_object : description.exports) {
+            objects.erase(export_object.handle);
         }
         pending.erase(found);
     }
@@ -297,6 +301,54 @@ extern "C" fsim_sc_status_v1 registry_register_port(
                 encoding,
                 width,
                 HierarchyRegistry::Impl::Object::Kind::port});
+        *result = *handle;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_register_export(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* name,
+    const fsim_sc_value_encoding_v1 encoding,
+    const std::uint32_t width,
+    fsim_sc_handle_v1* result) noexcept {
+    if (context == nullptr || module == 0 || name == nullptr
+        || *name == '\0' || width == 0 || result == nullptr
+        || !valid_encoding(encoding)) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.pending.find(module);
+        if (found == registry.pending.end()
+            || std::any_of(
+                found->second.exports.begin(),
+                found->second.exports.end(),
+                [&](const ExportDescription& export_object) {
+                    return export_object.name == name;
+                })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto handle = registry.allocate_handle();
+        if (!handle) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+        const auto index = found->second.exports.size();
+        found->second.exports.push_back(
+            {*handle, name, encoding, width, 0});
+        registry.objects.emplace(
+            *handle,
+            HierarchyRegistry::Impl::Object{
+                module,
+                index,
+                encoding,
+                width,
+                HierarchyRegistry::Impl::Object::Kind::
+                    export_object});
         *result = *handle;
         return FSIM_SC_OK;
     } catch (...) {
@@ -755,6 +807,11 @@ extern "C" fsim_sc_status_v1 registry_bind_port(
                     == HierarchyRegistry::Impl::Object::Kind::port
                 && target_object->second.module
                     != pending->second.parent)
+            || (target_object->second.kind
+                    == HierarchyRegistry::Impl::Object::Kind::
+                        export_object
+                && target_object->second.module
+                    != pending->second.parent)
             || port_object->second.index
                 >= pending->second.ports.size()) {
             return FSIM_SC_INVALID_ARGUMENT;
@@ -766,6 +823,82 @@ extern "C" fsim_sc_status_v1 registry_bind_port(
             return FSIM_SC_INVALID_ARGUMENT;
         }
         description.bound_object = channel;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_bind_export(
+    void* context,
+    const fsim_sc_handle_v1 export_handle,
+    const fsim_sc_handle_v1 target) noexcept {
+    if (context == nullptr || export_handle == 0 || target == 0) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto export_object =
+            registry.objects.find(export_handle);
+        const auto target_object = registry.objects.find(target);
+        if (export_object == registry.objects.end()
+            || target_object == registry.objects.end()
+            || export_object->second.kind
+                != HierarchyRegistry::Impl::Object::Kind::
+                    export_object
+            || (target_object->second.kind
+                    != HierarchyRegistry::Impl::Object::Kind::signal
+                && target_object->second.kind
+                    != HierarchyRegistry::Impl::Object::Kind::
+                        export_object)
+            || export_object->second.encoding
+                != target_object->second.encoding
+            || export_object->second.width
+                != target_object->second.width) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto module =
+            registry.pending.find(export_object->second.module);
+        if (module == registry.pending.end()
+            || (target_object->second.module
+                    != export_object->second.module
+                && target_object->second.module
+                    != module->second.parent)
+            || export_object->second.index
+                >= module->second.exports.size()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        auto current = target;
+        std::unordered_set<fsim_sc_handle_v1> visited;
+        while (current != 0 && visited.insert(current).second) {
+            if (current == export_handle) {
+                return FSIM_SC_INVALID_ARGUMENT;
+            }
+            const auto object = registry.objects.find(current);
+            if (object == registry.objects.end()
+                || object->second.kind
+                    != HierarchyRegistry::Impl::Object::Kind::
+                        export_object) {
+                break;
+            }
+            const auto owner =
+                registry.pending.find(object->second.module);
+            if (owner == registry.pending.end()
+                || object->second.index >= owner->second.exports.size()) {
+                return FSIM_SC_INVALID_ARGUMENT;
+            }
+            current =
+                owner->second.exports[object->second.index]
+                    .bound_object;
+        }
+        auto& description =
+            module->second.exports[export_object->second.index];
+        if (description.bound_object != 0
+            && description.bound_object != target) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        description.bound_object = target;
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -1432,6 +1565,8 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.bind_port = registry_bind_port;
     host.register_native_module = registry_register_native_module;
     host.register_lifecycle = registry_register_lifecycle;
+    host.register_export = registry_register_export;
+    host.bind_export = registry_bind_export;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;

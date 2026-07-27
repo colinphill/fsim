@@ -77,6 +77,14 @@ struct InternalSignalDescription {
     std::vector<std::uint8_t> initial_value;
 };
 
+struct ExportDescription {
+    fsim_sc_handle_v1 handle{};
+    std::string name;
+    fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
+    std::uint32_t width{};
+    fsim_sc_handle_v1 bound_object{};
+};
+
 struct LifecycleDescription {
     fsim_sc_lifecycle_entry_v1 before_end_of_elaboration{};
     fsim_sc_lifecycle_entry_v1 end_of_elaboration{};
@@ -96,6 +104,7 @@ struct ModuleDescription {
     std::vector<EventDescription> events;
     std::vector<PrimitiveChannelDescription> primitive_channels;
     std::vector<InternalSignalDescription> internal_signals;
+    std::vector<ExportDescription> exports;
     std::vector<ModuleDescription> native_children;
     LifecycleDescription lifecycle;
 };

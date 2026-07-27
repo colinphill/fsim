@@ -143,6 +143,8 @@ The following foundation is implemented:
   compiler;
 - typed, bidirectional SystemC/HDL hierarchy construction with either side as
   the selected top;
+- a typed `fsim::systemc::hdl_instance` facade extension for constructor-time
+  SystemC-to-VHDL/SV child declaration, with manifest-selected implementation;
 - statically sensitive facade-defined `SC_METHOD` callbacks using common
   scheduler/update semantics and contained native exceptions;
 - dynamic `SC_METHOD` time/event `next_trigger`, opaque named-event
@@ -161,8 +163,10 @@ The following foundation is implemented:
 - recursive constructor-time native SystemC child modules with direct-parent
   signal aliases and stable common-runtime process registration;
 - per-root SystemC elaboration/start/end lifecycle callbacks plus direct-parent
-  port chains and bounded typed signal-export chains; and
-- a stable catalog covering 307 unique current production diagnostic codes.
+  port chains and standard typed signal-interface export chains;
+- explicit SystemC export hierarchy objects resolved into common DesignIR
+  signal aliases; and
+- a stable catalog covering 308 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -377,7 +381,8 @@ Completed groundwork:
   hierarchy handles, child process execution, and direct-parent signal
   binding;
 - isolated per-build-root lifecycle phases, direct child-to-parent port
-  chains, and typed `sc_export<sc_signal<T>>` endpoint chains; and
+  chains, standard signal interface classes, and typed export hierarchy
+  chains resolved to common signals; and
 - compiler-emitted dependency closure for GCC-like SystemC builds.
 
 Planned implementation sequence:
@@ -387,10 +392,10 @@ Planned implementation sequence:
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
-3. Complete standard signal interface classes, export metadata, multi-hop
-   hierarchical port policies, and broader standard channel behavior; module
-   lifecycle phases, native construction, direct-parent port chains, bounded
-   typed signal exports, typed port-to-signal aliases, module-local
+3. Complete arbitrary custom-interface metadata, multi-hop hierarchical port
+   policies, and broader standard channel behavior; standard signal
+   interfaces, export metadata, module lifecycle phases, native construction,
+   direct-parent port chains, typed port-to-signal aliases, module-local
    `sc_signal`, primitive-channel update dispatch, `notify_delayed`, dynamic
    method sensitivity, OR/AND event expressions, pending-notification rules,
    and cancellation now use the common scheduler.

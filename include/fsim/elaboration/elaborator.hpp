@@ -81,6 +81,13 @@ struct ExternalInternalSignal {
     runtime::PackedLogic4 initial_value;
 };
 
+struct ExternalExport {
+    std::uint64_t handle{};
+    std::string name;
+    frontend::Type type;
+    std::uint64_t bound_object{};
+};
+
 /// Immutable, ABI-neutral description produced by one constructed SystemC
 /// elaboration factory. `path` is the full DesignIR instance path and `target`
 /// is the canonical `systemc:plugin.factory` manifest spelling.
@@ -95,6 +102,7 @@ struct SystemCInstanceDescription {
     std::vector<ExternalEvent> events;
     std::vector<ExternalPrimitiveChannel> primitive_channels;
     std::vector<ExternalInternalSignal> internal_signals;
+    std::vector<ExternalExport> exports;
     std::vector<SystemCInstanceDescription> native_children;
 };
 
@@ -172,6 +180,12 @@ struct SystemCSignalInfo {
     runtime::simir::SignalId signal{};
 };
 
+struct SystemCExportInfo {
+    std::string name;
+    std::uint64_t native_handle{};
+    runtime::simir::SignalId signal{};
+};
+
 struct SystemCInstanceInfo {
     std::uint32_t id{};
     std::string target;
@@ -181,6 +195,7 @@ struct SystemCInstanceInfo {
     std::vector<SystemCEventInfo> events;
     std::vector<SystemCPrimitiveChannelInfo> primitive_channels;
     std::vector<SystemCSignalInfo> internal_signals;
+    std::vector<SystemCExportInfo> exports;
 };
 
 struct SystemCProcessInfo {

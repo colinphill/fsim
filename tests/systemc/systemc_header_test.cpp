@@ -93,6 +93,14 @@ int main() {
         std::is_base_of_v<
             sc_core::sc_prim_channel,
             sc_core::sc_signal<bool>>);
+    static_assert(
+        std::is_base_of_v<
+            sc_core::sc_signal_in_if<bool>,
+            sc_core::sc_signal<bool>>);
+    static_assert(
+        std::is_base_of_v<
+            sc_core::sc_signal_inout_if<bool>,
+            sc_core::sc_signal<bool>>);
     sc_core::sc_signal<sc_dt::sc_uint<8>> initialized{
         "initialized", sc_dt::sc_uint<8>{7}};
     assert(initialized.read().to_uint64() == 7);
@@ -185,8 +193,9 @@ int main() {
     }
     assert(rejected_export_cycle);
 
-    sc_core::sc_export<sc_core::sc_signal<bool>> signal_export{
-        "signal_export"};
+    sc_core::sc_export<
+        sc_core::sc_signal_in_if<bool>> signal_export{
+            "signal_export"};
     signal_export.bind(clock);
     sc_core::sc_in<bool> exported_input{"exported_input"};
     exported_input.bind(signal_export);

@@ -21,10 +21,10 @@ registered primitive-channel update callbacks, and kernel-backed module-local
 alias graph, including across an HDL/SystemC instance boundary.
 Constructor-time native SystemC child members elaborate recursively and may
 bind their ports directly to parent signals or ports. Module lifecycle
-callbacks execute at deterministic common-kernel boundaries, and bounded
-typed signal-export chains resolve to common signals. Standard signal
-interface classes, general export metadata, and fiber-backed thread execution
-are still work in progress.
+callbacks execute at deterministic common-kernel boundaries. Standard typed
+signal interfaces and exports retain hierarchy metadata while resolving to
+common signals. General custom-interface metadata and fiber-backed thread
+execution are still work in progress.
 
 ## Source inclusion
 
@@ -74,6 +74,28 @@ Verilog/SystemVerilog module instance may bind explicitly to
 register a named foreign-child placeholder and its typed ports during
 elaboration; an `fsim.toml` binding for that full instance path then selects a
 `vhdl:LIBRARY.ENTITY(ARCHITECTURE)` or `sv:LIBRARY.MODULE` target.
+
+Facade-based modules declare the reverse direction with the fsim extension
+`fsim::systemc::hdl_instance`:
+
+```cpp
+SC_MODULE(Bridge) {
+    sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+    sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+    fsim::systemc::hdl_instance u_hdl{"u_hdl"};
+
+    SC_CTOR(Bridge) {
+        u_hdl.bind_input("value", value);
+        u_hdl.bind_output("inverted", inverted);
+    }
+};
+```
+
+For a SystemC instance named `top.u_bridge`, the child above has hierarchy path
+`top.u_bridge.u_hdl`. A manifest binding for that exact path chooses its VHDL
+or Verilog/SystemVerilog implementation. `bind_input`, `bind_output`, and
+`bind_inout` infer encoding and width from supported SystemC signals, ports, or
+signal-interface exports. The direction is the HDL child's port direction.
 
 Both directions are now elaborated recursively into the same `DesignIR`. The
 common elaborator assigns hierarchy/object/process IDs, checks every port and
@@ -254,13 +276,18 @@ child delegates C++ reads or writes through the parent port, while the
 elaborator aliases both registered port handles to one common signal ID.
 Bindings that skip a hierarchy level are rejected during factory construction.
 
-`sc_export<sc_signal<T>>` may bind a concrete `sc_signal<T>` endpoint, and one
-such export may chain through another before a child port binds it. Resolution
-occurs during construction, so the child ultimately records the signal handle
-and adds neither storage nor a scheduler delta. Unbound and cyclic export
-chains are rejected. Standard `sc_signal_in_if<T>` and
-`sc_signal_inout_if<T>` types, arbitrary user interfaces in kernel metadata,
-and export hierarchy objects remain future work.
+`sc_signal<T>` implements `sc_signal_in_if<T>`,
+`sc_signal_write_if<T>`, and `sc_signal_inout_if<T>`. An
+`sc_export<sc_signal_in_if<T>>` or
+`sc_export<sc_signal_inout_if<T>>` may bind a compatible signal endpoint, and
+one same-typed export may chain through another before a child port binds it.
+The append-only host ABI records every supported export and binding edge.
+DesignIR preserves the export paths and stable native handles while resolving
+the chain to the endpoint's dense signal ID, adding neither storage nor a
+scheduler delta. The earlier concrete `sc_export<sc_signal<T>>` spelling
+remains source-compatible. Unbound, cyclic, unknown, and conflicting export
+chains are rejected. Arbitrary user interfaces in kernel metadata remain
+future work.
 
 Every factory root registers `before_end_of_elaboration`,
 `end_of_elaboration`, `start_of_simulation`, and `end_of_simulation`. The first
@@ -278,8 +305,8 @@ The root factory object owns native C++ child members, so native children are
 not selected by a separate manifest binding. Crossings from either the root
 or a native child into VHDL or Verilog/SystemVerilog continue to require an
 explicit foreign-child binding. Dynamic module creation after construction,
-non-parent port chains, export metadata, and arbitrary interface binding are
-not yet implemented.
+non-parent port chains, and arbitrary custom-interface metadata are not yet
+implemented.
 
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0

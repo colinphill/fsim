@@ -58,6 +58,14 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, register_native_module),
     "lifecycle registration must remain append-only");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, register_export)
+        > offsetof(fsim_sc_host_v1, register_lifecycle),
+    "export registration must remain append-only");
+_Static_assert(
+    offsetof(fsim_sc_host_v1, bind_export)
+        > offsetof(fsim_sc_host_v1, register_export),
+    "export binding must remain append-only");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");

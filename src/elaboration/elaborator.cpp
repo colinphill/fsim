@@ -3196,6 +3196,99 @@ private:
             }
         }
 
+        std::unordered_map<
+            std::uint64_t, const ExternalExport*> exports_by_handle;
+        for (const auto& export_object : instance.exports) {
+            exports_by_handle.emplace(
+                export_object.handle, &export_object);
+        }
+        std::unordered_set<std::uint64_t> resolving_exports;
+        std::unordered_set<std::uint64_t> invalid_exports;
+        const auto resolve_export =
+            [&](const auto& self,
+                const ExternalExport& export_object)
+                -> std::optional<SignalId> {
+              if (const auto resolved =
+                      objects.find(export_object.handle);
+                  resolved != objects.end()) {
+                  return resolved->second;
+              }
+              if (export_object.bound_object == 0) {
+                  if (invalid_exports.insert(
+                          export_object.handle).second) {
+                      report(
+                          "FSIM-ELAB-BIND-048",
+                          "SystemC export '" + path + "."
+                              + export_object.name
+                              + "' is unbound",
+                          {});
+                  }
+                  return std::nullopt;
+              }
+              if (!resolving_exports.insert(
+                      export_object.handle).second) {
+                  if (invalid_exports.insert(
+                          export_object.handle).second) {
+                      report(
+                          "FSIM-ELAB-BIND-048",
+                          "SystemC export chain at '" + path + "."
+                              + export_object.name
+                              + "' is cyclic",
+                          {});
+                  }
+                  return std::nullopt;
+              }
+              std::optional<SignalId> signal;
+              if (const auto direct =
+                      objects.find(export_object.bound_object);
+                  direct != objects.end()) {
+                  signal = direct->second;
+              } else if (const auto nested =
+                             exports_by_handle.find(
+                                 export_object.bound_object);
+                         nested != exports_by_handle.end()) {
+                  signal = self(self, *nested->second);
+              } else if (invalid_exports.insert(
+                             export_object.handle).second) {
+                  report(
+                      "FSIM-ELAB-BIND-048",
+                      "SystemC export '" + path + "."
+                          + export_object.name
+                          + "' binds an unknown object handle",
+                      {});
+              }
+              resolving_exports.erase(export_object.handle);
+              if (signal) {
+                  objects.emplace(export_object.handle, *signal);
+              }
+              return signal;
+            };
+        for (const auto& export_object : instance.exports) {
+            const auto signal =
+                resolve_export(resolve_export, export_object);
+            if (!signal) {
+                continue;
+            }
+            const auto full_name = path + "." + export_object.name;
+            const auto local =
+                aliases.emplace(export_object.name, *signal);
+            const auto full = aliases.emplace(full_name, *signal);
+            if ((!local.second && local.first->second != *signal)
+                || (!full.second && full.first->second != *signal)) {
+                report(
+                    "FSIM-ELAB-BIND-048",
+                    "SystemC export alias '" + full_name
+                        + "' conflicts with another object",
+                    {});
+                continue;
+            }
+            design_.signal_by_name_.emplace(full_name, *signal);
+            if (path == design_.top_) {
+                design_.signal_by_name_.emplace(
+                    export_object.name, *signal);
+            }
+        }
+
         SystemCInstanceInfo info;
         info.id = static_cast<std::uint32_t>(
             design_.systemc_instances_.size());
@@ -3227,6 +3320,16 @@ private:
                 info.internal_signals.push_back(
                     {signal.name,
                      signal.handle,
+                     runtime_signal->second});
+            }
+        }
+        for (const auto& export_object : instance.exports) {
+            if (const auto runtime_signal =
+                    objects.find(export_object.handle);
+                runtime_signal != objects.end()) {
+                info.exports.push_back(
+                    {export_object.name,
+                     export_object.handle,
                      runtime_signal->second});
             }
         }

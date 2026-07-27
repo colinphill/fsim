@@ -340,6 +340,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-045` | error | A SystemC edge sensitivity references a non-scalar object. |
 | `FSIM-ELAB-BIND-046` | error | A SystemC port/channel binding references an unknown internal signal or aliases one internal signal to conflicting parent signals. |
 | `FSIM-ELAB-BIND-047` | error | A constructed native SystemC child has an inconsistent parent handle or direct-child path. |
+| `FSIM-ELAB-BIND-048` | error | A typed SystemC export is unbound, cyclic, references an unknown object, or conflicts with another hierarchy alias. |
 
 ## Time, runtime, trace, and design cache
 

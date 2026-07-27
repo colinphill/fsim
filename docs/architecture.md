@@ -61,11 +61,16 @@ manifest binding at that full path resolves the placeholder to a VHDL
 architecture or SV module. The common elaborator remains authoritative in
 both directions and supports recursive alternation between languages while
 retaining one stable-ID namespace, one port-conversion policy, and recursion
-detection. Foreign children can be created only during elaboration, never
+detection. Facade modules create these placeholders with
+`fsim::systemc::hdl_instance`; the native ABI remains its implementation
+mechanism rather than the user-facing construction interface. Foreign
+children can be created only during elaboration, never
 dynamically after simulation starts. Native SystemC child modules are captured
 recursively by the same factory root, and child ports may alias a direct
 parent signal or port. Concrete typed signal-export chains resolve to that
-same alias graph. Each constructed factory root owns independent lifecycle
+same alias graph; standard signal-interface exports retain their own stable
+hierarchy handles and paths while sharing the resolved dense signal ID. Each
+constructed factory root owns independent lifecycle
 state: the two elaboration callbacks run after common-object binding, the
 start callback runs before the first kernel start, and the end callback runs
 at terminal completion or session teardown.

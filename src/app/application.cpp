@@ -919,6 +919,16 @@ elaboration::SystemCInstanceDescription systemc_description(
             signal.initial_value),
     });
   }
+  result.exports.reserve(module.exports.size());
+  for (const auto& export_object : module.exports) {
+    result.exports.push_back({
+        export_object.handle,
+        export_object.name,
+        systemc_type(
+            export_object.encoding, export_object.width),
+        export_object.bound_object,
+    });
+  }
   result.native_children.reserve(module.native_children.size());
   for (const auto& child : module.native_children) {
     const auto child_path =
@@ -3053,6 +3063,11 @@ std::optional<BuiltProject> build_project(
         for (const auto& signal : instance.internal_signals) {
           systemc_hierarchy->bind_runtime_object(
               signal.native_handle, signal.signal);
+        }
+        for (const auto& export_object : instance.exports) {
+          systemc_hierarchy->bind_runtime_object(
+              export_object.native_handle,
+              export_object.signal);
         }
       }
     } catch (const std::exception& error) {

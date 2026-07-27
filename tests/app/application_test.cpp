@@ -1002,16 +1002,18 @@ SC_MODULE(ExportHierarchy) {
   sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
       "inverted_channel", sc_dt::sc_logic{'1'}};
   sc_core::sc_export<
-      sc_core::sc_signal<sc_dt::sc_logic>> value_endpoint{
+      sc_core::sc_signal_in_if<sc_dt::sc_logic>> value_endpoint{
           "value_endpoint"};
   sc_core::sc_export<
-      sc_core::sc_signal<sc_dt::sc_logic>> value_export{
+      sc_core::sc_signal_in_if<sc_dt::sc_logic>> value_export{
           "value_export"};
   sc_core::sc_export<
-      sc_core::sc_signal<sc_dt::sc_logic>> inverted_endpoint{
+      sc_core::sc_signal_inout_if<sc_dt::sc_logic>>
+      inverted_endpoint{
           "inverted_endpoint"};
   sc_core::sc_export<
-      sc_core::sc_signal<sc_dt::sc_logic>> inverted_export{
+      sc_core::sc_signal_inout_if<sc_dt::sc_logic>>
+      inverted_export{
           "inverted_export"};
   NativeLeaf leaf;
 
@@ -1026,6 +1028,14 @@ SC_MODULE(ExportHierarchy) {
     leaf.value(value_export);
     leaf.inverted(inverted_export);
   }
+};
+
+SC_MODULE(UnboundExport) {
+  sc_core::sc_export<
+      sc_core::sc_signal_in_if<sc_dt::sc_logic>> dangling{
+          "dangling"};
+
+  SC_CTOR(UnboundExport) {}
 };
 
 SC_MODULE(DeepMiddle) {
@@ -1159,78 +1169,18 @@ void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
 }
 void destroy_model(void*, void*) {}
-
-fsim_sc_status_v1 elaborate_bridge(
-    void* user,
-    const char* instance_name,
-    fsim_sc_handle_v1 module,
-    fsim_sc_handle_v1,
-    void** result) {
-  const auto* host = static_cast<const fsim_sc_host_v1*>(user);
-  if (host == nullptr || instance_name == nullptr
-      || *instance_name == '\0' || result == nullptr) {
-    return FSIM_SC_INVALID_ARGUMENT;
-  }
-  fsim_sc_handle_v1 value = 0;
-  fsim_sc_handle_v1 inverted = 0;
-  fsim_sc_handle_v1 child = 0;
-  auto status = host->register_port(
-      host->context,
-      module,
-      "value",
-      FSIM_SC_INPUT,
-      FSIM_SC_LOGIC4,
-      1,
-      &value);
-  if (status != FSIM_SC_OK) {
-    return status;
-  }
-  status = host->register_port(
-      host->context,
-      module,
-      "inverted",
-      FSIM_SC_OUTPUT,
-      FSIM_SC_LOGIC4,
-      1,
-      &inverted);
-  if (status != FSIM_SC_OK) {
-    return status;
-  }
-  status = host->register_foreign_child(
-      host->context, module, "u_hdl", &child);
-  if (status != FSIM_SC_OK) {
-    return status;
-  }
-  status = host->connect_foreign_port(
-      host->context,
-      child,
-      "value",
-      FSIM_SC_INPUT,
-      FSIM_SC_LOGIC4,
-      1,
-      value);
-  if (status != FSIM_SC_OK) {
-    return status;
-  }
-  status = host->connect_foreign_port(
-      host->context,
-      child,
-      "inverted",
-      FSIM_SC_OUTPUT,
-      FSIM_SC_LOGIC4,
-      1,
-      inverted);
-  if (status != FSIM_SC_OK) {
-    return status;
-  }
-  *result = new int{42};
-  return FSIM_SC_OK;
 }
 
-void destroy_bridge(void*, void* object) {
-  delete static_cast<int*>(object);
-}
-}
+SC_MODULE(HdlBridge) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  fsim::systemc::hdl_instance u_hdl{"u_hdl"};
+
+  SC_CTOR(HdlBridge) {
+    u_hdl.bind_input("value", value);
+    u_hdl.bind_output("inverted", inverted);
+  }
+};
 
 extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     const fsim_sc_host_v1* host,
@@ -1254,12 +1204,8 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     return status;
   }
   const auto bridge_status =
-      registrar->register_elaboration_factory(
-      registrar->context,
-      "bridge",
-      elaborate_bridge,
-      destroy_bridge,
-      const_cast<fsim_sc_host_v1*>(host));
+      fsim::systemc::register_module_factory<HdlBridge>(
+          host, registrar, "bridge");
   if (bridge_status != FSIM_SC_OK) {
     return bridge_status;
   }
@@ -1360,6 +1306,12 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
           host, registrar, "export_hierarchy");
   if (export_status != FSIM_SC_OK) {
     return export_status;
+  }
+  const auto unbound_export_status =
+      fsim::systemc::register_module_factory<UnboundExport>(
+          host, registrar, "unbound_export");
+  if (unbound_export_status != FSIM_SC_OK) {
+    return unbound_export_status;
   }
   return fsim::systemc::register_module_factory<
       InvalidDeepBinding>(
@@ -1860,6 +1812,32 @@ end architecture rtl;
         assert(leaf->ports.size() == 2);
         if (through_internal_signals) {
           assert(parent->internal_signals.size() == 2);
+          assert(parent->exports.size() == 4);
+          assert(
+              parent->exports[0].signal
+              == parent->internal_signals[0].signal);
+          assert(
+              parent->exports[1].signal
+              == parent->internal_signals[0].signal);
+          assert(
+              parent->exports[2].signal
+              == parent->internal_signals[1].signal);
+          assert(
+              parent->exports[3].signal
+              == parent->internal_signals[1].signal);
+          const auto exported_input =
+              reference_project->design.find_signal(
+                  instance_path + ".value_export");
+          const auto exported_output =
+              reference_project->design.find_signal(
+                  instance_path + ".inverted_export");
+          assert(exported_input && exported_output);
+          assert(
+              *exported_input
+              == parent->internal_signals[0].signal);
+          assert(
+              *exported_output
+              == parent->internal_signals[1].signal);
           assert(
               leaf->ports[0].signal
               == parent->internal_signals[0].signal);
@@ -1964,6 +1942,20 @@ end architecture rtl;
   }
   assert(rejected_end_lifecycle);
   assert(throwing_end_simulation.poisoned());
+
+  auto unbound_export_config = hdl_systemc_config;
+  unbound_export_config.project.top =
+      "systemc:models.unbound_export";
+  unbound_export_config.bindings.clear();
+  fsim::diagnostic::Engine unbound_export_diagnostics;
+  assert(!fsim::app::build_project(
+      unbound_export_config, unbound_export_diagnostics));
+  assert(std::any_of(
+      unbound_export_diagnostics.diagnostics().begin(),
+      unbound_export_diagnostics.diagnostics().end(),
+      [](const fsim::diagnostic::Diagnostic& diagnostic) {
+        return diagnostic.code == "FSIM-ELAB-BIND-048";
+      }));
 
   auto invalid_deep_binding_config = hdl_systemc_config;
   invalid_deep_binding_config.project.top =

@@ -255,6 +255,22 @@ typedef struct fsim_sc_host_v1 {
         fsim_sc_lifecycle_entry_v1 start_of_simulation,
         fsim_sc_lifecycle_entry_v1 end_of_simulation,
         void* user);
+
+    /*
+     * Append-only typed export hierarchy. An export may bind a compatible
+     * signal or another export in the same module or its direct parent.
+     */
+    fsim_sc_status_v1 (*register_export)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* name,
+        fsim_sc_value_encoding_v1 encoding,
+        uint32_t width,
+        fsim_sc_handle_v1* result);
+    fsim_sc_status_v1 (*bind_export)(
+        void* context,
+        fsim_sc_handle_v1 export_handle,
+        fsim_sc_handle_v1 target);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {
