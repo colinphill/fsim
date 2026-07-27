@@ -40,7 +40,9 @@ The current tree contains:
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,
   yields, design stop, loops containing suspension points, update-phase and
   delayed writes, and a shared checked allocation-free single-word `Logic4`
-  `aval`/`bval` path into the simulation kernel;
+  `aval`/`bval` path into the simulation kernel; eligible processes owned by
+  one bounded elaborated specialization are lowered and optimized together in
+  one LLVM module while capability misses retain per-process fallback;
 - a checksummed persistent object-cache primitive with process-aware per-key
   locking, atomic replacement, stale-lock recovery, and LLVM native-object
   reuse plus cold/warm activity telemetry beneath the configured application
@@ -57,9 +59,9 @@ The current tree contains:
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
 particular, complete semantic analysis, general mixed-boundary conversions and
-multi-driver resolution, parameter/generic specialization, per-specialization
-LLVM module grouping, instrumented O0 debug execution, broader interpreter/JIT
-differential coverage, SystemC kernel integration and fibers,
+multi-driver resolution, parameter/generic specialization identity beyond the
+current instance-specific records, instrumented O0 debug execution, broader
+interpreter/JIT differential coverage, SystemC kernel integration and fibers,
 source/statement/process debugging, fractional-delay and declaration-based
 time semantics, IEEE VHDL packages, complete HDL event controls, and most
 testbench features remain work in progress. Unsupported syntax is diagnosed
@@ -178,10 +180,13 @@ allocation-free single-word `Logic4` representation for values up to 64 bits,
 including blocking, update-phase, and delayed writes. The plain-C runtime-table
 ABI retains its v1 prefix and appends `write_update` and `write_after` fields;
 generated code size-gates those fields per process before use. The configured
-cache stores native objects under `llvm-native`; `fsim build` reports native
+cache stores one native object per compiled specialization module under
+`llvm-native`; `fsim build` reports compiled process/module counts and native
 cache hits, misses, stores, and rejected entries. LLVM O0/O2 object identity
-includes scheduled-write kind and the exact delayed-write delay, plus wait kind,
-ordered operands and widths, and static sensitivity signal/edge data.
+includes the specialization-module identity and ordered process keys. Each
+process key includes scheduled-write kind and the exact delayed-write delay,
+plus wait kind, ordered operands and widths, and static sensitivity signal/edge
+data.
 `WaitOn` and `WaitSensitivity` use appended resume-status values while keeping
 the v1 result layout and its existing status values unchanged. The result
 identifies the boundary instruction; immutable SimIR retains the dynamic
@@ -189,8 +194,8 @@ signal list and static edge rules for the kernel. Consequently,
 sensitivity-only signals may exceed 64 bits because no signal value crosses
 the generated ABI. Builds without LLVM execute entirely through the reference
 evaluator. `fsim debug` currently remains interpreter-only; value-bearing
-operations wider than 64 bits, per-specialization module grouping, and broader
-differential coverage remain work in progress.
+operations wider than 64 bits, full parameter/generic specialization identity,
+and broader differential coverage remain work in progress.
 
 The application suite also compares a bounded scheduled-write design exactly
 between the interpreter and O2 hybrid engine. It checks an update commit at

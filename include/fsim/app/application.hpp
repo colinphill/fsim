@@ -116,8 +116,13 @@ class Simulation final {
   /// Number of processes using the LLVM executor. This is zero for the
   /// reference engine and for builds without the LLVM adapter.
   [[nodiscard]] std::size_t compiled_process_count() const noexcept;
+  /// Number of elaborated specialization modules containing those processes.
+  ///
+  /// Several processes directly owned by one specialization share a single
+  /// LLVM optimization and native-object cache unit.
+  [[nodiscard]] std::size_t compiled_module_count() const noexcept;
   /// Native-object cache activity incurred while materializing this
-  /// simulation's compiled processes.
+  /// simulation's compiled specialization modules.
   [[nodiscard]] NativeCacheStatistics
   native_cache_statistics() const noexcept;
   void set_signal_change_hook(SignalChangeHook hook);

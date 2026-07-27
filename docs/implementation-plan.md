@@ -8,7 +8,7 @@ evidence-backed progress of the current repository. It complements the
 [feature matrix](feature-matrix.md), which tracks individual language and
 runtime features.
 
-Last updated: 2026-07-26.
+Last updated: 2026-07-27.
 
 The repository is currently a pre-alpha architecture vertical slice. It is not
 the fsim v1 release, and a milestone is not complete merely because its
@@ -39,6 +39,9 @@ The following foundation is implemented:
   processes whose value-bearing operations are up to 64 bits, with O0/O2
   lowering for update-phase/delayed writes plus dynamic/static sensitivity
   waits, integrated as a hybrid per-process engine for `build`/`run`;
+- dense bounded specialization records and one LLVM module/native cache object
+  per specialization's eligible process group, with per-process interpreter
+  fallback;
 - a persistent LLVM native-object cache selected beneath the configured
   application cache, with application-visible cold/warm telemetry and
   identity for scheduled-write kind/delay and wait kind, operands, widths, and
@@ -142,6 +145,11 @@ Completed:
   rules, boundary instructions, resume PCs, and frame states, while allowing
   sensitivity-only signals wider than 64 bits;
 - LLVM-enabled build/run selection with typed per-process fallback;
+- dense instance-specific specialization records containing canonical unit
+  identity, instance path, and directly owned process IDs;
+- one optimized LLVM module per bounded specialization's eligible process
+  group, with atomic group validation, lookup of each generated process, and
+  interpreter fallback for an unsupported sibling;
 - bounded O0/O2 SystemVerilog and O2 mixed-language application
   interpreter-versus-hybrid differential tests;
 - exact interpreter/O2-hybrid application evidence for tick-0 update and
@@ -151,15 +159,18 @@ Completed:
   tick 1/delta 1, including tick-0/tick-2 signal changes and two of two
   processes compiled;
 - application native-cache telemetry with cold miss/store and warm-hit
-  assertions for every compiled process at O0 and O2;
+  assertions for every compiled specialization module at O0 and O2, including
+  a two-process/one-module sensitivity fixture;
 - persistent object-cache cold/warm, invalidation, corruption, and
   incompatible-object tests, including scheduled-write kind and delay cache
   identity plus wait kind, operands, referenced widths, and static edge data;
+- O0/O2 grouped-module cache tests proving two functions share one native
+  object, a changed group member invalidates that object, and the unchanged
+  member retains its per-process frame identity;
 - checked-in SV-testbench/VHDL-counter/SV-child example.
 
 Remaining before the architecture gate passes:
 
-- compile one module per elaborated design-unit specialization;
 - replace the interpreter-only debugger with an instrumented O0 JIT path and
   demonstrate semantic equivalence with the default O2 hybrid run;
 - run every supported semantic test through interpreter and JIT and compare
@@ -275,10 +286,9 @@ Remaining before v1 release:
 
 The next development iterations should occur in this order:
 
-1. **Close the architecture gate:** group LLVM modules per design-unit
-   specialization, integrate instrumented O0 debugging, complete
-   source/include/specialization cache identity, and broaden the
-   interpreter/JIT differential harness.
+1. **Close the architecture gate:** integrate instrumented O0 debugging,
+   complete source/include and generic/parameter specialization cache identity,
+   and broaden the interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.
 3. **Expand synthesizable coverage:** packages/parameters/generics, generates,

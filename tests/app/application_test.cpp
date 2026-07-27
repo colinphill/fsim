@@ -80,6 +80,21 @@ module sensitivity;
 endmodule
 )";
   }
+  const auto partial_group_source = directory / "partial_group.sv";
+  {
+    std::ofstream output(partial_group_source);
+    output << R"(
+module partial_group;
+  logic narrow;
+  logic [64:0] wide;
+  initial narrow = 1'b1;
+  initial begin
+    wide = 65'b1;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -165,6 +180,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     std::vector<std::string> final_values;
     fsim::app::NativeCacheStatistics native_cache;
     std::size_t compiled_processes{};
+    std::size_t compiled_modules{};
     std::size_t process_count{};
   };
   const auto capture_simulation =
@@ -176,6 +192,8 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
             std::move(project), config.run.max_deltas, engine);
         captured.compiled_processes =
             candidate.compiled_process_count();
+        captured.compiled_modules =
+            candidate.compiled_module_count();
         captured.native_cache =
             candidate.native_cache_statistics();
         candidate.set_signal_change_hook(
@@ -208,6 +226,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
         assert(reference.changes == hybrid.changes);
         assert(reference.final_values == hybrid.final_values);
         assert(reference.compiled_processes == 0);
+        assert(reference.compiled_modules == 0);
         assert(
             reference.native_cache
             == fsim::app::NativeCacheStatistics{});
@@ -216,8 +235,13 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
         assert(
             hybrid.compiled_processes
             <= hybrid.process_count);
+        assert(hybrid.compiled_modules > 0);
+        assert(
+            hybrid.compiled_modules
+            <= hybrid.compiled_processes);
 #else
         assert(hybrid.compiled_processes == 0);
+        assert(hybrid.compiled_modules == 0);
 #endif
       };
 
@@ -253,6 +277,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     assert(
         hybrid.compiled_processes
         == hybrid.process_count);
+    assert(hybrid.compiled_modules == 2);
 #endif
 
     auto warm_project = fsim::app::build_project(
@@ -265,14 +290,14 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
 #if defined(FSIM_HAS_LLVM)
     assert(
         hybrid.native_cache.misses
-        == hybrid.compiled_processes);
+        == hybrid.compiled_modules);
     assert(
         hybrid.native_cache.stores
-        == hybrid.compiled_processes);
+        == hybrid.compiled_modules);
     assert(hybrid.native_cache.hits == 0);
     assert(
         warm.native_cache.hits
-        == warm.compiled_processes);
+        == warm.compiled_modules);
     assert(warm.native_cache.misses == 0);
     assert(warm.native_cache.load_failures == 0);
     assert(warm.native_cache.store_failures == 0);
@@ -322,6 +347,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert(scheduled_hybrid.process_count == 1);
 #if defined(FSIM_HAS_LLVM)
   assert(scheduled_hybrid.compiled_processes == 1);
+  assert(scheduled_hybrid.compiled_modules == 1);
 #endif
   assert(
       scheduled_hybrid.result.status
@@ -441,6 +467,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert(sensitivity_hybrid.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
   assert(sensitivity_hybrid.compiled_processes == 2);
+  assert(sensitivity_hybrid.compiled_modules == 1);
 #endif
   assert(
       sensitivity_hybrid.result.status
@@ -462,6 +489,72 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert((
       sensitivity_hybrid.final_values
       == std::vector<std::string>{"0", "1"}));
+#if defined(FSIM_HAS_LLVM)
+  assert(sensitivity_hybrid.native_cache.hits == 0);
+  assert(sensitivity_hybrid.native_cache.misses == 1);
+  assert(sensitivity_hybrid.native_cache.stores == 1);
+  auto sensitivity_warm_project =
+      fsim::app::build_project(
+          sensitivity_config, sensitivity_diagnostics);
+  assert(sensitivity_warm_project);
+  const auto sensitivity_warm = capture_simulation(
+      std::move(*sensitivity_warm_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      sensitivity_reference, sensitivity_warm);
+  assert(sensitivity_warm.compiled_processes == 2);
+  assert(sensitivity_warm.compiled_modules == 1);
+  assert(sensitivity_warm.native_cache.hits == 1);
+  assert(sensitivity_warm.native_cache.misses == 0);
+  assert(sensitivity_warm.native_cache.stores == 0);
+#endif
+
+  auto partial_group_config = config;
+  partial_group_config.project.name =
+      "partial-specialization-group-test";
+  partial_group_config.project.top =
+      "sv:work.partial_group";
+  partial_group_config.build.optimization =
+      fsim::project::Optimization::o2;
+  partial_group_config.build.cache_path =
+      directory / "partial-group-cache";
+  partial_group_config.source_sets.clear();
+  fsim::project::SourceSet partial_group_sources;
+  partial_group_sources.language =
+      fsim::project::Language::system_verilog;
+  partial_group_sources.standard = "2017";
+  partial_group_sources.library = "work";
+  partial_group_sources.files.push_back(partial_group_source);
+  partial_group_config.source_sets.push_back(
+      std::move(partial_group_sources));
+  fsim::diagnostic::Engine partial_group_diagnostics;
+  auto partial_group_reference_project =
+      fsim::app::build_project(
+          partial_group_config, partial_group_diagnostics);
+  auto partial_group_hybrid_project =
+      fsim::app::build_project(
+          partial_group_config, partial_group_diagnostics);
+  assert(partial_group_reference_project);
+  assert(partial_group_hybrid_project);
+  const auto partial_group_reference = capture_simulation(
+      std::move(*partial_group_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto partial_group_hybrid = capture_simulation(
+      std::move(*partial_group_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      partial_group_reference, partial_group_hybrid);
+  assert(partial_group_hybrid.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(partial_group_hybrid.compiled_processes == 1);
+  assert(partial_group_hybrid.compiled_modules == 1);
+  assert(partial_group_hybrid.native_cache.misses == 1);
+  assert(partial_group_hybrid.native_cache.stores == 1);
+#endif
+  assert(
+      partial_group_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(partial_group_hybrid.result.time == 1);
 
   fsim::diagnostic::Engine mixed_diagnostics;
   const auto mixed_manifest =

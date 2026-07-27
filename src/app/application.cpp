@@ -985,7 +985,9 @@ int handle_build(
            << " validated SystemC plug-in artifact(s)";
   }
   output << ", " << prepared.compiled_process_count()
-         << " LLVM-compiled process(es)";
+         << " LLVM-compiled process(es) in "
+         << prepared.compiled_module_count()
+         << " specialization module(s)";
   output << "; analysis cache "
          << (cache_hit ? "hit" : "populated");
   if (prepared.compiled_process_count() == 0) {
@@ -2118,21 +2120,46 @@ struct Simulation::Impl {
               static_cast<std::uint32_t>(signal.width));
         }
       }
-      for (const auto& process : built.design.processes()) {
-        const auto symbol =
-            "fsim_process_" + std::to_string(process.id);
-        try {
-          jit->add_process(symbol, process, signal_widths);
-          const auto handle = jit->lookup(symbol);
+      const auto& processes = built.design.processes();
+      for (const auto& specialization :
+           built.design.specializations()) {
+        std::vector<const runtime::simir::Process*> selected;
+        std::vector<std::string> symbols;
+        selected.reserve(specialization.processes.size());
+        symbols.reserve(specialization.processes.size());
+        for (const auto process_id : specialization.processes) {
+          const auto& process = processes.at(process_id);
+          if (!jit->supports_process(process, signal_widths)) {
+            continue;
+          }
+          selected.push_back(&process);
+          symbols.push_back(
+              "fsim_process_" + std::to_string(process.id));
+        }
+        if (selected.empty()) {
+          continue;
+        }
+
+        std::vector<compiler::JitProcessModuleEntry> entries;
+        entries.reserve(selected.size());
+        for (std::size_t index = 0; index < selected.size(); ++index) {
+          entries.push_back({symbols[index], selected[index]});
+        }
+        const auto module_identity =
+            "fsim-specialization:" +
+            std::to_string(specialization.id) + ":" +
+            specialization.unit + "@" +
+            specialization.instance;
+        jit->add_process_module(
+            module_identity, entries, signal_widths);
+        ++compiled_modules;
+        for (std::size_t index = 0; index < selected.size(); ++index) {
+          const auto handle = jit->lookup(symbols[index]);
           interpreter->set_process_executor(
-              process.id,
+              selected[index]->id,
               std::make_unique<LlvmProcessExecutor>(
-                  *jit, handle, process, signal_widths));
+                  *jit, handle, *selected[index], signal_widths));
           ++compiled_processes;
-        } catch (const compiler::LlvmJitUnsupportedError&) {
-          // A supported hybrid simulation intentionally evaluates only this
-          // process with the reference engine. Malformed SimIR and every
-          // compiler/cache/materialization error remain fatal.
         }
       }
     }
@@ -2201,6 +2228,7 @@ struct Simulation::Impl {
 #endif
   std::unique_ptr<runtime::simir::Interpreter> interpreter;
   std::size_t compiled_processes{};
+  std::size_t compiled_modules{};
   SignalChangeHook signal_change_hook;
   std::map<std::uint64_t, SignalChangeHook> signal_observers;
   std::uint64_t next_signal_observer{1};
@@ -2318,6 +2346,10 @@ bool Simulation::poisoned() const noexcept {
 
 std::size_t Simulation::compiled_process_count() const noexcept {
   return impl_->compiled_processes;
+}
+
+std::size_t Simulation::compiled_module_count() const noexcept {
+  return impl_->compiled_modules;
 }
 
 NativeCacheStatistics Simulation::native_cache_statistics() const noexcept {

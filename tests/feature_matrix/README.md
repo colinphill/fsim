@@ -67,14 +67,14 @@ These suites are the evidence currently referenced by the matrix:
 | Suite | Present evidence |
 |---|---|
 | [frontend/frontend_tests.cpp](../frontend/frontend_tests.cpp) | Minimal VHDL entity/architecture/process syntax, SystemVerilog module syntax, non-ANSI Verilog ports, bounded `` `timescale`` context/scaling, and targeted directive/duplicate/initializer/type diagnostics |
-| [elaboration/elaborator_test.cpp](../elaboration/elaborator_test.cpp) | Independently selected VHDL/SystemVerilog counters, executable SV-parent and VHDL-parent mixed hierarchies, cross-library VHDL selection, and targeted unsupported-semantics/driver diagnostics |
+| [elaboration/elaborator_test.cpp](../elaboration/elaborator_test.cpp) | Independently selected VHDL/SystemVerilog counters, executable SV-parent and VHDL-parent mixed hierarchies, dense instance-specific specialization ownership, cross-library VHDL selection, and targeted unsupported-semantics/driver diagnostics |
 | [runtime/runtime_tests.cpp](../runtime/runtime_tests.cpp) | Packed values including the checked allocation-free ≤64-bit `Logic4Word` path, exhaustive standard-logic resolution, phase ordering, delta limit, SimIR timed/static waits and operations, update coalescing, interpreter/external-executor scheduled writes, a dynamic `WaitOn` comparison covering duplicate normalization and tick-1/tick-2 delta-1 wakeups, force/release, design-stop lifecycle, and VCD core |
 | [project/project_config_test.cpp](../project/project_config_test.cpp) | Schema-1 manifest, glob ordering, schema/unknown-key diagnostics, and JSON escaping |
-| [app/application_test.cpp](../app/application_test.cpp) | Check/build/cache/run, bounded O0/O2 SystemVerilog and O2 mixed SV/VHDL/SV interpreter-versus-hybrid differential execution, exact fully compiled O2 scheduled-write comparison at ticks 0 and 2, interpreter/compiled scheduling-overflow containment, exact two-of-two compiled positive-edge comparison at tick 0/tick 1-delta 1/tick 2, eligible/fallback process counts, native-cache cold/warm telemetry, SystemC compile/ABI/factory validation, bounded CLI/debugger lifecycle, exact time conversion, `` `timescale``-driven `auto` resolution/runtime scaling, scaled VCD, and value parsing |
+| [app/application_test.cpp](../app/application_test.cpp) | Check/build/cache/run, bounded O0/O2 SystemVerilog and O2 mixed SV/VHDL/SV interpreter-versus-hybrid differential execution, exact fully compiled O2 scheduled-write comparison at ticks 0 and 2, interpreter/compiled scheduling-overflow containment, exact two-process/one-specialization-module positive-edge comparison at tick 0/tick 1-delta 1/tick 2, supported-sibling compilation beside a 65-bit fallback process, eligible/fallback process and compiled-module counts, per-module native-cache cold/warm telemetry, SystemC compile/ABI/factory validation, bounded CLI/debugger lifecycle, exact time conversion, `` `timescale``-driven `auto` resolution/runtime scaling, scaled VCD, and value parsing |
 | [api/api_test.cpp](../api/api_test.cpp) | C ABI lifecycle, generation-checked hierarchy/value handles, force/deposit/release, synchronous callbacks and re-entry guards, and run |
 | [compiler/cache_test.cpp](../compiler/cache_test.cpp) | SHA-256 stability, process-aware locking/stale-lock recovery, atomic replacement, and cache store/load/erase |
 | [compiler/jit_runtime_c_test.c](../compiler/jit_runtime_c_test.c) | C11 compilation, preserved resume-status values 0–5, appended wait statuses 6–7, fixed ABI offsets/size, and callback use of the append-only v1 `write_update`/`write_after` runtime-table fields |
-| [compiler/llvm_jit_test.cpp](../compiler/llvm_jit_test.cpp) | LLVM O0/O2 CFG, scheduled-write, `WaitOn`, and `WaitSensitivity` operations; layout-preserving resume statuses; suspension-safe loops; sensitivity-only 128/257-bit signals; wait-list/signal/width/edge validation; runtime-tail validation; and persistent-cache tests for referenced values, scheduled kind/delay, and wait kind/operand/referenced-width/static-edge identity |
+| [compiler/llvm_jit_test.cpp](../compiler/llvm_jit_test.cpp) | LLVM O0/O2 CFG, scheduled-write, `WaitOn`, and `WaitSensitivity` operations; grouped specialization modules with atomic validation, execution, warm reuse, and member invalidation; layout-preserving resume statuses; suspension-safe loops; sensitivity-only 128/257-bit signals; wait-list/signal/width/edge validation; runtime-tail validation; and persistent-cache tests for referenced values, scheduled kind/delay, and wait kind/operand/referenced-width/static-edge identity |
 | [systemc/systemc_header_test.cpp](../systemc/systemc_header_test.cpp) | Standalone SystemC source-facade types, exact time checks, module macros, edge sensitivity, signals, and ports |
 | [systemc/plugin_loader_test.cpp](../systemc/plugin_loader_test.cpp) | Native plug-in load/factory registration plus throwing-initializer containment without partial registration |
 | [systemc/plugin_compiler_test.cpp](../systemc/plugin_compiler_test.cpp) | Direct-argv compiler plans, transitive dependency keys, tracked linked inputs, non-cacheable dependency gaps, cache locks, and cold/warm compilation |
@@ -108,12 +108,19 @@ does not cross the C ABI, is rethrown to the application, poisons the
 simulation, and publishes no write. A separate O2 positive-edge fixture
 compiles both processes and exactly matches the initial trigger at tick 0, the
 rising trigger at tick 1/delta 0, the observer update at tick 1/delta 1, and
-the falling trigger at tick 2/delta 0. The suite also asserts cold native-cache
-misses/stores and warm hits at O0 and O2. This remains bounded architecture
-evidence: complete HDL event controls, assertion metadata, normalized VCD, O0
-mixed-language/application scheduled-write/application sensitivity coverage,
-exhaustive semantic fixtures, and Windows execution evidence remain
-outstanding.
+the falling trigger at tick 2/delta 0. Those two processes share one
+specialization module and therefore require exactly one cold cache miss/store
+and one warm hit. The suite also asserts per-module cold/warm telemetry at O0
+and O2. This remains bounded architecture evidence: complete HDL event
+controls, generic/parameter specialization identity, assertion metadata,
+normalized VCD, O0 mixed-language/application scheduled-write/application
+sensitivity coverage, exhaustive semantic fixtures, and Windows execution
+evidence remain outstanding.
+
+A separate two-process fixture places a supported scalar process beside a
+65-bit value-bearing process in one specialization. The hybrid application
+compiles the scalar sibling into one module and leaves only the wide sibling
+on the interpreter, with exact final-state and scheduler equivalence.
 
 The runtime suite separately compares an interpreted dynamic `WaitOn` process
 with an alternate executor at the shared kernel boundary. It verifies that a

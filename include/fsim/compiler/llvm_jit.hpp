@@ -70,6 +70,15 @@ struct JitProcessFrameLayout {
                          JitProcessFrameLayout) = default;
 };
 
+/// One externally named process function within a compiled LLVM module.
+///
+/// The pointed-to SimIR process is consumed synchronously by
+/// add_process_module() and need not outlive that call.
+struct JitProcessModuleEntry {
+  std::string_view symbol;
+  const runtime::simir::Process* process{};
+};
+
 class LlvmJitError : public std::runtime_error {
 public:
   using std::runtime_error::runtime_error;
@@ -121,7 +130,7 @@ private:
 /// LLVM basic blocks backed by a versioned caller-owned frame. Values crossing
 /// the native ABI must be between 1 and 64 bits; sensitivity-only signals may
 /// be wider. Control-flow cycles without a suspension safe point are rejected
-/// during add_process().
+/// during module addition.
 ///
 /// Persistent caching is opt-in through LlvmJitOptions::cache_directory.
 /// Cached native objects are checksummed and keyed to the complete supported
@@ -136,10 +145,29 @@ public:
   LlvmJit(const LlvmJit &) = delete;
   LlvmJit &operator=(const LlvmJit &) = delete;
 
-  /// Validate, lower, optimize, and add a process under an ORC symbol name.
+  /// Return whether a well-formed process is in the compiled subset.
   ///
-  /// signal_widths is indexed by SimIR SignalId. All referenced widths must be
-  /// in [1, 64]. Adding a duplicate symbol is an error.
+  /// Malformed SimIR still throws LlvmJitError. A valid capability miss
+  /// returns false so a hybrid caller can omit only that process from a
+  /// specialization module and retain interpreter fallback.
+  [[nodiscard]] bool supports_process(
+      const runtime::simir::Process& process,
+      std::span<const std::uint32_t> signal_widths) const;
+
+  /// Validate, lower, optimize, and add several process functions as one
+  /// native compilation/cache unit.
+  ///
+  /// module_identity must be non-empty. Entries and symbols must be non-empty
+  /// and unique, and every process must be supported. The operation is atomic:
+  /// no symbol is registered when validation or lowering fails.
+  void add_process_module(
+      std::string_view module_identity,
+      std::span<const JitProcessModuleEntry> entries,
+      std::span<const std::uint32_t> signal_widths);
+
+  /// Add one process as a one-function module.
+  ///
+  /// This compatibility wrapper uses symbol as the module identity.
   void add_process(std::string_view symbol,
                    const runtime::simir::Process &process,
                    std::span<const std::uint32_t> signal_widths);

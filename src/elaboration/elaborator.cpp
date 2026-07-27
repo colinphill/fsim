@@ -856,11 +856,15 @@ const DesignUnit* choose_same_language_instance(
 }
 
 std::string unit_identity(const DesignUnit& unit) {
+    const auto library =
+        unit.library.empty()
+            ? std::string_view{"work"}
+            : std::string_view{unit.library};
     if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
-        return "vhdl:" + unit.library + "." + unit.primary_name
+        return "vhdl:" + std::string{library} + "." + unit.primary_name
             + "(" + unit.name + ")";
     }
-    return "sv:" + unit.library + "." + unit.name;
+    return "sv:" + std::string{library} + "." + unit.name;
 }
 
 } // namespace
@@ -1304,19 +1308,35 @@ private:
             (void)add_owned_signal(signal, path, local);
         }
 
+        const auto specialization_index = design_.specializations_.size();
+        const auto specialization_id =
+            static_cast<SpecializationId>(specialization_index);
+        if (static_cast<std::size_t>(specialization_id)
+            != specialization_index) {
+            throw std::length_error(
+                "too many elaborated design-unit specializations");
+        }
+        SpecializationInfo specialization{
+            specialization_id, identity, path, {}};
+
         Lowerer lowerer{design_, local, diagnostics_};
         for (std::size_t index = 0;
              index < unit.concurrent_statements.size(); ++index) {
-            design_.processes_.push_back(lowerer.lower_concurrent(
+            auto process = lowerer.lower_concurrent(
                 unit.concurrent_statements[index],
                 unit.language,
                 path,
-                index));
+                index);
+            specialization.processes.push_back(process.id);
+            design_.processes_.push_back(std::move(process));
         }
         for (const auto& process : unit.processes) {
-            design_.processes_.push_back(
-                lowerer.lower_process(process, unit.language, path));
+            auto lowered =
+                lowerer.lower_process(process, unit.language, path);
+            specialization.processes.push_back(lowered.id);
+            design_.processes_.push_back(std::move(lowered));
         }
+        design_.specializations_.push_back(std::move(specialization));
 
         for (const auto& instance : unit.instances) {
             const auto child_path = path + "." + instance.name;
@@ -1367,6 +1387,11 @@ const std::vector<SignalInfo>& ElaboratedDesign::signals() const noexcept {
 
 const std::vector<runtime::simir::Process>& ElaboratedDesign::processes() const noexcept {
     return processes_;
+}
+
+const std::vector<SpecializationInfo>&
+ElaboratedDesign::specializations() const noexcept {
+    return specializations_;
 }
 
 std::optional<runtime::simir::SignalId> ElaboratedDesign::find_signal(

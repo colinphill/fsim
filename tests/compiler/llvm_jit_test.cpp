@@ -24,6 +24,7 @@ using fsim::compiler::JitExecutionStatus;
 using fsim::compiler::JitGeneratedRuntimeErrorReason;
 using fsim::compiler::JitOptimizationLevel;
 using fsim::compiler::JitProcessHandle;
+using fsim::compiler::JitProcessModuleEntry;
 using fsim::compiler::JitResumeStatus;
 using fsim::compiler::LlvmJit;
 using fsim::compiler::LlvmJitError;
@@ -1263,6 +1264,179 @@ cached_object_paths(const std::filesystem::path &root) {
   return result;
 }
 
+void test_process_module_grouping_at_level(
+    const JitOptimizationLevel optimization,
+    const std::filesystem::path& cache_directory) {
+  const auto make_process =
+      [](const ProcessId id, const SignalId signal,
+         const std::string_view value) {
+        Process process;
+        process.id = id;
+        process.name =
+            "grouped_process_" + std::to_string(id);
+        process.register_count = 1;
+        process.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string(value)},
+            WriteBlocking{signal, 0},
+            Halt{},
+        };
+        return process;
+      };
+  const std::array<std::uint32_t, 2> widths{8, 8};
+  const auto first = make_process(20, 0, "10100101");
+  const auto second = make_process(21, 1, "01011010");
+  const auto add_group =
+      [&](LlvmJit& jit, const Process& left,
+          const Process& right) {
+        const std::array entries{
+            JitProcessModuleEntry{"grouped_first", &left},
+            JitProcessModuleEntry{"grouped_second", &right},
+        };
+        jit.add_process_module(
+            "work.grouped@top", entries, widths);
+      };
+  const auto execute_group =
+      [](LlvmJit& jit) {
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        const auto first_handle = jit.lookup("grouped_first");
+        const auto second_handle = jit.lookup("grouped_second");
+        assert(first_handle != second_handle);
+        assert(
+            jit.execute(first_handle, descriptor)
+            == JitExecutionStatus::completed);
+        assert(
+            jit.execute(second_handle, descriptor)
+            == JitExecutionStatus::completed);
+        assert((
+            runtime.signals[0]
+            == EncodedSignal{UINT64_C(0xa5), 0}));
+        assert((
+            runtime.signals[1]
+            == EncodedSignal{UINT64_C(0x5a), 0}));
+        return std::array{
+            jit.frame_layout(first_handle),
+            jit.frame_layout(second_handle),
+        };
+      };
+
+  std::array<fsim::compiler::JitProcessFrameLayout, 2>
+      original_layouts;
+  {
+    LlvmJit cold{
+        LlvmJitOptions{optimization, cache_directory}};
+    assert(cold.supports_process(first, widths));
+    assert(cold.supports_process(second, widths));
+    add_group(cold, first, second);
+    original_layouts = execute_group(cold);
+    expect_cache_statistics(cold, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 1);
+
+  {
+    LlvmJit warm{
+        LlvmJitOptions{optimization, cache_directory}};
+    add_group(warm, first, second);
+    const auto warm_layouts = execute_group(warm);
+    assert(warm_layouts == original_layouts);
+    expect_cache_statistics(warm, 1, 0, 0);
+  }
+  assert(cached_object_paths(cache_directory).size() == 1);
+
+  // Any changed member invalidates the specialization object, while an
+  // unchanged member retains its process-local frame identity.
+  {
+    LlvmJit changed{
+        LlvmJitOptions{optimization, cache_directory}};
+    const auto changed_second =
+        make_process(21, 1, "00111100");
+    add_group(changed, first, changed_second);
+    const auto first_handle = changed.lookup("grouped_first");
+    const auto second_handle = changed.lookup("grouped_second");
+    assert(
+        changed.frame_layout(first_handle)
+        == original_layouts[0]);
+    assert(
+        changed.frame_layout(second_handle)
+        != original_layouts[1]);
+    expect_cache_statistics(changed, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 2);
+
+  {
+    LlvmJit rejected;
+    const std::array<JitProcessModuleEntry, 0> empty{};
+    expect_fatal_error(
+        [&] {
+          rejected.add_process_module(
+              "empty", empty, widths);
+        },
+        "module cannot be empty");
+    const std::array null_entry{
+        JitProcessModuleEntry{"missing", nullptr}};
+    expect_fatal_error(
+        [&] {
+          rejected.add_process_module(
+              "null", null_entry, widths);
+        },
+        "has no SimIR process");
+    const std::array duplicate_entries{
+        JitProcessModuleEntry{"duplicate", &first},
+        JitProcessModuleEntry{"duplicate", &second},
+    };
+    expect_fatal_error(
+        [&] {
+          rejected.add_process_module(
+              "duplicates", duplicate_entries, widths);
+        },
+        "duplicate LLVM process symbol");
+
+    Process supported;
+    supported.id = 22;
+    supported.name = "supported";
+    supported.operations = {Halt{}};
+    Process too_wide;
+    too_wide.id = 23;
+    too_wide.name = "too_wide";
+    too_wide.register_count = 1;
+    too_wide.operations = {ReadSignal{0, 0}, Halt{}};
+    const std::array<std::uint32_t, 1> wide_widths{65};
+    assert(rejected.supports_process(supported, wide_widths));
+    assert(!rejected.supports_process(too_wide, wide_widths));
+    const std::array unsupported_entries{
+        JitProcessModuleEntry{"eligible", &supported},
+        JitProcessModuleEntry{"unsupported", &too_wide},
+    };
+    expect_unsupported(
+        [&] {
+          rejected.add_process_module(
+              "unsupported-member", unsupported_entries,
+              wide_widths);
+        },
+        "widths in [1, 64]");
+    expect_error(
+        [&] { (void)rejected.lookup("eligible"); },
+        "was not added");
+
+    const std::array first_entry{
+        JitProcessModuleEntry{"registered", &first}};
+    rejected.add_process_module(
+        "same-module", first_entry, widths);
+    const std::array second_entry{
+        JitProcessModuleEntry{"new_symbol", &second}};
+    expect_fatal_error(
+        [&] {
+          rejected.add_process_module(
+              "same-module", second_entry, widths);
+        },
+        "duplicate LLVM process module identity");
+    expect_error(
+        [&] { (void)rejected.lookup("new_symbol"); },
+        "was not added");
+  }
+}
+
 void test_object_cache_at_level(const JitOptimizationLevel optimization,
                                 const std::filesystem::path &cache_directory) {
   const std::array<std::uint32_t, 2> widths{8, 1};
@@ -1554,6 +1728,10 @@ void test_persistent_object_cache() {
   test_object_cache_at_level(JitOptimizationLevel::o0, root / "o0");
   test_object_cache_at_level(JitOptimizationLevel::o2, root / "o2");
   test_optimization_cache_invalidation(root / "optimization");
+  test_process_module_grouping_at_level(
+      JitOptimizationLevel::o0, root / "group-o0");
+  test_process_module_grouping_at_level(
+      JitOptimizationLevel::o2, root / "group-o2");
 
   std::filesystem::remove_all(root, error);
   assert(!error);

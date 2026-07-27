@@ -71,7 +71,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v2";
+    "fsim-llvm-native-object-v3";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -965,6 +965,19 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
   return builder.finish();
 }
 
+[[nodiscard]] std::string make_native_module_cache_key(
+    const std::string_view module_identity,
+    const std::span<const std::string> process_keys) {
+  CacheKeyBuilder builder;
+  builder.add("llvm-module-schema", kNativeObjectCacheSchema);
+  builder.add("module-identity", module_identity);
+  add_key_u64(builder, "process-count", process_keys.size());
+  for (const auto& process_key : process_keys) {
+    builder.add("process-key", process_key);
+  }
+  return builder.finish();
+}
+
 [[nodiscard]] std::uint64_t cache_key_word(
     const std::string_view key, const std::size_t offset) noexcept {
   std::uint64_t result = 0;
@@ -1228,16 +1241,11 @@ void optimize_module(llvm::Module &module,
   return message;
 }
 
-[[nodiscard]] std::unique_ptr<llvm::Module>
-lower_process(llvm::LLVMContext &context, const llvm::DataLayout &data_layout,
-              const llvm::Triple &target_triple, const std::string &symbol,
-              const Process &process,
-              const std::span<const std::uint32_t> signal_widths,
-              const ValidatedProcess &validated) {
-  auto module = std::make_unique<llvm::Module>(symbol + ".module", context);
-  module->setDataLayout(data_layout);
-  module->setTargetTriple(target_triple);
-
+void lower_process(llvm::Module &module, const std::string &symbol,
+                   const Process &process,
+                   const std::span<const std::uint32_t> signal_widths,
+                   const ValidatedProcess &validated) {
+  auto &context = module.getContext();
   auto *i32 = llvm::Type::getInt32Ty(context);
   auto *i64 = llvm::Type::getInt64Ty(context);
   auto *pointer = llvm::PointerType::getUnqual(context);
@@ -1255,7 +1263,7 @@ lower_process(llvm::LLVMContext &context, const llvm::DataLayout &data_layout,
   auto *function_type =
       llvm::FunctionType::get(i32, {pointer, pointer, pointer}, false);
   auto *function = llvm::Function::Create(
-      function_type, llvm::Function::ExternalLinkage, symbol, *module);
+      function_type, llvm::Function::ExternalLinkage, symbol, module);
   function->setCallingConv(llvm::CallingConv::C);
   function->getArg(0)->setName("runtime");
   function->getArg(1)->setName("frame");
@@ -1575,11 +1583,6 @@ lower_process(llvm::LLVMContext &context, const llvm::DataLayout &data_layout,
         process.operations[index]);
   }
 
-  if (auto message = verify_error(*module); !message.empty()) {
-    throw LlvmJitError("generated invalid LLVM IR for '" + symbol + "': " +
-                       message);
-  }
-  return module;
 }
 
 std::once_flag native_target_once;
@@ -1628,6 +1631,7 @@ struct LlvmJit::Impl {
   std::unique_ptr<llvm::orc::LLJIT> jit;
   std::string target_cpu;
   std::vector<std::string> target_features;
+  std::unordered_set<std::string> module_identities;
   std::unordered_set<std::string> symbols;
   std::unordered_map<std::string, ProcessInfo> info_by_symbol;
   std::unordered_map<std::string, JitProcessHandle> handles_by_symbol;
@@ -1679,53 +1683,134 @@ LlvmJit::~LlvmJit() = default;
 LlvmJit::LlvmJit(LlvmJit &&) noexcept = default;
 LlvmJit &LlvmJit::operator=(LlvmJit &&) noexcept = default;
 
-void LlvmJit::add_process(
-    const std::string_view symbol, const Process &process,
+bool LlvmJit::supports_process(
+    const Process& process,
+    const std::span<const std::uint32_t> signal_widths) const {
+  if (!impl_) {
+    throw LlvmJitError("cannot use a moved-from LlvmJit");
+  }
+  try {
+    (void)validate_process(process, signal_widths);
+    return true;
+  } catch (const LlvmJitUnsupportedError&) {
+    return false;
+  }
+}
+
+void LlvmJit::add_process_module(
+    const std::string_view module_identity,
+    const std::span<const JitProcessModuleEntry> entries,
     const std::span<const std::uint32_t> signal_widths) {
   if (!impl_) {
     throw LlvmJitError("cannot use a moved-from LlvmJit");
   }
-  if (!valid_symbol(symbol)) {
-    throw LlvmJitError(
-        "LLVM process symbol must be a non-empty C identifier");
+  if (module_identity.empty()) {
+    throw LlvmJitError("LLVM process module identity cannot be empty");
   }
-  const std::string owned_symbol{symbol};
-  if (impl_->symbols.contains(owned_symbol)) {
-    throw LlvmJitError("duplicate LLVM process symbol '" + owned_symbol + "'");
+  const std::string owned_module_identity{module_identity};
+  if (entries.empty()) {
+    throw LlvmJitError("LLVM process module cannot be empty");
   }
 
-  const auto validated = validate_process(process, signal_widths);
-  const auto cache_key = make_native_object_cache_key(
-      owned_symbol, process, signal_widths, impl_->options.optimization,
-      impl_->jit->getTargetTriple(), impl_->jit->getDataLayout(),
-      impl_->target_cpu, impl_->target_features);
-  const Impl::ProcessInfo process_info{
-      make_frame_layout(cache_key, process.register_count),
-      static_cast<std::uint32_t>(process.operations.size()),
-      validated.requires_resume,
-      validated.uses_write_update,
-      validated.uses_write_after,
+  struct PreparedProcess {
+    std::string symbol;
+    const Process* process{};
+    ValidatedProcess validated;
+    std::string cache_key;
+    Impl::ProcessInfo info;
   };
+  std::vector<PreparedProcess> prepared;
+  prepared.reserve(entries.size());
+  std::unordered_set<std::string> module_symbols;
+  std::vector<std::string> process_keys;
+  process_keys.reserve(entries.size());
+
+  for (const auto& entry : entries) {
+    if (entry.process == nullptr) {
+      throw LlvmJitError("LLVM process module entry has no SimIR process");
+    }
+    if (!valid_symbol(entry.symbol)) {
+      throw LlvmJitError(
+          "LLVM process symbol must be a non-empty C identifier");
+    }
+    std::string owned_symbol{entry.symbol};
+    if (impl_->symbols.contains(owned_symbol) ||
+        !module_symbols.insert(owned_symbol).second) {
+      throw LlvmJitError(
+          "duplicate LLVM process symbol '" + owned_symbol + "'");
+    }
+
+    auto validated = validate_process(*entry.process, signal_widths);
+    auto cache_key = make_native_object_cache_key(
+        owned_symbol, *entry.process, signal_widths,
+        impl_->options.optimization, impl_->jit->getTargetTriple(),
+        impl_->jit->getDataLayout(), impl_->target_cpu,
+        impl_->target_features);
+    const Impl::ProcessInfo process_info{
+        make_frame_layout(cache_key, entry.process->register_count),
+        static_cast<std::uint32_t>(entry.process->operations.size()),
+        validated.requires_resume,
+        validated.uses_write_update,
+        validated.uses_write_after,
+    };
+    process_keys.push_back(cache_key);
+    prepared.push_back(
+        {std::move(owned_symbol), entry.process, std::move(validated),
+         std::move(cache_key), process_info});
+  }
+  if (impl_->module_identities.contains(owned_module_identity)) {
+    throw LlvmJitError(
+        "duplicate LLVM process module identity '" +
+        owned_module_identity + "'");
+  }
+
+  const auto module_cache_key = make_native_module_cache_key(
+      owned_module_identity, process_keys);
   auto context = std::make_unique<llvm::LLVMContext>();
-  auto module = lower_process(
-      *context, impl_->jit->getDataLayout(), impl_->jit->getTargetTriple(),
-      owned_symbol, process, signal_widths, validated);
+  auto module = std::make_unique<llvm::Module>(
+      owned_module_identity + ".module", *context);
+  module->setDataLayout(impl_->jit->getDataLayout());
+  module->setTargetTriple(impl_->jit->getTargetTriple());
+  for (const auto& item : prepared) {
+    lower_process(
+        *module, item.symbol, *item.process, signal_widths,
+        item.validated);
+  }
+  if (auto message = verify_error(*module); !message.empty()) {
+    throw LlvmJitError(
+        "generated invalid LLVM IR for module '" +
+        owned_module_identity + "': " + message);
+  }
   if (impl_->object_cache) {
-    module->setModuleIdentifier(cache_key);
+    module->setModuleIdentifier(module_cache_key);
   }
   optimize_module(*module, impl_->options.optimization);
   if (auto message = verify_error(*module); !message.empty()) {
-    throw LlvmJitError("LLVM optimization produced invalid IR for '" +
-                       owned_symbol + "': " + message);
+    throw LlvmJitError(
+        "LLVM optimization produced invalid IR for module '" +
+        owned_module_identity + "': " + message);
   }
 
   if (auto error = impl_->jit->addIRModule(llvm::orc::ThreadSafeModule(
           std::move(module), std::move(context)))) {
-    throw LlvmJitError("cannot add LLVM process '" + owned_symbol + "': " +
-                       llvm_error(std::move(error)));
+    throw LlvmJitError(
+        "cannot add LLVM process module '" + owned_module_identity +
+        "': " + llvm_error(std::move(error)));
   }
-  impl_->symbols.insert(owned_symbol);
-  impl_->info_by_symbol.emplace(owned_symbol, process_info);
+  impl_->module_identities.insert(owned_module_identity);
+  for (auto& item : prepared) {
+    impl_->symbols.insert(item.symbol);
+    impl_->info_by_symbol.emplace(
+        std::move(item.symbol), item.info);
+  }
+}
+
+void LlvmJit::add_process(
+    const std::string_view symbol, const Process &process,
+    const std::span<const std::uint32_t> signal_widths) {
+  const std::array entries{
+      JitProcessModuleEntry{symbol, &process}};
+  add_process_module(symbol, entries, signal_widths);
 }
 
 JitProcessHandle LlvmJit::lookup(const std::string_view symbol) {

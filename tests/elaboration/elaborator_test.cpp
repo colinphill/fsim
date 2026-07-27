@@ -45,6 +45,15 @@ endmodule
     assert(elaborated.ok());
     assert(elaborated.design->signals().size() == 3);
     assert(elaborated.design->processes().size() == 2);
+    assert(elaborated.design->specializations().size() == 1);
+    const auto& counter_specialization =
+        elaborated.design->specializations().front();
+    assert(counter_specialization.id == 0);
+    assert(counter_specialization.unit == "sv:work.counter");
+    assert(counter_specialization.instance == "counter");
+    assert((
+        counter_specialization.processes
+        == std::vector<fsim::runtime::simir::ProcessId>{0, 1}));
 
     auto interpreter = elaborated.design->create_interpreter();
     const auto clock = elaborated.design->find_signal("clk");
@@ -185,6 +194,29 @@ end architecture rtl;
     }
     assert(elaborated_mixed.ok());
     assert(elaborated_mixed.design->signals().size() == 4);
+    assert(elaborated_mixed.design->specializations().size() == 3);
+    const auto& mixed_specializations =
+        elaborated_mixed.design->specializations();
+    assert(mixed_specializations[0].id == 0);
+    assert(mixed_specializations[0].unit == "sv:work.tb");
+    assert(mixed_specializations[0].instance == "tb");
+    assert((
+        mixed_specializations[0].processes
+        == std::vector<fsim::runtime::simir::ProcessId>{0}));
+    assert(mixed_specializations[1].id == 1);
+    assert(
+        mixed_specializations[1].unit
+        == "vhdl:work.counter(rtl)");
+    assert(mixed_specializations[1].instance == "tb.u_counter");
+    assert((
+        mixed_specializations[1].processes
+        == std::vector<fsim::runtime::simir::ProcessId>{1}));
+    assert(mixed_specializations[2].id == 2);
+    assert(mixed_specializations[2].unit == "sv:work.child");
+    assert(mixed_specializations[2].instance == "tb.u_child");
+    assert((
+        mixed_specializations[2].processes
+        == std::vector<fsim::runtime::simir::ProcessId>{2}));
     const auto mixed_q = elaborated_mixed.design->find_signal("q");
     const auto mixed_child_q =
         elaborated_mixed.design->find_signal("tb.u_counter.q");

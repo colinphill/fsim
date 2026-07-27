@@ -24,10 +24,10 @@ The architectural invariants are:
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Basic files and source spans are current; expansion ancestry is planned |
 | Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers are current; typed semantic HIR is partial |
-| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive simple VHDL/SV hierarchy, explicit mixed bindings, port aliasing, and boundary checks are current; specialization and complete driver semantics are planned |
+| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive simple VHDL/SV hierarchy, dense instance-specific specialization records, explicit mixed bindings, port aliasing, and boundary checks are current; parameter/generic specialization and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
-| LLVM engine | Compile each design-unit specialization and execute via ORC | The application compiles eligible processes as separate LLVM modules and uses typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current, while per-design-unit-specialization module grouping remains planned |
+| LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
 | Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, value changes, deposit, and a force/release mask are current; full driver/resolution model is planned |
 | Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with time/signal breakpoints are current; source/statement/process debugging and locals are planned |
 
@@ -36,6 +36,12 @@ constant values, and legality results. The common `DesignIR` will own dense
 stable IDs for libraries, units, specializations, scopes, instances, processes,
 signals, ports, drivers, source locations, and debug-visible objects. These
 layers are still compacted together in parts of the current slice.
+
+The compact elaborated design now assigns a dense specialization ID to every
+instantiated unit occurrence and records its canonical unit identity, instance
+path, and directly owned process IDs. The current frontends do not yet expose
+generic or parameter values, so distinct parameterizations and reusable
+specialization identities are not represented yet.
 
 The current hierarchy builder recursively follows simple VHDL or SV instance
 nodes. Same-language children resolve within the parsed units. A manifest
@@ -170,8 +176,11 @@ instruction, resume-PC, frame-state, and ABI checks.
 hybrid engine handles with per-process interpreter fallback. Malformed SimIR,
 ABI mismatches, LLVM/cache failures, and generated-runtime failures remain
 fatal `LlvmJitError`s. LLVM-enabled `fsim build` and `fsim run` install
-compiled executors for eligible processes; builds without LLVM remain
-interpreter-only. LLVM-enabled application tests compare a bounded
+compiled executors for eligible processes; within each elaborated
+specialization, those processes are lowered and optimized in one LLVM module.
+An unsupported sibling is omitted without preventing eligible siblings from
+compiling. Builds without LLVM remain interpreter-only. LLVM-enabled
+application tests compare a bounded
 SystemVerilog hierarchy through reference and hybrid execution at O0 and O2,
 and the vertical SV-to-VHDL-to-SV hierarchy through reference and O2 hybrid
 execution. A separate exact scheduled-write comparison runs a fully compiled
@@ -188,12 +197,14 @@ The persistent cache primitive provides process-aware per-key locking,
 stale-owner recovery, checksummed entries, temporary-file plus atomic
 replacement, corrupt-entry rejection, and safe replacement of an existing
 entry. When explicitly given a cache directory, the LLVM adapter installs this
-primitive through LLVM's ObjectCache hook. Its native-object key covers the
-complete supported SimIR process, symbol, and IDs and widths of only the
-signals referenced by that process, plus cache/runtime ABI schemas, exact LLVM
-version, O0/O2 mode, target triple and data layout, and the detected host
-CPU/features. An unrelated elaborated signal-width change therefore reuses the
-process object, while a referenced signal ID or width change invalidates it.
+primitive through LLVM's ObjectCache hook. One native object is cached for each
+compiled specialization module. Its key covers the stable module identity and
+ordered canonical process keys. Each process key covers the complete supported
+SimIR process, symbol, and IDs and widths of only the signals referenced by
+that process, plus cache/runtime ABI schemas, exact LLVM version, O0/O2 mode,
+target triple and data layout, and the detected host CPU/features. An unrelated
+elaborated signal-width change therefore reuses the module object, while a
+referenced signal ID or width change invalidates it.
 Scheduled-write operation kind and signal/source identity participate in this
 key, as does the exact 64-bit delay for `WriteAfter`; changing a delayed write
 to an update write or changing its delay cannot reuse the object.
@@ -203,21 +214,25 @@ and edge kind.
 Cached objects are parsed and checked for the expected architecture before
 reuse; a rejected entry is recompiled and replaced. The frame and resume-result
 ABI versions and structure sizes, including the extended runtime-table size,
-participate in the key and in frame-layout identity. Cold, warm,
-corruption-recovery, SimIR/referenced-width invalidation, scheduled-write
-kind/delay invalidation, wait-kind/operand invalidation, and optimization-mode
-invalidation are tested at O0 and O2.
+participate in each process key and in frame-layout identity. Group tests at O0
+and O2 verify two functions per object, warm reuse, whole-module invalidation
+when one member changes, and stable frame identity for an unchanged member.
+Cold, warm, corruption-recovery, SimIR/referenced-width invalidation,
+scheduled-write kind/delay invalidation, wait-kind/operand invalidation, and
+optimization-mode invalidation are also tested at O0 and O2.
 
 LLVM-enabled `fsim build` and `fsim run` select this cache beneath the
 configured project cache as `llvm-native`. The adapter and application expose
 hit, miss, store, rejected-entry, and load/store-failure counters; `fsim build`
 reports the principal counters. Application tests require a cold miss and
-store for every compiled process followed by a warm hit with no misses or
-cache failures at both O0 and O2. This remains a per-process adapter cache
-rather than the required per-specialization cache with explicit source/include
-identity, has no age/size eviction policy, and O0 does not yet provide the full
-debug metadata or statement/call safe-point model. The application analysis
-cache remains separate.
+store for every compiled specialization module followed by a warm hit with no
+misses or cache failures at both O0 and O2. The two-process static-sensitivity
+application fixture specifically requires one module miss/store followed by
+one warm module hit. Source/include content and eventual generic/parameter
+values do not yet participate in the module identity, the cache has no age/size
+eviction policy, and O0 does not yet provide the full debug metadata or
+statement/call safe-point model. The application analysis cache remains
+separate.
 
 ## Debug and public API
 

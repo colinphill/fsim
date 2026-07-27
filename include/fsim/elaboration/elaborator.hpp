@@ -4,6 +4,7 @@
 #include "fsim/frontend/design.hpp"
 #include "fsim/runtime/simir.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -48,6 +49,22 @@ struct SignalInfo {
     frontend::PortDirection direction{frontend::PortDirection::Unknown};
 };
 
+using SpecializationId = std::uint32_t;
+
+/// One elaborated design-unit occurrence and its directly owned processes.
+///
+/// The current frontend subset has no generic/parameter actuals, so each
+/// instance is its own specialization record. The dense ID and explicit
+/// process membership provide the stable grouping contract that later
+/// parameterized specialization can refine without recovering ownership from
+/// process-name strings.
+struct SpecializationInfo {
+    SpecializationId id{};
+    std::string unit;
+    std::string instance;
+    std::vector<runtime::simir::ProcessId> processes;
+};
+
 class ElaboratedDesign final {
 public:
     ElaboratedDesign() = default;
@@ -55,6 +72,8 @@ public:
     [[nodiscard]] const std::string& top() const noexcept;
     [[nodiscard]] const std::vector<SignalInfo>& signals() const noexcept;
     [[nodiscard]] const std::vector<runtime::simir::Process>& processes() const noexcept;
+    [[nodiscard]] const std::vector<SpecializationInfo>&
+    specializations() const noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view name) const noexcept;
     /// Return every debug-visible signal path in lexical order. Boundary-port
@@ -81,6 +100,7 @@ private:
     std::vector<SignalInfo> signal_info_;
     std::vector<runtime::simir::Signal> signals_;
     std::vector<runtime::simir::Process> processes_;
+    std::vector<SpecializationInfo> specializations_;
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
 };
 
