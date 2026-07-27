@@ -106,8 +106,10 @@ module-local `sc_signal` objects use the common signal store and scheduler.
 Typed `sc_in`/`sc_out`/`sc_inout` bindings to those signals alias one common
 DesignIR object, including when HDL instantiates the SystemC module. Native
 SystemC child members now elaborate recursively with stable hierarchy handles
-and direct-parent signal binding. Lifecycle callbacks, export/interface
-binding, and fiber-backed `SC_THREAD`/`SC_CTHREAD` suspension remain planned.
+and direct-parent signal or port binding. The four standard module lifecycle
+callbacks run at deterministic build/start/terminal boundaries, and bounded
+typed `sc_export` chains resolve to common signals. General standard interface
+types and fiber-backed `SC_THREAD`/`SC_CTHREAD` suspension remain planned.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

@@ -56,10 +56,20 @@ struct HierarchyRegistry::Impl {
     };
 
     struct LiveModule {
+        enum class LifecycleState : std::uint8_t {
+            constructed,
+            before_elaboration_complete,
+            elaborated,
+            started,
+            ended,
+            poisoned,
+        };
+
         ModuleDescription description;
         fsim_sc_module_destroy_v1 destroy{};
         void* user{};
         void* object{};
+        LifecycleState lifecycle{LifecycleState::constructed};
     };
 
     std::filesystem::path path;
@@ -198,6 +208,52 @@ public:
         }
     }
     return nullptr;
+}
+
+[[nodiscard]] HierarchyRegistry::Impl::LiveModule* find_live_module(
+    HierarchyRegistry::Impl& registry,
+    const fsim_sc_handle_v1 handle) noexcept {
+    const auto found = std::find_if(
+        registry.live.begin(),
+        registry.live.end(),
+        [&](const HierarchyRegistry::Impl::LiveModule& module) {
+            return module.description.handle == handle;
+        });
+    return found == registry.live.end() ? nullptr : &*found;
+}
+
+void invoke_lifecycle_entry(
+    HierarchyRegistry::Impl& registry,
+    const fsim_sc_lifecycle_entry_v1 entry,
+    void* user,
+    const std::string_view phase) {
+    if (entry == nullptr || user == nullptr) {
+        return;
+    }
+    if (active_invocation != nullptr) {
+        throw std::logic_error{
+            "recursive SystemC lifecycle invocation is not supported"};
+    }
+    ActiveInvocation invocation{
+        &registry, nullptr, {}, {}, std::nullopt};
+    InvocationScope scope{invocation};
+    try {
+        entry(user);
+    } catch (const std::exception& exception) {
+        invocation.failure =
+            "SystemC " + std::string{phase}
+            + " callback escaped with an exception: "
+            + exception.what();
+    } catch (...) {
+        invocation.failure =
+            "SystemC " + std::string{phase}
+            + " callback escaped with an unknown exception";
+    }
+    if (!invocation.failure.empty()) {
+        throw std::runtime_error{
+            "SystemC " + std::string{phase}
+            + " callback failed: " + invocation.failure};
+    }
 }
 
 extern "C" fsim_sc_status_v1 registry_register_port(
@@ -675,25 +731,29 @@ extern "C" fsim_sc_status_v1 registry_bind_port(
         auto& registry =
             *static_cast<HierarchyRegistry::Impl*>(context);
         const auto port_object = registry.objects.find(port);
-        const auto channel_object = registry.objects.find(channel);
+        const auto target_object = registry.objects.find(channel);
         if (port_object == registry.objects.end()
-            || channel_object == registry.objects.end()
+            || target_object == registry.objects.end()
             || port_object->second.kind
                 != HierarchyRegistry::Impl::Object::Kind::port
-            || channel_object->second.kind
-                != HierarchyRegistry::Impl::Object::Kind::signal
             || port_object->second.encoding
-                != channel_object->second.encoding
+                != target_object->second.encoding
             || port_object->second.width
-                != channel_object->second.width) {
+                != target_object->second.width) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto pending =
             registry.pending.find(port_object->second.module);
         if (pending == registry.pending.end()
-            || (channel_object->second.module
+            || (target_object->second.kind
+                    == HierarchyRegistry::Impl::Object::Kind::signal
+                && target_object->second.module
                     != port_object->second.module
-                && channel_object->second.module
+                && target_object->second.module
+                    != pending->second.parent)
+            || (target_object->second.kind
+                    == HierarchyRegistry::Impl::Object::Kind::port
+                && target_object->second.module
                     != pending->second.parent)
             || port_object->second.index
                 >= pending->second.ports.size()) {
@@ -757,6 +817,41 @@ extern "C" fsim_sc_status_v1 registry_register_native_module(
         registry.pending.emplace(*handle, std::move(child));
         registry.native_children[parent].push_back(*handle);
         *result = *handle;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_register_lifecycle(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const fsim_sc_lifecycle_entry_v1 before_end_of_elaboration,
+    const fsim_sc_lifecycle_entry_v1 end_of_elaboration,
+    const fsim_sc_lifecycle_entry_v1 start_of_simulation,
+    const fsim_sc_lifecycle_entry_v1 end_of_simulation,
+    void* user) noexcept {
+    if (context == nullptr || module == 0
+        || before_end_of_elaboration == nullptr
+        || end_of_elaboration == nullptr
+        || start_of_simulation == nullptr
+        || end_of_simulation == nullptr || user == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.pending.find(module);
+        if (found == registry.pending.end()
+            || found->second.lifecycle.user != nullptr) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        found->second.lifecycle = {
+            before_end_of_elaboration,
+            end_of_elaboration,
+            start_of_simulation,
+            end_of_simulation,
+            user};
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -1336,6 +1431,7 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.value_changed = registry_value_changed;
     host.bind_port = registry_bind_port;
     host.register_native_module = registry_register_native_module;
+    host.register_lifecycle = registry_register_lifecycle;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -1452,7 +1548,8 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
         {description,
          found->second.destroy,
          found->second.user,
-         object});
+         object,
+         Impl::LiveModule::LifecycleState::constructed});
     return description;
 }
 
@@ -1480,6 +1577,151 @@ void HierarchyRegistry::set_time_resolution(
             "SystemC time resolution must be a positive femtosecond value"};
     }
     impl_->femtoseconds_per_tick = femtoseconds_per_tick;
+}
+
+void HierarchyRegistry::complete_elaboration(
+    const std::span<const fsim_sc_handle_v1> roots) {
+    if (impl_ == nullptr) {
+        throw std::logic_error{"SystemC hierarchy registry is unavailable"};
+    }
+    std::vector<Impl::LiveModule*> modules;
+    modules.reserve(roots.size());
+    std::unordered_set<fsim_sc_handle_v1> unique;
+    for (const auto root : roots) {
+        if (root == 0 || !unique.insert(root).second) {
+            throw std::invalid_argument{
+                "SystemC lifecycle root handles must be nonzero and unique"};
+        }
+        auto* module = find_live_module(*impl_, root);
+        if (module == nullptr) {
+            throw std::invalid_argument{
+                "unknown SystemC lifecycle root handle"};
+        }
+        if (module->lifecycle
+            == Impl::LiveModule::LifecycleState::poisoned) {
+            throw std::logic_error{
+                "SystemC lifecycle root is poisoned"};
+        }
+        modules.push_back(module);
+    }
+    for (auto* module : modules) {
+        if (module->lifecycle
+            != Impl::LiveModule::LifecycleState::constructed) {
+            continue;
+        }
+        try {
+            invoke_lifecycle_entry(
+                *impl_,
+                module->description.lifecycle
+                    .before_end_of_elaboration,
+                module->description.lifecycle.user,
+                "before_end_of_elaboration");
+            module->lifecycle =
+                Impl::LiveModule::LifecycleState::
+                    before_elaboration_complete;
+        } catch (...) {
+            module->lifecycle =
+                Impl::LiveModule::LifecycleState::poisoned;
+            throw;
+        }
+    }
+    for (auto* module : modules) {
+        if (module->lifecycle
+            != Impl::LiveModule::LifecycleState::
+                before_elaboration_complete) {
+            continue;
+        }
+        try {
+            invoke_lifecycle_entry(
+                *impl_,
+                module->description.lifecycle.end_of_elaboration,
+                module->description.lifecycle.user,
+                "end_of_elaboration");
+            module->lifecycle =
+                Impl::LiveModule::LifecycleState::elaborated;
+        } catch (...) {
+            module->lifecycle =
+                Impl::LiveModule::LifecycleState::poisoned;
+            throw;
+        }
+    }
+}
+
+void HierarchyRegistry::start_simulation(
+    const std::span<const fsim_sc_handle_v1> roots) {
+    if (impl_ == nullptr) {
+        throw std::logic_error{"SystemC hierarchy registry is unavailable"};
+    }
+    for (const auto root : roots) {
+        auto* module = find_live_module(*impl_, root);
+        if (module == nullptr) {
+            throw std::invalid_argument{
+                "unknown SystemC lifecycle root handle"};
+        }
+        if (module->lifecycle
+            == Impl::LiveModule::LifecycleState::started) {
+            continue;
+        }
+        if (module->lifecycle
+            != Impl::LiveModule::LifecycleState::elaborated) {
+            throw std::logic_error{
+                "SystemC lifecycle root was not elaborated"};
+        }
+        try {
+            invoke_lifecycle_entry(
+                *impl_,
+                module->description.lifecycle.start_of_simulation,
+                module->description.lifecycle.user,
+                "start_of_simulation");
+            module->lifecycle =
+                Impl::LiveModule::LifecycleState::started;
+        } catch (...) {
+            module->lifecycle =
+                Impl::LiveModule::LifecycleState::poisoned;
+            throw;
+        }
+    }
+}
+
+void HierarchyRegistry::end_simulation(
+    const std::span<const fsim_sc_handle_v1> roots) {
+    if (impl_ == nullptr) {
+        throw std::logic_error{"SystemC hierarchy registry is unavailable"};
+    }
+    std::exception_ptr failure;
+    for (auto root = roots.rbegin(); root != roots.rend(); ++root) {
+        auto* module = find_live_module(*impl_, *root);
+        if (module == nullptr) {
+            if (!failure) {
+                failure = std::make_exception_ptr(
+                    std::invalid_argument{
+                        "unknown SystemC lifecycle root handle"});
+            }
+            continue;
+        }
+        if (module->lifecycle
+            != Impl::LiveModule::LifecycleState::started) {
+            continue;
+        }
+        try {
+            invoke_lifecycle_entry(
+                *impl_,
+                module->description.lifecycle.end_of_simulation,
+                module->description.lifecycle.user,
+                "end_of_simulation");
+            module->lifecycle =
+                Impl::LiveModule::LifecycleState::ended;
+        } catch (...) {
+            module->lifecycle =
+                Impl::LiveModule::LifecycleState::poisoned;
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 }
 
 MethodSuspendResult HierarchyRegistry::invoke_method(

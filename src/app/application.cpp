@@ -3019,6 +3019,11 @@ std::optional<BuiltProject> build_project(
   if (!systemc_instances) {
     return std::nullopt;
   }
+  std::vector<std::uint64_t> systemc_roots;
+  systemc_roots.reserve(systemc_instances->size());
+  for (const auto& instance : *systemc_instances) {
+    systemc_roots.push_back(instance.handle);
+  }
   std::vector<elaboration::Binding> bindings;
   bindings.reserve(config.bindings.size());
   for (const auto& binding : config.bindings) {
@@ -3054,6 +3059,15 @@ std::optional<BuiltProject> build_project(
       diagnostics.error(
           "FSIM-SC-A006",
           "cannot bind SystemC objects to the common runtime: "
+              + std::string{error.what()});
+      return std::nullopt;
+    }
+    try {
+      systemc_hierarchy->complete_elaboration(systemc_roots);
+    } catch (const std::exception& error) {
+      diagnostics.error(
+          "FSIM-SC-A008",
+          "cannot complete SystemC elaboration: "
               + std::string{error.what()});
       return std::nullopt;
     }
@@ -3111,6 +3125,7 @@ std::optional<BuiltProject> build_project(
       std::move(*specialization_cache_keys),
       std::move(systemc_plugins),
       std::move(systemc_hierarchy),
+      std::move(systemc_roots),
       hit};
 }
 
@@ -3263,6 +3278,36 @@ struct Simulation::Impl {
     }
   }
 
+  ~Impl() {
+    if (systemc_start_attempted && !systemc_ended
+        && built.systemc_hierarchy) {
+      try {
+        built.systemc_hierarchy->end_simulation(
+            built.systemc_roots);
+      } catch (...) {
+      }
+    }
+  }
+
+  void start_systemc() {
+    if (systemc_start_attempted || !built.systemc_hierarchy) {
+      return;
+    }
+    systemc_start_attempted = true;
+    built.systemc_hierarchy->start_simulation(
+        built.systemc_roots);
+  }
+
+  void end_systemc() {
+    if (!systemc_start_attempted || systemc_ended
+        || !built.systemc_hierarchy) {
+      return;
+    }
+    built.systemc_hierarchy->end_simulation(
+        built.systemc_roots);
+    systemc_ended = true;
+  }
+
   BuiltProject built;
 #if defined(FSIM_HAS_LLVM)
   // Shared by every compiled executor. It is fully populated before executor
@@ -3279,6 +3324,8 @@ struct Simulation::Impl {
   std::map<std::uint64_t, SignalChangeHook> signal_observers;
   std::uint64_t next_signal_observer{1};
   Lifecycle lifecycle{Lifecycle::ready};
+  bool systemc_start_attempted{};
+  bool systemc_ended{};
 };
 
 Simulation::Simulation(
@@ -3338,7 +3385,16 @@ bool Simulation::signal_is_forced(const SignalId signal) const {
 }
 
 void Simulation::start() {
-  impl_->interpreter->start();
+  if (impl_->lifecycle != Impl::Lifecycle::ready) {
+    throw std::logic_error{"simulation is not ready to start"};
+  }
+  try {
+    impl_->start_systemc();
+    impl_->interpreter->start();
+  } catch (...) {
+    impl_->lifecycle = Impl::Lifecycle::poisoned;
+    throw;
+  }
 }
 
 runtime::RunResult Simulation::run(
@@ -3354,9 +3410,11 @@ runtime::RunResult Simulation::run(
     throw std::invalid_argument("run time limit is before the current time");
   }
   try {
+    impl_->start_systemc();
     auto result = impl_->interpreter->run(until);
     if (result.status == runtime::RunStatus::completed
         || impl_->interpreter->stopped_by_design()) {
+      impl_->end_systemc();
       impl_->lifecycle = Impl::Lifecycle::finished;
     }
     return result;

@@ -693,14 +693,33 @@ public:
     sc_export() = default;
     explicit sc_export(const char*) noexcept {}
 
-    void bind(Interface& interface) noexcept { interface_ = &interface; }
+    void bind(Interface& interface) noexcept {
+        interface_ = &interface;
+        export_ = nullptr;
+    }
     void operator()(Interface& interface) noexcept { bind(interface); }
 
-    [[nodiscard]] Interface& get_interface() const {
-        if (interface_ == nullptr) {
-            throw std::logic_error{"access through unbound sc_export"};
+    void bind(sc_export& target) {
+        for (auto* current = &target;
+             current != nullptr; current = current->export_) {
+            if (current == this) {
+                throw std::logic_error{
+                    "cyclic sc_export binding"};
+            }
         }
-        return *interface_;
+        interface_ = nullptr;
+        export_ = &target;
+    }
+    void operator()(sc_export& target) { bind(target); }
+
+    [[nodiscard]] Interface& get_interface() const {
+        if (interface_ != nullptr) {
+            return *interface_;
+        }
+        if (export_ != nullptr) {
+            return export_->get_interface();
+        }
+        throw std::logic_error{"access through unbound sc_export"};
     }
 
     [[nodiscard]] Interface* operator->() const {
@@ -710,6 +729,7 @@ public:
 
 private:
     Interface* interface_{};
+    sc_export* export_{};
 };
 
 class sc_event_finder final {
@@ -857,9 +877,32 @@ public:
         return FSIM_SC_OK;
     }
 
+    [[nodiscard]] fsim_sc_status_v1 fsim_register_lifecycle(
+        const fsim_sc_host_v1* host,
+        const fsim_sc_handle_v1 module) {
+        if (host == nullptr || host->register_lifecycle == nullptr
+            || module == 0 || handle_ != module) {
+            return FSIM_SC_ABI_MISMATCH;
+        }
+        lifecycle_host_ = host;
+        return host->register_lifecycle(
+            host->context,
+            module,
+            invoke_before_end_of_elaboration,
+            invoke_end_of_elaboration,
+            invoke_start_of_simulation,
+            invoke_end_of_simulation,
+            this);
+    }
+
     sc_sensitive sensitive;
 
 protected:
+    virtual void before_end_of_elaboration() {}
+    virtual void end_of_elaboration() {}
+    virtual void start_of_simulation() {}
+    virtual void end_of_simulation() {}
+
     struct Sensitivity {
         fsim_sc_handle_v1 object{};
         fsim_sc_edge_kind_v1 edge{FSIM_SC_ANY_EDGE};
@@ -879,6 +922,101 @@ protected:
     }
 
 private:
+    enum class LifecyclePhase : std::uint8_t {
+        before_end_of_elaboration,
+        end_of_elaboration,
+        start_of_simulation,
+        end_of_simulation,
+    };
+
+    void fsim_invoke_lifecycle(const LifecyclePhase phase) {
+        if (phase == LifecyclePhase::end_of_simulation) {
+            for (auto child = children_.rbegin();
+                 child != children_.rend(); ++child) {
+                (*child)->fsim_invoke_lifecycle(phase);
+            }
+            end_of_simulation();
+            return;
+        }
+        switch (phase) {
+        case LifecyclePhase::before_end_of_elaboration:
+            before_end_of_elaboration();
+            break;
+        case LifecyclePhase::end_of_elaboration:
+            end_of_elaboration();
+            break;
+        case LifecyclePhase::start_of_simulation:
+            start_of_simulation();
+            break;
+        case LifecyclePhase::end_of_simulation:
+            break;
+        }
+        for (auto* child : children_) {
+            child->fsim_invoke_lifecycle(phase);
+        }
+    }
+
+    static void invoke_lifecycle(
+        void* user,
+        const LifecyclePhase phase,
+        const char* unknown_failure) noexcept {
+        auto* module = static_cast<sc_module*>(user);
+        if (module == nullptr || module->lifecycle_host_ == nullptr) {
+            return;
+        }
+        detail::host_scope scope{module->lifecycle_host_};
+        try {
+            module->fsim_invoke_lifecycle(phase);
+        } catch (const std::exception& exception) {
+            if (module->lifecycle_host_->report != nullptr) {
+                module->lifecycle_host_->report(
+                    module->lifecycle_host_->context,
+                    3,
+                    exception.what());
+            }
+        } catch (...) {
+            if (module->lifecycle_host_->report != nullptr) {
+                module->lifecycle_host_->report(
+                    module->lifecycle_host_->context,
+                    3,
+                    unknown_failure);
+            }
+        }
+    }
+
+    static void invoke_before_end_of_elaboration(
+        void* user) noexcept {
+        invoke_lifecycle(
+            user,
+            LifecyclePhase::before_end_of_elaboration,
+            "SystemC before_end_of_elaboration callback threw an "
+            "unknown exception");
+    }
+
+    static void invoke_end_of_elaboration(void* user) noexcept {
+        invoke_lifecycle(
+            user,
+            LifecyclePhase::end_of_elaboration,
+            "SystemC end_of_elaboration callback threw an "
+            "unknown exception");
+    }
+
+    static void invoke_start_of_simulation(void* user) noexcept {
+        invoke_lifecycle(
+            user,
+            LifecyclePhase::start_of_simulation,
+            "SystemC start_of_simulation callback threw an "
+            "unknown exception");
+    }
+
+    static void invoke_end_of_simulation(void* user) noexcept {
+        invoke_lifecycle(
+            user,
+            LifecyclePhase::end_of_simulation,
+            "SystemC end_of_simulation callback threw an "
+            "unknown exception");
+    }
+
     void attach_to_current_parent() {
         attach_to_parent(detail::current_cpp_module);
     }
@@ -920,6 +1058,7 @@ private:
     fsim_sc_handle_v1 handle_{};
     std::vector<sc_module*> children_;
     std::vector<Process> processes_;
+    const fsim_sc_host_v1* lifecycle_host_{};
 };
 
 template <typename T>
@@ -1024,11 +1163,34 @@ public:
     void bind(const sc_signal<T>& signal) {
         detail::bind_port(handle_, signal.native_handle());
         signal_ = &signal;
+        port_ = nullptr;
     }
     void operator()(const sc_signal<T>& signal) { bind(signal); }
+    void bind(const sc_in& port) {
+        for (auto* current = &port;
+             current != nullptr; current = current->port_) {
+            if (current == this) {
+                throw std::logic_error{"cyclic sc_in binding"};
+            }
+        }
+        detail::bind_port(handle_, port.native_handle());
+        signal_ = nullptr;
+        port_ = &port;
+    }
+    void operator()(const sc_in& port) { bind(port); }
+    void bind(const sc_export<sc_signal<T>>& export_object) {
+        bind(export_object.get_interface());
+    }
+    void operator()(
+        const sc_export<sc_signal<T>>& export_object) {
+        bind(export_object);
+    }
     [[nodiscard]] const T& read() const {
         if (signal_ != nullptr) {
             return signal_->read();
+        }
+        if (port_ != nullptr) {
+            return port_->read();
         }
         if (handle_ == 0) {
             throw std::logic_error{"read from unbound sc_in"};
@@ -1037,7 +1199,10 @@ public:
         return value_;
     }
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
-        return signal_ == nullptr ? handle_ : signal_->native_handle();
+        if (signal_ != nullptr) {
+            return signal_->native_handle();
+        }
+        return port_ == nullptr ? handle_ : port_->native_handle();
     }
     [[nodiscard]] sc_event_finder pos() const noexcept {
         return {native_handle(), FSIM_SC_POSEDGE};
@@ -1049,6 +1214,7 @@ public:
 
 private:
     const sc_signal<T>* signal_{};
+    const sc_in* port_{};
     fsim_sc_handle_v1 handle_{};
     mutable T value_{};
 };
@@ -1072,11 +1238,35 @@ public:
     void bind(sc_signal<T>& signal) {
         detail::bind_port(handle_, signal.native_handle());
         signal_ = &signal;
+        port_ = nullptr;
     }
     void operator()(sc_signal<T>& signal) { bind(signal); }
+    void bind(sc_out& port) {
+        for (auto* current = &port;
+             current != nullptr; current = current->port_) {
+            if (current == this) {
+                throw std::logic_error{"cyclic sc_out binding"};
+            }
+        }
+        detail::bind_port(handle_, port.native_handle());
+        signal_ = nullptr;
+        port_ = &port;
+    }
+    void operator()(sc_out& port) { bind(port); }
+    void bind(const sc_export<sc_signal<T>>& export_object) {
+        bind(export_object.get_interface());
+    }
+    void operator()(
+        const sc_export<sc_signal<T>>& export_object) {
+        bind(export_object);
+    }
     void write(const T& value) {
         if (signal_ != nullptr) {
             signal_->write(value);
+            return;
+        }
+        if (port_ != nullptr) {
+            port_->write(value);
             return;
         }
         if (handle_ == 0) {
@@ -1085,7 +1275,10 @@ public:
         detail::write_object(handle_, value);
     }
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
-        return signal_ == nullptr ? handle_ : signal_->native_handle();
+        if (signal_ != nullptr) {
+            return signal_->native_handle();
+        }
+        return port_ == nullptr ? handle_ : port_->native_handle();
     }
     sc_out& operator=(const T& value) {
         write(value);
@@ -1094,6 +1287,7 @@ public:
 
 private:
     sc_signal<T>* signal_{};
+    sc_out* port_{};
     fsim_sc_handle_v1 handle_{};
 };
 
@@ -1107,9 +1301,25 @@ public:
     void bind(sc_signal<T>& signal) {
         sc_out<T>::bind(signal);
         input_.bind(signal);
+        port_ = nullptr;
     }
     void operator()(sc_signal<T>& signal) { bind(signal); }
+    void bind(sc_inout& port) {
+        sc_out<T>::bind(static_cast<sc_out<T>&>(port));
+        port_ = &port;
+    }
+    void operator()(sc_inout& port) { bind(port); }
+    void bind(const sc_export<sc_signal<T>>& export_object) {
+        bind(export_object.get_interface());
+    }
+    void operator()(
+        const sc_export<sc_signal<T>>& export_object) {
+        bind(export_object);
+    }
     [[nodiscard]] const T& read() const {
+        if (port_ != nullptr) {
+            return port_->read();
+        }
         if (this->native_handle() != 0) {
             value_ = detail::read_object<T>(this->native_handle());
             return value_;
@@ -1126,6 +1336,7 @@ public:
 
 private:
     sc_in<T> input_;
+    sc_inout* port_{};
     mutable T value_{};
 };
 
@@ -1749,6 +1960,11 @@ struct module_factory_state {
             if (status != FSIM_SC_OK) {
                 return status;
             }
+            const auto lifecycle_status =
+                object->fsim_register_lifecycle(host, module);
+            if (lifecycle_status != FSIM_SC_OK) {
+                return lifecycle_status;
+            }
             *result = object.release();
             return FSIM_SC_OK;
         } catch (...) {
@@ -1790,7 +2006,8 @@ template <typename Module>
         || host->register_signal == nullptr
         || host->value_changed == nullptr
         || host->bind_port == nullptr
-        || host->register_native_module == nullptr) {
+        || host->register_native_module == nullptr
+        || host->register_lifecycle == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

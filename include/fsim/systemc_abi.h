@@ -79,6 +79,7 @@ typedef struct fsim_sc_value_view_v1 {
 
 typedef void (*fsim_sc_process_entry_v1)(void* user);
 typedef void (*fsim_sc_channel_update_v1)(void* user);
+typedef void (*fsim_sc_lifecycle_entry_v1)(void* user);
 typedef void* (*fsim_sc_module_factory_v1)(
     void* user, const char* instance_name, fsim_sc_handle_v1 parent);
 typedef void (*fsim_sc_module_destroy_v1)(void* user, void* module);
@@ -221,9 +222,9 @@ typedef struct fsim_sc_host_v1 {
         uint8_t* result);
 
     /*
-     * Append-only elaboration-time port/channel binding. Handles must have
+     * Append-only elaboration-time port/object binding. Handles must have
      * identical value metadata. A port may bind a signal owned by the same
-     * module or by its direct native SystemC parent.
+     * module or its direct native parent, or a port owned by that parent.
      */
     fsim_sc_status_v1 (*bind_port)(
         void* context,
@@ -240,6 +241,20 @@ typedef struct fsim_sc_host_v1 {
         fsim_sc_handle_v1 parent,
         const char* name,
         fsim_sc_handle_v1* result);
+
+    /*
+     * Append-only lifecycle registration for one factory root. The callbacks
+     * must not throw across the C ABI. Native children are dispatched
+     * recursively by the root callback.
+     */
+    fsim_sc_status_v1 (*register_lifecycle)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        fsim_sc_lifecycle_entry_v1 before_end_of_elaboration,
+        fsim_sc_lifecycle_entry_v1 end_of_elaboration,
+        fsim_sc_lifecycle_entry_v1 start_of_simulation,
+        fsim_sc_lifecycle_entry_v1 end_of_simulation,
+        void* user);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

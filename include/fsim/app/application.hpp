@@ -46,6 +46,7 @@ struct BuiltProject {
   std::vector<std::string> specialization_cache_keys;
   std::vector<std::filesystem::path> systemc_plugins;
   std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
+  std::vector<std::uint64_t> systemc_roots;
   bool cache_hit{};
 };
 

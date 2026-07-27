@@ -173,6 +173,39 @@ int main() {
     assert(rejected_unbound_export);
     exported.bind(implementation);
     assert(exported->value() == 42);
+    sc_core::sc_export<ValueInterface> chained_export{
+        "chained_export"};
+    chained_export.bind(exported);
+    assert(chained_export->value() == 42);
+    bool rejected_export_cycle = false;
+    try {
+        exported.bind(chained_export);
+    } catch (const std::logic_error&) {
+        rejected_export_cycle = true;
+    }
+    assert(rejected_export_cycle);
+
+    sc_core::sc_export<sc_core::sc_signal<bool>> signal_export{
+        "signal_export"};
+    signal_export.bind(clock);
+    sc_core::sc_in<bool> exported_input{"exported_input"};
+    exported_input.bind(signal_export);
+    clock.write(true);
+    assert(exported_input.read());
+
+    sc_core::sc_out<bool> parent_output{"parent_output"};
+    sc_core::sc_out<bool> child_output{"child_output"};
+    parent_output.bind(clock);
+    child_output.bind(parent_output);
+    child_output.write(false);
+    assert(!clock.read());
+    bool rejected_port_cycle = false;
+    try {
+        parent_output.bind(child_output);
+    } catch (const std::logic_error&) {
+        rejected_port_cycle = true;
+    }
+    assert(rejected_port_cycle);
 
     const char* first_name = sc_core::sc_gen_unique_name("object");
     const char* second_name = sc_core::sc_gen_unique_name("object");

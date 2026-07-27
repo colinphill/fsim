@@ -982,6 +982,178 @@ SC_MODULE(DuplicateNativeHierarchy) {
         second{"duplicate"} {}
 };
 
+SC_MODULE(PortChainHierarchy) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  NativeLeaf leaf;
+
+  SC_CTOR(PortChainHierarchy)
+      : leaf{"leaf"} {
+    leaf.value(value);
+    leaf.inverted(inverted);
+  }
+};
+
+SC_MODULE(ExportHierarchy) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  sc_core::sc_signal<sc_dt::sc_logic> value_channel{
+      "value_channel", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
+      "inverted_channel", sc_dt::sc_logic{'1'}};
+  sc_core::sc_export<
+      sc_core::sc_signal<sc_dt::sc_logic>> value_endpoint{
+          "value_endpoint"};
+  sc_core::sc_export<
+      sc_core::sc_signal<sc_dt::sc_logic>> value_export{
+          "value_export"};
+  sc_core::sc_export<
+      sc_core::sc_signal<sc_dt::sc_logic>> inverted_endpoint{
+          "inverted_endpoint"};
+  sc_core::sc_export<
+      sc_core::sc_signal<sc_dt::sc_logic>> inverted_export{
+          "inverted_export"};
+  NativeLeaf leaf;
+
+  SC_CTOR(ExportHierarchy)
+      : leaf{"leaf"} {
+    value(value_channel);
+    inverted(inverted_channel);
+    value_endpoint(value_channel);
+    value_export(value_endpoint);
+    inverted_endpoint(inverted_channel);
+    inverted_export(inverted_endpoint);
+    leaf.value(value_export);
+    leaf.inverted(inverted_export);
+  }
+};
+
+SC_MODULE(DeepMiddle) {
+  NativeLeaf leaf;
+
+  SC_CTOR(DeepMiddle)
+      : leaf{"leaf"} {}
+};
+
+SC_MODULE(InvalidDeepBinding) {
+  sc_core::sc_signal<sc_dt::sc_logic> root_signal{
+      "root_signal", sc_dt::sc_logic{'0'}};
+  DeepMiddle middle;
+
+  SC_CTOR(InvalidDeepBinding)
+      : middle{"middle"} {
+    middle.leaf.value(root_signal);
+  }
+};
+
+struct LifecycleLeaf : sc_core::sc_module {
+  explicit LifecycleLeaf(
+      sc_core::sc_module_name name,
+      std::vector<int>& events)
+      : sc_core::sc_module(name),
+        events_(events) {}
+
+ protected:
+  void before_end_of_elaboration() override {
+    require_size(1);
+    events_.push_back(2);
+  }
+
+  void end_of_elaboration() override {
+    require_size(3);
+    events_.push_back(4);
+  }
+
+  void start_of_simulation() override {
+    require_size(5);
+    events_.push_back(6);
+  }
+
+  void end_of_simulation() override {
+    require_size(6);
+    events_.push_back(7);
+  }
+
+ private:
+  void require_size(const std::size_t expected) const {
+    if (events_.size() != expected) {
+      throw std::runtime_error{
+          "native SystemC lifecycle order mismatch"};
+    }
+  }
+
+  std::vector<int>& events_;
+};
+
+SC_MODULE(LifecycleModule) {
+  std::vector<int> lifecycle_events;
+  sc_core::sc_in<sc_dt::sc_logic> trigger{"trigger"};
+  sc_core::sc_out<sc_dt::sc_logic> ready{"ready"};
+  LifecycleLeaf leaf;
+
+  SC_CTOR(LifecycleModule)
+      : leaf{"leaf", lifecycle_events} {
+    SC_METHOD(observe);
+    sensitive << trigger;
+    dont_initialize();
+  }
+
+  void observe() {
+    ready.write(
+        sc_dt::sc_logic{
+            lifecycle_events.size() == 6 ? '1' : '0'});
+  }
+
+ protected:
+  void before_end_of_elaboration() override {
+    require_size(0);
+    lifecycle_events.push_back(1);
+  }
+
+  void end_of_elaboration() override {
+    require_size(2);
+    lifecycle_events.push_back(3);
+  }
+
+  void start_of_simulation() override {
+    require_size(4);
+    lifecycle_events.push_back(5);
+  }
+
+  void end_of_simulation() override {
+    require_size(7);
+    lifecycle_events.push_back(8);
+  }
+
+ private:
+  void require_size(const std::size_t expected) const {
+    if (lifecycle_events.size() != expected) {
+      throw std::runtime_error{
+          "root SystemC lifecycle order mismatch"};
+    }
+  }
+};
+
+SC_MODULE(ThrowingLifecycle) {
+  SC_CTOR(ThrowingLifecycle) {}
+
+ protected:
+  void before_end_of_elaboration() override {
+    throw std::runtime_error{
+        "intentional lifecycle elaboration failure"};
+  }
+};
+
+SC_MODULE(ThrowingEndLifecycle) {
+  SC_CTOR(ThrowingEndLifecycle) {}
+
+ protected:
+  void end_of_simulation() override {
+    throw std::runtime_error{
+        "intentional lifecycle terminal failure"};
+  }
+};
+
 namespace {
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
@@ -1151,9 +1323,47 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (native_hierarchy_status != FSIM_SC_OK) {
     return native_hierarchy_status;
   }
-  return fsim::systemc::register_module_factory<
+  const auto duplicate_status =
+      fsim::systemc::register_module_factory<
       DuplicateNativeHierarchy>(
           host, registrar, "duplicate_native_hierarchy");
+  if (duplicate_status != FSIM_SC_OK) {
+    return duplicate_status;
+  }
+  const auto lifecycle_status =
+      fsim::systemc::register_module_factory<LifecycleModule>(
+          host, registrar, "lifecycle_module");
+  if (lifecycle_status != FSIM_SC_OK) {
+    return lifecycle_status;
+  }
+  const auto throwing_lifecycle_status =
+      fsim::systemc::register_module_factory<ThrowingLifecycle>(
+          host, registrar, "throwing_lifecycle");
+  if (throwing_lifecycle_status != FSIM_SC_OK) {
+    return throwing_lifecycle_status;
+  }
+  const auto throwing_end_status =
+      fsim::systemc::register_module_factory<
+          ThrowingEndLifecycle>(
+              host, registrar, "throwing_end_lifecycle");
+  if (throwing_end_status != FSIM_SC_OK) {
+    return throwing_end_status;
+  }
+  const auto port_chain_status =
+      fsim::systemc::register_module_factory<PortChainHierarchy>(
+          host, registrar, "port_chain_hierarchy");
+  if (port_chain_status != FSIM_SC_OK) {
+    return port_chain_status;
+  }
+  const auto export_status =
+      fsim::systemc::register_module_factory<ExportHierarchy>(
+          host, registrar, "export_hierarchy");
+  if (export_status != FSIM_SC_OK) {
+    return export_status;
+  }
+  return fsim::systemc::register_module_factory<
+      InvalidDeepBinding>(
+          host, registrar, "invalid_deep_binding");
 }
 )";
   }
@@ -1230,6 +1440,45 @@ module systemc_native_hierarchy_host;
   logic value;
   logic inverted;
   native_hierarchy_placeholder u_native(
+      .value(value),
+      .inverted(inverted));
+  initial begin
+    value = 1'b0;
+    #1 value = 1'b1;
+    #1 $finish;
+  end
+endmodule
+
+module systemc_lifecycle_host;
+  logic trigger;
+  logic ready;
+  lifecycle_module_placeholder u_lifecycle(
+      .trigger(trigger),
+      .ready(ready));
+  initial begin
+    trigger = 1'b0;
+    #1 trigger = 1'b1;
+    #1 $finish;
+  end
+endmodule
+
+module systemc_port_chain_host;
+  logic value;
+  logic inverted;
+  port_chain_hierarchy_placeholder u_chain(
+      .value(value),
+      .inverted(inverted));
+  initial begin
+    value = 1'b0;
+    #1 value = 1'b1;
+    #1 $finish;
+  end
+endmodule
+
+module systemc_export_host;
+  logic value;
+  logic inverted;
+  export_hierarchy_placeholder u_export(
       .value(value),
       .inverted(inverted));
   initial begin
@@ -1524,6 +1773,148 @@ end architecture rtl;
   assert(native_reference.first.time == native_compiled.first.time);
   assert(native_reference.second == native_compiled.second);
 
+  auto lifecycle_config = hdl_systemc_config;
+  lifecycle_config.project.top =
+      "sv:work.systemc_lifecycle_host";
+  lifecycle_config.bindings = {
+      {"systemc_lifecycle_host.u_lifecycle",
+       "systemc:models.lifecycle_module",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine lifecycle_diagnostics;
+  auto lifecycle_reference_project = fsim::app::build_project(
+      lifecycle_config, lifecycle_diagnostics);
+  auto lifecycle_compiled_project = fsim::app::build_project(
+      lifecycle_config, lifecycle_diagnostics);
+  assert(lifecycle_reference_project);
+  assert(lifecycle_compiled_project);
+  assert(lifecycle_reference_project->systemc_roots.size() == 1);
+  assert(lifecycle_compiled_project->systemc_roots.size() == 1);
+  const auto run_lifecycle =
+      [&](fsim::app::BuiltProject project,
+          const fsim::app::SimulationEngine engine) {
+        const auto ready = project.design.find_signal("ready");
+        assert(ready);
+        fsim::app::Simulation simulation{
+            std::move(project),
+            lifecycle_config.run.max_deltas,
+            engine};
+        const auto result = simulation.run();
+        return std::pair{
+            result,
+            simulation.read_signal(*ready).to_msb_string()};
+      };
+  const auto lifecycle_reference = run_lifecycle(
+      std::move(*lifecycle_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto lifecycle_compiled = run_lifecycle(
+      std::move(*lifecycle_compiled_project),
+      fsim::app::SimulationEngine::compiled);
+  assert(
+      lifecycle_reference.first.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(lifecycle_reference.first.time == 2);
+  assert(lifecycle_reference.second == "1");
+  assert(
+      lifecycle_reference.first.status
+      == lifecycle_compiled.first.status);
+  assert(
+      lifecycle_reference.first.time
+      == lifecycle_compiled.first.time);
+  assert(lifecycle_reference.second == lifecycle_compiled.second);
+
+  const auto exercise_native_binding =
+      [&](const std::string& top,
+          const std::string& instance_path,
+          const std::string& target,
+          const bool through_internal_signals) {
+        auto binding_config = hdl_systemc_config;
+        binding_config.project.top = "sv:work." + top;
+        binding_config.bindings = {
+            {instance_path, target, std::nullopt},
+        };
+        fsim::diagnostic::Engine binding_diagnostics;
+        auto reference_project = fsim::app::build_project(
+            binding_config, binding_diagnostics);
+        auto compiled_project = fsim::app::build_project(
+            binding_config, binding_diagnostics);
+        assert(reference_project);
+        assert(compiled_project);
+        const auto& instances =
+            reference_project->design.systemc_instances();
+        const auto parent = std::find_if(
+            instances.begin(),
+            instances.end(),
+            [&](const fsim::elaboration::SystemCInstanceInfo& instance) {
+              return instance.instance == instance_path;
+            });
+        const auto leaf = std::find_if(
+            instances.begin(),
+            instances.end(),
+            [&](const fsim::elaboration::SystemCInstanceInfo& instance) {
+              return instance.instance == instance_path + ".leaf";
+            });
+        assert(parent != instances.end());
+        assert(leaf != instances.end());
+        assert(parent->ports.size() == 2);
+        assert(leaf->ports.size() == 2);
+        if (through_internal_signals) {
+          assert(parent->internal_signals.size() == 2);
+          assert(
+              leaf->ports[0].signal
+              == parent->internal_signals[0].signal);
+          assert(
+              leaf->ports[1].signal
+              == parent->internal_signals[1].signal);
+        } else {
+          assert(
+              leaf->ports[0].signal
+              == parent->ports[0].signal);
+          assert(
+              leaf->ports[1].signal
+              == parent->ports[1].signal);
+        }
+        const auto run_binding =
+            [&](fsim::app::BuiltProject project,
+                const fsim::app::SimulationEngine engine) {
+              const auto output =
+                  project.design.find_signal("inverted");
+              assert(output);
+              fsim::app::Simulation simulation{
+                  std::move(project),
+                  binding_config.run.max_deltas,
+                  engine};
+              const auto result = simulation.run();
+              return std::pair{
+                  result,
+                  simulation.read_signal(*output).to_msb_string()};
+            };
+        const auto reference = run_binding(
+            std::move(*reference_project),
+            fsim::app::SimulationEngine::interpreter);
+        const auto compiled = run_binding(
+            std::move(*compiled_project),
+            fsim::app::SimulationEngine::compiled);
+        assert(
+            reference.first.status
+            == fsim::runtime::RunStatus::stopped);
+        assert(reference.first.time == 2);
+        assert(reference.second == "0");
+        assert(reference.first.status == compiled.first.status);
+        assert(reference.first.time == compiled.first.time);
+        assert(reference.second == compiled.second);
+      };
+  exercise_native_binding(
+      "systemc_port_chain_host",
+      "systemc_port_chain_host.u_chain",
+      "systemc:models.port_chain_hierarchy",
+      false);
+  exercise_native_binding(
+      "systemc_export_host",
+      "systemc_export_host.u_export",
+      "systemc:models.export_hierarchy",
+      true);
+
   auto duplicate_native_config = hdl_systemc_config;
   duplicate_native_config.project.top =
       "systemc:models.duplicate_native_hierarchy";
@@ -1534,6 +1925,57 @@ end architecture rtl;
   assert(std::any_of(
       duplicate_native_diagnostics.diagnostics().begin(),
       duplicate_native_diagnostics.diagnostics().end(),
+      [](const fsim::diagnostic::Diagnostic& diagnostic) {
+        return diagnostic.code == "FSIM-SC-A004";
+      }));
+
+  auto throwing_lifecycle_config = hdl_systemc_config;
+  throwing_lifecycle_config.project.top =
+      "systemc:models.throwing_lifecycle";
+  throwing_lifecycle_config.bindings.clear();
+  fsim::diagnostic::Engine throwing_lifecycle_diagnostics;
+  assert(!fsim::app::build_project(
+      throwing_lifecycle_config,
+      throwing_lifecycle_diagnostics));
+  assert(std::any_of(
+      throwing_lifecycle_diagnostics.diagnostics().begin(),
+      throwing_lifecycle_diagnostics.diagnostics().end(),
+      [](const fsim::diagnostic::Diagnostic& diagnostic) {
+        return diagnostic.code == "FSIM-SC-A008";
+      }));
+
+  auto throwing_end_config = hdl_systemc_config;
+  throwing_end_config.project.top =
+      "systemc:models.throwing_end_lifecycle";
+  throwing_end_config.bindings.clear();
+  fsim::diagnostic::Engine throwing_end_diagnostics;
+  auto throwing_end_project = fsim::app::build_project(
+      throwing_end_config, throwing_end_diagnostics);
+  assert(throwing_end_project);
+  fsim::app::Simulation throwing_end_simulation{
+      std::move(*throwing_end_project),
+      throwing_end_config.run.max_deltas,
+      fsim::app::SimulationEngine::interpreter};
+  bool rejected_end_lifecycle = false;
+  try {
+    (void)throwing_end_simulation.run();
+  } catch (const std::runtime_error&) {
+    rejected_end_lifecycle = true;
+  }
+  assert(rejected_end_lifecycle);
+  assert(throwing_end_simulation.poisoned());
+
+  auto invalid_deep_binding_config = hdl_systemc_config;
+  invalid_deep_binding_config.project.top =
+      "systemc:models.invalid_deep_binding";
+  invalid_deep_binding_config.bindings.clear();
+  fsim::diagnostic::Engine invalid_deep_binding_diagnostics;
+  assert(!fsim::app::build_project(
+      invalid_deep_binding_config,
+      invalid_deep_binding_diagnostics));
+  assert(std::any_of(
+      invalid_deep_binding_diagnostics.diagnostics().begin(),
+      invalid_deep_binding_diagnostics.diagnostics().end(),
       [](const fsim::diagnostic::Diagnostic& diagnostic) {
         return diagnostic.code == "FSIM-SC-A004";
       }));

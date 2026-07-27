@@ -372,6 +372,7 @@ therefore excluded.
 | `FSIM-SC-A005` | error | One SystemC instance path has conflicting factory targets. |
 | `FSIM-SC-A006` | error | A registered SystemC object could not be bound to its common-runtime signal. |
 | `FSIM-SC-A007` | error | The selected project time resolution cannot configure the SystemC runtime. |
+| `FSIM-SC-A008` | error | A SystemC elaboration lifecycle callback failed or the selected lifecycle roots were inconsistent. |
 | `FSIM-SC-C001` | error | The SystemC compiler working directory cannot be resolved. |
 | `FSIM-SC-C002` | error | A SystemC source set contains no C++ sources. |
 | `FSIM-SC-C003` | error | A SystemC source or dependency is missing, unreadable, invalid, or cannot be hashed/scanned. |

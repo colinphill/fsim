@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -76,6 +77,14 @@ struct InternalSignalDescription {
     std::vector<std::uint8_t> initial_value;
 };
 
+struct LifecycleDescription {
+    fsim_sc_lifecycle_entry_v1 before_end_of_elaboration{};
+    fsim_sc_lifecycle_entry_v1 end_of_elaboration{};
+    fsim_sc_lifecycle_entry_v1 start_of_simulation{};
+    fsim_sc_lifecycle_entry_v1 end_of_simulation{};
+    void* user{};
+};
+
 struct ModuleDescription {
     fsim_sc_handle_v1 handle{};
     fsim_sc_handle_v1 parent{};
@@ -88,6 +97,7 @@ struct ModuleDescription {
     std::vector<PrimitiveChannelDescription> primitive_channels;
     std::vector<InternalSignalDescription> internal_signals;
     std::vector<ModuleDescription> native_children;
+    LifecycleDescription lifecycle;
 };
 
 enum class MethodSuspendKind : std::uint8_t {
@@ -145,6 +155,19 @@ public:
     /// Set the exact number of femtoseconds represented by one common
     /// simulation tick. Must be called before process execution.
     void set_time_resolution(std::uint64_t femtoseconds_per_tick);
+
+    /// Invoke before_end_of_elaboration for every selected root, then
+    /// end_of_elaboration for every root. Each phase runs at most once.
+    void complete_elaboration(
+        std::span<const fsim_sc_handle_v1> roots);
+
+    /// Invoke start_of_simulation once for every selected root.
+    void start_simulation(
+        std::span<const fsim_sc_handle_v1> roots);
+
+    /// Invoke end_of_simulation once in reverse root order.
+    void end_simulation(
+        std::span<const fsim_sc_handle_v1> roots);
 
     /// Invoke a registered SC_METHOD with host reads/writes redirected to the
     /// supplied common-kernel execution context.

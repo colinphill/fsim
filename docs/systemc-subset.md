@@ -20,9 +20,11 @@ registered primitive-channel update callbacks, and kernel-backed module-local
 `sc_signal` objects. Typed port-to-signal bindings enter the same DesignIR
 alias graph, including across an HDL/SystemC instance boundary.
 Constructor-time native SystemC child members elaborate recursively and may
-bind their ports directly to parent signals. Lifecycle callbacks,
-export/interface binding, and fiber-backed thread execution are still work in
-progress.
+bind their ports directly to parent signals or ports. Module lifecycle
+callbacks execute at deterministic common-kernel boundaries, and bounded
+typed signal-export chains resolve to common signals. Standard signal
+interface classes, general export metadata, and fiber-backed thread execution
+are still work in progress.
 
 ## Source inclusion
 
@@ -246,12 +248,38 @@ direct parent, producing one common signal ID rather than a copy process or
 extra delta. Duplicate child names fail factory construction, and inconsistent
 parent/path metadata is rejected during DesignIR elaboration.
 
+The direct-parent binding rule also permits a native child `sc_in<T>`,
+`sc_out<T>`, or `sc_inout<T>` to bind its parent's type-identical port. The
+child delegates C++ reads or writes through the parent port, while the
+elaborator aliases both registered port handles to one common signal ID.
+Bindings that skip a hierarchy level are rejected during factory construction.
+
+`sc_export<sc_signal<T>>` may bind a concrete `sc_signal<T>` endpoint, and one
+such export may chain through another before a child port binds it. Resolution
+occurs during construction, so the child ultimately records the signal handle
+and adds neither storage nor a scheduler delta. Unbound and cyclic export
+chains are rejected. Standard `sc_signal_in_if<T>` and
+`sc_signal_inout_if<T>` types, arbitrary user interfaces in kernel metadata,
+and export hierarchy objects remain future work.
+
+Every factory root registers `before_end_of_elaboration`,
+`end_of_elaboration`, `start_of_simulation`, and `end_of_simulation`. The first
+two run after DesignIR object binding; start runs immediately before the first
+kernel start; end runs on terminal completion or during teardown of a started
+session. Forward phases visit a parent before its native children; end visits
+children in reverse order before the parent. Lifecycle state is isolated by
+the exact root-handle set in each built project, including warm builds sharing
+one loaded plug-in. Exceptions are contained at the C ABI and poison only the
+affected build or simulation. Callbacks may mutate ordinary C++ module state
+that later processes inspect. Structural registration or binding during these
+callbacks, and callback-originated signal transactions, remain unsupported.
+
 The root factory object owns native C++ child members, so native children are
 not selected by a separate manifest binding. Crossings from either the root
 or a native child into VHDL or Verilog/SystemVerilog continue to require an
 explicit foreign-child binding. Dynamic module creation after construction,
-port-to-port chains, exports, and arbitrary interface binding are not yet
-implemented.
+non-parent port chains, export metadata, and arbitrary interface binding are
+not yet implemented.
 
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0
@@ -272,9 +300,10 @@ OR/AND dynamic event expressions, and primitive-channel registration/update
 dispatch. Module-local `sc_signal` values, sensitivities, and event queries use
 the common kernel, and typed port-to-signal bindings use common DesignIR
 aliases. Native child modules use the same recursive hierarchy and runtime
-registry. It does not yet provide dynamic module construction, arbitrary
-user-defined channel binding semantics, lifecycle phase callbacks,
-asynchronous updates, or fiber suspension.
+registry, lifecycle callbacks are root-scoped, and direct-parent port/export
+chains resolve to common signals. It does not yet provide dynamic module
+construction, arbitrary user-defined channel binding semantics, asynchronous
+updates, or fiber suspension.
 
 ## Deliberately outside v1
 

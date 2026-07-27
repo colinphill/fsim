@@ -51,8 +51,8 @@ the child port ID to the parent signal ID. It diagnoses missing or duplicate
 connections, width and signedness mismatches, implicit loss into a 2-state
 destination, recursive hierarchy, unused bindings, and unresolved multiple
 boundary drivers. Generic/parameter specialization, expression actuals,
-unpacked/record boundaries, SystemC factories, and actual multi-driver
-resolution remain outside this slice.
+unpacked/record boundaries, and actual multi-driver resolution remain outside
+this slice.
 
 The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
@@ -62,8 +62,13 @@ architecture or SV module. The common elaborator remains authoritative in
 both directions and supports recursive alternation between languages while
 retaining one stable-ID namespace, one port-conversion policy, and recursion
 detection. Foreign children can be created only during elaboration, never
-dynamically after simulation starts. Factory instantiation and the
-append-only placeholder callback are not implemented in the current slice.
+dynamically after simulation starts. Native SystemC child modules are captured
+recursively by the same factory root, and child ports may alias a direct
+parent signal or port. Concrete typed signal-export chains resolve to that
+same alias graph. Each constructed factory root owns independent lifecycle
+state: the two elaboration callbacks run after common-object binding, the
+start callback runs before the first kernel start, and the end callback runs
+at terminal completion or session teardown.
 
 ## Runtime values
 

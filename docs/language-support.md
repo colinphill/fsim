@@ -86,9 +86,11 @@ registered callbacks. Module-local typed `sc_signal` objects already use the
 common kernel, and typed bindings from module ports to those signals share the
 same DesignIR object across HDL/SystemC boundaries. Constructor-time native
 SystemC child modules elaborate recursively, including direct bindings from
-child ports to parent signals. Lifecycle callbacks, export/interface binding,
-and broader standard channel behavior remain v1 targets. TLM, AMS, CCI,
-dynamic processes, arbitrary custom primitive-channel
+child ports to parent signals or ports. Module lifecycle callbacks execute at
+the common build/start/terminal boundaries. Concrete typed signal exports may
+chain before binding a child port. Standard signal interface classes and
+broader channel behavior remain v1 targets. TLM, AMS, CCI, dynamic processes,
+arbitrary custom primitive-channel
 interfaces/binding beyond the bounded registered `sc_prim_channel` update
 callback, and Accellera kernel/ABI compatibility are deferred.
 
