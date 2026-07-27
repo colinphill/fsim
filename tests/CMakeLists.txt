@@ -48,6 +48,22 @@ fsim_configure_test(fsim_systemc_header_tests)
 target_link_libraries(fsim_systemc_header_tests PRIVATE fsim_systemc_headers)
 add_test(NAME fsim.systemc.header COMMAND fsim_systemc_header_tests)
 
+add_executable(
+  fsim_systemc_abi_c_tests
+  systemc/systemc_abi_c_test.c
+)
+target_compile_features(fsim_systemc_abi_c_tests PRIVATE c_std_11)
+set_target_properties(
+  fsim_systemc_abi_c_tests
+  PROPERTIES C_EXTENSIONS OFF
+)
+target_include_directories(
+  fsim_systemc_abi_c_tests
+  PRIVATE "${PROJECT_SOURCE_DIR}/include"
+)
+fsim_enable_warnings(fsim_systemc_abi_c_tests)
+add_test(NAME fsim.systemc.abi-c COMMAND fsim_systemc_abi_c_tests)
+
 add_library(fsim_test_systemc_plugin MODULE systemc/sample_plugin.cpp)
 target_compile_features(fsim_test_systemc_plugin PRIVATE cxx_std_20)
 target_include_directories(

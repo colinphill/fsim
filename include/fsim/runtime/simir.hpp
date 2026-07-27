@@ -326,6 +326,7 @@ struct Process {
   std::vector<DebugLocal> debug_locals;
   std::vector<Sensitivity> static_sensitivity;
   std::vector<Operation> operations;
+  bool initialize{true};
 };
 
 /// Narrow signal/update surface available to an alternate process executor.

@@ -13,8 +13,9 @@ cache, and typed factory construction integrated into common hierarchy
 elaboration. A project build collects the configured SystemC sources into one
 shared library, loads it, constructs the requested factory instances, and
 retains their native objects for the design lifetime. Common-kernel SystemC
-process execution and fiber-backed thread execution are still work in
-progress.
+execution now covers statically sensitive `SC_METHOD` callbacks and port
+updates. Dynamic sensitivity/events and fiber-backed thread execution are
+still work in progress.
 
 ## Source inclusion
 
@@ -143,6 +144,19 @@ and symmetric with HDL-to-SystemC binding without exposing frontend or
 remains loadable for compatibility but cannot satisfy an integrated hierarchy
 binding.
 
+Facade modules register without handwritten factory thunks through
+`fsim::systemc::register_module_factory<Module>(host, registrar, name)`.
+During construction, named `sc_in`, `sc_out`, and `sc_inout` members register
+their typed port handles. After construction, the helper publishes recorded
+processes, static sensitivities, edge qualifiers, and `dont_initialize()`
+state. The helper passes the host table as factory user context, so separate
+loaded sessions do not depend on a process-global host pointer.
+
+Packed ABI values are byte-addressed with least-significant bits first.
+`FSIM_SC_BIT2` uses one value plane. The other current encodings use an `aval`
+plane followed by an equal-size `bval` plane, preserving `0`, `1`, `X`, and
+`Z` without exposing a C++ datatype.
+
 The loader rejects a missing entry point, host/registrar ABI mismatch, or failed
 initialization. Factory registrations are buffered until initialization
 succeeds, preventing a throwing or failed initializer from partially
@@ -153,11 +167,19 @@ factory.
 
 ## Process execution
 
-`SC_METHOD` callbacks run to completion and use static sensitivity or
-`next_trigger`. `SC_THREAD` and `SC_CTHREAD` callbacks may suspend at `wait`.
-The v1 runtime will implement suspension with Boost.Context 1.91.0 fibers on
-x86-64 ELF and Windows PE. A fiber is a suspension mechanism only: the
-simulation remains single-threaded and deterministic.
+The current common-kernel path executes `SC_METHOD` callbacks to completion
+with default time-zero initialization or `dont_initialize()`, static
+any-change sensitivity, and scalar positive/negative edge sensitivity.
+Reads observe committed common-runtime values; writes enter the common update
+phase and awaken dependent HDL or SystemC processes in the next delta.
+Callback exceptions are contained at the native boundary and poison only the
+affected simulation session.
+
+Dynamic `next_trigger` and named-event notification remain pending.
+`SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
+non-executable until suspension is implemented with Boost.Context 1.91.0
+fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
+the simulation remains single-threaded and deterministic.
 
 SystemC work participates in fsim's common phase policy:
 
@@ -167,11 +189,11 @@ SystemC work participates in fsim's common phase policy:
 - channel writes become visible in the common update phase; and
 - changed channels awaken dependents in the next delta.
 
-The current header routes timed/event waits, edge sensitivity, and
-notifications through host callbacks when a host is bound. During
-elaboration, process and kernel callbacks intentionally report unsupported;
-typed ports and foreign hierarchy are accepted. The facade does not yet
-provide fiber suspension or the integrated common update phase.
+The current header routes timed/event waits and notifications through host
+callbacks when a host is bound, but those callbacks still report unsupported.
+Static method registration, port reads, and update-phase port writes are
+active. The facade does not yet provide dynamic sensitivity, internal
+primitive-channel registration, or fiber suspension.
 
 ## Deliberately outside v1
 

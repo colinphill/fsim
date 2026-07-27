@@ -617,31 +617,93 @@ endmodule
   {
     std::ofstream output(systemc_source);
     output << R"(
-#include <fsim/systemc_abi.h>
+#include <systemc>
+
+SC_MODULE(MethodBridge) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+
+  SC_CTOR(MethodBridge) {
+    SC_METHOD(evaluate);
+    sensitive << value;
+  }
+
+  void evaluate() {
+    const auto input = value.read();
+    if (input == sc_dt::sc_logic{'0'}) {
+      inverted.write(sc_dt::sc_logic{'1'});
+    } else if (input == sc_dt::sc_logic{'1'}) {
+      inverted.write(sc_dt::sc_logic{'0'});
+    } else {
+      inverted.write(sc_dt::sc_logic{'Z'});
+    }
+  }
+};
+
+SC_MODULE(NoInitBridge) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+
+  SC_CTOR(NoInitBridge) {
+    SC_METHOD(evaluate);
+    sensitive << value;
+    dont_initialize();
+  }
+
+  void evaluate() {
+    inverted.write(sc_dt::sc_logic{'0'});
+  }
+};
+
+SC_MODULE(EdgeCounter) {
+  sc_core::sc_in<bool> clock{"clock"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> count{"count"};
+  sc_dt::sc_uint<8> state{};
+
+  SC_CTOR(EdgeCounter) {
+    SC_METHOD(tick);
+    sensitive << clock.pos();
+    dont_initialize();
+  }
+
+  void tick() {
+    state = state.to_uint64() + 1;
+    count.write(state);
+  }
+};
+
+SC_MODULE(ThrowingMethod) {
+  SC_CTOR(ThrowingMethod) {
+    SC_METHOD(fail);
+  }
+
+  void fail() {
+    throw std::runtime_error{"intentional SystemC method failure"};
+  }
+};
 
 namespace {
-const fsim_sc_host_v1* active_host = nullptr;
-
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
 }
 void destroy_model(void*, void*) {}
 
 fsim_sc_status_v1 elaborate_bridge(
-    void*,
+    void* user,
     const char* instance_name,
     fsim_sc_handle_v1 module,
     fsim_sc_handle_v1,
     void** result) {
-  if (active_host == nullptr || instance_name == nullptr
+  const auto* host = static_cast<const fsim_sc_host_v1*>(user);
+  if (host == nullptr || instance_name == nullptr
       || *instance_name == '\0' || result == nullptr) {
     return FSIM_SC_INVALID_ARGUMENT;
   }
   fsim_sc_handle_v1 value = 0;
   fsim_sc_handle_v1 inverted = 0;
   fsim_sc_handle_v1 child = 0;
-  auto status = active_host->register_port(
-      active_host->context,
+  auto status = host->register_port(
+      host->context,
       module,
       "value",
       FSIM_SC_INPUT,
@@ -651,8 +713,8 @@ fsim_sc_status_v1 elaborate_bridge(
   if (status != FSIM_SC_OK) {
     return status;
   }
-  status = active_host->register_port(
-      active_host->context,
+  status = host->register_port(
+      host->context,
       module,
       "inverted",
       FSIM_SC_OUTPUT,
@@ -662,13 +724,13 @@ fsim_sc_status_v1 elaborate_bridge(
   if (status != FSIM_SC_OK) {
     return status;
   }
-  status = active_host->register_foreign_child(
-      active_host->context, module, "u_hdl", &child);
+  status = host->register_foreign_child(
+      host->context, module, "u_hdl", &child);
   if (status != FSIM_SC_OK) {
     return status;
   }
-  status = active_host->connect_foreign_port(
-      active_host->context,
+  status = host->connect_foreign_port(
+      host->context,
       child,
       "value",
       FSIM_SC_INPUT,
@@ -678,8 +740,8 @@ fsim_sc_status_v1 elaborate_bridge(
   if (status != FSIM_SC_OK) {
     return status;
   }
-  status = active_host->connect_foreign_port(
-      active_host->context,
+  status = host->connect_foreign_port(
+      host->context,
       child,
       "inverted",
       FSIM_SC_OUTPUT,
@@ -710,7 +772,6 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       || registrar->register_elaboration_factory == nullptr) {
     return FSIM_SC_ABI_MISMATCH;
   }
-  active_host = host;
   const auto status = registrar->register_factory(
       registrar->context,
       "model",
@@ -720,12 +781,36 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (status != FSIM_SC_OK) {
     return status;
   }
-  return registrar->register_elaboration_factory(
+  const auto bridge_status =
+      registrar->register_elaboration_factory(
       registrar->context,
       "bridge",
       elaborate_bridge,
       destroy_bridge,
-      nullptr);
+      const_cast<fsim_sc_host_v1*>(host));
+  if (bridge_status != FSIM_SC_OK) {
+    return bridge_status;
+  }
+  const auto method_status =
+      fsim::systemc::register_module_factory<MethodBridge>(
+          host, registrar, "method_bridge");
+  if (method_status != FSIM_SC_OK) {
+    return method_status;
+  }
+  const auto noinit_status =
+      fsim::systemc::register_module_factory<NoInitBridge>(
+      host, registrar, "noinit_bridge");
+  if (noinit_status != FSIM_SC_OK) {
+    return noinit_status;
+  }
+  const auto edge_status =
+      fsim::systemc::register_module_factory<EdgeCounter>(
+          host, registrar, "edge_counter");
+  if (edge_status != FSIM_SC_OK) {
+    return edge_status;
+  }
+  return fsim::systemc::register_module_factory<ThrowingMethod>(
+      host, registrar, "throwing_method");
 }
 )";
   }
@@ -754,6 +839,54 @@ module systemc_host;
     #1 $finish;
   end
 endmodule
+
+module systemc_method_host;
+  logic value;
+  logic inverted;
+  logic observed;
+  method_bridge_placeholder u_method(
+      .value(value),
+      .inverted(inverted));
+  always_comb observed = inverted;
+  initial begin
+    value = 1'b0;
+    #1 value = 1'b1;
+    #1 $finish;
+  end
+endmodule
+
+module systemc_edge_host;
+  bit clock;
+  logic [7:0] count;
+  edge_counter_placeholder u_counter(
+      .clock(clock),
+      .count(count));
+  initial begin
+    clock = 1'b0;
+    #1 clock = 1'b1;
+    #1 clock = 1'b0;
+    #1 clock = 1'b1;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
+  const auto systemc_method_vhdl_source =
+      directory / "systemc_method.vhd";
+  {
+    std::ofstream output(systemc_method_vhdl_source);
+    output << R"(
+entity systemc_method_vhdl_host is
+end entity systemc_method_vhdl_host;
+
+architecture rtl of systemc_method_vhdl_host is
+  signal value : std_logic;
+  signal inverted : std_logic;
+begin
+  value <= '1';
+  u_method: method_bridge_placeholder
+    port map (value => value, inverted => inverted);
+end architecture rtl;
 )";
   }
 
@@ -807,8 +940,6 @@ endmodule
 
   auto hdl_systemc_config = config;
   hdl_systemc_config.project.top = "sv:work.systemc_host";
-  hdl_systemc_config.build.cache_path =
-      directory / "hdl-systemc-cache";
   hdl_systemc_config.source_sets.front().files = {
       systemc_boundary_source};
   hdl_systemc_config.bindings = {
@@ -852,8 +983,6 @@ endmodule
       == "0");
 
   auto legacy_systemc_config = hdl_systemc_config;
-  legacy_systemc_config.build.cache_path =
-      directory / "legacy-systemc-cache";
   legacy_systemc_config.bindings.front().target =
       "systemc:models.model";
   fsim::diagnostic::Engine legacy_systemc_diagnostics;
@@ -868,8 +997,6 @@ endmodule
 
   auto systemc_hdl_config = hdl_systemc_config;
   systemc_hdl_config.project.top = "systemc:models.bridge";
-  systemc_hdl_config.build.cache_path =
-      directory / "systemc-hdl-cache";
   systemc_hdl_config.bindings = {
       {"bridge.u_hdl",
        "sv:work.systemc_hdl_child",
@@ -912,6 +1039,236 @@ endmodule
           ->signal_value(*systemc_root_inverted)
           .to_msb_string()
       == "0");
+
+  auto systemc_method_config = hdl_systemc_config;
+  systemc_method_config.project.top =
+      "sv:work.systemc_method_host";
+  systemc_method_config.bindings = {
+      {"systemc_method_host.u_method",
+       "systemc:models.method_bridge",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine systemc_method_diagnostics;
+  auto systemc_method_reference = fsim::app::build_project(
+      systemc_method_config, systemc_method_diagnostics);
+  auto systemc_method_compiled = fsim::app::build_project(
+      systemc_method_config, systemc_method_diagnostics);
+  assert(systemc_method_reference);
+  assert(systemc_method_compiled);
+  assert(
+      systemc_method_reference->design.systemc_processes().size()
+      == 1);
+  const auto method_process_id =
+      systemc_method_reference->design.systemc_processes().front().process;
+  const auto& method_process =
+      systemc_method_reference->design.processes().at(
+          method_process_id);
+  assert(
+      method_process.name == "systemc_method_host.u_method.evaluate");
+  assert(method_process.initialize);
+  assert(method_process.static_sensitivity.size() == 1);
+  const auto run_systemc_method =
+      [&](fsim::app::BuiltProject project,
+          const fsim::app::SimulationEngine engine) {
+        const auto inverted =
+            project.design.find_signal("inverted");
+        const auto observed =
+            project.design.find_signal("observed");
+        assert(inverted && observed);
+        fsim::app::Simulation simulation{
+            std::move(project),
+            systemc_method_config.run.max_deltas,
+            engine};
+        const auto result = simulation.run();
+        return std::tuple{
+            result,
+            simulation.read_signal(*inverted).to_msb_string(),
+            simulation.read_signal(*observed).to_msb_string()};
+      };
+  const auto method_reference = run_systemc_method(
+      std::move(*systemc_method_reference),
+      fsim::app::SimulationEngine::interpreter);
+  const auto method_compiled = run_systemc_method(
+      std::move(*systemc_method_compiled),
+      fsim::app::SimulationEngine::compiled);
+  assert(std::get<0>(method_reference).status
+         == fsim::runtime::RunStatus::stopped);
+  assert(std::get<0>(method_reference).time == 2);
+  assert(std::get<1>(method_reference) == "0");
+  assert(std::get<2>(method_reference) == "0");
+  assert(std::get<0>(method_reference).status
+         == std::get<0>(method_compiled).status);
+  assert(std::get<0>(method_reference).time
+         == std::get<0>(method_compiled).time);
+  assert(std::get<1>(method_reference)
+         == std::get<1>(method_compiled));
+  assert(std::get<2>(method_reference)
+         == std::get<2>(method_compiled));
+
+  auto vhdl_systemc_method_config = systemc_method_config;
+  vhdl_systemc_method_config.project.top =
+      "vhdl:work.systemc_method_vhdl_host(rtl)";
+  vhdl_systemc_method_config.source_sets.front().language =
+      fsim::project::Language::vhdl;
+  vhdl_systemc_method_config.source_sets.front().standard = "2008";
+  vhdl_systemc_method_config.source_sets.front().files = {
+      systemc_method_vhdl_source};
+  vhdl_systemc_method_config.bindings = {
+      {"systemc_method_vhdl_host.u_method",
+       "systemc:models.method_bridge",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine vhdl_systemc_method_diagnostics;
+  auto vhdl_systemc_method_project = fsim::app::build_project(
+      vhdl_systemc_method_config,
+      vhdl_systemc_method_diagnostics);
+  assert(vhdl_systemc_method_project);
+  const auto vhdl_method_output =
+      vhdl_systemc_method_project->design.find_signal("inverted");
+  assert(vhdl_method_output);
+  fsim::app::Simulation vhdl_systemc_method_simulation{
+      std::move(*vhdl_systemc_method_project),
+      vhdl_systemc_method_config.run.max_deltas,
+      fsim::app::SimulationEngine::compiled};
+  const auto vhdl_systemc_method_result =
+      vhdl_systemc_method_simulation.run();
+  assert(
+      vhdl_systemc_method_result.status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      vhdl_systemc_method_simulation
+          .read_signal(*vhdl_method_output)
+          .to_msb_string()
+      == "0");
+
+  auto systemc_method_top_config = systemc_method_config;
+  systemc_method_top_config.project.top =
+      "systemc:models.method_bridge";
+  systemc_method_top_config.bindings.clear();
+  fsim::diagnostic::Engine systemc_method_top_diagnostics;
+  auto systemc_method_top = fsim::app::build_project(
+      systemc_method_top_config,
+      systemc_method_top_diagnostics);
+  assert(systemc_method_top);
+  const auto method_top_output =
+      systemc_method_top->design.find_signal(
+          "method_bridge.inverted");
+  assert(method_top_output);
+  fsim::app::Simulation method_top_simulation{
+      std::move(*systemc_method_top),
+      systemc_method_top_config.run.max_deltas,
+      fsim::app::SimulationEngine::interpreter};
+  const auto method_top_result = method_top_simulation.run();
+  assert(
+      method_top_result.status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      method_top_simulation.read_signal(*method_top_output)
+          .to_msb_string()
+      == "Z");
+
+  auto noinit_config = systemc_method_top_config;
+  noinit_config.project.top =
+      "systemc:models.noinit_bridge";
+  fsim::diagnostic::Engine noinit_diagnostics;
+  auto noinit_project = fsim::app::build_project(
+      noinit_config, noinit_diagnostics);
+  assert(noinit_project);
+  const auto noinit_input =
+      noinit_project->design.find_signal("noinit_bridge.value");
+  const auto noinit_output =
+      noinit_project->design.find_signal(
+          "noinit_bridge.inverted");
+  assert(noinit_input && noinit_output);
+  fsim::app::Simulation noinit_simulation{
+      std::move(*noinit_project),
+      noinit_config.run.max_deltas,
+      fsim::app::SimulationEngine::interpreter};
+  const auto noinit_result = noinit_simulation.run();
+  assert(noinit_result.status == fsim::runtime::RunStatus::completed);
+  assert(
+      noinit_simulation.read_signal(*noinit_output).to_msb_string()
+      == "X");
+
+  noinit_diagnostics.clear();
+  auto awakened_noinit_project = fsim::app::build_project(
+      noinit_config, noinit_diagnostics);
+  assert(awakened_noinit_project);
+  const auto awakened_input =
+      awakened_noinit_project->design.find_signal(
+          "noinit_bridge.value");
+  const auto awakened_output =
+      awakened_noinit_project->design.find_signal(
+          "noinit_bridge.inverted");
+  assert(awakened_input && awakened_output);
+  fsim::app::Simulation awakened_noinit_simulation{
+      std::move(*awakened_noinit_project),
+      noinit_config.run.max_deltas,
+      fsim::app::SimulationEngine::interpreter};
+  awakened_noinit_simulation.deposit_signal(
+      *awakened_input,
+      fsim::runtime::PackedLogic4::from_msb_string("0"));
+  const auto awakened_noinit_result =
+      awakened_noinit_simulation.run();
+  assert(
+      awakened_noinit_result.status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      awakened_noinit_simulation
+          .read_signal(*awakened_output)
+          .to_msb_string()
+      == "0");
+
+  auto edge_method_config = systemc_method_config;
+  edge_method_config.project.top =
+      "sv:work.systemc_edge_host";
+  edge_method_config.bindings = {
+      {"systemc_edge_host.u_counter",
+       "systemc:models.edge_counter",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine edge_method_diagnostics;
+  auto edge_method_project = fsim::app::build_project(
+      edge_method_config, edge_method_diagnostics);
+  assert(edge_method_project);
+  const auto edge_count =
+      edge_method_project->design.find_signal("count");
+  assert(edge_count);
+  fsim::app::Simulation edge_method_simulation{
+      std::move(*edge_method_project),
+      edge_method_config.run.max_deltas,
+      fsim::app::SimulationEngine::compiled};
+  const auto edge_method_result = edge_method_simulation.run();
+  assert(
+      edge_method_result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(edge_method_result.time == 4);
+  assert(
+      edge_method_simulation.read_signal(*edge_count).to_msb_string()
+      == "00000010");
+
+  auto throwing_method_config = systemc_method_top_config;
+  throwing_method_config.project.top =
+      "systemc:models.throwing_method";
+  fsim::diagnostic::Engine throwing_method_diagnostics;
+  auto throwing_method_project = fsim::app::build_project(
+      throwing_method_config, throwing_method_diagnostics);
+  assert(throwing_method_project);
+  fsim::app::Simulation throwing_method_simulation{
+      std::move(*throwing_method_project),
+      throwing_method_config.run.max_deltas,
+      fsim::app::SimulationEngine::interpreter};
+  bool caught_systemc_failure = false;
+  try {
+    (void)throwing_method_simulation.run();
+  } catch (const std::runtime_error& error) {
+    caught_systemc_failure =
+        std::string_view{error.what()}.find(
+            "intentional SystemC method failure")
+        != std::string_view::npos;
+  }
+  assert(caught_systemc_failure);
+  assert(throwing_method_simulation.poisoned());
 
   struct CapturedSimulation {
     fsim::runtime::RunResult result;

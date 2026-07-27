@@ -385,6 +385,44 @@ void test_simir_expressions_and_edges() {
       "SimIR add and unary-not operations");
 }
 
+void test_simir_noninitializing_static_process() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto trigger = interpreter.add_signal(
+      {"top.trigger", PackedLogic4::from_msb_string("0")});
+  const auto observed = interpreter.add_signal(
+      {"top.observed", PackedLogic4::from_msb_string("0")});
+
+  Process process;
+  process.id = 0;
+  process.name = "dont_initialize";
+  process.register_count = 1;
+  process.static_sensitivity.push_back({trigger, EdgeKind::any});
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteBlocking{observed, 0},
+      Halt{},
+  };
+  process.initialize = false;
+  (void)interpreter.add_process(std::move(process));
+  interpreter.schedule_signal_at(
+      trigger, PackedLogic4::from_msb_string("1"), 1, 0);
+
+  const auto before_event = interpreter.run(0);
+  require(
+      before_event.status == RunStatus::time_limit
+          && interpreter.signal_value(observed).to_msb_string() == "0",
+      "a noninitializing static process must not execute at time zero");
+  const auto after_event = interpreter.run();
+  require(
+      after_event.status == RunStatus::completed
+          && after_event.time == 1
+          && interpreter.signal_value(observed).to_msb_string() == "1",
+      "a noninitializing static process must wake on its sensitivity");
+}
+
 void test_simir_wide_truth_and_comparison() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1757,6 +1795,7 @@ int main() {
     test_simir();
     test_simir_update_coalescing();
     test_simir_expressions_and_edges();
+    test_simir_noninitializing_static_process();
     test_simir_wide_truth_and_comparison();
     test_simir_wide_reduction_and_shift();
     test_simir_wide_unsigned_arithmetic();

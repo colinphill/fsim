@@ -204,6 +204,7 @@ target_link_libraries(
     fsim_project
     fsim_diagnostic
     fsim_object_cache
+    fsim_runtime
 )
 
 add_library(fsim_api SHARED src/api/api.cpp)

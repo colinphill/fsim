@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <bitset>
 #include <cmath>
 #include <compare>
@@ -12,6 +13,7 @@
 #include <deque>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -114,16 +116,55 @@ inline constexpr sc_time SC_ZERO_TIME{};
 namespace detail {
 
 inline thread_local const fsim_sc_host_v1* current_host = nullptr;
+inline thread_local fsim_sc_handle_v1 current_module = 0;
 
 inline void bind_host(const fsim_sc_host_v1* host) noexcept {
     current_host = host;
 }
+
+class host_scope final {
+public:
+    host_scope(
+        const fsim_sc_host_v1* host,
+        const fsim_sc_handle_v1 module = 0) noexcept
+        : previous_host_(current_host),
+          previous_module_(current_module) {
+        current_host = host;
+        current_module = module;
+    }
+
+    ~host_scope() {
+        current_host = previous_host_;
+        current_module = previous_module_;
+    }
+
+    host_scope(const host_scope&) = delete;
+    host_scope& operator=(const host_scope&) = delete;
+
+private:
+    const fsim_sc_host_v1* previous_host_;
+    fsim_sc_handle_v1 previous_module_;
+};
 
 inline void check_status(const fsim_sc_status_v1 status, const char* operation) {
     if (status != FSIM_SC_OK) {
         throw std::runtime_error{std::string{"fsim SystemC host failed to "} + operation};
     }
 }
+
+template <typename T>
+struct value_traits;
+
+template <typename T>
+[[nodiscard]] fsim_sc_handle_v1 register_port(
+    const char* name,
+    fsim_sc_port_direction_v1 direction);
+
+template <typename T>
+[[nodiscard]] T read_object(fsim_sc_handle_v1 object);
+
+template <typename T>
+void write_object(fsim_sc_handle_v1 object, const T& value);
 
 } // namespace detail
 
@@ -280,7 +321,8 @@ public:
             kind,
             std::function<void()>{std::forward<Function>(function)},
             {},
-            true});
+            true,
+            nullptr});
     }
 
     void fsim_add_sensitivity(
@@ -297,6 +339,51 @@ public:
         }
     }
 
+    [[nodiscard]] fsim_sc_status_v1 fsim_elaborate(
+        const fsim_sc_host_v1* host,
+        const fsim_sc_handle_v1 module) {
+        if (host == nullptr || host->register_process == nullptr
+            || host->add_sensitivity == nullptr) {
+            return FSIM_SC_ABI_MISMATCH;
+        }
+        for (auto& process : processes_) {
+            process.host = host;
+            fsim_sc_handle_v1 handle = 0;
+            auto status = host->register_process(
+                host->context,
+                module,
+                process.name.c_str(),
+                process.kind,
+                invoke_process,
+                &process,
+                &handle);
+            if (status != FSIM_SC_OK) {
+                return status;
+            }
+            for (const auto& sensitivity : process.sensitivity) {
+                status = host->add_sensitivity(
+                    host->context,
+                    handle,
+                    sensitivity.object,
+                    sensitivity.edge);
+                if (status != FSIM_SC_OK) {
+                    return status;
+                }
+            }
+            if (!process.initialize) {
+                if (host->set_process_initialize == nullptr) {
+                    return FSIM_SC_ABI_MISMATCH;
+                }
+                status = host->set_process_initialize(
+                    host->context, handle, 0);
+                if (status != FSIM_SC_OK) {
+                    return status;
+                }
+            }
+        }
+        return FSIM_SC_OK;
+    }
+
     sc_sensitive sensitive;
 
 protected:
@@ -311,6 +398,7 @@ protected:
         std::function<void()> entry;
         std::vector<Sensitivity> sensitivity;
         bool initialize{true};
+        const fsim_sc_host_v1* host{};
     };
 
     [[nodiscard]] const std::vector<Process>& fsim_processes() const noexcept {
@@ -318,6 +406,29 @@ protected:
     }
 
 private:
+    static void invoke_process(void* user) noexcept {
+        auto* process = static_cast<Process*>(user);
+        if (process == nullptr || process->host == nullptr) {
+            return;
+        }
+        detail::host_scope scope{process->host};
+        try {
+            process->entry();
+        } catch (const std::exception& exception) {
+            if (process->host->report != nullptr) {
+                process->host->report(
+                    process->host->context, 3, exception.what());
+            }
+        } catch (...) {
+            if (process->host->report != nullptr) {
+                process->host->report(
+                    process->host->context,
+                    3,
+                    "SystemC process threw an unknown exception");
+            }
+        }
+    }
+
     std::string name_;
     std::vector<Process> processes_;
 };
@@ -365,18 +476,24 @@ template <typename T>
 class sc_in {
 public:
     sc_in() = default;
-    explicit sc_in(const char*) {}
+    explicit sc_in(const char* name)
+        : handle_(
+              detail::register_port<T>(name, FSIM_SC_INPUT)) {}
 
     void bind(const sc_signal<T>& signal) noexcept { signal_ = &signal; }
     void operator()(const sc_signal<T>& signal) noexcept { bind(signal); }
     [[nodiscard]] const T& read() const {
-        if (signal_ == nullptr) {
+        if (signal_ != nullptr) {
+            return signal_->read();
+        }
+        if (handle_ == 0) {
             throw std::logic_error{"read from unbound sc_in"};
         }
-        return signal_->read();
+        value_ = detail::read_object<T>(handle_);
+        return value_;
     }
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
-        return signal_ == nullptr ? 0 : signal_->native_handle();
+        return signal_ == nullptr ? handle_ : signal_->native_handle();
     }
     [[nodiscard]] sc_event_finder pos() const noexcept {
         return {native_handle(), FSIM_SC_POSEDGE};
@@ -388,24 +505,40 @@ public:
 
 private:
     const sc_signal<T>* signal_{};
+    fsim_sc_handle_v1 handle_{};
+    mutable T value_{};
 };
 
 template <typename T>
 class sc_out {
 public:
     sc_out() = default;
-    explicit sc_out(const char*) {}
+    explicit sc_out(const char* name)
+        : sc_out(name, FSIM_SC_OUTPUT) {}
+
+protected:
+    sc_out(
+        const char* name,
+        const fsim_sc_port_direction_v1 direction)
+        : handle_(
+              detail::register_port<T>(name, direction)) {}
+
+public:
 
     void bind(sc_signal<T>& signal) noexcept { signal_ = &signal; }
     void operator()(sc_signal<T>& signal) noexcept { bind(signal); }
     void write(const T& value) {
-        if (signal_ == nullptr) {
+        if (signal_ != nullptr) {
+            signal_->write(value);
+            return;
+        }
+        if (handle_ == 0) {
             throw std::logic_error{"write to unbound sc_out"};
         }
-        signal_->write(value);
+        detail::write_object(handle_, value);
     }
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
-        return signal_ == nullptr ? 0 : signal_->native_handle();
+        return signal_ == nullptr ? handle_ : signal_->native_handle();
     }
     sc_out& operator=(const T& value) {
         write(value);
@@ -414,19 +547,28 @@ public:
 
 private:
     sc_signal<T>* signal_{};
+    fsim_sc_handle_v1 handle_{};
 };
 
 template <typename T>
 class sc_inout : public sc_out<T> {
 public:
-    using sc_out<T>::sc_out;
+    sc_inout() = default;
+    explicit sc_inout(const char* name)
+        : sc_out<T>(name, FSIM_SC_INOUT) {}
 
     void bind(sc_signal<T>& signal) noexcept {
         sc_out<T>::bind(signal);
         input_.bind(signal);
     }
     void operator()(sc_signal<T>& signal) noexcept { bind(signal); }
-    [[nodiscard]] const T& read() const { return input_.read(); }
+    [[nodiscard]] const T& read() const {
+        if (this->native_handle() != 0) {
+            value_ = detail::read_object<T>(this->native_handle());
+            return value_;
+        }
+        return input_.read();
+    }
     [[nodiscard]] sc_event_finder pos() const noexcept {
         return {this->native_handle(), FSIM_SC_POSEDGE};
     }
@@ -437,6 +579,7 @@ public:
 
 private:
     sc_in<T> input_;
+    mutable T value_{};
 };
 
 inline const char* sc_gen_unique_name(const char* base) {
@@ -648,6 +791,335 @@ private:
 };
 
 } // namespace sc_dt
+
+namespace sc_core::detail {
+
+template <typename T>
+struct value_traits {
+    static constexpr bool supported = false;
+};
+
+template <>
+struct value_traits<bool> {
+    static constexpr bool supported = true;
+    static constexpr auto encoding = FSIM_SC_BIT2;
+    static constexpr std::uint32_t width = 1;
+
+    [[nodiscard]] static char state(const bool value, std::size_t) noexcept {
+        return value ? '1' : '0';
+    }
+    [[nodiscard]] static bool from_text(const std::string_view text) {
+        return text == "1";
+    }
+};
+
+template <>
+struct value_traits<sc_dt::sc_logic> {
+    static constexpr bool supported = true;
+    static constexpr auto encoding = FSIM_SC_LOGIC4;
+    static constexpr std::uint32_t width = 1;
+
+    [[nodiscard]] static char state(
+        const sc_dt::sc_logic value, std::size_t) noexcept {
+        return value.to_char();
+    }
+    [[nodiscard]] static sc_dt::sc_logic from_text(
+        const std::string_view text) {
+        return sc_dt::sc_logic{text.front()};
+    }
+};
+
+template <int Width>
+struct value_traits<sc_dt::sc_bv<Width>> {
+    static constexpr bool supported = true;
+    static constexpr auto encoding = FSIM_SC_BIT2;
+    static constexpr std::uint32_t width =
+        static_cast<std::uint32_t>(Width);
+
+    [[nodiscard]] static char state(
+        const sc_dt::sc_bv<Width>& value,
+        const std::size_t bit) {
+        return value[bit] ? '1' : '0';
+    }
+    [[nodiscard]] static sc_dt::sc_bv<Width> from_text(
+        const std::string_view text) {
+        const std::string owned{text};
+        return sc_dt::sc_bv<Width>{owned.c_str()};
+    }
+};
+
+template <int Width>
+struct value_traits<sc_dt::sc_lv<Width>> {
+    static constexpr bool supported = true;
+    static constexpr auto encoding = FSIM_SC_LOGIC4;
+    static constexpr std::uint32_t width =
+        static_cast<std::uint32_t>(Width);
+
+    [[nodiscard]] static char state(
+        const sc_dt::sc_lv<Width>& value,
+        const std::size_t bit) {
+        return value[bit].to_char();
+    }
+    [[nodiscard]] static sc_dt::sc_lv<Width> from_text(
+        const std::string_view text) {
+        const std::string owned{text};
+        return sc_dt::sc_lv<Width>{owned.c_str()};
+    }
+};
+
+template <int Width>
+struct value_traits<sc_dt::sc_uint<Width>> {
+    static constexpr bool supported = true;
+    static constexpr auto encoding = FSIM_SC_UNSIGNED;
+    static constexpr std::uint32_t width =
+        static_cast<std::uint32_t>(Width);
+
+    [[nodiscard]] static char state(
+        const sc_dt::sc_uint<Width> value,
+        const std::size_t bit) noexcept {
+        return ((value.to_uint64() >> bit) & 1U) != 0 ? '1' : '0';
+    }
+    [[nodiscard]] static sc_dt::sc_uint<Width> from_text(
+        const std::string_view text) {
+        std::uint64_t value = 0;
+        for (const char state : text) {
+            if (state != '0' && state != '1') {
+                throw std::logic_error{
+                    "X or Z cannot be read into sc_uint"};
+            }
+            value = (value << 1U)
+                | static_cast<std::uint64_t>(state == '1');
+        }
+        return sc_dt::sc_uint<Width>{value};
+    }
+};
+
+template <int Width>
+struct value_traits<sc_dt::sc_int<Width>> {
+    static constexpr bool supported = true;
+    static constexpr auto encoding = FSIM_SC_SIGNED;
+    static constexpr std::uint32_t width =
+        static_cast<std::uint32_t>(Width);
+
+    [[nodiscard]] static char state(
+        const sc_dt::sc_int<Width> value,
+        const std::size_t bit) noexcept {
+        const auto bits =
+            std::bit_cast<std::uint64_t>(value.to_int64());
+        return ((bits >> bit) & 1U) != 0 ? '1' : '0';
+    }
+    [[nodiscard]] static sc_dt::sc_int<Width> from_text(
+        const std::string_view text) {
+        std::uint64_t bits = 0;
+        for (const char state : text) {
+            if (state != '0' && state != '1') {
+                throw std::logic_error{
+                    "X or Z cannot be read into sc_int"};
+            }
+            bits = (bits << 1U)
+                | static_cast<std::uint64_t>(state == '1');
+        }
+        if constexpr (Width < 64) {
+            const auto sign = std::uint64_t{1} << (Width - 1);
+            if ((bits & sign) != 0) {
+                bits |= ~((std::uint64_t{1} << Width) - 1U);
+            }
+        }
+        return sc_dt::sc_int<Width>{
+            std::bit_cast<std::int64_t>(bits)};
+    }
+};
+
+template <typename T>
+[[nodiscard]] fsim_sc_handle_v1 register_port(
+    const char* name,
+    const fsim_sc_port_direction_v1 direction) {
+    using traits = value_traits<std::remove_cv_t<T>>;
+    static_assert(
+        traits::supported,
+        "this fsim SystemC port value type is not supported");
+    if (current_host == nullptr || current_module == 0) {
+        return 0;
+    }
+    if (current_host->register_port == nullptr
+        || name == nullptr || *name == '\0') {
+        throw std::logic_error{
+            "named SystemC port requires an active elaboration host"};
+    }
+    fsim_sc_handle_v1 handle = 0;
+    check_status(
+        current_host->register_port(
+            current_host->context,
+            current_module,
+            name,
+            direction,
+            traits::encoding,
+            traits::width,
+            &handle),
+        "register port");
+    return handle;
+}
+
+[[nodiscard]] inline std::size_t value_plane_size(
+    const std::uint32_t width) noexcept {
+    return (static_cast<std::size_t>(width) + 7U) / 8U;
+}
+
+template <typename T>
+[[nodiscard]] T read_object(const fsim_sc_handle_v1 object) {
+    using traits = value_traits<std::remove_cv_t<T>>;
+    static_assert(
+        traits::supported,
+        "this fsim SystemC value type is not supported");
+    if (current_host == nullptr || current_host->read_value == nullptr
+        || object == 0) {
+        throw std::logic_error{
+            "SystemC port read requires an active process"};
+    }
+    fsim_sc_value_view_v1 view{};
+    view.struct_size = sizeof(view);
+    check_status(
+        current_host->read_value(
+            current_host->context, object, &view),
+        "read port");
+    const auto bytes = value_plane_size(traits::width);
+    const bool four_state = traits::encoding != FSIM_SC_BIT2;
+    const auto expected = bytes * (four_state ? 2U : 1U);
+    if (view.encoding != traits::encoding
+        || view.width != traits::width
+        || view.data == nullptr || view.data_size != expected) {
+        throw std::runtime_error{
+            "fsim SystemC host returned an invalid port value"};
+    }
+    std::string text(traits::width, '0');
+    for (std::size_t bit = 0; bit < traits::width; ++bit) {
+        const auto byte = bit / 8U;
+        const auto mask =
+            static_cast<std::uint8_t>(1U << (bit % 8U));
+        const bool aval = (view.data[byte] & mask) != 0;
+        const bool bval = four_state
+            && (view.data[bytes + byte] & mask) != 0;
+        text[traits::width - 1U - bit] =
+            !bval ? (aval ? '1' : '0') : (aval ? 'X' : 'Z');
+    }
+    return traits::from_text(text);
+}
+
+template <typename T>
+void write_object(
+    const fsim_sc_handle_v1 object, const T& value) {
+    using traits = value_traits<std::remove_cv_t<T>>;
+    static_assert(
+        traits::supported,
+        "this fsim SystemC value type is not supported");
+    if (current_host == nullptr || current_host->write_value == nullptr
+        || object == 0) {
+        throw std::logic_error{
+            "SystemC port write requires an active process"};
+    }
+    const auto bytes = value_plane_size(traits::width);
+    const bool four_state = traits::encoding != FSIM_SC_BIT2;
+    std::vector<std::uint8_t> storage(
+        bytes * (four_state ? 2U : 1U), 0);
+    for (std::size_t bit = 0; bit < traits::width; ++bit) {
+        const auto state = traits::state(value, bit);
+        const auto byte = bit / 8U;
+        const auto mask =
+            static_cast<std::uint8_t>(1U << (bit % 8U));
+        if (state == '1' || state == 'X') {
+            storage[byte] |= mask;
+        }
+        if (state == 'X' || state == 'Z') {
+            if (!four_state) {
+                throw std::logic_error{
+                    "two-state SystemC value contains X or Z"};
+            }
+            storage[bytes + byte] |= mask;
+        }
+    }
+    const fsim_sc_value_view_v1 view{
+        sizeof(fsim_sc_value_view_v1),
+        traits::encoding,
+        traits::width,
+        storage.data(),
+        storage.size()};
+    check_status(
+        current_host->write_value(
+            current_host->context, object, &view),
+        "write port");
+}
+
+} // namespace sc_core::detail
+
+namespace fsim::systemc {
+
+template <typename Module>
+struct module_factory_state {
+    static fsim_sc_status_v1 elaborate(
+        void* user,
+        const char* instance_name,
+        const fsim_sc_handle_v1 module,
+        fsim_sc_handle_v1,
+        void** result) noexcept {
+        static_assert(
+            std::is_base_of_v<sc_core::sc_module, Module>,
+            "registered SystemC module must derive from sc_module");
+        const auto* host =
+            static_cast<const fsim_sc_host_v1*>(user);
+        if (host == nullptr || instance_name == nullptr
+            || *instance_name == '\0' || result == nullptr) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        try {
+            sc_core::detail::host_scope scope{host, module};
+            auto object = std::make_unique<Module>(
+                sc_core::sc_module_name{instance_name});
+            const auto status = object->fsim_elaborate(host, module);
+            if (status != FSIM_SC_OK) {
+                return status;
+            }
+            *result = object.release();
+            return FSIM_SC_OK;
+        } catch (...) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+    }
+
+    static void destroy(void*, void* module) noexcept {
+        delete static_cast<Module*>(module);
+    }
+};
+
+template <typename Module>
+[[nodiscard]] fsim_sc_status_v1 register_module_factory(
+    const fsim_sc_host_v1* host,
+    fsim_sc_registrar_v1* registrar,
+    const char* name) noexcept {
+    if (host == nullptr || registrar == nullptr || name == nullptr
+        || *name == '\0'
+        || host->abi_version != FSIM_SYSTEMC_ABI_VERSION
+        || registrar->abi_version != FSIM_SYSTEMC_ABI_VERSION
+        || host->struct_size < sizeof(fsim_sc_host_v1)
+        || registrar->struct_size < sizeof(fsim_sc_registrar_v1)
+        || registrar->register_elaboration_factory == nullptr
+        || host->register_port == nullptr
+        || host->register_process == nullptr
+        || host->add_sensitivity == nullptr
+        || host->read_value == nullptr
+        || host->write_value == nullptr
+        || host->report == nullptr
+        || host->set_process_initialize == nullptr) {
+        return FSIM_SC_ABI_MISMATCH;
+    }
+    return registrar->register_elaboration_factory(
+        registrar->context,
+        name,
+        module_factory_state<Module>::elaborate,
+        module_factory_state<Module>::destroy,
+        const_cast<fsim_sc_host_v1*>(host));
+}
+
+} // namespace fsim::systemc
 
 #define SC_MODULE(name) struct name : public ::sc_core::sc_module
 #define SC_CTOR(name) \

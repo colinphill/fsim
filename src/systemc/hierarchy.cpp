@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/hierarchy.hpp"
 
+#include "fsim/runtime/simir.hpp"
 #include "fsim/systemc/plugin_loader.hpp"
 
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -23,11 +25,18 @@ struct HierarchyRegistry::Impl {
     struct Object {
         fsim_sc_handle_v1 module{};
         std::size_t port{};
+        fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
+        std::uint32_t width{};
     };
 
     struct Child {
         fsim_sc_handle_v1 module{};
         std::size_t child{};
+    };
+
+    struct Process {
+        fsim_sc_handle_v1 module{};
+        std::size_t process{};
     };
 
     struct LiveModule {
@@ -43,6 +52,8 @@ struct HierarchyRegistry::Impl {
     std::unordered_map<fsim_sc_handle_v1, ModuleDescription> pending;
     std::unordered_map<fsim_sc_handle_v1, Object> objects;
     std::unordered_map<fsim_sc_handle_v1, Child> children;
+    std::unordered_map<fsim_sc_handle_v1, Process> processes;
+    std::unordered_map<fsim_sc_handle_v1, std::uint32_t> runtime_objects;
     std::vector<LiveModule> live;
     fsim_sc_handle_v1 next_handle{1};
 
@@ -62,11 +73,34 @@ struct HierarchyRegistry::Impl {
         for (const auto& child : description.foreign_children) {
             children.erase(child.handle);
         }
+        for (const auto& process : description.processes) {
+            processes.erase(process.handle);
+        }
         pending.erase(description.handle);
     }
 };
 
 namespace {
+
+struct ActiveInvocation {
+    HierarchyRegistry::Impl* registry{};
+    runtime::simir::ProcessExecutionContext* context{};
+    std::vector<std::uint8_t> read_buffer;
+    std::string failure;
+};
+
+thread_local ActiveInvocation* active_invocation = nullptr;
+
+class InvocationScope final {
+public:
+    explicit InvocationScope(ActiveInvocation& invocation) noexcept {
+        active_invocation = &invocation;
+    }
+    ~InvocationScope() { active_invocation = nullptr; }
+
+    InvocationScope(const InvocationScope&) = delete;
+    InvocationScope& operator=(const InvocationScope&) = delete;
+};
 
 [[nodiscard]] bool valid_direction(
     const fsim_sc_port_direction_v1 direction) noexcept {
@@ -118,7 +152,8 @@ extern "C" fsim_sc_status_v1 registry_register_port(
             {*handle, name, direction, encoding, width});
         registry.objects.emplace(
             *handle,
-            HierarchyRegistry::Impl::Object{module, index});
+            HierarchyRegistry::Impl::Object{
+                module, index, encoding, width});
         *result = *handle;
         return FSIM_SC_OK;
     } catch (...) {
@@ -214,35 +249,256 @@ extern "C" fsim_sc_status_v1 registry_connect_foreign_port(
     }
 }
 
-extern "C" fsim_sc_status_v1 unsupported_register_process(
-    void*,
-    fsim_sc_handle_v1,
-    const char*,
-    fsim_sc_process_kind_v1,
-    fsim_sc_process_entry_v1,
-    void*,
-    fsim_sc_handle_v1*) noexcept {
-    return FSIM_SC_NOT_SUPPORTED;
+extern "C" fsim_sc_status_v1 registry_register_process(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* name,
+    const fsim_sc_process_kind_v1 kind,
+    const fsim_sc_process_entry_v1 entry,
+    void* user,
+    fsim_sc_handle_v1* result) noexcept {
+    if (context == nullptr || name == nullptr || *name == '\0'
+        || entry == nullptr || result == nullptr
+        || (kind != FSIM_SC_METHOD && kind != FSIM_SC_THREAD
+            && kind != FSIM_SC_CTHREAD)) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.pending.find(module);
+        if (found == registry.pending.end()
+            || std::any_of(
+                found->second.processes.begin(),
+                found->second.processes.end(),
+                [&](const ProcessDescription& process) {
+                    return process.name == name;
+                })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto handle = registry.allocate_handle();
+        if (!handle) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+        const auto index = found->second.processes.size();
+        found->second.processes.push_back(
+            {*handle, name, kind, entry, user, {}, true});
+        registry.processes.emplace(
+            *handle,
+            HierarchyRegistry::Impl::Process{module, index});
+        *result = *handle;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
 }
 
-extern "C" fsim_sc_status_v1 unsupported_add_sensitivity(
-    void*,
-    fsim_sc_handle_v1,
-    fsim_sc_handle_v1,
-    fsim_sc_edge_kind_v1) noexcept {
-    return FSIM_SC_NOT_SUPPORTED;
+extern "C" fsim_sc_status_v1 registry_add_sensitivity(
+    void* context,
+    const fsim_sc_handle_v1 process,
+    const fsim_sc_handle_v1 object,
+    const fsim_sc_edge_kind_v1 edge) noexcept {
+    if (context == nullptr
+        || (edge != FSIM_SC_ANY_EDGE && edge != FSIM_SC_POSEDGE
+            && edge != FSIM_SC_NEGEDGE)) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto process_found = registry.processes.find(process);
+        const auto object_found = registry.objects.find(object);
+        if (process_found == registry.processes.end()
+            || object_found == registry.objects.end()
+            || process_found->second.module
+                != object_found->second.module) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto module =
+            registry.pending.find(process_found->second.module);
+        if (module == registry.pending.end()
+            || process_found->second.process
+                >= module->second.processes.size()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        auto& sensitivities =
+            module->second
+                .processes[process_found->second.process]
+                .sensitivity;
+        if (std::find_if(
+                sensitivities.begin(), sensitivities.end(),
+                [&](const SensitivityDescription& existing) {
+                    return existing.object == object
+                        && existing.edge == edge;
+                }) == sensitivities.end()) {
+            sensitivities.push_back({object, edge});
+        }
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
 }
 
-extern "C" fsim_sc_status_v1 unsupported_read(
-    void*, fsim_sc_handle_v1, fsim_sc_value_view_v1*) noexcept {
-    return FSIM_SC_NOT_SUPPORTED;
+extern "C" fsim_sc_status_v1 registry_set_process_initialize(
+    void* context,
+    const fsim_sc_handle_v1 process,
+    const std::uint8_t initialize) noexcept {
+    if (context == nullptr || initialize > 1) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto process_found = registry.processes.find(process);
+        if (process_found == registry.processes.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto module =
+            registry.pending.find(process_found->second.module);
+        if (module == registry.pending.end()
+            || process_found->second.process
+                >= module->second.processes.size()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        module->second
+            .processes[process_found->second.process]
+            .initialize = initialize != 0;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
 }
 
-extern "C" fsim_sc_status_v1 unsupported_write(
-    void*,
-    fsim_sc_handle_v1,
-    const fsim_sc_value_view_v1*) noexcept {
-    return FSIM_SC_NOT_SUPPORTED;
+[[nodiscard]] std::size_t plane_size(
+    const std::uint32_t width) noexcept {
+    return (static_cast<std::size_t>(width) + 7U) / 8U;
+}
+
+extern "C" fsim_sc_status_v1 registry_read(
+    void* context,
+    const fsim_sc_handle_v1 object,
+    fsim_sc_value_view_v1* result) noexcept {
+    if (context == nullptr || result == nullptr
+        || result->struct_size < sizeof(fsim_sc_value_view_v1)) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        if (active_invocation == nullptr
+            || active_invocation->registry != &registry
+            || active_invocation->context == nullptr) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+        const auto metadata = registry.objects.find(object);
+        const auto binding = registry.runtime_objects.find(object);
+        if (metadata == registry.objects.end()
+            || binding == registry.runtime_objects.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto value =
+            active_invocation->context->read_signal(binding->second);
+        if (value.width() != metadata->second.width) {
+            active_invocation->failure =
+                "SystemC runtime object width disagrees with DesignIR";
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+        const auto bytes = plane_size(metadata->second.width);
+        const bool four_state =
+            metadata->second.encoding != FSIM_SC_BIT2;
+        active_invocation->read_buffer.assign(
+            bytes * (four_state ? 2U : 1U), 0);
+        for (std::size_t bit = 0; bit < value.width(); ++bit) {
+            const auto state = value.get(bit);
+            const auto byte = bit / 8U;
+            const auto mask =
+                static_cast<std::uint8_t>(1U << (bit % 8U));
+            if (state == runtime::Logic4::one
+                || state == runtime::Logic4::x) {
+                active_invocation->read_buffer[byte] |= mask;
+            }
+            if (state == runtime::Logic4::x
+                || state == runtime::Logic4::z) {
+                if (!four_state) {
+                    active_invocation->failure =
+                        "SystemC two-state port observed X or Z";
+                    return FSIM_SC_RUNTIME_ERROR;
+                }
+                active_invocation->read_buffer[bytes + byte] |= mask;
+            }
+        }
+        result->encoding = metadata->second.encoding;
+        result->width = metadata->second.width;
+        result->data = active_invocation->read_buffer.data();
+        result->data_size = active_invocation->read_buffer.size();
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_write(
+    void* context,
+    const fsim_sc_handle_v1 object,
+    const fsim_sc_value_view_v1* value) noexcept {
+    if (context == nullptr || value == nullptr
+        || value->struct_size < sizeof(fsim_sc_value_view_v1)
+        || value->data == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        if (active_invocation == nullptr
+            || active_invocation->registry != &registry
+            || active_invocation->context == nullptr) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+        const auto metadata = registry.objects.find(object);
+        const auto binding = registry.runtime_objects.find(object);
+        if (metadata == registry.objects.end()
+            || binding == registry.runtime_objects.end()
+            || value->encoding != metadata->second.encoding
+            || value->width != metadata->second.width) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto bytes = plane_size(value->width);
+        const bool four_state = value->encoding != FSIM_SC_BIT2;
+        const auto expected = bytes * (four_state ? 2U : 1U);
+        if (value->data_size != expected) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        runtime::PackedLogic4 converted(value->width);
+        for (std::size_t bit = 0; bit < value->width; ++bit) {
+            const auto byte = bit / 8U;
+            const auto mask =
+                static_cast<std::uint8_t>(1U << (bit % 8U));
+            const bool aval = (value->data[byte] & mask) != 0;
+            const bool bval = four_state
+                && (value->data[bytes + byte] & mask) != 0;
+            converted.set(
+                bit,
+                !bval
+                    ? (aval ? runtime::Logic4::one
+                            : runtime::Logic4::zero)
+                    : (aval ? runtime::Logic4::x
+                            : runtime::Logic4::z));
+        }
+        active_invocation->context->write_update(
+            binding->second, std::move(converted));
+        return FSIM_SC_OK;
+    } catch (const std::exception& exception) {
+        if (active_invocation != nullptr) {
+            active_invocation->failure = exception.what();
+        }
+        return FSIM_SC_RUNTIME_ERROR;
+    } catch (...) {
+        if (active_invocation != nullptr) {
+            active_invocation->failure =
+                "unknown SystemC runtime write failure";
+        }
+        return FSIM_SC_RUNTIME_ERROR;
+    }
 }
 
 extern "C" fsim_sc_status_v1 unsupported_wait_time(
@@ -260,7 +516,21 @@ extern "C" fsim_sc_status_v1 unsupported_notify(
     return FSIM_SC_NOT_SUPPORTED;
 }
 
-extern "C" void ignore_report(void*, int, const char*) noexcept {}
+extern "C" void registry_report(
+    void* context, const int severity, const char* message) noexcept {
+    if (context == nullptr || severity < 2
+        || active_invocation == nullptr
+        || active_invocation->registry != context) {
+        return;
+    }
+    try {
+        active_invocation->failure =
+            message == nullptr || *message == '\0'
+            ? "SystemC process reported a runtime failure"
+            : message;
+    } catch (...) {
+    }
+}
 
 extern "C" fsim_sc_status_v1 registry_register_factory(
     void* context,
@@ -350,16 +620,18 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.struct_size = sizeof(host);
     host.context = impl.get();
     host.register_port = registry_register_port;
-    host.register_process = unsupported_register_process;
-    host.add_sensitivity = unsupported_add_sensitivity;
-    host.read_value = unsupported_read;
-    host.write_value = unsupported_write;
+    host.register_process = registry_register_process;
+    host.add_sensitivity = registry_add_sensitivity;
+    host.read_value = registry_read;
+    host.write_value = registry_write;
     host.wait_time = unsupported_wait_time;
     host.wait_event = unsupported_wait_event;
     host.notify_event = unsupported_notify;
-    host.report = ignore_report;
+    host.report = registry_report;
     host.register_foreign_child = registry_register_foreign_child;
     host.connect_foreign_port = registry_connect_foreign_port;
+    host.set_process_initialize =
+        registry_set_process_initialize;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -430,6 +702,7 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
         std::string{factory},
         std::string{instance},
         {},
+        {},
         {}};
     impl_->pending.emplace(*handle, pending);
 
@@ -481,6 +754,69 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
          found->second.user,
          object});
     return description;
+}
+
+void HierarchyRegistry::bind_runtime_object(
+    const fsim_sc_handle_v1 object,
+    const std::uint32_t signal) {
+    if (impl_ == nullptr || !impl_->objects.contains(object)) {
+        throw std::invalid_argument{
+            "cannot bind an unknown SystemC object handle"};
+    }
+    const auto [found, inserted] =
+        impl_->runtime_objects.emplace(object, signal);
+    if (!inserted && found->second != signal) {
+        throw std::logic_error{
+            "SystemC object handle has conflicting runtime bindings"};
+    }
+}
+
+void HierarchyRegistry::invoke_method(
+    const fsim_sc_handle_v1 process,
+    runtime::simir::ProcessExecutionContext& context) {
+    if (impl_ == nullptr) {
+        throw std::logic_error{"SystemC hierarchy registry is unavailable"};
+    }
+    const auto found = impl_->processes.find(process);
+    if (found == impl_->processes.end()) {
+        throw std::invalid_argument{"unknown SystemC process handle"};
+    }
+    const ProcessDescription* description = nullptr;
+    for (const auto& module : impl_->live) {
+        if (module.description.handle != found->second.module
+            || found->second.process
+                >= module.description.processes.size()) {
+            continue;
+        }
+        description =
+            &module.description.processes[found->second.process];
+        break;
+    }
+    if (description == nullptr
+        || description->kind != FSIM_SC_METHOD
+        || description->entry == nullptr) {
+        throw std::logic_error{
+            "SystemC process is not an executable SC_METHOD"};
+    }
+    if (active_invocation != nullptr) {
+        throw std::logic_error{
+            "recursive SystemC process invocation is not supported"};
+    }
+    ActiveInvocation invocation{impl_.get(), &context, {}, {}};
+    InvocationScope scope{invocation};
+    try {
+        description->entry(description->user);
+    } catch (const std::exception& exception) {
+        invocation.failure =
+            "SystemC process callback escaped with an exception: "
+            + std::string{exception.what()};
+    } catch (...) {
+        invocation.failure =
+            "SystemC process callback escaped with an unknown exception";
+    }
+    if (!invocation.failure.empty()) {
+        throw std::runtime_error{std::move(invocation.failure)};
+    }
 }
 
 const std::filesystem::path& HierarchyRegistry::path() const noexcept {

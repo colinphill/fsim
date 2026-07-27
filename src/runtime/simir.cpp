@@ -1544,6 +1544,7 @@ ProcessId Interpreter::add_process(Process process) {
 
   Impl::ProcessState state;
   state.registers.assign(process.register_count, PackedLogic4{});
+  state.waiting_on_static = !process.initialize;
   state.program = std::move(process);
   impl_->processes.push_back(std::move(state));
   return id;
@@ -1573,7 +1574,9 @@ void Interpreter::start() {
   }
   impl_->started = true;
   for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-    impl_->queue_at(id, impl_->scheduler.now());
+    if (impl_->processes[id].program.initialize) {
+      impl_->queue_at(id, impl_->scheduler.now());
+    }
   }
 }
 

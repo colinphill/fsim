@@ -3,6 +3,7 @@
 
 #include "fsim/frontend/design.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/systemc_abi.h"
 
 #include <cstdint>
 #include <memory>
@@ -47,6 +48,21 @@ struct ForeignChild {
     std::vector<ForeignPort> ports;
 };
 
+struct ExternalSensitivity {
+    std::uint64_t object{};
+    fsim_sc_edge_kind_v1 edge{FSIM_SC_ANY_EDGE};
+};
+
+struct ExternalProcess {
+    std::uint64_t handle{};
+    std::string name;
+    fsim_sc_process_kind_v1 kind{FSIM_SC_METHOD};
+    fsim_sc_process_entry_v1 entry{};
+    void* user{};
+    std::vector<ExternalSensitivity> sensitivity;
+    bool initialize{true};
+};
+
 /// Immutable, ABI-neutral description produced by one constructed SystemC
 /// elaboration factory. `path` is the full DesignIR instance path and `target`
 /// is the canonical `systemc:plugin.factory` manifest spelling.
@@ -57,6 +73,7 @@ struct SystemCInstanceDescription {
     std::uint64_t parent{};
     std::vector<ExternalPort> ports;
     std::vector<ForeignChild> foreign_children;
+    std::vector<ExternalProcess> processes;
 };
 
 [[nodiscard]] ElaborationResult elaborate(
@@ -110,14 +127,23 @@ struct SpecializationInfo {
     std::vector<std::pair<std::string, std::string>> parameter_values;
 };
 
+struct SystemCPortInfo {
+    std::string name;
+    std::uint64_t native_handle{};
+    runtime::simir::SignalId signal{};
+};
+
 struct SystemCInstanceInfo {
     std::uint32_t id{};
     std::string target;
     std::string instance;
     std::uint64_t native_handle{};
-    std::vector<
-        std::pair<std::string, runtime::simir::SignalId>>
-        ports;
+    std::vector<SystemCPortInfo> ports;
+};
+
+struct SystemCProcessInfo {
+    runtime::simir::ProcessId process{};
+    std::uint64_t native_handle{};
 };
 
 class ElaboratedDesign final {
@@ -131,6 +157,8 @@ public:
     specializations() const noexcept;
     [[nodiscard]] const std::vector<SystemCInstanceInfo>&
     systemc_instances() const noexcept;
+    [[nodiscard]] const std::vector<SystemCProcessInfo>&
+    systemc_processes() const noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view name) const noexcept;
     /// Return every debug-visible signal path in lexical order. Boundary-port
@@ -164,6 +192,7 @@ private:
     std::vector<runtime::simir::Process> processes_;
     std::vector<SpecializationInfo> specializations_;
     std::vector<SystemCInstanceInfo> systemc_instances_;
+    std::vector<SystemCProcessInfo> systemc_processes_;
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
 };
 

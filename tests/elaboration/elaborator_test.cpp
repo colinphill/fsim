@@ -327,7 +327,7 @@ endmodule
 
 module systemc_hdl_child(
   input bit clock,
-  output logic [7:0] value
+  output bit [7:0] value
 );
   assign value = 8'b10100101;
 endmodule
@@ -343,7 +343,7 @@ endmodule
         std::nullopt,
         false};
     fsim::frontend::Type systemc_unsigned{
-        fsim::frontend::ValueDomain::Logic4,
+        fsim::frontend::ValueDomain::Bit2,
         "systemc.unsigned",
         fsim::frontend::PackedRange{7, 0, true},
         false};
@@ -367,7 +367,8 @@ endmodule
                      {"value", systemc_unsigned,
                       fsim::frontend::PortDirection::Output, 102},
                  }},
-            }};
+            },
+            {}};
     const std::vector<fsim::elaboration::Binding>
         hdl_to_systemc_bindings{
             {"systemc_parent.u_bridge",
@@ -475,6 +476,27 @@ endmodule
     assert(has_diagnostic(
         missing_systemc_child, "FSIM-ELAB-BIND-040"));
 
+    auto thread_systemc = systemc_root;
+    thread_systemc.foreign_children.clear();
+    thread_systemc.processes.push_back({
+        150,
+        "thread",
+        FSIM_SC_THREAD,
+        nullptr,
+        nullptr,
+        {},
+        true});
+    const std::array thread_systemc_instances{thread_systemc};
+    const auto rejected_systemc_thread =
+        fsim::elaboration::elaborate(
+            parsed_systemc_boundary.design,
+            "systemc:models.bridge",
+            std::span<const fsim::elaboration::Binding>{},
+            thread_systemc_instances);
+    assert(!rejected_systemc_thread.ok());
+    assert(has_diagnostic(
+        rejected_systemc_thread, "FSIM-ELAB-BIND-042"));
+
     constexpr std::string_view systemc_boundary_vhdl = R"(
 entity systemc_vhdl_parent is
 end entity systemc_vhdl_parent;
@@ -530,7 +552,8 @@ end architecture rtl;
                      {"inverted", systemc_logic,
                       fsim::frontend::PortDirection::Output, 202},
                  }},
-            }};
+            },
+            {}};
     const std::vector<fsim::elaboration::Binding>
         vhdl_systemc_bindings{
             {"systemc_vhdl_parent.u_bridge",

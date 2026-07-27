@@ -48,6 +48,31 @@ using runtime::PackedLogic4;
 using runtime::SimulationTick;
 using runtime::simir::SignalId;
 
+class SystemCMethodExecutor final
+    : public runtime::simir::ProcessExecutor {
+ public:
+  SystemCMethodExecutor(
+      std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
+      const std::uint64_t process)
+      : hierarchy_(std::move(hierarchy)), process_(process) {
+    if (!hierarchy_) {
+      throw std::invalid_argument{
+          "SystemC method executor requires a hierarchy registry"};
+    }
+  }
+
+  [[nodiscard]] runtime::simir::ProcessResumeResult resume(
+      runtime::simir::ProcessExecutionContext& context,
+      runtime::simir::InstructionIndex) override {
+    hierarchy_->invoke_method(process_, context);
+    return {0, 1};
+  }
+
+ private:
+  std::shared_ptr<systemc::HierarchyRegistry> hierarchy_;
+  std::uint64_t process_{};
+};
+
 #if defined(FSIM_HAS_LLVM)
 
 class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
@@ -739,12 +764,12 @@ frontend::Type systemc_type(
       result.spelling = "systemc.logic";
       break;
     case FSIM_SC_SIGNED:
-      result.domain = frontend::ValueDomain::Logic4;
+      result.domain = frontend::ValueDomain::Bit2;
       result.spelling = "systemc.signed";
       result.is_signed = true;
       break;
     case FSIM_SC_UNSIGNED:
-      result.domain = frontend::ValueDomain::Logic4;
+      result.domain = frontend::ValueDomain::Bit2;
       result.spelling = "systemc.unsigned";
       break;
   }
@@ -787,6 +812,22 @@ elaboration::SystemCInstanceDescription systemc_description(
       });
     }
     result.foreign_children.push_back(std::move(converted));
+  }
+  result.processes.reserve(module.processes.size());
+  for (const auto& process : module.processes) {
+    elaboration::ExternalProcess converted;
+    converted.handle = process.handle;
+    converted.name = process.name;
+    converted.kind = process.kind;
+    converted.entry = process.entry;
+    converted.user = process.user;
+    converted.initialize = process.initialize;
+    converted.sensitivity.reserve(process.sensitivity.size());
+    for (const auto& sensitivity : process.sensitivity) {
+      converted.sensitivity.push_back(
+          {sensitivity.object, sensitivity.edge});
+    }
+    result.processes.push_back(std::move(converted));
   }
   return result;
 }
@@ -2864,6 +2905,23 @@ std::optional<BuiltProject> build_project(
   if (!elaborated.design || diagnostics.has_error()) {
     return std::nullopt;
   }
+  if (systemc_hierarchy) {
+    try {
+      for (const auto& instance :
+           elaborated.design->systemc_instances()) {
+        for (const auto& port : instance.ports) {
+          systemc_hierarchy->bind_runtime_object(
+              port.native_handle, port.signal);
+        }
+      }
+    } catch (const std::exception& error) {
+      diagnostics.error(
+          "FSIM-SC-A006",
+          "cannot bind SystemC objects to the common runtime: "
+              + std::string{error.what()});
+      return std::nullopt;
+    }
+  }
 
   auto specialization_cache_keys =
       make_specialization_cache_keys(
@@ -2934,6 +2992,19 @@ struct Simulation::Impl {
       : built(std::move(project)),
         interpreter(built.design.create_interpreter(
             runtime::SchedulerOptions{max_deltas, 32})) {
+    if (!built.design.systemc_processes().empty()
+        && !built.systemc_hierarchy) {
+      throw std::logic_error{
+          "SystemC processes require their native hierarchy registry"};
+    }
+    for (const auto& process :
+         built.design.systemc_processes()) {
+      interpreter->set_process_executor(
+          process.process,
+          std::make_unique<SystemCMethodExecutor>(
+              built.systemc_hierarchy,
+              process.native_handle));
+    }
 #if defined(FSIM_HAS_LLVM)
     if (engine != SimulationEngine::interpreter) {
       compiler::LlvmJitOptions options;

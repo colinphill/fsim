@@ -126,19 +126,21 @@ The following foundation is implemented:
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler;
 - typed, bidirectional SystemC/HDL hierarchy construction with either side as
-  the selected top while SystemC process execution remains pending; and
-- a stable catalog covering 297 unique current production diagnostic codes.
+  the selected top;
+- statically sensitive facade-defined `SC_METHOD` callbacks using common
+  scheduler/update semantics and contained native exceptions; and
+- a stable catalog covering 303 unique current production diagnostic codes.
 
 Current Linux validation:
 
 | Gate | Result |
 |---|---|
-| GCC Debug, LLVM disabled | 12/12 tests pass |
-| GCC Release, LLVM disabled | 12/12 tests pass |
-| LLVM 22.1.8 Debug, warnings-as-errors | 13/13 tests pass |
-| LLVM 22.1.8 Release, warnings-as-errors | 13/13 tests pass |
+| GCC Debug, LLVM disabled | 13/13 tests pass |
+| GCC Release, LLVM disabled | 13/13 tests pass |
+| LLVM 22.1.8 Debug, warnings-as-errors | 14/14 tests pass |
+| LLVM 22.1.8 Release, warnings-as-errors | 14/14 tests pass |
 | Concurrent LLVM Debug and Release suites | Both pass; cache-test paths are isolated |
-| GCC ASan/UBSan | 12/12 tests pass with no findings |
+| GCC ASan/UBSan | 13/13 tests pass with no findings |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -325,7 +327,10 @@ Completed groundwork:
 - typed SystemC factory construction with owned native-module lifetime,
   ABI-neutral port metadata, and append-only foreign-child registration;
 - recursive HDL-to-SystemC and SystemC-to-HDL elaboration with either language
-  family as the selected top; and
+  family as the selected top;
+- facade-defined `SC_METHOD` registration, time-zero initialization,
+  `dont_initialize()`, static any-change/scalar-edge sensitivities, packed
+  runtime port access, and common update-phase writes; and
 - compiler-emitted dependency closure for GCC-like SystemC builds.
 
 Planned implementation sequence:
@@ -335,8 +340,9 @@ Planned implementation sequence:
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
-3. Implement SystemC channel updates, sensitivity, `SC_METHOD`, and event
-   notification in the common scheduler.
+3. Implement dynamic SystemC sensitivity, internal channel registration,
+   events, notification/cancellation, and `next_trigger` in the common
+   scheduler.
 4. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
 5. Complete nested/scoped debug locals and add call safe points.

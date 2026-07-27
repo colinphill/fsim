@@ -53,6 +53,12 @@ typedef enum fsim_sc_value_encoding_v1 {
 } fsim_sc_value_encoding_v1;
 
 typedef struct fsim_sc_value_view_v1 {
+    /*
+     * Packed planes are byte-addressed, least-significant bit first.
+     * FSIM_SC_BIT2 uses one value plane. LOGIC4/SIGNED/UNSIGNED use an
+     * aval plane followed by an equally sized bval plane: 00=0, 10=1,
+     * 11=X, 01=Z for each corresponding bit.
+     */
     uint32_t struct_size;
     fsim_sc_value_encoding_v1 encoding;
     uint32_t width;
@@ -125,6 +131,16 @@ typedef struct fsim_sc_host_v1 {
         fsim_sc_value_encoding_v1 encoding,
         uint32_t width,
         fsim_sc_handle_v1 object);
+
+    /*
+     * Append-only process property. SC_METHOD processes initialize once at
+     * time zero by default; a module calls this with zero for
+     * dont_initialize().
+     */
+    fsim_sc_status_v1 (*set_process_initialize)(
+        void* context,
+        fsim_sc_handle_v1 process,
+        uint8_t initialize);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

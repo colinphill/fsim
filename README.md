@@ -86,15 +86,19 @@ The current tree contains:
   construction, and foreign-child registration; and
 - an fsim SystemC compatibility header plus a shell-free, cached host compiler
   for plug-in shared libraries, with build-time entry-point and factory
-  validation.
+  validation; and
+- executable facade-defined `SC_METHOD` processes with time-zero
+  initialization, `dont_initialize()`, static any-change/edge sensitivity,
+  canonical packed port reads, and common update-phase writes.
 
 The implemented SystemC hierarchy spine is bidirectional: HDL instances may
 bind to typed SystemC factories, and those factories may declare
 elaboration-time foreign children explicitly bound to VHDL or SystemVerilog
 targets. Either HDL or SystemC may be the selected top. The resulting ports,
 aliases, HDL descendants, and stable SystemC instance metadata enter the common
-elaborated design. SystemC process registration and scheduler execution are
-still planned.
+elaborated design. Static `SC_METHOD` callbacks execute in that hierarchy;
+dynamic `next_trigger`, events, channel internals, and fiber-backed
+`SC_THREAD`/`SC_CTHREAD` suspension remain planned.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

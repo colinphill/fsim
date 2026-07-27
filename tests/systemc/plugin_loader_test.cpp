@@ -97,6 +97,17 @@ int main(int argc, char** argv) {
     assert(bridge->ports[1].direction == FSIM_SC_OUTPUT);
     assert(bridge->ports[1].encoding == FSIM_SC_UNSIGNED);
     assert(bridge->ports[1].width == 8);
+    assert(bridge->processes.size() == 1);
+    assert(bridge->processes[0].name == "evaluate");
+    assert(bridge->processes[0].kind == FSIM_SC_METHOD);
+    assert(!bridge->processes[0].initialize);
+    assert(bridge->processes[0].sensitivity.size() == 1);
+    assert(
+        bridge->processes[0].sensitivity[0].object
+        == bridge->ports[0].handle);
+    assert(
+        bridge->processes[0].sensitivity[0].edge
+        == FSIM_SC_POSEDGE);
     assert(bridge->foreign_children.size() == 1);
     assert(bridge->foreign_children[0].name == "u_hdl");
     assert(bridge->foreign_children[0].ports.size() == 2);

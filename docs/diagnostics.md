@@ -255,6 +255,7 @@ therefore excluded.
 | `FSIM-ELAB-002` | error | A VHDL architecture has no matching entity. |
 | `FSIM-ELAB-003` | error | A qualified top-level target is malformed. |
 | `FSIM-ELAB-004` | error | A qualified VHDL top does not name an architecture. |
+| `FSIM-ELAB-008` | error | The elaborated design exceeds the dense process-ID space. |
 | `FSIM-ELAB-010` | error | A signal has an invalid packed width. |
 | `FSIM-ELAB-011` | error | The design exceeds the dense 32-bit signal-ID limit. |
 | `FSIM-ELAB-020` | error | A process sensitivity names an unknown signal. |
@@ -333,6 +334,10 @@ therefore excluded.
 | `FSIM-ELAB-BIND-039` | error | A preconstructed SystemC instance target differs from its manifest binding. |
 | `FSIM-ELAB-BIND-040` | error | A SystemC foreign child lacks its required explicit HDL binding. |
 | `FSIM-ELAB-BIND-041` | error | A SystemC foreign child is bound to a non-HDL target. |
+| `FSIM-ELAB-BIND-042` | error | A registered SystemC thread process requires unsupported fiber suspension. |
+| `FSIM-ELAB-BIND-043` | error | A SystemC process sensitivity references an unknown registered object. |
+| `FSIM-ELAB-BIND-044` | error | A SystemC process registered an invalid sensitivity edge. |
+| `FSIM-ELAB-BIND-045` | error | A SystemC edge sensitivity references a non-scalar object. |
 
 ## Time, runtime, trace, and design cache
 
@@ -363,6 +368,7 @@ therefore excluded.
 | `FSIM-SC-A003` | error | A requested SystemC factory uses the legacy untyped construction ABI. |
 | `FSIM-SC-A004` | error | A typed SystemC factory failed during module construction. |
 | `FSIM-SC-A005` | error | One SystemC instance path has conflicting factory targets. |
+| `FSIM-SC-A006` | error | A registered SystemC object could not be bound to its common-runtime signal. |
 | `FSIM-SC-C001` | error | The SystemC compiler working directory cannot be resolved. |
 | `FSIM-SC-C002` | error | A SystemC source set contains no C++ sources. |
 | `FSIM-SC-C003` | error | A SystemC source or dependency is missing, unreadable, invalid, or cannot be hashed/scanned. |

@@ -443,8 +443,12 @@ elaboration factories are constructed before HDL elaboration; their registered
 ports and foreign HDL children are copied into ABI-neutral descriptions and
 recursively incorporated into the common hierarchy in either direction.
 Native module objects remain owned beside the built design until simulation
-teardown. Registering and executing SystemC processes in the common scheduler
-remains planned.
+teardown. Facade-defined `SC_METHOD` callbacks are represented by dense common
+process IDs and an external executor; registered port handles map to dense
+signals, reads observe committed values, and writes enter the common update
+phase. Static sensitivities therefore reuse the same fanout and next-delta
+wakeup path as HDL processes. Dynamic events/channels and fiber-backed thread
+suspension remain planned.
 
 This cache boundary does not yet fingerprint every helper behind the selected
 compiler driver or every environment-injected code-generation setting. The

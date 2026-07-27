@@ -3085,10 +3085,102 @@ private:
         for (const auto& port : instance.ports) {
             if (const auto signal = aliases.find(port.name);
                 signal != aliases.end()) {
-                info.ports.emplace_back(port.name, signal->second);
+                info.ports.push_back(
+                    {port.name, port.handle, signal->second});
             }
         }
         design_.systemc_instances_.push_back(std::move(info));
+
+        for (const auto& external : instance.processes) {
+            if (external.kind != FSIM_SC_METHOD) {
+                report(
+                    "FSIM-ELAB-BIND-042",
+                    "SystemC process '" + path + "." + external.name
+                        + "' requires SC_THREAD/SC_CTHREAD suspension, "
+                          "which is not executable yet",
+                    {});
+                continue;
+            }
+            runtime::simir::Process process;
+            process.id = static_cast<ProcessId>(
+                design_.processes_.size());
+            if (static_cast<std::size_t>(process.id)
+                != design_.processes_.size()) {
+                report(
+                    "FSIM-ELAB-008",
+                    "the design has too many processes",
+                    {});
+                continue;
+            }
+            process.name = path + "." + external.name;
+            process.initialize = external.initialize;
+            for (const auto& sensitivity : external.sensitivity) {
+                const auto signal = objects.find(sensitivity.object);
+                if (signal == objects.end()) {
+                    report(
+                        "FSIM-ELAB-BIND-043",
+                        "SystemC process sensitivity '" + process.name
+                            + "' references an unknown registered object",
+                        {});
+                    continue;
+                }
+                auto edge = runtime::simir::EdgeKind::any;
+                switch (sensitivity.edge) {
+                case FSIM_SC_ANY_EDGE:
+                    break;
+                case FSIM_SC_POSEDGE:
+                    edge = runtime::simir::EdgeKind::posedge;
+                    break;
+                case FSIM_SC_NEGEDGE:
+                    edge = runtime::simir::EdgeKind::negedge;
+                    break;
+                default:
+                    report(
+                        "FSIM-ELAB-BIND-044",
+                        "SystemC process '" + process.name
+                            + "' has an invalid sensitivity edge",
+                        {});
+                    continue;
+                }
+                const auto& signal_info =
+                    design_.signal_info_.at(signal->second);
+                if (edge != runtime::simir::EdgeKind::any
+                    && signal_info.width != 1) {
+                    report(
+                        "FSIM-ELAB-BIND-045",
+                        "SystemC process edge sensitivity '"
+                            + process.name
+                            + "' requires a scalar object",
+                        {});
+                    continue;
+                }
+                process.static_sensitivity.push_back(
+                    {signal->second, edge});
+            }
+            std::sort(
+                process.static_sensitivity.begin(),
+                process.static_sensitivity.end(),
+                [](const runtime::simir::Sensitivity& left,
+                   const runtime::simir::Sensitivity& right) {
+                    return left.signal < right.signal
+                        || (left.signal == right.signal
+                            && left.edge < right.edge);
+                });
+            process.static_sensitivity.erase(
+                std::unique(
+                    process.static_sensitivity.begin(),
+                    process.static_sensitivity.end()),
+                process.static_sensitivity.end());
+            process.operations.emplace_back(
+                process.static_sensitivity.empty()
+                    ? runtime::simir::Operation{
+                          runtime::simir::Halt{}}
+                    : runtime::simir::Operation{
+                          runtime::simir::WaitSensitivity{}});
+            design_.systemc_processes_.push_back(
+                {process.id, external.handle});
+            design_.processes_.push_back(std::move(process));
+        }
 
         for (const auto& child : instance.foreign_children) {
             const auto child_path = path + "." + child.name;
@@ -3306,6 +3398,11 @@ ElaboratedDesign::specializations() const noexcept {
 const std::vector<SystemCInstanceInfo>&
 ElaboratedDesign::systemc_instances() const noexcept {
     return systemc_instances_;
+}
+
+const std::vector<SystemCProcessInfo>&
+ElaboratedDesign::systemc_processes() const noexcept {
+    return systemc_processes_;
 }
 
 std::optional<runtime::simir::SignalId> ElaboratedDesign::find_signal(

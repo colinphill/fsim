@@ -12,6 +12,10 @@
 #include <string_view>
 #include <vector>
 
+namespace fsim::runtime::simir {
+class ProcessExecutionContext;
+}
+
 namespace fsim::systemc {
 
 struct PortDescription {
@@ -36,6 +40,21 @@ struct ForeignChildDescription {
     std::vector<ForeignPortDescription> ports;
 };
 
+struct SensitivityDescription {
+    fsim_sc_handle_v1 object{};
+    fsim_sc_edge_kind_v1 edge{FSIM_SC_ANY_EDGE};
+};
+
+struct ProcessDescription {
+    fsim_sc_handle_v1 handle{};
+    std::string name;
+    fsim_sc_process_kind_v1 kind{FSIM_SC_METHOD};
+    fsim_sc_process_entry_v1 entry{};
+    void* user{};
+    std::vector<SensitivityDescription> sensitivity;
+    bool initialize{true};
+};
+
 struct ModuleDescription {
     fsim_sc_handle_v1 handle{};
     fsim_sc_handle_v1 parent{};
@@ -43,6 +62,7 @@ struct ModuleDescription {
     std::string instance;
     std::vector<PortDescription> ports;
     std::vector<ForeignChildDescription> foreign_children;
+    std::vector<ProcessDescription> processes;
 };
 
 /// Owns one loaded SystemC plug-in and every module object constructed from
@@ -75,6 +95,19 @@ public:
         std::string_view instance,
         fsim_sc_handle_v1 parent,
         std::string& error);
+
+    /// Bind one plug-in object handle to its dense common-runtime signal.
+    /// Bindings are immutable and may be shared by repeated simulations of
+    /// the same built design.
+    void bind_runtime_object(
+        fsim_sc_handle_v1 object,
+        std::uint32_t signal);
+
+    /// Invoke a registered SC_METHOD with host reads/writes redirected to the
+    /// supplied common-kernel execution context.
+    void invoke_method(
+        fsim_sc_handle_v1 process,
+        runtime::simir::ProcessExecutionContext& context);
 
     [[nodiscard]] const std::filesystem::path& path() const noexcept;
 
