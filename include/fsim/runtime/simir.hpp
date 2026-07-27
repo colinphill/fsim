@@ -90,6 +90,22 @@ struct Shift {
   RegisterId amount{};
 };
 
+/// Extract a contiguous normalized bit range from one packed value.
+struct Extract {
+  RegisterId destination{};
+  RegisterId source{};
+  std::uint32_t offset{};
+  std::uint32_t width{1};
+};
+
+/// Concatenate packed operands in source order. The first operand occupies
+/// the most-significant result bits.
+struct Concatenate {
+  RegisterId destination{};
+  std::vector<RegisterId> operands;
+  std::uint32_t width{};
+};
+
 enum class BinaryOperator : std::uint8_t {
   bit_and,
   bit_or,
@@ -237,7 +253,7 @@ struct Halt {};
 
 using Operation =
     std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, LogicalNot,
-                 LogicalBinary, Reduction, Shift, Binary,
+                 LogicalBinary, Reduction, Shift, Extract, Concatenate, Binary,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WaitFor, WaitOn, WaitSensitivity, Yield, Jump, Branch,
                  DebugPoint, Assert, Stop, Halt>;

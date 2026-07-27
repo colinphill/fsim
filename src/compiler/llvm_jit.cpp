@@ -48,10 +48,12 @@ using runtime::simir::Assert;
 using runtime::simir::Binary;
 using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
+using runtime::simir::Concatenate;
 using runtime::simir::ConditionalSelect;
 using runtime::simir::CopyRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::EdgeKind;
+using runtime::simir::Extract;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
 using runtime::simir::Jump;
@@ -568,6 +570,35 @@ validate_process(const Process &process,
               unify_registers(
                   operation.destination, operation.value, index);
             },
+            [&](const Extract& operation) {
+              if (operation.width == 0) {
+                reject(
+                    process, index,
+                    "Extract width must be greater than zero");
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              constrain_width(
+                  operation.destination, operation.width, index);
+            },
+            [&](const Concatenate& operation) {
+              if (operation.operands.empty()) {
+                reject(
+                    process, index,
+                    "Concatenate requires at least one operand");
+              }
+              if (operation.width == 0) {
+                reject(
+                    process, index,
+                    "Concatenate width must be greater than zero");
+              }
+              record_definition(operation.destination, index);
+              for (const auto operand : operation.operands) {
+                record_use(operand, index);
+              }
+              constrain_width(
+                  operation.destination, operation.width, index);
+            },
             [&](const Binary &operation) {
               switch (operation.operation) {
               case BinaryOperator::bit_and:
@@ -731,6 +762,30 @@ validate_process(const Process &process,
       }
       if (result.register_widths[used] == 0) {
         reject(process, index, "source register width cannot be inferred");
+      }
+    }
+    if (const auto* extract =
+            std::get_if<Extract>(&process.operations[index])) {
+      const auto source_width =
+          result.register_widths[extract->source];
+      if (extract->offset > source_width
+          || extract->width
+              > source_width - extract->offset) {
+        reject(
+            process, index,
+            "Extract range is outside its source register");
+      }
+    }
+    if (const auto* concatenate =
+            std::get_if<Concatenate>(&process.operations[index])) {
+      std::uint64_t width = 0;
+      for (const auto operand : concatenate->operands) {
+        width += result.register_widths[operand];
+      }
+      if (width != concatenate->width) {
+        reject(
+            process, index,
+            "Concatenate operand widths do not match its result width");
       }
     }
   }
@@ -1035,6 +1090,23 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "value", value.value);
               add_key_u64(builder, "amount", value.amount);
+            },
+            [&](const Extract& value) {
+              builder.add("operation", "Extract");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "offset", value.offset);
+              add_key_u64(builder, "width", value.width);
+            },
+            [&](const Concatenate& value) {
+              builder.add("operation", "Concatenate");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "width", value.width);
+              add_key_u64(
+                  builder, "operand-count", value.operands.size());
+              for (const auto operand : value.operands) {
+                add_key_u64(builder, "operand", operand);
+              }
             },
             [&](const Binary &value) {
               builder.add("operation", "Binary");
@@ -1918,6 +1990,61 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       builder.CreateSelect(
                           amount_unknown, value_mask, known_bval),
                       value.width});
+              branch_to_next();
+            },
+            [&](const Extract& operation) {
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              auto* shift =
+                  constant_i64(context, operation.offset);
+              auto* mask =
+                  constant_i64(context, width_mask(operation.width));
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateAnd(
+                          builder.CreateLShr(source.aval, shift),
+                          mask),
+                      builder.CreateAnd(
+                          builder.CreateLShr(source.bval, shift),
+                          mask),
+                      operation.width});
+              branch_to_next();
+            },
+            [&](const Concatenate& operation) {
+              llvm::Value* aval = constant_i64(context, 0);
+              llvm::Value* bval = constant_i64(context, 0);
+              std::uint32_t offset = 0;
+              for (auto operand = operation.operands.rbegin();
+                   operand != operation.operands.rend(); ++operand) {
+                const auto source =
+                    load_register(builder, registers, *operand);
+                auto* source_mask =
+                    constant_i64(context, width_mask(source.width));
+                auto* source_aval =
+                    builder.CreateAnd(source.aval, source_mask);
+                auto* source_bval =
+                    builder.CreateAnd(source.bval, source_mask);
+                if (offset != 0) {
+                  auto* shift = constant_i64(context, offset);
+                  source_aval =
+                      builder.CreateShl(source_aval, shift);
+                  source_bval =
+                      builder.CreateShl(source_bval, shift);
+                }
+                aval = builder.CreateOr(aval, source_aval);
+                bval = builder.CreateOr(bval, source_bval);
+                offset += source.width;
+              }
+              auto* mask =
+                  constant_i64(context, width_mask(operation.width));
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateAnd(aval, mask),
+                      builder.CreateAnd(bval, mask),
+                      operation.width});
               branch_to_next();
             },
             [&](const Binary &operation) {

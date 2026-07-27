@@ -56,6 +56,50 @@ std::optional<std::uint64_t> unsigned_decimal(std::string_view text) {
     return value;
 }
 
+std::optional<std::int64_t> constant_index(
+    const Expression& expression) {
+    if (expression.kind == ExpressionKind::IntegerLiteral) {
+        std::string cleaned{expression.text};
+        cleaned.erase(
+            std::remove(cleaned.begin(), cleaned.end(), '_'),
+            cleaned.end());
+        std::int64_t value{};
+        const auto result = std::from_chars(
+            cleaned.data(), cleaned.data() + cleaned.size(), value);
+        if (result.ec == std::errc{}
+            && result.ptr == cleaned.data() + cleaned.size()) {
+            return value;
+        }
+        return std::nullopt;
+    }
+    if (expression.kind == ExpressionKind::Unary
+        && expression.operands.size() == 1
+        && (expression.text == "+" || expression.text == "-")) {
+        const auto value = constant_index(expression.operands[0]);
+        if (!value) {
+            return std::nullopt;
+        }
+        if (expression.text == "+") {
+            return value;
+        }
+        if (*value == std::numeric_limits<std::int64_t>::min()) {
+            return std::nullopt;
+        }
+        return -*value;
+    }
+    return std::nullopt;
+}
+
+std::uint64_t index_distance(
+    const std::int64_t lhs,
+    const std::int64_t rhs) noexcept {
+    return lhs >= rhs
+        ? static_cast<std::uint64_t>(lhs)
+              - static_cast<std::uint64_t>(rhs)
+        : static_cast<std::uint64_t>(rhs)
+              - static_cast<std::uint64_t>(lhs);
+}
+
 PackedLogic4 unsigned_value(const std::uint64_t value, const std::size_t width) {
     PackedLogic4 result(width, Logic4::zero);
     for (std::size_t bit = 0; bit < width && bit < 64; ++bit) {
@@ -233,6 +277,7 @@ public:
         register_domains_.clear();
         locals_.clear();
         local_signed_.clear();
+        local_ranges_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = std::string(hierarchy) + "."
             + (source.name.empty()
@@ -345,6 +390,7 @@ public:
         register_domains_.clear();
         locals_.clear();
         local_signed_.clear();
+        local_ranges_.clear();
         return std::move(process_);
     }
 
@@ -360,6 +406,7 @@ public:
         register_domains_.clear();
         locals_.clear();
         local_signed_.clear();
+        local_ranges_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = name + ".concurrent_" + std::to_string(order);
         emit_debug_point(DebugPointKind::process_entry, statement.span);
@@ -384,6 +431,7 @@ public:
         register_domains_.clear();
         locals_.clear();
         local_signed_.clear();
+        local_ranges_.clear();
         return std::move(process_);
     }
 
@@ -442,6 +490,8 @@ private:
             locals_.emplace(variable.name, register_id);
             local_signed_.emplace(
                 variable.name, variable.type.is_signed);
+            local_ranges_.emplace(
+                variable.name, variable.type.packed_range);
             process_.debug_locals.push_back(DebugLocal{
                 variable.name,
                 variable.type.spelling,
@@ -992,6 +1042,175 @@ private:
                 LoadConstant{destination, std::move(literal->value)});
             return destination;
         }
+        if (language_ != frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Index
+            && expression.operands.size() == 2) {
+            const auto source_width =
+                infer_width(expression.operands[0]);
+            const auto index =
+                constant_index(expression.operands[1]);
+            if (!source_width || !index) {
+                report(
+                    "FSIM-ELAB-068",
+                    "a bit-select requires an inferable packed source and "
+                    "a constant integer index",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto offset = select_offset(
+                expression.operands[0], *index, *source_width);
+            if (!offset
+                || *offset
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-068",
+                    "bit-select index "
+                        + std::to_string(*index)
+                        + " is outside the source's declared packed range",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source =
+                lower_expression(
+                    expression.operands[0], *source_width);
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(1, register_domain(*source));
+            process_.operations.emplace_back(Extract{
+                destination,
+                *source,
+                static_cast<std::uint32_t>(*offset),
+                1});
+            return destination;
+        }
+        if (language_ != frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Slice
+            && expression.operands.size() == 3) {
+            const auto source_width =
+                infer_width(expression.operands[0]);
+            const auto left =
+                constant_index(expression.operands[1]);
+            const auto right =
+                constant_index(expression.operands[2]);
+            if (!source_width || !left || !right) {
+                report(
+                    "FSIM-ELAB-068",
+                    "a part-select requires an inferable packed source and "
+                    "constant integer bounds",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto range =
+                expression_range(
+                    expression.operands[0], *source_width);
+            const auto offset = select_offset(
+                expression.operands[0], *right, *source_width);
+            const auto left_offset = select_offset(
+                expression.operands[0], *left, *source_width);
+            const auto width = index_distance(*left, *right) + 1;
+            const bool selected_descending = *left >= *right;
+            const bool direction_matches =
+                *left == *right
+                || (range
+                    && selected_descending
+                        == (range->left >= range->right));
+            if (!offset || !left_offset || !direction_matches
+                || width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-068",
+                    "part-select bounds "
+                        + std::to_string(*left) + ":"
+                        + std::to_string(*right)
+                        + " are outside or reverse the source's declared "
+                          "packed range",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source =
+                lower_expression(
+                    expression.operands[0], *source_width);
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                static_cast<std::size_t>(width),
+                register_domain(*source));
+            process_.operations.emplace_back(Extract{
+                destination,
+                *source,
+                static_cast<std::uint32_t>(*offset),
+                static_cast<std::uint32_t>(width)});
+            return destination;
+        }
+        if (language_ != frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Concatenation) {
+            if (expression.operands.empty()) {
+                report(
+                    "FSIM-ELAB-069",
+                    "a concatenation requires at least one packed operand",
+                    expression.span);
+                return std::nullopt;
+            }
+            std::vector<RegisterId> operands;
+            operands.reserve(expression.operands.size());
+            std::size_t width = 0;
+            auto result_domain = frontend::ValueDomain::Bit2;
+            for (const auto& operand_expression : expression.operands) {
+                const auto operand_width =
+                    infer_width(operand_expression);
+                if (!operand_width || *operand_width == 0
+                    || *operand_width
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || *operand_width
+                        > std::numeric_limits<std::size_t>::max()
+                            - width) {
+                    report(
+                        "FSIM-ELAB-069",
+                        "concatenation operand width is not statically "
+                        "inferable or the total width overflows",
+                        operand_expression.span);
+                    return std::nullopt;
+                }
+                const auto operand =
+                    lower_expression(
+                        operand_expression, *operand_width);
+                if (!operand) {
+                    return std::nullopt;
+                }
+                operands.push_back(*operand);
+                width += register_width(*operand);
+                const auto domain = register_domain(*operand);
+                if (domain == frontend::ValueDomain::Logic9) {
+                    result_domain = frontend::ValueDomain::Logic9;
+                } else if (
+                    domain != frontend::ValueDomain::Bit2
+                    && domain != frontend::ValueDomain::Boolean
+                    && result_domain
+                        != frontend::ValueDomain::Logic9) {
+                    result_domain = frontend::ValueDomain::Logic4;
+                }
+            }
+            if (width == 0
+                || width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-069",
+                    "concatenation result width is outside the supported "
+                    "range",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(width, result_domain);
+            process_.operations.emplace_back(Concatenate{
+                destination,
+                std::move(operands),
+                static_cast<std::uint32_t>(width)});
+            return destination;
+        }
         if (expression.kind == ExpressionKind::Unary
             && expression.operands.size() == 1
             && expression.text == "!") {
@@ -1388,6 +1607,51 @@ private:
     }
 
     std::optional<std::size_t> infer_width(const Expression& expression) const {
+        if (expression.kind == ExpressionKind::Index
+            && expression.operands.size() == 2) {
+            return std::size_t{1};
+        }
+        if (expression.kind == ExpressionKind::Slice
+            && expression.operands.size() == 3) {
+            const auto left = constant_index(expression.operands[1]);
+            const auto right = constant_index(expression.operands[2]);
+            if (left && right) {
+                const auto width = index_distance(*left, *right) + 1;
+                if (width
+                    <= std::numeric_limits<std::size_t>::max()) {
+                    return static_cast<std::size_t>(width);
+                }
+            }
+            return std::nullopt;
+        }
+        if (expression.kind == ExpressionKind::Concatenation) {
+            std::size_t width = 0;
+            for (const auto& operand : expression.operands) {
+                const auto operand_width = infer_width(operand);
+                if (!operand_width
+                    || *operand_width
+                        > std::numeric_limits<std::size_t>::max()
+                            - width) {
+                    return std::nullopt;
+                }
+                width += *operand_width;
+            }
+            return width == 0
+                ? std::nullopt
+                : std::optional<std::size_t>{width};
+        }
+        if (expression.kind == ExpressionKind::LogicLiteral) {
+            const auto quote = expression.text.find('\'');
+            if (quote != std::string::npos && quote != 0) {
+                const auto width = unsigned_decimal(
+                    std::string_view{expression.text}.substr(0, quote));
+                if (width && *width != 0
+                    && *width
+                        <= std::numeric_limits<std::size_t>::max()) {
+                    return static_cast<std::size_t>(*width);
+                }
+            }
+        }
         if (expression.kind == ExpressionKind::Call
             && expression.text == "?:"
             && expression.operands.size() == 3) {
@@ -1411,6 +1675,57 @@ private:
             }
         }
         return std::nullopt;
+    }
+
+    std::optional<frontend::PackedRange> expression_range(
+        const Expression& expression,
+        const std::size_t width) const {
+        if (expression.kind == ExpressionKind::Identifier) {
+            if (const auto local =
+                    local_ranges_.find(expression.text);
+                local != local_ranges_.end()
+                && local->second) {
+                return *local->second;
+            }
+            if (const auto signal =
+                    signals_.find(expression.text);
+                signal != signals_.end()
+                && design_.signal_info_[signal->second].packed_range) {
+                return *design_
+                            .signal_info_[signal->second]
+                            .packed_range;
+            }
+        }
+        if (width == 0
+            || width - 1
+                > static_cast<std::size_t>(
+                    std::numeric_limits<std::int64_t>::max())) {
+            return std::nullopt;
+        }
+        return frontend::PackedRange{
+            static_cast<std::int64_t>(width - 1), 0, true};
+    }
+
+    std::optional<std::size_t> select_offset(
+        const Expression& expression,
+        const std::int64_t index,
+        const std::size_t width) const {
+        const auto range = expression_range(expression, width);
+        if (!range) {
+            return std::nullopt;
+        }
+        const auto lower = std::min(range->left, range->right);
+        const auto upper = std::max(range->left, range->right);
+        if (index < lower || index > upper) {
+            return std::nullopt;
+        }
+        const auto offset = index_distance(index, range->right);
+        if (offset >= width
+            || offset
+                > std::numeric_limits<std::size_t>::max()) {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(offset);
     }
 
     [[nodiscard]] bool is_signed_expression(
@@ -1522,6 +1837,9 @@ private:
     std::vector<frontend::ValueDomain> register_domains_;
     std::unordered_map<std::string, RegisterId> locals_;
     std::unordered_map<std::string, bool> local_signed_;
+    std::unordered_map<
+        std::string, std::optional<frontend::PackedRange>>
+        local_ranges_;
     frontend::Language language_{frontend::Language::Vhdl2008};
 };
 
@@ -1818,6 +2136,7 @@ private:
             static_cast<std::size_t>(width),
             declaration.type.domain,
             declaration.type.is_signed,
+            declaration.type.packed_range,
             declaration.is_port,
             declaration.direction});
         auto initial = Logic4::x;

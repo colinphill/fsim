@@ -584,6 +584,50 @@ void test_simir_wide_unsigned_arithmetic() {
   }
 }
 
+void test_simir_wide_extract_and_concatenate() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto low = interpreter.add_signal(
+      {"top.low", PackedLogic4(2, Logic4::zero)});
+  const auto high = interpreter.add_signal(
+      {"top.high", PackedLogic4(2, Logic4::zero)});
+  const auto joined = interpreter.add_signal(
+      {"top.joined", PackedLogic4(69, Logic4::zero)});
+  const auto source =
+      "1" + std::string(62, '0') + "XZ";
+
+  Process process;
+  process.id = 0;
+  process.name = "wide_extract_and_concatenate";
+  process.register_count = 4;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string(source)},
+      Extract{1, 0, 0, 2},
+      WriteBlocking{low, 1},
+      Extract{2, 0, 63, 2},
+      WriteBlocking{high, 2},
+      Concatenate{3, {0, 2, 1}, 69},
+      WriteBlocking{joined, 3},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "wide extract and concatenate process completes");
+  require(
+      interpreter.signal_value(low).to_msb_string() == "XZ"
+          && interpreter.signal_value(high).to_msb_string() == "10",
+      "wide extraction crosses normalized packed positions");
+  require(
+      interpreter.signal_value(joined).to_msb_string()
+          == source + "10XZ",
+      "wide concatenation preserves source operand order");
+}
+
 void test_simir_force_release() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1518,6 +1562,7 @@ int main() {
     test_simir_wide_truth_and_comparison();
     test_simir_wide_reduction_and_shift();
     test_simir_wide_unsigned_arithmetic();
+    test_simir_wide_extract_and_concatenate();
     test_simir_force_release();
     test_simir_design_stop_identity();
     test_simir_alternate_executor_context_and_boundaries();

@@ -1479,6 +1479,64 @@ void test_unsigned_arithmetic_at_level(
   }
 }
 
+void test_extract_and_concatenate_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 5;
+  process.operations = {
+      ReadSignal{0, 0},
+      Extract{1, 0, 2, 1},
+      WriteBlocking{1, 1},
+      Extract{2, 0, 4, 4},
+      WriteBlocking{2, 2},
+      LoadConstant{
+          3, PackedLogic4::from_msb_string("XZ")},
+      Concatenate{4, {2, 1, 3}, 7},
+      WriteBlocking{3, 4},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 4> widths{8, 1, 4, 7};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  struct TestCase {
+    std::string_view source;
+    std::string_view expected_bit;
+    std::string_view expected_part;
+    std::string_view expected_joined;
+  };
+  const std::array cases{
+      TestCase{"10XZ0110", "1", "10XZ", "10XZ1XZ"},
+      TestCase{"Z10100X1", "0", "Z101", "Z1010XZ"},
+  };
+  for (const auto& test : cases) {
+    TestRuntime runtime;
+    const auto source =
+        PackedLogic4::from_msb_string(test.source).low_word();
+    runtime.signals[0] = {source.aval, source.bval};
+    auto descriptor = abi(runtime);
+    assert(
+        jit.execute(handle, descriptor)
+        == JitExecutionStatus::completed);
+    const std::array expected{
+        test.expected_bit,
+        test.expected_part,
+        test.expected_joined};
+    for (std::size_t index = 0; index < expected.size();
+         ++index) {
+      const auto encoded =
+          PackedLogic4::from_msb_string(expected[index]).low_word();
+      assert((
+          runtime.signals[index + 1]
+          == EncodedSignal{encoded.aval, encoded.bval}));
+    }
+  }
+}
+
 void test_initialized_bval_slot(const JitOptimizationLevel optimization,
                                 const std::string_view symbol) {
   LlvmJit jit{LlvmJitOptions{optimization, {}}};
@@ -2304,6 +2362,7 @@ void test_persistent_object_cache() {
 void test_rejections() {
   LlvmJit jit;
   const std::array<std::uint32_t, 1> one_signal{1};
+  const std::array<std::uint32_t, 0> no_signals{};
 
   Process empty_wait_on;
   empty_wait_on.id = 0;
@@ -2469,6 +2528,41 @@ void test_rejections() {
         "register width constraints are inconsistent");
   }
 
+  Process invalid_extract;
+  invalid_extract.id = 0;
+  invalid_extract.name = "invalid_extract";
+  invalid_extract.register_count = 2;
+  invalid_extract.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_msb_string("1010")},
+      Extract{1, 0, 3, 2},
+      Halt{},
+  };
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_extract", invalid_extract, no_signals);
+      },
+      "Extract range is outside its source register");
+
+  Process invalid_concatenate;
+  invalid_concatenate.id = 0;
+  invalid_concatenate.name = "invalid_concatenate";
+  invalid_concatenate.register_count = 3;
+  invalid_concatenate.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      LoadConstant{
+          1, PackedLogic4::from_msb_string("10")},
+      Concatenate{2, {0, 1}, 4},
+      Halt{},
+  };
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_concatenate", invalid_concatenate, no_signals);
+      },
+      "Concatenate operand widths do not match its result width");
+
   Process too_wide;
   too_wide.id = 0;
   too_wide.name = "wide";
@@ -2565,7 +2659,6 @@ void test_rejections() {
   bad_jump.id = 0;
   bad_jump.name = "bad_jump";
   bad_jump.operations = {Jump{2}, Halt{}};
-  const std::array<std::uint32_t, 0> no_signals{};
   expect_fatal_error(
       [&] { jit.add_process("bad_jump", bad_jump, no_signals); },
       "jump target is outside");
@@ -2664,6 +2757,10 @@ int main() {
       JitOptimizationLevel::o0, "unsigned_arithmetic_o0");
   test_unsigned_arithmetic_at_level(
       JitOptimizationLevel::o2, "unsigned_arithmetic_o2");
+  test_extract_and_concatenate_at_level(
+      JitOptimizationLevel::o0, "extract_concatenate_o0");
+  test_extract_and_concatenate_at_level(
+      JitOptimizationLevel::o2, "extract_concatenate_o2");
   test_initialized_bval_slot(JitOptimizationLevel::o0, "initialized_bval_o0");
   test_initialized_bval_slot(JitOptimizationLevel::o2, "initialized_bval_o2");
   test_debug_point_instrumentation();

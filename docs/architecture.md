@@ -186,6 +186,16 @@ the generated code cannot execute LLVM's undefined integer divide-by-zero
 case. Unary plus preserves its operand and unary minus lowers to width-matched
 zero minus the operand.
 
+DesignIR retains each signal's optional declared packed range in addition to
+its normalized storage width. Constant SystemVerilog bit and part selects map
+source indices to storage offsets by distance from the declaration's right
+bound, so descending, ascending, and non-zero-based ranges preserve their
+source ordering. Part-select direction must match the declaration in the
+current bounded form. SimIR `Extract` operates on normalized offsets, while
+`Concatenate` places ordered source operands from most to least significant;
+the interpreter supports arbitrary widths and LLVM lowers the single-word
+case.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

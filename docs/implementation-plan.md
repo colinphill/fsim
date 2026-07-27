@@ -109,9 +109,12 @@ The following foundation is implemented:
 - SystemVerilog unary plus/minus and equal-width unsigned subtraction,
   multiplication, division, and remainder with arbitrary-width interpreter
   algorithms, guarded LLVM lowering, and differential source tests;
+- declared-range-aware constant SystemVerilog bit/part selects and packed
+  concatenations with arbitrary-width interpreter operations, LLVM
+  single-word lowering, and ascending/non-zero-based range tests;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 282 unique current production diagnostic codes.
+- a stable catalog covering 284 unique current production diagnostic codes.
 
 Current Linux validation:
 

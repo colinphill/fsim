@@ -288,6 +288,8 @@ therefore excluded.
 | `FSIM-ELAB-065` | error | Conditional-expression alternatives have different widths. |
 | `FSIM-ELAB-066` | error | A signed relational comparison requires signed SimIR semantics that are not implemented yet. |
 | `FSIM-ELAB-067` | error | A signed arithmetic expression requires signed SimIR semantics that are not implemented yet. |
+| `FSIM-ELAB-068` | error | A bit/part select does not have constant in-range bounds compatible with its declared packed direction. |
+| `FSIM-ELAB-069` | error | A concatenation is empty or has an operand/result width that cannot be inferred or represented. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

@@ -143,6 +143,53 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return result;
 }
 
+[[nodiscard]] PackedLogic4 extract_value(
+    const PackedLogic4& source,
+    const std::size_t offset,
+    const std::size_t width) {
+  if (width == 0 || offset > source.width()
+      || width > source.width() - offset) {
+    throw std::invalid_argument(
+        "extract range is outside its source value");
+  }
+  PackedLogic4 result(width, Logic4::zero);
+  for (std::size_t bit = 0; bit < width; ++bit) {
+    result.set(bit, source.get(offset + bit));
+  }
+  return result;
+}
+
+[[nodiscard]] PackedLogic4 concatenate_values(
+    const std::vector<PackedLogic4>& operands,
+    const std::size_t expected_width) {
+  if (operands.empty()) {
+    throw std::invalid_argument(
+        "concatenation requires at least one operand");
+  }
+  std::size_t width = 0;
+  for (const auto& operand : operands) {
+    if (operand.width()
+        > std::numeric_limits<std::size_t>::max() - width) {
+      throw std::invalid_argument("concatenation width overflows");
+    }
+    width += operand.width();
+  }
+  if (width == 0 || width != expected_width) {
+    throw std::invalid_argument(
+        "concatenation operand widths do not match its result width");
+  }
+  PackedLogic4 result(width, Logic4::zero);
+  std::size_t offset = 0;
+  for (auto operand = operands.rbegin();
+       operand != operands.rend(); ++operand) {
+    for (std::size_t bit = 0; bit < operand->width(); ++bit) {
+      result.set(offset + bit, operand->get(bit));
+    }
+    offset += operand->width();
+  }
+  return result;
+}
+
 [[nodiscard]] bool has_unknown(const PackedLogic4& value) {
   for (std::size_t index = 0; index < value.width(); ++index) {
     const auto bit = value.get(index);
@@ -1004,6 +1051,32 @@ void Interpreter::Impl::execute(ProcessId id) {
                       op.operation,
                       get_register(process, op.value),
                       get_register(process, op.amount));
+              ++process.pc;
+            },
+            [&](const Extract& op) {
+              try {
+                get_register(process, op.destination) =
+                    extract_value(
+                        get_register(process, op.source),
+                        op.offset,
+                        op.width);
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
+            [&](const Concatenate& op) {
+              std::vector<PackedLogic4> operands;
+              operands.reserve(op.operands.size());
+              for (const auto operand : op.operands) {
+                operands.push_back(get_register(process, operand));
+              }
+              try {
+                get_register(process, op.destination) =
+                    concatenate_values(operands, op.width);
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
               ++process.pc;
             },
             [&](const Binary &op) {

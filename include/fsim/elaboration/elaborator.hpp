@@ -45,6 +45,7 @@ struct SignalInfo {
     std::size_t width{};
     frontend::ValueDomain source_domain{frontend::ValueDomain::Unknown};
     bool is_signed{};
+    std::optional<frontend::PackedRange> packed_range;
     bool is_port{};
     frontend::PortDirection direction{frontend::PortDirection::Unknown};
 };

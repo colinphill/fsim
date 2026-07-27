@@ -1653,6 +1653,138 @@ endmodule
     assert(has_diagnostic(
         rejected_signed_arithmetic, "FSIM-ELAB-067"));
 
+    const auto select_concat_process =
+        fsim::frontend::parse_text(
+            "select_concat_process.sv",
+            R"(
+module select_concat_process;
+  logic [15:8] descending;
+  logic [0:7] ascending;
+  logic selected_descending;
+  logic selected_ascending;
+  logic selected_local;
+  logic [3:0] descending_part;
+  logic [3:0] ascending_part;
+  logic [8:0] joined;
+  always_comb begin
+    logic [5:2] local_copy;
+    local_copy = descending[15:12];
+    selected_descending = descending[10];
+    selected_ascending = ascending[2];
+    selected_local = local_copy[3];
+    descending_part = descending[15:12];
+    ascending_part = ascending[2:5];
+    joined = {
+      descending[15:12], descending[10], ascending[4:7]
+    };
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(select_concat_process.ok());
+    const auto elaborated_select_concat =
+        fsim::elaboration::elaborate(
+            select_concat_process.design,
+            "sv:work.select_concat_process");
+    assert(elaborated_select_concat.ok());
+    const auto descending =
+        elaborated_select_concat.design->find_signal("descending");
+    const auto ascending =
+        elaborated_select_concat.design->find_signal("ascending");
+    const std::array select_concat_outputs{
+        elaborated_select_concat.design->find_signal(
+            "selected_descending"),
+        elaborated_select_concat.design->find_signal(
+            "selected_ascending"),
+        elaborated_select_concat.design->find_signal(
+            "selected_local"),
+        elaborated_select_concat.design->find_signal(
+            "descending_part"),
+        elaborated_select_concat.design->find_signal(
+            "ascending_part"),
+        elaborated_select_concat.design->find_signal("joined")};
+    assert(descending && ascending);
+    assert(std::ranges::all_of(
+        select_concat_outputs,
+        [](const auto& signal) {
+          return signal.has_value();
+        }));
+    auto select_concat_interpreter =
+        elaborated_select_concat.design->create_interpreter();
+    select_concat_interpreter->deposit_signal(
+        *descending,
+        fsim::runtime::PackedLogic4::from_msb_string("10XZ0110"));
+    select_concat_interpreter->deposit_signal(
+        *ascending,
+        fsim::runtime::PackedLogic4::from_msb_string("01ZX1100"));
+    (void)select_concat_interpreter->run();
+    const std::array<std::string_view, 6> expected_select_concat{
+        "1", "Z", "X", "10XZ", "ZX11", "10XZ11100"};
+    for (std::size_t index = 0;
+         index < select_concat_outputs.size(); ++index) {
+      assert(
+          select_concat_interpreter
+              ->signal_value(*select_concat_outputs[index])
+              .to_msb_string()
+          == expected_select_concat[index]);
+    }
+
+    const auto reversed_select = fsim::frontend::parse_text(
+        "reversed_select.sv",
+        R"(
+module reversed_select;
+  logic [0:7] value;
+  logic [3:0] result;
+  always_comb result = value[5:2];
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(reversed_select.ok());
+    const auto rejected_reversed_select =
+        fsim::elaboration::elaborate(
+            reversed_select.design, "sv:work.reversed_select");
+    assert(!rejected_reversed_select.ok());
+    assert(has_diagnostic(
+        rejected_reversed_select, "FSIM-ELAB-068"));
+
+    const auto dynamic_select = fsim::frontend::parse_text(
+        "dynamic_select.sv",
+        R"(
+module dynamic_select;
+  logic [7:0] value;
+  logic [2:0] index;
+  logic result;
+  always_comb result = value[index];
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_select.ok());
+    const auto rejected_dynamic_select =
+        fsim::elaboration::elaborate(
+            dynamic_select.design, "sv:work.dynamic_select");
+    assert(!rejected_dynamic_select.ok());
+    assert(has_diagnostic(
+        rejected_dynamic_select, "FSIM-ELAB-068"));
+
+    const auto empty_concatenation =
+        fsim::frontend::parse_text(
+            "empty_concatenation.sv",
+            R"(
+module empty_concatenation;
+  logic result;
+  always_comb result = {};
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(empty_concatenation.ok());
+    const auto rejected_empty_concatenation =
+        fsim::elaboration::elaborate(
+            empty_concatenation.design,
+            "sv:work.empty_concatenation");
+    assert(!rejected_empty_concatenation.ok());
+    assert(has_diagnostic(
+        rejected_empty_concatenation, "FSIM-ELAB-069"));
+
     const auto empty_wildcard = fsim::frontend::parse_text(
         "empty_wildcard.sv",
         R"(

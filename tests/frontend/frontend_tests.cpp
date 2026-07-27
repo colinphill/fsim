@@ -1104,6 +1104,68 @@ endmodule
   }
 }
 
+void test_systemverilog_select_and_concatenation_expressions() {
+  const auto result = parse_text(
+      "select_concat.sv",
+      R"(
+module select_concat;
+  logic [15:8] descending;
+  logic [0:7] ascending;
+  logic selected;
+  logic [3:0] part;
+  logic [8:0] combined;
+  always_comb begin
+    selected = descending[10];
+    part = ascending[2:5];
+    combined = {
+      descending[15:12], descending[10], ascending[4:7]
+    };
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "SystemVerilog select and concatenation expressions must parse");
+  const auto& signals = result.design.units.front().signals;
+  require(
+      signals[0].type.packed_range
+          && signals[0].type.packed_range->left == 15
+          && signals[0].type.packed_range->right == 8
+          && signals[0].type.packed_range->descending,
+      "descending packed range metadata");
+  require(
+      signals[1].type.packed_range
+          && signals[1].type.packed_range->left == 0
+          && signals[1].type.packed_range->right == 7
+          && !signals[1].type.packed_range->descending,
+      "ascending packed range metadata");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 3
+          && statements[0].value.kind == ExpressionKind::Index
+          && statements[0].value.operands.size() == 2
+          && statements[0].value.operands[1].text == "10",
+      "bit-select expression node");
+  require(
+      statements[1].value.kind == ExpressionKind::Slice
+          && statements[1].value.operands.size() == 3
+          && statements[1].value.operands[1].text == "2"
+          && statements[1].value.operands[2].text == "5",
+      "ascending part-select expression node");
+  require(
+      statements[2].value.kind == ExpressionKind::Concatenation
+          && statements[2].value.operands.size() == 3
+          && statements[2].value.operands[0].kind
+              == ExpressionKind::Slice
+          && statements[2].value.operands[1].kind
+              == ExpressionKind::Index
+          && statements[2].value.operands[2].kind
+              == ExpressionKind::Slice,
+      "concatenation expression node and operand order");
+}
+
 }  // namespace
 
 int main() {
@@ -1133,6 +1195,7 @@ int main() {
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
     test_systemverilog_arithmetic_expressions();
+    test_systemverilog_select_and_concatenation_expressions();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';
