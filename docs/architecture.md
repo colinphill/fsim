@@ -24,7 +24,7 @@ The architectural invariants are:
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots plus include/macro ancestry are current for Verilog/SV; VHDL source spans are current |
 | Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers plus a bounded multi-root SV preprocessor are current; typed semantic HIR is partial |
-| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, explicit mixed bindings, port aliasing, and boundary checks are current; general generic/parameter typing, SystemC construction-parameter transfer, and complete driver semantics are planned |
+| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, construction-actual transfer across VHDL/SV bindings, explicit mixed bindings, port aliasing, and boundary checks are current; general generic/parameter typing, SystemC construction-parameter transfer, and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
@@ -53,9 +53,16 @@ the child port ID to the parent signal ID. It diagnoses missing or duplicate
 connections, width and signedness mismatches, implicit loss into a 2-state
 destination, recursive hierarchy, unused bindings, and unresolved multiple
 boundary drivers. Bounded VHDL generics and SystemVerilog parameters are
-specialized before port checks; cross-SystemC construction parameters,
-expression port actuals, unpacked/record boundaries, and actual multi-driver
-resolution remain outside this slice.
+specialized before port checks, including when an explicit binding changes the
+child language. Positional actuals map by declaration ordinal. A named actual
+uses case-insensitive matching whenever either the association syntax or the
+target declaration is VHDL; a VHDL name that would match multiple distinct
+case-sensitive Verilog/SystemVerilog parameters is rejected as ambiguous.
+The association syntax owns ordering legality, so VHDL may use positional
+actuals followed by named actuals while Verilog/SystemVerilog may not mix the
+two forms. Cross-SystemC construction parameters, expression port actuals,
+unpacked/record boundaries, and actual multi-driver resolution remain outside
+this slice.
 
 The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
@@ -397,9 +404,11 @@ therefore invalidates the module even when SimIR is identical, while changing
 an unrelated, uninstantiated root retains the module object. Actual
 VHDL scalar generic and SystemVerilog integral parameter/localparam values are
 now constant-evaluated, canonicalized in declaration order, and included per
-instance. A separated VHDL entity source is also an explicit specialization
-provenance dependency of its architecture. Complete generic/parameter typing
-remains pending. The cache has no age/size eviction policy. O0
+instance, including construction actuals transferred through an explicit
+VHDL/SystemVerilog boundary binding. A separated VHDL entity source is also an
+explicit specialization provenance dependency of its architecture. Complete
+generic/parameter typing and SystemC construction schemas remain pending. The
+cache has no age/size eviction policy. O0
 exposes source-bearing statement, wait, assertion, process-entry, and
 process-suspension points plus addressable ≤64-bit packed process locals. Call
 points, complete local scopes/types, and complete source metadata remain open.

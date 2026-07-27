@@ -230,7 +230,7 @@ or asynchronous updates.
 | ML-007 | Automatic single-driver boundaries and runtime `std_logic`/`sv_wire` multi-driver resolution | v1 target | [single-driver mixed test](../tests/elaboration/elaborator_test.cpp) | [missing/unimplemented resolver tests](../tests/elaboration/elaborator_test.cpp) | [resolution is explicitly rejected, not silently accepted](../tests/elaboration/elaborator_test.cpp) | — |
 | ML-008 | Full deterministic cross-language phase lattice | v1 target | — | — | — | [common four-phase spine and one SV→VHDL→SV path](../tests/elaboration/elaborator_test.cpp) |
 | ML-009 | Explicit VHDL-parent/SV-child binding with whole-vector port aliases and delta propagation | execute | [both instance ASTs](../tests/frontend/frontend_tests.cpp) | [bounded VHDL association rejection](../tests/frontend/frontend_tests.cpp) | [reverse mixed hierarchy test](../tests/elaboration/elaborator_test.cpp) | [`1010` → inverted `0101`](../tests/elaboration/elaborator_test.cpp) |
-| ML-010 | Mixed parameters/generics across VHDL, Verilog/SystemVerilog, and both SystemC hierarchy directions; broader delay interaction; and complete cross-language failure diagnostics | v1 target | [same-language bounded SV specialization](../tests/frontend/frontend_tests.cpp) | [SystemC-bound override is explicitly rejected until factory schemas exist](../src/elaboration/elaborator.cpp) | [canonical SV specialization identity](../tests/elaboration/elaborator_test.cpp) | [same-language interpreter/LLVM parameter differential](../tests/app/application_test.cpp) |
+| ML-010 | Mixed parameters/generics across VHDL, Verilog/SystemVerilog, and both SystemC hierarchy directions; broader delay interaction; and complete cross-language failure diagnostics | v1 target | [bounded HDL actual syntax in both parent languages](../tests/frontend/frontend_tests.cpp) | [ambiguous VHDL-name-to-SV-parameter and pending SystemC-schema rejection](../tests/elaboration/elaborator_test.cpp) | [bidirectional VHDL/SV specialization before boundary checking](../tests/elaboration/elaborator_test.cpp) | [bidirectional interpreter/LLVM behavior plus cold/warm cache identity](../tests/app/application_test.cpp) |
 | ML-011 | Recursive bidirectional SystemC hierarchy using explicit HDL-to-factory bindings and facade-declared foreign HDL child placeholders, with any language as top | execute | [typed `hdl_instance` factory and manifest bindings](../tests/app/application_test.cpp) | [missing foreign-child binding](../tests/elaboration/elaborator_test.cpp) | [SV → SystemC → SV, VHDL → SystemC → VHDL, and SystemC → HDL](../tests/elaboration/elaborator_test.cpp) | [real compiled plug-in in both top-level directions](../tests/app/application_test.cpp) |
 | ML-012 | HDL-connected SystemC ports bound to module-local `sc_signal` channels preserve one common signal identity and scheduler path | execute | [SystemVerilog host and bound SystemC factory](../tests/app/application_test.cpp) | [one channel connected to conflicting HDL actuals](../tests/elaboration/elaborator_test.cpp) | [port/channel/HDL signal-ID equality](../tests/app/application_test.cpp) | [interpreter/hybrid boundary differential](../tests/app/application_test.cpp) |
 | ML-013 | HDL → SystemC → native SystemC hierarchy preserves common signal identity through the native child boundary | execute | [SV host and nested SystemC factory](../tests/app/application_test.cpp) | [native parent/path mismatch](../tests/elaboration/elaborator_test.cpp) | [parent/child signal-ID equality](../tests/app/application_test.cpp) | [nested interpreter/hybrid differential](../tests/app/application_test.cpp) |
@@ -239,11 +239,13 @@ The files under
 [examples/vertical_slice](../examples/vertical_slice/README.md) are an
 executable demonstration of ML-003 and ML-004. They are not evidence for
 general vector-direction conversion, runtime resolver behavior, or the
-opposite mixed hierarchy direction. The application suite now uses this
-example as bounded O2 interpreter/hybrid differential evidence and separately
-compares normalized VCD plus assertion metadata. It does not yet run the mixed
-case at O0, combine mixed-language behavior with assertion failures, or
-provide Windows execution evidence.
+opposite mixed hierarchy direction. The application suite uses this example
+as bounded O2 interpreter/hybrid differential evidence and separately covers
+VHDL-to-SV and SV-to-VHDL construction-actual transfer with canonical native
+cache identity. It compares normalized VCD plus assertion metadata. It does
+not yet run the main mixed case at O0, combine mixed-language behavior with
+assertion failures, transfer construction actuals through SystemC factory
+schemas, or provide Windows execution evidence.
 
 ## Required v1 rows not yet implemented
 

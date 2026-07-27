@@ -123,7 +123,10 @@ General custom interfaces remain planned.
 Facade modules declare VHDL/SV children with the typed
 `fsim::systemc::hdl_instance` extension; the full child path in `fsim.toml`
 selects the implementation, so mixed hierarchy remains explicit in both
-directions.
+directions. Bounded scalar VHDL generic and integral SystemVerilog parameter
+actuals already transfer across explicit VHDL/SV bindings in either direction
+before port widths are checked; typed construction schemas for carrying those
+values through SystemC factories remain in progress.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
@@ -333,8 +336,9 @@ an SV combinational child. The final committed values are `counter_q = 1` and
 LLVM-enabled application test also runs this bounded mixed hierarchy through
 the reference and O2 hybrid engines and compares status, time, delta,
 committed-change callbacks, and final values. Assertion metadata, normalized
-VCD comparison, exhaustive semantic fixtures, and Windows execution evidence
-remain open.
+VCD comparison, and bidirectional bounded VHDL/SystemVerilog
+construction-actual/cache tests are also automated. Exhaustive semantic
+fixtures and Windows execution evidence remain open.
 
 ## Design documents
 

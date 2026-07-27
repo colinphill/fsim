@@ -788,6 +788,7 @@ enum class SpecializationDiagnostic {
     actual_evaluation,
     default_evaluation,
     subtype_constraint,
+    ambiguous_name,
 };
 
 const char* specialization_diagnostic_code(
@@ -816,16 +817,45 @@ const char* specialization_diagnostic_code(
             : "FSIM-ELAB-PARAM-005";
     case SpecializationDiagnostic::subtype_constraint:
         return "FSIM-ELAB-GENERIC-008";
+    case SpecializationDiagnostic::ambiguous_name:
+        return "FSIM-ELAB-PARAM-009";
     }
     return is_vhdl
         ? "FSIM-ELAB-GENERIC-001"
         : "FSIM-ELAB-PARAM-001";
 }
 
+bool parameter_name_matches(
+    const std::string_view formal,
+    const std::string_view actual,
+    const frontend::Language target_language,
+    const frontend::Language association_language) {
+    if (target_language != frontend::Language::Vhdl2008
+        && association_language
+            != frontend::Language::Vhdl2008) {
+        return formal == actual;
+    }
+    if (formal.size() != actual.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < formal.size(); ++index) {
+        const auto formal_character =
+            static_cast<unsigned char>(formal[index]);
+        const auto actual_character =
+            static_cast<unsigned char>(actual[index]);
+        if (std::tolower(formal_character)
+            != std::tolower(actual_character)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 SpecializedUnit specialize_unit(
     const DesignUnit& source,
     const std::vector<frontend::ParameterOverride>& overrides,
     const ConstantEnvironment& parent_environment,
+    const frontend::Language association_language,
     std::vector<Diagnostic>& diagnostics) {
     SpecializedUnit result;
     result.unit = source;
@@ -834,6 +864,8 @@ SpecializedUnit specialize_unit(
     const bool is_verilog =
         source.language == frontend::Language::SystemVerilog2017
         || source.language == frontend::Language::Verilog2005;
+    const bool association_is_vhdl =
+        association_language == frontend::Language::Vhdl2008;
     const auto code = [&](const SpecializationDiagnostic diagnostic) {
         return specialization_diagnostic_code(
             is_vhdl, diagnostic);
@@ -878,13 +910,29 @@ SpecializedUnit specialize_unit(
         std::optional<std::size_t> actual_index;
         if (override.name) {
             saw_named = true;
-            const auto declared = std::find_if(
+            std::vector<
+                const frontend::ParameterDeclaration*> matches;
+            std::copy_if(
                 overridable.begin(),
                 overridable.end(),
+                std::back_inserter(matches),
                 [&](const frontend::ParameterDeclaration* parameter) {
-                    return parameter->name == *override.name;
+                    return parameter_name_matches(
+                        parameter->name,
+                        *override.name,
+                        source.language,
+                        association_language);
                 });
-            if (declared == overridable.end()) {
+            if (matches.size() > 1) {
+                diagnostics.push_back({
+                    code(SpecializationDiagnostic::ambiguous_name),
+                    "VHDL generic name '" + *override.name
+                        + "' ambiguously matches multiple "
+                        "case-sensitive target parameters",
+                    override.span});
+                continue;
+            }
+            if (matches.empty()) {
                 diagnostics.push_back({
                     code(SpecializationDiagnostic::invalid_actual),
                     "unknown or local " + std::string{object_kind}
@@ -893,10 +941,15 @@ SpecializedUnit specialize_unit(
                 continue;
             }
             actual_index = static_cast<std::size_t>(
-                std::distance(overridable.begin(), declared));
+                std::distance(
+                    overridable.begin(),
+                    std::find(
+                        overridable.begin(),
+                        overridable.end(),
+                        matches.front())));
         } else {
             saw_positional = true;
-            if (is_vhdl && saw_named) {
+            if (association_is_vhdl && saw_named) {
                 diagnostics.push_back({
                     code(SpecializationDiagnostic::association_order),
                     "a positional generic actual cannot follow a named "
@@ -926,7 +979,7 @@ SpecializedUnit specialize_unit(
             }
         }
     }
-    if (is_verilog && saw_named && saw_positional) {
+    if (!association_is_vhdl && saw_named && saw_positional) {
         diagnostics.push_back({
             code(SpecializationDiagnostic::association_order),
             "named and positional parameter overrides cannot be mixed",
@@ -3263,7 +3316,7 @@ public:
 
     void build(const DesignUnit& root) {
         auto specialized = specialize_selected_unit(
-            root, {}, {});
+            root, {}, {}, root.language);
         instantiate(
             specialized.unit,
             design_.top_,
@@ -3314,11 +3367,13 @@ private:
     SpecializedUnit specialize_selected_unit(
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
-        const ConstantEnvironment& parent_environment) {
+        const ConstantEnvironment& parent_environment,
+        const frontend::Language association_language) {
         return specialize_unit(
             effective_unit(selected),
             overrides,
             parent_environment,
+            association_language,
             diagnostics_);
     }
 
@@ -4392,7 +4447,8 @@ private:
                 continue;
             }
             auto specialized =
-                specialize_selected_unit(*selected, {}, {});
+                specialize_selected_unit(
+                    *selected, {}, {}, selected->language);
             auto child_aliases = connect_foreign_child(
                 child, specialized.unit, child_path, objects);
             instantiate(
@@ -4546,7 +4602,8 @@ private:
             auto child_specialized = specialize_selected_unit(
                 *target,
                 instance.parameter_overrides,
-                parameter_environment);
+                parameter_environment,
+                unit.language);
             auto child_aliases = connect_instance(
                 instance,
                 child_specialized.unit,

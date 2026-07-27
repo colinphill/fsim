@@ -35,11 +35,16 @@ For the bounded hierarchy slice, child ports alias parent signal IDs after
 width, signedness, and lossy-2-state checks. Same-language lookup and explicit
 VHDL/SV manifest overrides are implemented. Automated runtime evidence covers
 both hierarchy directions: an SV top driving a VHDL counter and an SV child,
-plus a VHDL top driving a bound SV combinational child. This does not yet
-establish complete VHDL generic or SystemVerilog parameter typing and sizing,
-general vector-direction conversion, aggregates/interfaces, or resolved
-multi-driver behavior. SystemC factories already elaborate as peer hierarchy
-nodes in either direction through explicit bindings.
+plus a VHDL top driving a bound SV combinational child. Bounded scalar
+generic/parameter actuals cross explicit VHDL/SV bindings in either direction
+before boundary-width checks; positional actuals map by ordinal, and
+VHDL-associated names use case-insensitive target matching with ambiguity
+diagnostics for case-distinct SV declarations. This does not yet establish
+complete VHDL generic or SystemVerilog parameter typing and sizing, SystemC
+construction schemas, general vector-direction conversion,
+aggregates/interfaces, or resolved multi-driver behavior. SystemC factories
+already elaborate as peer hierarchy nodes in either direction through
+explicit bindings.
 
 ## v1 target
 

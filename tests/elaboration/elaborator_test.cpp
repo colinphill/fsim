@@ -479,6 +479,196 @@ end architecture;
     assert(has_diagnostic(
         rejected_generics, "FSIM-ELAB-GENERIC-008"));
 
+    auto mixed_actual_sv = fsim::frontend::parse_text(
+        "mixed-actuals.sv",
+        R"(
+module sv_generic_host(output logic [3:0] q);
+  vhdl_bound #(.WIDTH(4), .VALUE(5)) child(.q(q));
+endmodule
+
+module sv_parameter_child #(
+  parameter width = 1,
+  parameter value = 1,
+  localparam last = width - 1
+) (
+  output logic [last:0] q
+);
+  initial q = value;
+endmodule
+
+module ambiguous_parameter_child #(
+  parameter WIDTH = 1,
+  parameter width = 2
+) (
+  output logic q
+);
+  initial q = 1'b0;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    auto mixed_actual_vhdl = fsim::frontend::parse_text(
+        "mixed-actuals.vhd",
+        R"(
+entity vhdl_generic_child is
+  generic (
+    width : positive := 1;
+    value : natural := 1;
+    last : integer := width - 1
+  );
+  port (
+    q : out unsigned(last downto 0)
+  );
+end entity;
+architecture rtl of vhdl_generic_child is
+begin
+  q <= value;
+end architecture;
+
+entity vhdl_parameter_host is
+  port (
+    q : out unsigned(3 downto 0)
+  );
+end entity;
+architecture rtl of vhdl_parameter_host is
+begin
+  child: entity work.foreign_parameter(rtl)
+    generic map (
+      4,
+      value => 6
+    )
+    port map (
+      q => q
+    );
+end architecture;
+
+entity ambiguous_parameter_host is
+  port (
+    q : out std_logic
+  );
+end entity;
+architecture rtl of ambiguous_parameter_host is
+begin
+  child: entity work.foreign_ambiguous(rtl)
+    generic map (
+      width => 1
+    )
+    port map (
+      q => q
+    );
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(mixed_actual_sv.ok());
+    assert(mixed_actual_vhdl.ok());
+    fsim::frontend::ParsedDesign mixed_actual_design =
+        std::move(mixed_actual_sv.design);
+    mixed_actual_design.units.insert(
+        mixed_actual_design.units.end(),
+        std::make_move_iterator(
+            mixed_actual_vhdl.design.units.begin()),
+        std::make_move_iterator(
+            mixed_actual_vhdl.design.units.end()));
+
+    const std::vector<fsim::elaboration::Binding>
+        sv_to_vhdl_actual_binding{
+            {"sv_generic_host.child",
+             "vhdl:work.vhdl_generic_child(rtl)",
+             std::nullopt}};
+    const auto sv_to_vhdl_actual =
+        fsim::elaboration::elaborate(
+            mixed_actual_design,
+            "sv:work.sv_generic_host",
+            sv_to_vhdl_actual_binding);
+    if (!sv_to_vhdl_actual.ok()) {
+        for (const auto& diagnostic :
+             sv_to_vhdl_actual.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(sv_to_vhdl_actual.ok());
+    assert(
+        sv_to_vhdl_actual.design->specializations().size() == 2);
+    assert((
+        sv_to_vhdl_actual.design->specializations()[1]
+            .parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"width", "4"},
+            {"value", "5"},
+            {"last", "3"}}));
+    const auto sv_to_vhdl_q =
+        sv_to_vhdl_actual.design->find_signal("q");
+    assert(sv_to_vhdl_q);
+    auto sv_to_vhdl_interpreter =
+        sv_to_vhdl_actual.design->create_interpreter();
+    const auto sv_to_vhdl_result =
+        sv_to_vhdl_interpreter->run();
+    assert(
+        sv_to_vhdl_result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        sv_to_vhdl_interpreter
+            ->signal_value(*sv_to_vhdl_q)
+            .to_msb_string()
+        == "0101");
+
+    const std::vector<fsim::elaboration::Binding>
+        vhdl_to_sv_actual_binding{
+            {"vhdl_parameter_host.child",
+             "sv:work.sv_parameter_child",
+             std::nullopt}};
+    const auto vhdl_to_sv_actual =
+        fsim::elaboration::elaborate(
+            mixed_actual_design,
+            "vhdl:work.vhdl_parameter_host(rtl)",
+            vhdl_to_sv_actual_binding);
+    if (!vhdl_to_sv_actual.ok()) {
+        for (const auto& diagnostic :
+             vhdl_to_sv_actual.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(vhdl_to_sv_actual.ok());
+    assert(
+        vhdl_to_sv_actual.design->specializations().size() == 2);
+    assert((
+        vhdl_to_sv_actual.design->specializations()[1]
+            .parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"width", "4"},
+            {"value", "6"},
+            {"last", "3"}}));
+    const auto vhdl_to_sv_q =
+        vhdl_to_sv_actual.design->find_signal("q");
+    assert(vhdl_to_sv_q);
+    auto vhdl_to_sv_interpreter =
+        vhdl_to_sv_actual.design->create_interpreter();
+    const auto vhdl_to_sv_result =
+        vhdl_to_sv_interpreter->run();
+    assert(
+        vhdl_to_sv_result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        vhdl_to_sv_interpreter
+            ->signal_value(*vhdl_to_sv_q)
+            .to_msb_string()
+        == "0110");
+
+    const std::vector<fsim::elaboration::Binding>
+        ambiguous_actual_binding{
+            {"ambiguous_parameter_host.child",
+             "sv:work.ambiguous_parameter_child",
+             std::nullopt}};
+    const auto ambiguous_actual =
+        fsim::elaboration::elaborate(
+            mixed_actual_design,
+            "vhdl:work.ambiguous_parameter_host(rtl)",
+            ambiguous_actual_binding);
+    assert(!ambiguous_actual.ok());
+    assert(has_diagnostic(
+        ambiguous_actual, "FSIM-ELAB-PARAM-009"));
+
     constexpr std::string_view vhdl_source = R"(
 entity counter_vhdl is
   port (

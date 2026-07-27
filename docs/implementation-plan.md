@@ -82,6 +82,10 @@ The following foundation is implemented:
   positional-then-named maps, dependent constant evaluation, parameterized
   ranges, entity/architecture interface merging, and canonical per-instance
   specialization values;
+- bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
+  explicit bindings, with parent-language association rules,
+  case-insensitive VHDL name matching, ambiguity rejection, specialization
+  before boundary checks, and canonical native-cache identity;
 - a persistent LLVM native-object cache selected beneath the configured
   application cache, with application-visible cold/warm telemetry and
   identity for scheduled-write kind/delay and wait kind, operands, widths, and
@@ -311,6 +315,9 @@ Completed:
   bundled-library marker, and represented generic/parameter values, with
   tested reuse across unrelated-source changes and invalidation for owning
   source, separated VHDL entity interface, and standard changes;
+- interpreter/O2-hybrid application evidence for bounded construction actuals
+  crossing explicit VHDL-to-SystemVerilog and SystemVerilog-to-VHDL bindings,
+  including final values and cold/warm specialization-cache behavior;
 - checked-in SV-testbench/VHDL-counter/SV-child example.
 
 Remaining before the architecture gate passes:
@@ -325,7 +332,8 @@ Remaining before the architecture gate passes:
   fixtures, and validate it on LLVM 22.1.8 Windows; and
 - complete VHDL generic types and the remaining SystemVerilog parameter
   type/sizing rules; bounded scalar VHDL and integral SystemVerilog values
-  already participate in per-specialization native-cache identity.
+  already participate in per-specialization native-cache identity and cross
+  explicit VHDL/SystemVerilog bindings.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
 

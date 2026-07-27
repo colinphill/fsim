@@ -374,6 +374,7 @@ therefore excluded.
 | `FSIM-ELAB-PARAM-005` | error | A parameter default constant expression cannot be evaluated. |
 | `FSIM-ELAB-PARAM-006` | error | A parameterized packed range cannot be evaluated. |
 | `FSIM-ELAB-PARAM-007` | error | A parameterized packed range width overflows the supported range. |
+| `FSIM-ELAB-PARAM-009` | error | A case-insensitive VHDL named generic actual ambiguously matches multiple case-sensitive parameters on a foreign Verilog/SystemVerilog target. |
 | `FSIM-ELAB-TYPE-001` | error | A signal type cannot be represented by the packed runtime. |
 
 ### Bindings and mixed-language boundaries

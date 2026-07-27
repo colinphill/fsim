@@ -715,6 +715,63 @@ end architecture;
 )";
       };
   write_vhdl_generic_top(2);
+  const auto mixed_actual_sv_top_source =
+      directory / "mixed_actual_sv_top.sv";
+  {
+    std::ofstream output(mixed_actual_sv_top_source);
+    output << R"(
+module mixed_actual_sv_top;
+  logic [3:0] q;
+  vhdl_generic_bound #(
+    .WIDTH(4),
+    .VALUE(5)
+  ) child(.q(q));
+  initial #1 $finish;
+endmodule
+)";
+  }
+  const auto mixed_actual_sv_child_source =
+      directory / "mixed_actual_sv_child.sv";
+  {
+    std::ofstream output(mixed_actual_sv_child_source);
+    output << R"(
+module mixed_actual_sv_child #(
+  parameter width = 1,
+  parameter value = 1,
+  localparam last = width - 1
+) (
+  output logic [last:0] q
+);
+  initial q = value;
+endmodule
+)";
+  }
+  const auto mixed_actual_vhdl_top_source =
+      directory / "mixed_actual_vhdl_top.vhd";
+  {
+    std::ofstream output(mixed_actual_vhdl_top_source);
+    output << R"(
+entity mixed_actual_vhdl_top is
+end entity;
+
+architecture rtl of mixed_actual_vhdl_top is
+  signal q : unsigned(3 downto 0);
+begin
+  child: entity work.sv_parameter_bound(rtl)
+    generic map (
+      4,
+      value => 6
+    )
+    port map (
+      q => q
+    );
+  stopper: process
+  begin
+    wait for 1 ns;
+  end process;
+end architecture;
+)";
+  }
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -4381,6 +4438,248 @@ end architecture rtl;
   assert(
       generic_interface_changed.simulation.native_cache.stores
       == 2);
+#endif
+
+  // Explicit mixed-language bindings carry construction actuals from the
+  // parent syntax into the selected foreign unit before boundary widths are
+  // checked. Exercise both hierarchy directions through the interpreter and
+  // the native specialization cache.
+  auto sv_to_vhdl_actual_config = config;
+  sv_to_vhdl_actual_config.project.name =
+      "sv-to-vhdl-construction-actual-test";
+  sv_to_vhdl_actual_config.project.top =
+      "sv:work.mixed_actual_sv_top";
+  sv_to_vhdl_actual_config.build.optimization =
+      fsim::project::Optimization::o2;
+  sv_to_vhdl_actual_config.build.cache_path =
+      directory / "sv-to-vhdl-construction-actual-cache";
+  sv_to_vhdl_actual_config.source_sets.clear();
+  fsim::project::SourceSet sv_to_vhdl_actual_vhdl_sources;
+  sv_to_vhdl_actual_vhdl_sources.language =
+      fsim::project::Language::vhdl;
+  sv_to_vhdl_actual_vhdl_sources.standard = "2008";
+  sv_to_vhdl_actual_vhdl_sources.library = "work";
+  sv_to_vhdl_actual_vhdl_sources.compilation_unit = "file";
+  sv_to_vhdl_actual_vhdl_sources.files = {
+      vhdl_generic_entity_source,
+      vhdl_generic_architecture_source,
+  };
+  sv_to_vhdl_actual_config.source_sets.push_back(
+      std::move(sv_to_vhdl_actual_vhdl_sources));
+  fsim::project::SourceSet sv_to_vhdl_actual_sv_sources;
+  sv_to_vhdl_actual_sv_sources.language =
+      fsim::project::Language::system_verilog;
+  sv_to_vhdl_actual_sv_sources.standard = "2017";
+  sv_to_vhdl_actual_sv_sources.library = "work";
+  sv_to_vhdl_actual_sv_sources.compilation_unit = "file";
+  sv_to_vhdl_actual_sv_sources.files = {
+      mixed_actual_sv_top_source};
+  sv_to_vhdl_actual_config.source_sets.push_back(
+      std::move(sv_to_vhdl_actual_sv_sources));
+  sv_to_vhdl_actual_config.bindings = {
+      {"mixed_actual_sv_top.child",
+       "vhdl:work.vhdl_generic_child(rtl)",
+       std::nullopt},
+  };
+  const auto run_sv_to_vhdl_actual =
+      [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            sv_to_vhdl_actual_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 2);
+        assert(project->specialization_cache_keys.size() == 2);
+        ParameterRun result;
+        for (std::size_t index = 0;
+             index < project->design.specializations().size();
+             ++index) {
+          const auto& specialization =
+              project->design.specializations()[index];
+          result.keys.emplace_back(
+              specialization.instance,
+              project->specialization_cache_keys[index]);
+          if (specialization.instance
+              == "mixed_actual_sv_top.child") {
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"width", "4"},
+                    {"value", "5"},
+                    {"last", "3"}}));
+          }
+        }
+        result.simulation =
+            capture_simulation(std::move(*project), engine);
+        return result;
+      };
+
+  const auto sv_to_vhdl_actual_reference =
+      run_sv_to_vhdl_actual(
+          fsim::app::SimulationEngine::interpreter);
+  const auto sv_to_vhdl_actual_cold =
+      run_sv_to_vhdl_actual(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      sv_to_vhdl_actual_reference.simulation,
+      sv_to_vhdl_actual_cold.simulation);
+  assert(
+      sv_to_vhdl_actual_cold.simulation.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(sv_to_vhdl_actual_cold.simulation.result.time == 1);
+  assert((
+      sv_to_vhdl_actual_cold.simulation.final_values
+      == std::vector<std::string>{"0101"}));
+  assert(sv_to_vhdl_actual_cold.simulation.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      sv_to_vhdl_actual_cold.simulation.compiled_processes
+      == 2);
+  assert(
+      sv_to_vhdl_actual_cold.simulation.compiled_modules == 2);
+  assert(
+      sv_to_vhdl_actual_cold.simulation.native_cache.hits == 0);
+  assert(
+      sv_to_vhdl_actual_cold.simulation.native_cache.misses
+      == 2);
+  assert(
+      sv_to_vhdl_actual_cold.simulation.native_cache.stores
+      == 2);
+#endif
+  const auto sv_to_vhdl_actual_warm =
+      run_sv_to_vhdl_actual(
+          fsim::app::SimulationEngine::compiled);
+  assert(
+      sv_to_vhdl_actual_warm.keys
+      == sv_to_vhdl_actual_cold.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      sv_to_vhdl_actual_warm.simulation.native_cache.hits == 2);
+  assert(
+      sv_to_vhdl_actual_warm.simulation.native_cache.misses
+      == 0);
+#endif
+
+  auto vhdl_to_sv_actual_config = config;
+  vhdl_to_sv_actual_config.project.name =
+      "vhdl-to-sv-construction-actual-test";
+  vhdl_to_sv_actual_config.project.top =
+      "vhdl:work.mixed_actual_vhdl_top(rtl)";
+  vhdl_to_sv_actual_config.build.optimization =
+      fsim::project::Optimization::o2;
+  vhdl_to_sv_actual_config.build.cache_path =
+      directory / "vhdl-to-sv-construction-actual-cache";
+  vhdl_to_sv_actual_config.source_sets.clear();
+  fsim::project::SourceSet vhdl_to_sv_actual_vhdl_sources;
+  vhdl_to_sv_actual_vhdl_sources.language =
+      fsim::project::Language::vhdl;
+  vhdl_to_sv_actual_vhdl_sources.standard = "2008";
+  vhdl_to_sv_actual_vhdl_sources.library = "work";
+  vhdl_to_sv_actual_vhdl_sources.compilation_unit = "file";
+  vhdl_to_sv_actual_vhdl_sources.files = {
+      mixed_actual_vhdl_top_source};
+  vhdl_to_sv_actual_config.source_sets.push_back(
+      std::move(vhdl_to_sv_actual_vhdl_sources));
+  fsim::project::SourceSet vhdl_to_sv_actual_sv_sources;
+  vhdl_to_sv_actual_sv_sources.language =
+      fsim::project::Language::system_verilog;
+  vhdl_to_sv_actual_sv_sources.standard = "2017";
+  vhdl_to_sv_actual_sv_sources.library = "work";
+  vhdl_to_sv_actual_sv_sources.compilation_unit = "file";
+  vhdl_to_sv_actual_sv_sources.files = {
+      mixed_actual_sv_child_source};
+  vhdl_to_sv_actual_config.source_sets.push_back(
+      std::move(vhdl_to_sv_actual_sv_sources));
+  vhdl_to_sv_actual_config.bindings = {
+      {"mixed_actual_vhdl_top.child",
+       "sv:work.mixed_actual_sv_child",
+       std::nullopt},
+  };
+  const auto run_vhdl_to_sv_actual =
+      [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            vhdl_to_sv_actual_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 2);
+        assert(project->specialization_cache_keys.size() == 2);
+        ParameterRun result;
+        for (std::size_t index = 0;
+             index < project->design.specializations().size();
+             ++index) {
+          const auto& specialization =
+              project->design.specializations()[index];
+          result.keys.emplace_back(
+              specialization.instance,
+              project->specialization_cache_keys[index]);
+          if (specialization.instance
+              == "mixed_actual_vhdl_top.child") {
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"width", "4"},
+                    {"value", "6"},
+                    {"last", "3"}}));
+          }
+        }
+        result.simulation =
+            capture_simulation(std::move(*project), engine, 0);
+        return result;
+      };
+
+  const auto vhdl_to_sv_actual_reference =
+      run_vhdl_to_sv_actual(
+          fsim::app::SimulationEngine::interpreter);
+  const auto vhdl_to_sv_actual_cold =
+      run_vhdl_to_sv_actual(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      vhdl_to_sv_actual_reference.simulation,
+      vhdl_to_sv_actual_cold.simulation);
+  assert(
+      vhdl_to_sv_actual_cold.simulation.result.status
+      == fsim::runtime::RunStatus::time_limit);
+  assert(vhdl_to_sv_actual_cold.simulation.result.time == 0);
+  assert((
+      vhdl_to_sv_actual_cold.simulation.final_values
+      == std::vector<std::string>{"0110"}));
+  assert(vhdl_to_sv_actual_cold.simulation.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      vhdl_to_sv_actual_cold.simulation.compiled_processes
+      == 2);
+  assert(
+      vhdl_to_sv_actual_cold.simulation.compiled_modules == 2);
+  assert(
+      vhdl_to_sv_actual_cold.simulation.native_cache.hits == 0);
+  assert(
+      vhdl_to_sv_actual_cold.simulation.native_cache.misses
+      == 2);
+  assert(
+      vhdl_to_sv_actual_cold.simulation.native_cache.stores
+      == 2);
+#endif
+  const auto vhdl_to_sv_actual_warm =
+      run_vhdl_to_sv_actual(
+          fsim::app::SimulationEngine::compiled);
+  assert(
+      vhdl_to_sv_actual_warm.keys
+      == vhdl_to_sv_actual_cold.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      vhdl_to_sv_actual_warm.simulation.native_cache.hits == 2);
+  assert(
+      vhdl_to_sv_actual_warm.simulation.native_cache.misses
+      == 0);
 #endif
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit
