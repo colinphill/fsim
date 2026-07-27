@@ -2,6 +2,7 @@
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/frontend.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <optional>
@@ -661,6 +662,114 @@ endmodule
     assert(!rejected_process_drivers.ok());
     assert(has_diagnostic(
         rejected_process_drivers, "FSIM-ELAB-DRV-001"));
+
+    const auto local_variables = fsim::frontend::parse_text(
+        "local_variables.sv",
+        R"(
+module local_variables;
+  logic q;
+  initial begin
+    logic state = 1'b0;
+    state = 1'b1;
+    q = state;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(local_variables.ok());
+    const auto elaborated_locals = fsim::elaboration::elaborate(
+        local_variables.design, "local_variables");
+    assert(elaborated_locals.ok());
+    const auto& local_process =
+        elaborated_locals.design->processes().front();
+    assert(
+        local_process.debug_locals.size() == 1
+        && local_process.debug_locals.front().name == "state"
+        && local_process.debug_locals.front().type_name == "logic"
+        && local_process.debug_locals.front().width == 1);
+    assert(std::any_of(
+        local_process.operations.begin(),
+        local_process.operations.end(),
+        [](const fsim::runtime::simir::Operation& operation) {
+          return std::holds_alternative<
+              fsim::runtime::simir::CopyRegister>(operation);
+        }));
+    auto local_interpreter =
+        elaborated_locals.design->create_interpreter();
+    const auto local_run = local_interpreter->run();
+    assert(local_run.status == fsim::runtime::RunStatus::completed);
+    assert(
+        local_interpreter->read_debug_local(0, 0).to_msb_string()
+        == "1");
+    const auto local_q =
+        elaborated_locals.design->find_signal("q");
+    assert(local_q);
+    assert(
+        local_interpreter->signal_value(*local_q).to_msb_string()
+        == "1");
+
+    const auto vhdl_local_variables = fsim::frontend::parse_text(
+        "local_variables.vhd",
+        R"(
+entity local_variables is
+  port (clk : in std_logic; q : out std_logic);
+end entity;
+architecture rtl of local_variables is begin
+  worker: process(clk)
+    variable state : std_logic := '0';
+  begin
+    state := not state;
+    q <= state;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_local_variables.ok());
+    const auto elaborated_vhdl_locals =
+        fsim::elaboration::elaborate(
+            vhdl_local_variables.design,
+            "vhdl:work.local_variables(rtl)");
+    assert(elaborated_vhdl_locals.ok());
+    const auto& vhdl_local_process =
+        elaborated_vhdl_locals.design->processes().front();
+    assert(
+        vhdl_local_process.debug_locals.size() == 1
+        && vhdl_local_process.debug_locals.front().name == "state"
+        && vhdl_local_process.debug_locals.front().type_name
+            == "std_logic");
+    assert(std::count_if(
+               vhdl_local_process.operations.begin(),
+               vhdl_local_process.operations.end(),
+               [](const fsim::runtime::simir::Operation& operation) {
+                 return std::holds_alternative<
+                     fsim::runtime::simir::CopyRegister>(operation);
+               })
+           >= 2);
+    auto vhdl_local_interpreter =
+        elaborated_vhdl_locals.design->create_interpreter();
+    const auto vhdl_local_clk =
+        elaborated_vhdl_locals.design->find_signal("clk");
+    const auto vhdl_local_q =
+        elaborated_vhdl_locals.design->find_signal("q");
+    assert(vhdl_local_clk && vhdl_local_q);
+    vhdl_local_interpreter->schedule_signal_at(
+        *vhdl_local_clk,
+        fsim::runtime::PackedLogic4::from_msb_string("1"),
+        1);
+    const auto vhdl_local_run = vhdl_local_interpreter->run(2);
+    assert(
+        vhdl_local_run.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        vhdl_local_interpreter
+            ->signal_value(*vhdl_local_q)
+            .to_msb_string()
+        == "0");
+    assert(
+        vhdl_local_interpreter
+            ->read_debug_local(0, 0)
+            .to_msb_string()
+        == "0");
 
     std::cout << "elaborator tests passed\n";
 }

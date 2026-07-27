@@ -599,6 +599,62 @@ endmodule
       "unsupported SystemVerilog assertion action diagnostic");
 }
 
+void test_process_variable_declarations() {
+  const auto vhdl = parse_text(
+      "locals.vhd",
+      R"(
+entity locals is end entity;
+architecture rtl of locals is begin
+  worker: process
+    variable state : std_logic := '1';
+    variable flags : bit_vector(1 downto 0);
+  begin
+    state := '0';
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(vhdl.ok(), "bounded VHDL process variables must parse");
+  const auto& vhdl_variables =
+      vhdl.design.units.back().processes.front().variables;
+  require(
+      vhdl_variables.size() == 2
+          && vhdl_variables[0].name == "state"
+          && vhdl_variables[0].type.width() == 1
+          && vhdl_variables[0].initializer
+          && vhdl_variables[1].name == "flags"
+          && vhdl_variables[1].type.width() == 2
+          && !vhdl_variables[1].initializer,
+      "VHDL process-variable metadata");
+
+  const auto system_verilog = parse_text(
+      "locals.sv",
+      R"(
+module locals;
+  initial begin
+    logic [3:0] state = 4'b0011;
+    bit ready;
+    state = 4'b1010;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      system_verilog.ok(),
+      "bounded SystemVerilog procedural variables must parse");
+  const auto& sv_variables =
+      system_verilog.design.units.front().processes.front().variables;
+  require(
+      sv_variables.size() == 2
+          && sv_variables[0].name == "state"
+          && sv_variables[0].type.width() == 4
+          && sv_variables[0].initializer
+          && sv_variables[1].name == "ready"
+          && sv_variables[1].type.domain == ValueDomain::Bit2
+          && !sv_variables[1].initializer,
+      "SystemVerilog procedural-variable metadata");
+}
+
 }  // namespace
 
 int main() {
@@ -621,6 +677,7 @@ int main() {
     test_duplicate_declarations_are_rejected();
     test_systemverilog_timescale_context();
     test_immediate_assertions();
+    test_process_variable_declarations();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

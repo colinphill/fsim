@@ -81,9 +81,12 @@ The following foundation is implemented:
 - command-scoped SIGINT handler installation/restoration and real-handler
   interpreter/O0 tests proving safe-point stop at tick 0 and resumable
   completion;
+- bounded VHDL/SystemVerilog process variables lowered to named persistent
+  SimIR registers, interpreter/O0/O2 `CopyRegister`, and engine-neutral
+  debugger `locals` reads;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 248 current production diagnostic codes.
+- a stable catalog covering 260 current production diagnostic codes.
 
 Current Linux validation:
 
@@ -201,8 +204,9 @@ Completed:
 
 Remaining before the architecture gate passes:
 
-- add call safe points, addressable debug locals/frames, and complete source
-  metadata to the current O0 hybrid debugger;
+- add call safe points, complete nested/scoped local-variable semantics, C API
+  local objects, and complete source metadata to the current O0 hybrid
+  debugger;
 - run every supported semantic test through interpreter and JIT and compare
   final state, assertions, scheduler observations, and trace events;
 - extend the bounded mixed-language differential to O0 and mixed-language
@@ -281,7 +285,7 @@ Planned implementation sequence:
    notification in the common scheduler.
 5. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
-6. Add debug locals and call safe points.
+6. Complete nested/scoped debug locals and add call safe points.
 7. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
    process, severity, source location, and message.
@@ -323,7 +327,7 @@ Remaining before v1 release:
 The next development iterations should occur in this order:
 
 1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   call instrumentation and addressable locals, complete transitive include
+   call instrumentation and complete scoped locals, complete transitive include
    and actual generic/parameter cache identity, and broaden the
    interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR

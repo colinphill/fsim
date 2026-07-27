@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <type_traits>
 #include <unordered_map>
@@ -615,6 +616,11 @@ void Interpreter::Impl::execute(ProcessId id) {
                   get_signal(op.signal).initial_value;
               ++process.pc;
             },
+            [&](const CopyRegister& op) {
+              get_register(process, op.destination) =
+                  get_register(process, op.source);
+              ++process.pc;
+            },
             [&](const UnaryNot &op) {
               get_register(process, op.destination) =
                   unary_not(get_register(process, op.source));
@@ -770,6 +776,16 @@ ProcessId Interpreter::add_process(Process process) {
     }
     impl_->static_fanout[signal.signal].push_back({id, signal.edge});
   }
+  std::set<std::string> local_names;
+  for (const auto& local : process.debug_locals) {
+    if (local.name.empty() || local.width == 0
+        || local.register_id >= process.register_count) {
+      throw std::invalid_argument{"invalid SimIR debug-local metadata"};
+    }
+    if (!local_names.insert(local.name).second) {
+      throw std::invalid_argument{"duplicate SimIR debug-local name"};
+    }
+  }
 
   Impl::ProcessState state;
   state.registers.assign(process.register_count, PackedLogic4{});
@@ -864,6 +880,25 @@ void Interpreter::schedule_signal_after(SignalId signal, PackedLogic4 value,
 
 const PackedLogic4 &Interpreter::signal_value(SignalId signal) const {
   return impl_->get_signal(signal).initial_value;
+}
+
+PackedLogic4 Interpreter::read_debug_local(
+    const ProcessId process,
+    const std::size_t local_index) const {
+  auto& state = impl_->get_process(process);
+  if (local_index >= state.program.debug_locals.size()) {
+    throw std::out_of_range{"invalid SimIR debug-local index"};
+  }
+  const auto& local = state.program.debug_locals[local_index];
+  if (state.executor) {
+    return state.executor->read_register(
+        local.register_id, local.width);
+  }
+  const auto& value = state.registers.at(local.register_id);
+  if (value.width() != local.width) {
+    throw std::logic_error{"SimIR debug local has not been initialized"};
+  }
+  return value;
 }
 
 bool Interpreter::stopped_by_design() const noexcept {

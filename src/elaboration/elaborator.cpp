@@ -231,11 +231,13 @@ public:
         next_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
+        locals_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = std::string(hierarchy) + "."
             + (source.name.empty()
                    ? "process_" + std::to_string(process_.id)
                    : source.name);
+        initialize_variables(source.variables);
         for (const auto& sensitivity : source.sensitivities) {
             const auto found = signals_.find(sensitivity.signal);
             if (found == signals_.end()) {
@@ -264,6 +266,8 @@ public:
                 : nullptr;
         const bool waits_before_first_execution =
             verilog_event_process || vhdl_edge_guard != nullptr;
+        const auto resume_entry =
+            static_cast<InstructionIndex>(process_.operations.size());
         if (waits_before_first_execution) {
             process_.operations.emplace_back(WaitSensitivity{});
         }
@@ -285,17 +289,18 @@ public:
             // Event-controlled processes wait before their first execution.
             // Returning directly to operation zero preserves one body
             // execution per matching event.
-            process_.operations.emplace_back(Jump{0});
+            process_.operations.emplace_back(Jump{resume_entry});
         } else {
             // A VHDL process with a sensitivity list executes once at time
             // zero, then waits at the implicit trailing sensitivity point.
             process_.operations.emplace_back(WaitSensitivity{});
-            process_.operations.emplace_back(Jump{0});
+            process_.operations.emplace_back(Jump{resume_entry});
         }
         process_.register_count = next_register_;
         next_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
+        locals_.clear();
         return std::move(process_);
     }
 
@@ -309,6 +314,7 @@ public:
         next_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
+        locals_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = name + ".concurrent_" + std::to_string(order);
         emit_debug_point(DebugPointKind::process_entry, statement.span);
@@ -331,10 +337,104 @@ public:
         next_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
+        locals_.clear();
         return std::move(process_);
     }
 
 private:
+    void initialize_variables(
+        const std::vector<frontend::VariableDeclaration>& variables) {
+        struct Pending {
+            const frontend::VariableDeclaration* declaration{};
+            RegisterId register_id{};
+            std::size_t width{};
+        };
+        std::vector<Pending> pending;
+        pending.reserve(variables.size());
+        for (const auto& variable : variables) {
+            const auto width = variable.type.width();
+            if (!width || *width == 0) {
+                report(
+                    "FSIM-ELAB-052",
+                    "local variable '" + variable.name
+                        + "' has no executable packed width",
+                    variable.span);
+                continue;
+            }
+            if (locals_.contains(variable.name)
+                || signals_.contains(variable.name)) {
+                report(
+                    "FSIM-ELAB-053",
+                    "duplicate or shadowing local variable '"
+                        + variable.name + "'",
+                    variable.span);
+                continue;
+            }
+            const auto register_id =
+                allocate_register(*width, variable.type.domain);
+            locals_.emplace(variable.name, register_id);
+            process_.debug_locals.push_back(DebugLocal{
+                variable.name,
+                variable.type.spelling,
+                register_id,
+                *width,
+                SourceLocation{
+                    variable.span.source_name,
+                    static_cast<std::uint32_t>(
+                        variable.span.begin.line),
+                    static_cast<std::uint32_t>(
+                        variable.span.begin.column)}});
+            pending.push_back(Pending{&variable, register_id, *width});
+        }
+        for (const auto& local : pending) {
+            const auto& variable = *local.declaration;
+            if (variable.initializer) {
+                const auto value =
+                    lower_expression(*variable.initializer, local.width);
+                if (!value) {
+                    continue;
+                }
+                if (register_width(*value) != local.width) {
+                    report(
+                        "FSIM-ELAB-054",
+                        "local variable initializer width mismatch for '"
+                            + variable.name + "'",
+                        variable.span);
+                    continue;
+                }
+                if ((variable.type.domain
+                         == frontend::ValueDomain::Bit2
+                     || variable.type.domain
+                         == frontend::ValueDomain::Boolean)
+                    && register_domain(*value)
+                        != frontend::ValueDomain::Bit2
+                    && register_domain(*value)
+                        != frontend::ValueDomain::Boolean) {
+                    report(
+                        "FSIM-ELAB-058",
+                        "two-state local variable initializer for '"
+                            + variable.name
+                            + "' requires an explicit conversion",
+                        variable.span);
+                    continue;
+                }
+                process_.operations.emplace_back(
+                    CopyRegister{local.register_id, *value});
+                continue;
+            }
+            const auto initial =
+                variable.type.domain == frontend::ValueDomain::Bit2
+                    || variable.type.domain
+                        == frontend::ValueDomain::Boolean
+                    ? Logic4::zero
+                    : Logic4::x;
+            process_.operations.emplace_back(
+                LoadConstant{
+                    local.register_id,
+                    PackedLogic4{local.width, initial}});
+        }
+    }
+
     static const Statement* recognized_vhdl_edge_guard(
         const frontend::Process& source) {
         if (source.statements.empty()) {
@@ -376,6 +476,13 @@ private:
     }
 
     void lower_statement(const Statement& statement) {
+        if (!statement.declarations.empty()) {
+            report(
+                "FSIM-ELAB-055",
+                "nested procedural block variables are not executable in "
+                "this slice",
+                statement.span);
+        }
         if (statement.kind != StatementKind::Block) {
             auto kind = DebugPointKind::statement;
             if (statement.kind == StatementKind::Assert) {
@@ -469,6 +576,51 @@ private:
                 "FSIM-ELAB-031",
                 "only whole-signal assignment targets are supported by this executable slice",
                 statement.target.span);
+            return;
+        }
+        if (const auto local = locals_.find(statement.target.text);
+            local != locals_.end()) {
+            if (statement.assignment_kind != AssignmentKind::Blocking
+                || statement.delay) {
+                report(
+                    "FSIM-ELAB-056",
+                    "local variable assignments require an undelayed "
+                    "blocking/variable assignment",
+                    statement.span);
+                return;
+            }
+            const auto target_width = register_width(local->second);
+            const auto value =
+                lower_expression(statement.value, target_width);
+            if (!value) {
+                return;
+            }
+            if (register_width(*value) != target_width) {
+                report(
+                    "FSIM-ELAB-057",
+                    "local variable assignment width mismatch for '"
+                        + statement.target.text + "'",
+                    statement.span);
+                return;
+            }
+            const auto target_domain =
+                register_domain(local->second);
+            if ((target_domain == frontend::ValueDomain::Bit2
+                 || target_domain == frontend::ValueDomain::Boolean)
+                && register_domain(*value)
+                    != frontend::ValueDomain::Bit2
+                && register_domain(*value)
+                    != frontend::ValueDomain::Boolean) {
+                report(
+                    "FSIM-ELAB-058",
+                    "assignment to two-state local variable '"
+                        + statement.target.text
+                        + "' requires an explicit conversion",
+                    statement.span);
+                return;
+            }
+            process_.operations.emplace_back(
+                CopyRegister{local->second, *value});
             return;
         }
         const auto target = signals_.find(statement.target.text);
@@ -569,6 +721,10 @@ private:
     std::optional<RegisterId> lower_expression(
         const Expression& expression, const std::size_t expected_width) {
         if (expression.kind == ExpressionKind::Identifier) {
+            if (const auto local = locals_.find(expression.text);
+                local != locals_.end()) {
+                return local->second;
+            }
             const auto found = signals_.find(expression.text);
             if (found == signals_.end()) {
                 report(
@@ -704,6 +860,10 @@ private:
 
     std::optional<std::size_t> infer_width(const Expression& expression) const {
         if (expression.kind == ExpressionKind::Identifier) {
+            if (const auto local = locals_.find(expression.text);
+                local != locals_.end()) {
+                return register_width(local->second);
+            }
             if (const auto found = signals_.find(expression.text); found != signals_.end()) {
                 return design_.signal_info_[found->second].width;
             }
@@ -755,6 +915,7 @@ private:
     RegisterId next_register_{};
     std::vector<std::size_t> register_widths_;
     std::vector<frontend::ValueDomain> register_domains_;
+    std::unordered_map<std::string, RegisterId> locals_;
     frontend::Language language_{frontend::Language::Vhdl2008};
 };
 

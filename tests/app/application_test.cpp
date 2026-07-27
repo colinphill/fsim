@@ -65,8 +65,10 @@ module tb;
   bit two_state;
   child u_child(.value(q), .inverted(child_y));
   initial begin
-    q = 1'b0;
-    #2 q = 1'b1;
+    logic local_state = 1'b0;
+    q = local_state;
+    #2 local_state = 1'b1;
+    q = local_state;
     #1 $finish;
   end
 endmodule
@@ -939,11 +941,15 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       "breakpoints\n"
       "continue\n"
       "delete 2\n"
-      "break source tb.sv:13\n"
+      "break source tb.sv:14\n"
       "run-until 3ns\n"
       "delete 3\n"
+      "locals\n"
+      "step statement\n"
+      "locals\n"
       "step statement\n"
       "delete 1\n"
+      "locals\n"
       "step process\n"
       "where\n"
       "break signal child_y\n"
@@ -989,15 +995,22 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   assert(
       transcript.find("hit breakpoint 2: time 1") != std::string::npos);
   assert(
-      transcript.find("breakpoint 3 set at tb.sv:13")
+      transcript.find("breakpoint 3 set at tb.sv:14")
       != std::string::npos);
   assert(
       transcript.find(
-          "hit breakpoint 3: " + source.string() + ":13:")
+          "hit breakpoint 3: " + source.string() + ":14:")
       != std::string::npos);
   assert(
-      transcript.find(" at " + source.string() + ":14:")
+      transcript.find(" at " + source.string() + ":15:")
       != std::string::npos);
+  assert(
+      transcript.find(" at " + source.string() + ":16:")
+      != std::string::npos);
+  assert(
+      transcript.find("local_state = 0") != std::string::npos);
+  assert(
+      transcript.find("local_state = 1") != std::string::npos);
   assert(transcript.find("stopped at time 2") != std::string::npos);
   assert(transcript.find("time 2, delta") != std::string::npos);
   assert(transcript.find("cleared all breakpoints") != std::string::npos);

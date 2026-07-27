@@ -551,6 +551,41 @@ class VerilogParser final : private detail::ParserBase {
            "FSIM-SV-PARSE-008");
   }
 
+  void parse_procedural_declaration(Statement& block) {
+    const auto start = current();
+    Type type = default_verilog_type();
+    parse_optional_net_type(type);
+    if (type.spelling == "wire") {
+      error(
+          start,
+          "FSIM-SV-UNSUPPORTED-014",
+          "procedural wire declarations are not supported; use a variable "
+          "type");
+    }
+    parse_optional_signedness(type);
+    parse_optional_range(type);
+
+    for (;;) {
+      const auto name = expect_identifier("local variable name");
+      std::optional<Expression> initializer;
+      if (match(TokenKind::Assign)) {
+        initializer = parse_expression();
+      }
+      block.declarations.push_back(VariableDeclaration{
+          name.text,
+          type,
+          std::move(initializer),
+          span_from(name, previous())});
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after local variable declaration",
+        "FSIM-SV-PARSE-045");
+  }
+
   static void update_or_add_port(DesignUnit& unit,
                                  SignalDeclaration declaration) {
     for (auto& existing : unit.ports) {
@@ -624,6 +659,7 @@ class VerilogParser final : private detail::ParserBase {
     auto body = parse_statement();
     if (body) {
       if (body->kind == StatementKind::Block) {
+        process.variables = std::move(body->declarations);
         process.statements = std::move(body->statements);
       } else {
         process.statements.push_back(std::move(*body));
@@ -641,6 +677,7 @@ class VerilogParser final : private detail::ParserBase {
     auto body = parse_statement();
     if (body) {
       if (body->kind == StatementKind::Block) {
+        process.variables = std::move(body->declarations);
         process.statements = std::move(body->statements);
       } else {
         process.statements.push_back(std::move(*body));
@@ -726,7 +763,9 @@ class VerilogParser final : private detail::ParserBase {
       block.kind = StatementKind::Block;
       while (!at_end() && !keyword("end")) {
         const auto before = position();
-        if (auto child = parse_statement()) {
+        if (is_net_type_keyword()) {
+          parse_procedural_declaration(block);
+        } else if (auto child = parse_statement()) {
           block.statements.push_back(std::move(*child));
         }
         if (position() == before) {
@@ -751,6 +790,13 @@ class VerilogParser final : private detail::ParserBase {
              "FSIM-SV-PARSE-019");
       if (auto true_branch = parse_statement()) {
         if (true_branch->kind == StatementKind::Block) {
+          if (!true_branch->declarations.empty()) {
+            error(
+                current(),
+                "FSIM-SV-UNSUPPORTED-015",
+                "nested procedural block declarations are not implemented "
+                "in this frontend slice");
+          }
           statement.statements = std::move(true_branch->statements);
         } else {
           statement.statements.push_back(std::move(*true_branch));
@@ -759,6 +805,13 @@ class VerilogParser final : private detail::ParserBase {
       if (match_keyword("else")) {
         if (auto false_branch = parse_statement()) {
           if (false_branch->kind == StatementKind::Block) {
+            if (!false_branch->declarations.empty()) {
+              error(
+                  current(),
+                  "FSIM-SV-UNSUPPORTED-015",
+                  "nested procedural block declarations are not implemented "
+                  "in this frontend slice");
+            }
             statement.else_statements =
                 std::move(false_branch->statements);
           } else {

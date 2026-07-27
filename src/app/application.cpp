@@ -191,6 +191,17 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     return {result.instruction, frame_.program_counter};
   }
 
+  [[nodiscard]] PackedLogic4 read_register(
+      const runtime::simir::RegisterId id,
+      const std::size_t width) const override {
+    if (id >= register_aval_.size() || width == 0 || width > 64) {
+      throw compiler::LlvmJitError{
+          "compiled process debug-register request is out of range"};
+    }
+    return PackedLogic4::from_aval_bval(
+        width, register_aval_[id], register_bval_[id]);
+  }
+
  private:
   struct CallbackState {
     runtime::simir::ProcessExecutionContext* context{};
@@ -1311,7 +1322,7 @@ void print_debug_help(std::ostream& output) {
       << "          show SIGNAL,\n"
       << "          deposit SIGNAL VALUE, force SIGNAL VALUE, release SIGNAL,\n"
       << "          trace add|remove SIGNAL, trace all|clear|list,\n"
-      << "          where, help, quit\n";
+      << "          locals, where, help, quit\n";
 }
 
 std::vector<std::string> words(const std::string& line) {
@@ -1406,6 +1417,10 @@ class DebuggerSession final {
     if (command[0] == "where") {
       output_ << "time " << simulation_.now() << ", delta "
               << simulation_.delta() << ", scope " << scope_ << '\n';
+      return;
+    }
+    if (command[0] == "locals" && command.size() == 1) {
+      show_locals();
       return;
     }
     if (command[0] == "scope") {
@@ -1695,6 +1710,28 @@ class DebuggerSession final {
       simulation_.deposit_signal(signal->second, std::move(*value));
     } else {
       simulation_.force_signal(signal->second, std::move(*value));
+    }
+  }
+
+  void show_locals() {
+    if (!current_execution_point_) {
+      output_ << "no process is selected; stop at a source point first\n";
+      return;
+    }
+    const auto process_id = current_execution_point_->process;
+    const auto& process =
+        simulation_.design().processes().at(process_id);
+    if (process.debug_locals.empty()) {
+      output_ << "(no locals)\n";
+      return;
+    }
+    for (std::size_t index = 0; index < process.debug_locals.size();
+         ++index) {
+      const auto& local = process.debug_locals[index];
+      output_ << local.name << " = "
+              << simulation_.read_process_local(
+                     process_id, index).to_msb_string()
+              << '\n';
     }
   }
 
@@ -2831,6 +2868,12 @@ std::optional<SignalId> Simulation::find_signal(
 
 const PackedLogic4& Simulation::read_signal(const SignalId signal) const {
   return impl_->interpreter->signal_value(signal);
+}
+
+PackedLogic4 Simulation::read_process_local(
+    const runtime::simir::ProcessId process,
+    const std::size_t local_index) const {
+  return impl_->interpreter->read_debug_local(process, local_index);
 }
 
 void Simulation::deposit_signal(

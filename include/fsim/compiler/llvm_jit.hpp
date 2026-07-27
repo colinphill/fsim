@@ -125,8 +125,9 @@ private:
 
 /// Narrow LLVM ORC adapter for the first compiled SimIR subset.
 ///
-/// Supported processes may use LoadConstant, ReadSignal, UnaryNot, Binary,
-/// WriteBlocking, WriteUpdate, WriteAfter, Assert, Jump, Branch, WaitFor,
+/// Supported processes may use LoadConstant, ReadSignal, CopyRegister,
+/// UnaryNot, Binary, WriteBlocking, WriteUpdate, WriteAfter, Assert, Jump,
+/// Branch, WaitFor,
 /// WaitOn, WaitSensitivity, Yield, Stop, Halt, and source-bearing DebugPoint
 /// operations. Control flow is lowered to LLVM basic blocks backed by a
 /// versioned caller-owned frame. O0 always returns DebugPoint boundaries; O2

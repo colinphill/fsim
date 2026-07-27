@@ -48,6 +48,7 @@ using runtime::simir::Assert;
 using runtime::simir::Binary;
 using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
+using runtime::simir::CopyRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::EdgeKind;
 using runtime::simir::Halt;
@@ -498,6 +499,12 @@ validate_process(const Process &process,
               constrain_width(operation.destination,
                               signal_width(operation.signal, index), index);
             },
+            [&](const CopyRegister& operation) {
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              unify_registers(
+                  operation.destination, operation.source, index);
+            },
             [&](const UnaryNot &operation) {
               record_definition(operation.destination, index);
               record_use(operation.source, index);
@@ -863,6 +870,11 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "signal", value.signal);
               add_key_u64(
                   builder, "signal-width", signal_widths[value.signal]);
+            },
+            [&](const CopyRegister& value) {
+              builder.add("operation", "CopyRegister");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
             },
             [&](const UnaryNot &value) {
               builder.add("operation", "UnaryNot");
@@ -1456,6 +1468,13 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       builder.CreateAnd(aval, mask),
                       builder.CreateAnd(bval, mask),
                       width});
+              branch_to_next();
+            },
+            [&](const CopyRegister& operation) {
+              store_register(
+                  builder, registers, operation.destination,
+                  load_register(
+                      builder, registers, operation.source));
               branch_to_next();
             },
             [&](const UnaryNot &operation) {

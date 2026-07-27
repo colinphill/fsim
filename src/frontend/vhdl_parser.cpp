@@ -628,12 +628,45 @@ class VhdlParser final : private detail::ParserBase {
              "FSIM-VHDL-PARSE-020");
     }
     match_keyword("is", true);
-    if (!keyword("begin", 0, true)) {
-      const auto declaration = current();
-      error(declaration, "FSIM-VHDL-UNSUPPORTED-007",
-            "process declarative items are not implemented in this slice");
-      while (!at_end() && !keyword("begin", 0, true)) {
-        advance();
+    while (!at_end() && !keyword("begin", 0, true)) {
+      if (!match_keyword("variable", true)) {
+        const auto declaration = current();
+        error(
+            declaration,
+            "FSIM-VHDL-UNSUPPORTED-007",
+            "only process variable declarations are implemented in this "
+            "declarative slice");
+        while (!at_end() && !keyword("begin", 0, true)
+               && !at(TokenKind::Semicolon)) {
+          advance();
+        }
+        match(TokenKind::Semicolon);
+        continue;
+      }
+      std::vector<Token> names;
+      names.push_back(expect_identifier("variable name"));
+      while (match(TokenKind::Comma)) {
+        names.push_back(expect_identifier("variable name"));
+      }
+      expect(
+          TokenKind::Colon,
+          "':' after variable names",
+          "FSIM-VHDL-PARSE-047");
+      const auto type = parse_vhdl_type();
+      std::optional<Expression> initializer;
+      if (match(TokenKind::ColonEqual)) {
+        initializer = parse_expression();
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after variable declaration",
+          "FSIM-VHDL-PARSE-048");
+      for (const auto& name : names) {
+        process.variables.push_back(VariableDeclaration{
+            vhdl_name(name.text),
+            type,
+            initializer,
+            span_from(name, previous())});
       }
     }
     expect_keyword("begin", true, "FSIM-VHDL-PARSE-021");

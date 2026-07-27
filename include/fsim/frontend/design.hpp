@@ -87,6 +87,13 @@ struct Expression {
   }
 };
 
+struct VariableDeclaration {
+  std::string name;
+  Type type;
+  std::optional<Expression> initializer;
+  SourceSpan span;
+};
+
 struct PortConnection {
   // Empty for a positional connection.
   std::optional<std::string> port;
@@ -150,6 +157,8 @@ struct Statement {
   std::vector<Statement> statements;
   // The false branch of an If statement.
   std::vector<Statement> else_statements;
+  // Declarations directly owned by a procedural block.
+  std::vector<VariableDeclaration> declarations;
 };
 
 enum class EdgeKind {
@@ -174,6 +183,7 @@ enum class ProcessKind {
 struct Process {
   ProcessKind kind{ProcessKind::VhdlProcess};
   std::string name;
+  std::vector<VariableDeclaration> variables;
   std::vector<Sensitivity> sensitivities;
   std::vector<Statement> statements;
   SourceSpan span;

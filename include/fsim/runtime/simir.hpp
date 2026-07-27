@@ -32,6 +32,11 @@ struct ReadSignal {
   SignalId signal{};
 };
 
+struct CopyRegister {
+  RegisterId destination{};
+  RegisterId source{};
+};
+
 struct UnaryNot {
   RegisterId destination{};
   RegisterId source{};
@@ -146,9 +151,10 @@ struct Stop {};
 struct Halt {};
 
 using Operation =
-    std::variant<LoadConstant, ReadSignal, UnaryNot, Binary, WriteBlocking,
-                 WriteUpdate, WriteAfter, WaitFor, WaitOn, WaitSensitivity,
-                 Yield, Jump, Branch, DebugPoint, Assert, Stop, Halt>;
+    std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, Binary,
+                 WriteBlocking, WriteUpdate, WriteAfter, WaitFor, WaitOn,
+                 WaitSensitivity, Yield, Jump, Branch, DebugPoint, Assert,
+                 Stop, Halt>;
 
 struct Signal {
   std::string name;
@@ -166,10 +172,19 @@ struct Sensitivity {
   EdgeKind edge = EdgeKind::any;
 };
 
+struct DebugLocal {
+  std::string name;
+  std::string type_name;
+  RegisterId register_id{};
+  std::size_t width{};
+  SourceLocation source;
+};
+
 struct Process {
   ProcessId id{};
   std::string name;
   std::size_t register_count{};
+  std::vector<DebugLocal> debug_locals;
   std::vector<Sensitivity> static_sensitivity;
   std::vector<Operation> operations;
 };
@@ -268,6 +283,12 @@ public:
   [[nodiscard]] virtual ProcessResumeResult
   resume(ProcessExecutionContext& context,
          InstructionIndex start_instruction) = 0;
+
+  [[nodiscard]] virtual PackedLogic4
+  read_register(RegisterId, std::size_t) const {
+    throw std::logic_error{
+        "alternate process executor does not expose register values"};
+  }
 };
 
 class InterpreterError : public std::runtime_error {
@@ -350,6 +371,8 @@ public:
                              SimulationTick delay, StableOrder order = 0);
 
   [[nodiscard]] const PackedLogic4 &signal_value(SignalId signal) const;
+  [[nodiscard]] PackedLogic4 read_debug_local(
+      ProcessId process, std::size_t local_index) const;
   /// True once a language-level Stop operation (`$finish` or equivalent) has
   /// executed. External scheduler stop requests do not set this flag.
   [[nodiscard]] bool stopped_by_design() const noexcept;

@@ -111,6 +111,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-044` | error | A VHDL library, use, or context-reference clause is malformed or unterminated. |
 | `FSIM-VHDL-PARSE-045` | error | Expected a string literal after an assertion `report`. |
 | `FSIM-VHDL-PARSE-046` | error | Expected `;` after an assertion. |
+| `FSIM-VHDL-PARSE-047` | error | Expected `:` after process-variable names. |
+| `FSIM-VHDL-PARSE-048` | error | Expected `;` after a process-variable declaration. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -127,7 +129,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
 | `FSIM-VHDL-UNSUPPORTED-005` | error | Unsupported labeled concurrent statement. |
 | `FSIM-VHDL-UNSUPPORTED-006` | error | Unsupported concurrent statement. |
-| `FSIM-VHDL-UNSUPPORTED-007` | error | Process declarative items are not implemented. |
+| `FSIM-VHDL-UNSUPPORTED-007` | error | A process declarative item is not a bounded variable declaration. |
 | `FSIM-VHDL-UNSUPPORTED-008` | error | Unsupported sequential statement. |
 | `FSIM-VHDL-UNSUPPORTED-009` | error | Generic maps are not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-010` | error | A port-map actual is not a simple identifier. |
@@ -187,6 +189,7 @@ therefore excluded.
 | `FSIM-SV-PARSE-042` | error | Expected a string literal argument to `$error`. |
 | `FSIM-SV-PARSE-043` | error | Expected `)` after an assertion `$error` message. |
 | `FSIM-SV-PARSE-044` | error | Expected `;` after an assertion. |
+| `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -221,6 +224,8 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-011` | error | Declaration initializers are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-012` | error | Integer objects are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-013` | error | `` `default_nettype`` is recognized but implicit-net legality is not implemented. |
+| `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
+| `FSIM-SV-UNSUPPORTED-015` | error | A nested procedural block declaration requires unsupported local-scope semantics. |
 
 ## Elaboration and SimIR lowering
 
@@ -251,6 +256,13 @@ therefore excluded.
 | `FSIM-ELAB-049` | error | Binary operands have different widths and would require implicit sizing. |
 | `FSIM-ELAB-050` | error | Assignment into a two-state target would implicitly lose four- or nine-state values. |
 | `FSIM-ELAB-051` | error | An executable assertion condition does not produce one bit. |
+| `FSIM-ELAB-052` | error | A local variable has no executable packed width. |
+| `FSIM-ELAB-053` | error | A local variable duplicates another local or shadows a signal in the bounded slice. |
+| `FSIM-ELAB-054` | error | A local variable initializer has the wrong packed width. |
+| `FSIM-ELAB-055` | error | A nested procedural block variable reached lowering without supported scope semantics. |
+| `FSIM-ELAB-056` | error | A local variable assignment is delayed or nonblocking. |
+| `FSIM-ELAB-057` | error | A local variable assignment has the wrong packed width. |
+| `FSIM-ELAB-058` | error | A local variable initializer or assignment would implicitly lose four- or nine-state values. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

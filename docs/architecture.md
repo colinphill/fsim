@@ -29,7 +29,7 @@ The architectural invariants are:
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
 | Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, value changes, deposit, and a force/release mask are current; full driver/resolution model is planned |
-| Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with source/time/signal breakpoints plus all four step modes are current; locals are planned |
+| Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with source/time/signal breakpoints, all four step modes, and bounded packed process-local reads are current; complete local scopes/types are planned |
 
 The language-specific HIR will retain resolved symbols, types, overload choices,
 constant values, and legality results. The common `DesignIR` will own dense
@@ -241,8 +241,9 @@ directories and macros, so transitive HDL include-content closure remains open
 until preprocessing exists. Actual generic/parameter values are likewise
 pending frontend support. The cache has no age/size eviction policy. O0
 exposes source-bearing statement, wait, assertion, process-entry, and
-process-suspension points, but call points, addressable locals, and complete
-source metadata remain open. The application analysis cache remains separate.
+process-suspension points plus addressable ≤64-bit packed process locals. Call
+points, complete local scopes/types, and complete source metadata remain open.
+The application analysis cache remains separate.
 
 ## Debug and public API
 
@@ -258,13 +259,14 @@ a valid process handle. Object handles carry a build generation so a rebuild
 invalidates stale hierarchy handles, and mutating/rebuilding re-entry from a
 synchronous callback is rejected. False assertions invoke the assertion
 callback with the originating process handle plus severity, source
-path/line/column, and message. Scope objects, locals, and complete
+path/line/column, and message. Scope objects, C API local objects, and complete
 non-assertion source/debug metadata are not yet wired.
 
 Optimized `run` and instrumented `debug` are required to have identical
-simulation semantics. Debug code will use addressable process frames and safe
-points at statements, waits, calls, process boundaries, assertion failures,
-delta boundaries, and time boundaries. The default LLVM-enabled `run` path is
+simulation semantics. Bounded debug code uses addressable process frames and
+safe points at statements, waits, process boundaries, assertion failures,
+delta boundaries, and time boundaries. Call points remain open. The default
+LLVM-enabled `run` path is
 the O2 hybrid engine. The current bounded `debug` path forces O0 for eligible
 process groups and retains per-process interpreter fallback. SimIR carries
 source-bearing statement, wait, assertion, process-entry, and
@@ -290,8 +292,9 @@ refused. Ctrl-C only sets an atomic stop request; the simulation thread observes
 it at a safe point. The command-scoped signal-handler guard restores the host's
 previous handler on every exit path. Tests raise SIGINT through the real handler
 and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
-to terminal completion, and restore a preinstalled handler. Debug locals remain
-planned.
+to terminal completion, and restore a preinstalled handler. The `locals`
+command reads declared packed process variables through an engine-neutral
+interface; nested scopes, richer types, and C API local objects remain planned.
 
 ## Platform boundary
 

@@ -60,8 +60,8 @@ The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
 particular, complete semantic analysis, general mixed-boundary conversions and
 multi-driver resolution, parameter/generic specialization identity beyond the
-current instance-specific records, addressable debug locals and call safe
-points, broader interpreter/JIT differential coverage, SystemC kernel
+current instance-specific records, complete scoped/local type coverage and call
+safe points, broader interpreter/JIT differential coverage, SystemC kernel
 integration and fibers, fractional-delay and declaration-based time semantics,
 IEEE VHDL packages, complete HDL event controls, and most testbench features
 remain work in progress. Unsupported syntax is diagnosed rather than silently
@@ -173,11 +173,12 @@ O2 tests one size-gated runtime flag so ordinary runs continue through them.
 Signal breakpoints accept exact-state `==`/`!=` conditions. When a debug VCD is
 configured, `trace add`, `trace remove`, `trace all`, `trace clear`, and
 `trace list` change the live committed-value selection. Call instrumentation
-and locals remain future work. A design `$finish` is terminal for that
-simulation; a debugger or Ctrl-C stop remains resumable, while a fatal runtime
-error poisons the simulation and prevents further execution. The CLI installs
-its SIGINT handler only for the active run/debug command and restores the
-host's previous handler on exit.
+and nested/scoped locals remain future work; bounded packed process variables
+are shown by `locals` through interpreter or compiled frames. A design
+`$finish` is terminal for that simulation; a debugger or Ctrl-C stop remains
+resumable, while a fatal runtime error poisons the simulation and prevents
+further execution. The CLI installs its SIGINT handler only for the active
+run/debug command and restores the host's previous handler on exit.
 
 The native C session API also exposes tested statement/process/delta/time
 stepping and an asynchronous stop request that may be issued from a synchronous
@@ -215,9 +216,9 @@ sensitivity-only signals may exceed 64 bits because no signal value crosses
 the generated ABI. Builds without LLVM execute entirely through the reference
 evaluator. The bounded O0 debug path is differentially tested against the
 interpreter for source breakpoints and statement/process/scheduler stepping.
-Value-bearing operations wider than 64 bits, call instrumentation and
-addressable locals, full parameter/generic specialization identity, and
-broader differential coverage remain work in progress.
+Value-bearing operations wider than 64 bits, call instrumentation and complete
+local-variable scope/type semantics, full parameter/generic specialization
+identity, and broader differential coverage remain work in progress.
 
 The application suite also compares a bounded scheduled-write design exactly
 between the interpreter and O2 hybrid engine. It checks an update commit at

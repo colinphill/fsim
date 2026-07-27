@@ -111,6 +111,8 @@ class Simulation final {
       std::string_view path) const noexcept;
   [[nodiscard]] const runtime::PackedLogic4& read_signal(
       runtime::simir::SignalId signal) const;
+  [[nodiscard]] runtime::PackedLogic4 read_process_local(
+      runtime::simir::ProcessId process, std::size_t local_index) const;
   void deposit_signal(
       runtime::simir::SignalId signal,
       runtime::PackedLogic4 value);
