@@ -56,6 +56,7 @@ using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
 using runtime::simir::Jump;
 using runtime::simir::LoadConstant;
+using runtime::simir::LogicalNot;
 using runtime::simir::Operation;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
@@ -511,6 +512,11 @@ validate_process(const Process &process,
               record_use(operation.source, index);
               unify_registers(operation.destination, operation.source, index);
             },
+            [&](const LogicalNot& operation) {
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              constrain_width(operation.destination, 1U, index);
+            },
             [&](const Binary &operation) {
               switch (operation.operation) {
               case BinaryOperator::bit_and:
@@ -519,6 +525,11 @@ validate_process(const Process &process,
               case BinaryOperator::add_unsigned:
               case BinaryOperator::equal:
               case BinaryOperator::case_equal:
+              case BinaryOperator::not_equal:
+              case BinaryOperator::less_unsigned:
+              case BinaryOperator::less_equal_unsigned:
+              case BinaryOperator::greater_unsigned:
+              case BinaryOperator::greater_equal_unsigned:
                 break;
               default:
                 reject(process, index,
@@ -529,7 +540,16 @@ validate_process(const Process &process,
               record_use(operation.rhs, index);
               unify_registers(operation.lhs, operation.rhs, index);
               if (operation.operation == BinaryOperator::equal
-                  || operation.operation == BinaryOperator::case_equal) {
+                  || operation.operation == BinaryOperator::case_equal
+                  || operation.operation == BinaryOperator::not_equal
+                  || operation.operation
+                      == BinaryOperator::less_unsigned
+                  || operation.operation
+                      == BinaryOperator::less_equal_unsigned
+                  || operation.operation
+                      == BinaryOperator::greater_unsigned
+                  || operation.operation
+                      == BinaryOperator::greater_equal_unsigned) {
                 constrain_width(operation.destination, 1U, index);
               } else {
                 unify_registers(operation.destination, operation.lhs, index);
@@ -925,6 +945,11 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "source", value.source);
             },
+            [&](const LogicalNot& value) {
+              builder.add("operation", "LogicalNot");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
             [&](const Binary &value) {
               builder.add("operation", "Binary");
               add_key_u64(
@@ -1316,6 +1341,51 @@ struct EncodedBit {
         constant_i64(context, 0),
         1};
   }
+  case BinaryOperator::not_equal:
+  case BinaryOperator::less_unsigned:
+  case BinaryOperator::less_equal_unsigned:
+  case BinaryOperator::greater_unsigned:
+  case BinaryOperator::greater_equal_unsigned: {
+    auto *unknown_bits = builder.CreateAnd(
+        builder.CreateOr(lhs.bval, rhs.bval), mask);
+    auto *unknown = builder.CreateICmpNE(
+        unknown_bits, constant_i64(context, 0));
+    auto *left = builder.CreateAnd(lhs.aval, mask);
+    auto *right = builder.CreateAnd(rhs.aval, mask);
+    llvm::CmpInst::Predicate predicate = llvm::CmpInst::ICMP_NE;
+    switch (operation) {
+    case BinaryOperator::not_equal:
+      predicate = llvm::CmpInst::ICMP_NE;
+      break;
+    case BinaryOperator::less_unsigned:
+      predicate = llvm::CmpInst::ICMP_ULT;
+      break;
+    case BinaryOperator::less_equal_unsigned:
+      predicate = llvm::CmpInst::ICMP_ULE;
+      break;
+    case BinaryOperator::greater_unsigned:
+      predicate = llvm::CmpInst::ICMP_UGT;
+      break;
+    case BinaryOperator::greater_equal_unsigned:
+      predicate = llvm::CmpInst::ICMP_UGE;
+      break;
+    case BinaryOperator::bit_and:
+    case BinaryOperator::bit_or:
+    case BinaryOperator::bit_xor:
+    case BinaryOperator::add_unsigned:
+    case BinaryOperator::equal:
+    case BinaryOperator::case_equal:
+      llvm_unreachable("not a comparison operator");
+    }
+    auto *compared = builder.CreateICmp(predicate, left, right);
+    return {
+        builder.CreateZExt(
+            builder.CreateOr(unknown, compared),
+            llvm::Type::getInt64Ty(context)),
+        builder.CreateZExt(
+            unknown, llvm::Type::getInt64Ty(context)),
+        1};
+  }
   }
   llvm_unreachable("all BinaryOperator values are handled");
 }
@@ -1562,6 +1632,35 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               store_register(
                   builder, registers, operation.destination,
                   EncodedValue{aval, source.bval, source.width});
+              branch_to_next();
+            },
+            [&](const LogicalNot& operation) {
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              auto *mask =
+                  constant_i64(context, width_mask(source.width));
+              auto *known_ones = builder.CreateAnd(
+                  builder.CreateAnd(source.aval, mask),
+                  builder.CreateNot(source.bval));
+              auto *has_one = builder.CreateICmpNE(
+                  known_ones, constant_i64(context, 0));
+              auto *has_unknown = builder.CreateICmpNE(
+                  builder.CreateAnd(source.bval, mask),
+                  constant_i64(context, 0));
+              auto *not_true = builder.CreateNot(has_one);
+              auto *unknown =
+                  builder.CreateAnd(not_true, has_unknown);
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateZExt(
+                          not_true,
+                          llvm::Type::getInt64Ty(context)),
+                      builder.CreateZExt(
+                          unknown,
+                          llvm::Type::getInt64Ty(context)),
+                      1});
               branch_to_next();
             },
             [&](const Binary &operation) {

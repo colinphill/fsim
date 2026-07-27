@@ -232,6 +232,7 @@ public:
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
+        local_signed_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = std::string(hierarchy) + "."
             + (source.name.empty()
@@ -343,6 +344,7 @@ public:
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
+        local_signed_.clear();
         return std::move(process_);
     }
 
@@ -357,6 +359,7 @@ public:
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
+        local_signed_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = name + ".concurrent_" + std::to_string(order);
         emit_debug_point(DebugPointKind::process_entry, statement.span);
@@ -380,6 +383,7 @@ public:
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
+        local_signed_.clear();
         return std::move(process_);
     }
 
@@ -436,6 +440,8 @@ private:
             const auto register_id =
                 allocate_register(*width, variable.type.domain);
             locals_.emplace(variable.name, register_id);
+            local_signed_.emplace(
+                variable.name, variable.type.is_signed);
             process_.debug_locals.push_back(DebugLocal{
                 variable.name,
                 variable.type.spelling,
@@ -986,14 +992,30 @@ private:
                 LoadConstant{destination, std::move(literal->value)});
             return destination;
         }
-        if (expression.kind == ExpressionKind::Unary && expression.operands.size() == 1
+        if (expression.kind == ExpressionKind::Unary
+            && expression.operands.size() == 1
             && expression.text == "!") {
-            report(
-                "FSIM-ELAB-044",
-                "SystemVerilog logical negation is parsed but not executable "
-                "until SimIR has scalar truth-value conversion",
-                expression.span);
-            return std::nullopt;
+            const auto source_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            const auto source =
+                lower_expression(
+                    expression.operands[0], source_width);
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto source_domain = register_domain(*source);
+            const auto result_domain =
+                source_domain == frontend::ValueDomain::Bit2
+                        || source_domain
+                            == frontend::ValueDomain::Boolean
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            const auto destination =
+                allocate_register(1, result_domain);
+            process_.operations.emplace_back(
+                LogicalNot{destination, *source});
+            return destination;
         }
         if (expression.kind == ExpressionKind::Unary
             && expression.operands.size() == 1
@@ -1107,6 +1129,26 @@ private:
             } else if (
                 expression.text == "=" || expression.text == "==") {
                 operation = BinaryOperator::equal;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "!=") {
+                operation = BinaryOperator::not_equal;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "<") {
+                operation = BinaryOperator::less_unsigned;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "<=") {
+                operation = BinaryOperator::less_equal_unsigned;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == ">") {
+                operation = BinaryOperator::greater_unsigned;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == ">=") {
+                operation = BinaryOperator::greater_equal_unsigned;
             }
             if (!operation) {
                 report(
@@ -1115,10 +1157,35 @@ private:
                     expression.span);
                 return std::nullopt;
             }
-            const auto result_width =
+            const auto relational =
+                *operation == BinaryOperator::less_unsigned
+                || *operation
+                    == BinaryOperator::less_equal_unsigned
+                || *operation == BinaryOperator::greater_unsigned
+                || *operation
+                    == BinaryOperator::greater_equal_unsigned;
+            if (relational
+                && (is_signed_expression(expression.operands[0])
+                    || is_signed_expression(expression.operands[1]))) {
+                report(
+                    "FSIM-ELAB-066",
+                    "signed relational comparison is not executable until "
+                    "signed SimIR comparison semantics are implemented",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto scalar_result =
                 *operation == BinaryOperator::equal
-                    ? std::size_t{1}
-                    : register_width(*lhs);
+                || *operation == BinaryOperator::not_equal
+                || *operation == BinaryOperator::less_unsigned
+                || *operation
+                    == BinaryOperator::less_equal_unsigned
+                || *operation == BinaryOperator::greater_unsigned
+                || *operation
+                    == BinaryOperator::greater_equal_unsigned;
+            const auto result_width =
+                scalar_result ? std::size_t{1}
+                              : register_width(*lhs);
             const auto is_two_state =
                 [](const frontend::ValueDomain domain) {
                     return domain == frontend::ValueDomain::Bit2
@@ -1129,7 +1196,7 @@ private:
                         && is_two_state(register_domain(*rhs))
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic4;
-            if (*operation != BinaryOperator::equal
+            if (!scalar_result
                 && (register_domain(*lhs)
                         == frontend::ValueDomain::Logic9
                     || register_domain(*rhs)
@@ -1172,6 +1239,34 @@ private:
             }
         }
         return std::nullopt;
+    }
+
+    [[nodiscard]] bool is_signed_expression(
+        const Expression& expression) const {
+        if (expression.kind == ExpressionKind::Identifier) {
+            if (const auto local =
+                    local_signed_.find(expression.text);
+                local != local_signed_.end()) {
+                return local->second;
+            }
+            if (const auto signal = signals_.find(expression.text);
+                signal != signals_.end()) {
+                return design_.signal_info_[signal->second].is_signed;
+            }
+        }
+        if (expression.kind == ExpressionKind::IntegerLiteral) {
+            return true;
+        }
+        if (expression.kind == ExpressionKind::LogicLiteral) {
+            return expression.text.find("'s") != std::string::npos
+                || expression.text.find("'S") != std::string::npos;
+        }
+        return std::any_of(
+            expression.operands.begin(),
+            expression.operands.end(),
+            [&](const Expression& operand) {
+                return is_signed_expression(operand);
+            });
     }
 
     static void collect_identifiers(
@@ -1254,6 +1349,7 @@ private:
     std::vector<std::size_t> register_widths_;
     std::vector<frontend::ValueDomain> register_domains_;
     std::unordered_map<std::string, RegisterId> locals_;
+    std::unordered_map<std::string, bool> local_signed_;
     frontend::Language language_{frontend::Language::Vhdl2008};
 };
 

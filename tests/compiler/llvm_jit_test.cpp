@@ -1179,6 +1179,84 @@ void test_conditional_select_at_level(
   }
 }
 
+void test_comparisons_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 8;
+  process.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      Binary{BinaryOperator::not_equal, 2, 0, 1},
+      WriteBlocking{2, 2},
+      Binary{BinaryOperator::less_unsigned, 3, 0, 1},
+      WriteBlocking{3, 3},
+      Binary{BinaryOperator::less_equal_unsigned, 4, 0, 1},
+      WriteBlocking{4, 4},
+      Binary{BinaryOperator::greater_unsigned, 5, 0, 1},
+      WriteBlocking{5, 5},
+      Binary{BinaryOperator::greater_equal_unsigned, 6, 0, 1},
+      WriteBlocking{6, 6},
+      LogicalNot{7, 0},
+      WriteBlocking{7, 7},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 8> widths{
+      4, 4, 1, 1, 1, 1, 1, 1};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  struct TestCase {
+    std::string_view lhs;
+    std::string_view rhs;
+    std::array<Logic4, 6> expected;
+  };
+  const std::array cases{
+      TestCase{
+          "0010",
+          "0011",
+          {Logic4::one, Logic4::one, Logic4::one,
+           Logic4::zero, Logic4::zero, Logic4::zero}},
+      TestCase{
+          "0000",
+          "0000",
+          {Logic4::zero, Logic4::zero, Logic4::one,
+           Logic4::zero, Logic4::one, Logic4::one}},
+      TestCase{
+          "00X0",
+          "0011",
+          {Logic4::x, Logic4::x, Logic4::x,
+           Logic4::x, Logic4::x, Logic4::x}},
+      TestCase{
+          "01Z0",
+          "0011",
+          {Logic4::x, Logic4::x, Logic4::x,
+           Logic4::x, Logic4::x, Logic4::zero}},
+  };
+  for (const auto& test : cases) {
+    TestRuntime runtime;
+    const auto lhs =
+        PackedLogic4::from_msb_string(test.lhs).low_word();
+    const auto rhs =
+        PackedLogic4::from_msb_string(test.rhs).low_word();
+    runtime.signals[0] = {lhs.aval, lhs.bval};
+    runtime.signals[1] = {rhs.aval, rhs.bval};
+    auto descriptor = abi(runtime);
+    assert(
+        jit.execute(handle, descriptor)
+        == JitExecutionStatus::completed);
+    for (std::size_t index = 0; index < test.expected.size();
+         ++index) {
+      assert(
+          runtime.signals[index + 2]
+          == encode(test.expected[index]));
+    }
+  }
+}
+
 void test_initialized_bval_slot(const JitOptimizationLevel optimization,
                                 const std::string_view symbol) {
   LlvmJit jit{LlvmJitOptions{optimization, {}}};
@@ -2348,6 +2426,10 @@ int main() {
       JitOptimizationLevel::o0, "conditional_select_o0");
   test_conditional_select_at_level(
       JitOptimizationLevel::o2, "conditional_select_o2");
+  test_comparisons_at_level(
+      JitOptimizationLevel::o0, "comparisons_o0");
+  test_comparisons_at_level(
+      JitOptimizationLevel::o2, "comparisons_o2");
   test_initialized_bval_slot(JitOptimizationLevel::o0, "initialized_bval_o0");
   test_initialized_bval_slot(JitOptimizationLevel::o2, "initialized_bval_o2");
   test_debug_point_instrumentation();

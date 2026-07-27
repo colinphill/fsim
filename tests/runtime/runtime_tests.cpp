@@ -382,7 +382,57 @@ void test_simir_expressions_and_edges() {
   require(interpreter.signal_value(edge_seen).to_msb_string() == "1",
           "posedge must activate a waiting process");
   require(interpreter.signal_value(expression).to_msb_string() == "1011",
-          "SimIR add and unary-not operations");
+      "SimIR add and unary-not operations");
+}
+
+void test_simir_wide_truth_and_comparison() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto greater = interpreter.add_signal(
+      {"top.greater", PackedLogic4::from_msb_string("0")});
+  const auto logical_not_known = interpreter.add_signal(
+      {"top.logical_not_known", PackedLogic4::from_msb_string("X")});
+  const auto logical_not_unknown = interpreter.add_signal(
+      {"top.logical_not_unknown", PackedLogic4::from_msb_string("0")});
+
+  Process process;
+  process.id = 0;
+  process.name = "wide_truth_and_comparison";
+  process.register_count = 6;
+  process.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_msb_string(
+                 "1" + std::string(64, '0'))},
+      LoadConstant{
+          1, PackedLogic4::from_msb_string(
+                 "0" + std::string(64, '1'))},
+      Binary{BinaryOperator::greater_unsigned, 2, 0, 1},
+      WriteBlocking{greater, 2},
+      LogicalNot{3, 0},
+      WriteBlocking{logical_not_known, 3},
+      LoadConstant{
+          4, PackedLogic4::from_msb_string(
+                 "X" + std::string(64, '0'))},
+      LogicalNot{5, 4},
+      WriteBlocking{logical_not_unknown, 5},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+  const auto result = interpreter.run();
+  require(result.status == RunStatus::completed,
+          "wide comparison process completes");
+  require(interpreter.signal_value(greater).to_msb_string() == "1",
+          "wide unsigned comparison uses high bits");
+  require(
+      interpreter.signal_value(logical_not_known).to_msb_string()
+          == "0",
+      "known one dominates wide logical negation");
+  require(
+      interpreter.signal_value(logical_not_unknown).to_msb_string()
+          == "X",
+      "wide unknown-only truth value remains unknown");
 }
 
 void test_simir_force_release() {
@@ -1316,6 +1366,7 @@ int main() {
     test_simir();
     test_simir_update_coalescing();
     test_simir_expressions_and_edges();
+    test_simir_wide_truth_and_comparison();
     test_simir_force_release();
     test_simir_design_stop_identity();
     test_simir_alternate_executor_context_and_boundaries();

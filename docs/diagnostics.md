@@ -265,7 +265,6 @@ therefore excluded.
 | `FSIM-ELAB-041` | error | A literal is malformed or unsupported by executable lowering. |
 | `FSIM-ELAB-042` | error | An operator was parsed but has no executable SimIR lowering. |
 | `FSIM-ELAB-043` | error | An expression form was parsed but has no executable SimIR lowering. |
-| `FSIM-ELAB-044` | error | SystemVerilog logical negation lacks executable truth-value conversion. |
 | `FSIM-ELAB-045` | error | A VHDL edge predicate appears outside the one supported process-guard form. |
 | `FSIM-ELAB-046` | error | A procedural blocking intra-assignment delay cannot yet suspend after RHS evaluation. |
 | `FSIM-ELAB-047` | error | Assignment target and expression widths differ. |
@@ -287,6 +286,7 @@ therefore excluded.
 | `FSIM-ELAB-063` | error | A case-item choice width does not match its selector width. |
 | `FSIM-ELAB-064` | error | A conditional-expression condition is not scalar in the bounded executable slice. |
 | `FSIM-ELAB-065` | error | Conditional-expression alternatives have different widths. |
+| `FSIM-ELAB-066` | error | A signed relational comparison requires signed SimIR semantics that are not implemented yet. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

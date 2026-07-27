@@ -205,6 +205,40 @@ module conditional_app;
 endmodule
 )";
   }
+  const auto comparison_source = directory / "comparison.sv";
+  {
+    std::ofstream output(comparison_source);
+    output << R"(
+module comparison_app;
+  logic [3:0] lhs;
+  logic [3:0] rhs;
+  logic neq;
+  logic lt;
+  logic le;
+  logic gt;
+  logic ge;
+  logic logical_not;
+  always_comb begin
+    neq = lhs != rhs;
+    lt = lhs < rhs;
+    le = lhs <= rhs;
+    gt = lhs > rhs;
+    ge = lhs >= rhs;
+    logical_not = !lhs;
+  end
+  initial begin
+    lhs = 4'b0010;
+    rhs = 4'b0011;
+    #1 lhs = 4'b0000;
+    rhs = 4'b0000;
+    #1 lhs = 4'b00x0;
+    rhs = 4'b0011;
+    #1 lhs = 4'b01z0;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
   const auto partial_group_source = directory / "partial_group.sv";
   {
     std::ofstream output(partial_group_source);
@@ -1056,6 +1090,53 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       conditional_hybrid.final_values
       == std::vector<std::string>{
           "Z", "101Z", "100Z", "10XZ"}));
+
+  auto comparison_config = config;
+  comparison_config.project.name =
+      "comparison-expression-test";
+  comparison_config.project.top = "sv:work.comparison_app";
+  comparison_config.build.optimization =
+      fsim::project::Optimization::o2;
+  comparison_config.build.cache_path =
+      directory / "comparison-cache";
+  comparison_config.source_sets.clear();
+  fsim::project::SourceSet comparison_sources;
+  comparison_sources.language =
+      fsim::project::Language::system_verilog;
+  comparison_sources.standard = "2017";
+  comparison_sources.library = "work";
+  comparison_sources.files.push_back(comparison_source);
+  comparison_config.source_sets.push_back(
+      std::move(comparison_sources));
+  fsim::diagnostic::Engine comparison_diagnostics;
+  auto comparison_reference_project =
+      fsim::app::build_project(
+          comparison_config, comparison_diagnostics);
+  auto comparison_hybrid_project =
+      fsim::app::build_project(
+          comparison_config, comparison_diagnostics);
+  assert(comparison_reference_project);
+  assert(comparison_hybrid_project);
+  const auto comparison_reference = capture_simulation(
+      std::move(*comparison_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto comparison_hybrid = capture_simulation(
+      std::move(*comparison_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(comparison_reference, comparison_hybrid);
+  assert(
+      comparison_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(comparison_hybrid.result.time == 4);
+  assert(comparison_hybrid.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(comparison_hybrid.compiled_processes == 2);
+  assert(comparison_hybrid.compiled_modules == 1);
+#endif
+  assert((
+      comparison_hybrid.final_values
+      == std::vector<std::string>{
+          "01Z0", "0011", "X", "X", "X", "X", "X", "0"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =

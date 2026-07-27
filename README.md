@@ -44,6 +44,8 @@ The current tree contains:
   comma-separated choices and four-state `X`/`Z` matching;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
+- vector-aware SystemVerilog logical negation and unsigned
+  equality/relational comparisons with four-state unknown propagation;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

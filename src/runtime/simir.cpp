@@ -57,6 +57,20 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return result;
 }
 
+[[nodiscard]] PackedLogic4 logical_not(const PackedLogic4& source) {
+  bool has_unknown = false;
+  for (std::size_t index = 0; index < source.width(); ++index) {
+    const auto value = source.get(index);
+    if (value == Logic4::one) {
+      return PackedLogic4(1, Logic4::zero);
+    }
+    has_unknown =
+        has_unknown || value == Logic4::x || value == Logic4::z;
+  }
+  return PackedLogic4(
+      1, has_unknown ? Logic4::x : Logic4::one);
+}
+
 [[nodiscard]] PackedLogic4 binary_value(BinaryOperator operation,
                                         const PackedLogic4 &lhs,
                                         const PackedLogic4 &rhs) {
@@ -91,6 +105,57 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     }
     return result;
   }
+  if (operation == BinaryOperator::not_equal
+      || operation == BinaryOperator::less_unsigned
+      || operation == BinaryOperator::less_equal_unsigned
+      || operation == BinaryOperator::greater_unsigned
+      || operation == BinaryOperator::greater_equal_unsigned) {
+    for (std::size_t index = 0; index < lhs.width(); ++index) {
+      const auto left = lhs.get(index);
+      const auto right = rhs.get(index);
+      if (left == Logic4::x || left == Logic4::z
+          || right == Logic4::x || right == Logic4::z) {
+        return PackedLogic4(1, Logic4::x);
+      }
+    }
+    bool less = false;
+    bool greater = false;
+    for (std::size_t index = lhs.width(); index-- > 0;) {
+      if (lhs.get(index) == rhs.get(index)) {
+        continue;
+      }
+      less = lhs.get(index) == Logic4::zero;
+      greater = !less;
+      break;
+    }
+    bool result = false;
+    switch (operation) {
+    case BinaryOperator::not_equal:
+      result = less || greater;
+      break;
+    case BinaryOperator::less_unsigned:
+      result = less;
+      break;
+    case BinaryOperator::less_equal_unsigned:
+      result = less || !greater;
+      break;
+    case BinaryOperator::greater_unsigned:
+      result = greater;
+      break;
+    case BinaryOperator::greater_equal_unsigned:
+      result = greater || !less;
+      break;
+    case BinaryOperator::bit_and:
+    case BinaryOperator::bit_or:
+    case BinaryOperator::bit_xor:
+    case BinaryOperator::add_unsigned:
+    case BinaryOperator::equal:
+    case BinaryOperator::case_equal:
+      break;
+    }
+    return PackedLogic4(
+        1, result ? Logic4::one : Logic4::zero);
+  }
 
   PackedLogic4 result(lhs.width(), Logic4::zero);
   if (operation == BinaryOperator::add_unsigned) {
@@ -120,6 +185,11 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     case BinaryOperator::add_unsigned:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
+    case BinaryOperator::not_equal:
+    case BinaryOperator::less_unsigned:
+    case BinaryOperator::less_equal_unsigned:
+    case BinaryOperator::greater_unsigned:
+    case BinaryOperator::greater_equal_unsigned:
       break;
     }
   }
@@ -710,6 +780,11 @@ void Interpreter::Impl::execute(ProcessId id) {
             [&](const UnaryNot &op) {
               get_register(process, op.destination) =
                   unary_not(get_register(process, op.source));
+              ++process.pc;
+            },
+            [&](const LogicalNot& op) {
+              get_register(process, op.destination) =
+                  logical_not(get_register(process, op.source));
               ++process.pc;
             },
             [&](const Binary &op) {

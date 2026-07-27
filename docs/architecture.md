@@ -153,6 +153,14 @@ same interpreter and allocation-free LLVM single-word implementation.
 Vector truth conversion and the standard's complete expression sizing rules
 remain pending.
 
+SystemVerilog logical negation reduces a packed operand using four-state truth
+semantics: any known `1` makes `!` false, an otherwise unknown-containing
+operand produces `X`, and an all-zero operand produces true. Unsigned
+inequality and relational comparisons require equal operand widths and return
+`X` if either operand contains `X` or `Z`; known operands compare exactly.
+The interpreter supports arbitrary packed widths while LLVM uses the common
+single-word fast path and falls back for wider value-bearing processes.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

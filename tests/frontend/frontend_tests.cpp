@@ -2,6 +2,7 @@
 #include "fsim/frontend/frontend.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -992,6 +993,46 @@ endmodule
       "conditional-expression operand order");
 }
 
+void test_systemverilog_comparison_expressions() {
+  const auto result = parse_text(
+      "comparisons.sv",
+      R"(
+module comparisons;
+  logic [3:0] lhs;
+  logic [3:0] rhs;
+  logic result;
+  always_comb begin
+    result = !lhs;
+    result = lhs != rhs;
+    result = lhs < rhs;
+    result = lhs <= rhs;
+    result = lhs > rhs;
+    result = lhs >= rhs;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(), "SystemVerilog comparison expressions must parse");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 6
+          && statements[0].value.kind == ExpressionKind::Unary
+          && statements[0].value.text == "!",
+      "logical-negation expression node");
+  const std::array<std::string_view, 5> operators{
+      "!=", "<", "<=", ">", ">="};
+  for (std::size_t index = 0; index < operators.size(); ++index) {
+    require(
+        statements[index + 1].value.kind
+                == ExpressionKind::Binary
+            && statements[index + 1].value.text
+                == operators[index],
+        "comparison expression node");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -1019,6 +1060,7 @@ int main() {
     test_wildcard_and_always_comb_processes();
     test_systemverilog_case_statements();
     test_systemverilog_conditional_expression();
+    test_systemverilog_comparison_expressions();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

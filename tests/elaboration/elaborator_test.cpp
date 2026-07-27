@@ -3,6 +3,7 @@
 #include "fsim/frontend/frontend.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <iostream>
 #include <iterator>
@@ -414,10 +415,37 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(logical_not.ok());
-    const auto rejected_not =
+    const auto elaborated_not =
         fsim::elaboration::elaborate(logical_not.design, "logical_not");
-    assert(!rejected_not.ok());
-    assert(has_diagnostic(rejected_not, "FSIM-ELAB-044"));
+    assert(elaborated_not.ok());
+    const auto not_value =
+        elaborated_not.design->find_signal("value");
+    const auto not_result =
+        elaborated_not.design->find_signal("result");
+    assert(not_value && not_result);
+    auto not_interpreter =
+        elaborated_not.design->create_interpreter();
+    for (const auto& [value, expected] :
+         std::array{
+             std::pair{
+                 std::string_view{"0000"},
+                 std::string_view{"1"}},
+             std::pair{
+                 std::string_view{"00X0"},
+                 std::string_view{"X"}},
+             std::pair{
+                 std::string_view{"01X0"},
+                 std::string_view{"0"}}}) {
+        not_interpreter->deposit_signal(
+            *not_value,
+            fsim::runtime::PackedLogic4::from_msb_string(value));
+        (void)not_interpreter->run();
+        assert(
+            not_interpreter
+                ->signal_value(*not_result)
+                .to_msb_string()
+            == expected);
+    }
 
     const auto blocking_delay = fsim::frontend::parse_text(
         "blocking_delay.sv",
@@ -1250,6 +1278,113 @@ endmodule
     assert(!rejected_alternatives.ok());
     assert(has_diagnostic(
         rejected_alternatives, "FSIM-ELAB-065"));
+
+    const auto comparison_process = fsim::frontend::parse_text(
+        "comparison_process.sv",
+        R"(
+module comparison_process;
+  logic [3:0] lhs;
+  logic [3:0] rhs;
+  logic neq;
+  logic lt;
+  logic le;
+  logic gt;
+  logic ge;
+  logic logical_not;
+  always_comb begin
+    neq = lhs != rhs;
+    lt = lhs < rhs;
+    le = lhs <= rhs;
+    gt = lhs > rhs;
+    ge = lhs >= rhs;
+    logical_not = !lhs;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(comparison_process.ok());
+    const auto elaborated_comparisons =
+        fsim::elaboration::elaborate(
+            comparison_process.design,
+            "sv:work.comparison_process");
+    assert(elaborated_comparisons.ok());
+    const auto comparison_lhs =
+        elaborated_comparisons.design->find_signal("lhs");
+    const auto comparison_rhs =
+        elaborated_comparisons.design->find_signal("rhs");
+    const auto comparison_neq =
+        elaborated_comparisons.design->find_signal("neq");
+    const auto comparison_lt =
+        elaborated_comparisons.design->find_signal("lt");
+    const auto comparison_le =
+        elaborated_comparisons.design->find_signal("le");
+    const auto comparison_gt =
+        elaborated_comparisons.design->find_signal("gt");
+    const auto comparison_ge =
+        elaborated_comparisons.design->find_signal("ge");
+    const auto comparison_not =
+        elaborated_comparisons.design->find_signal("logical_not");
+    assert(
+        comparison_lhs && comparison_rhs && comparison_neq
+        && comparison_lt && comparison_le && comparison_gt
+        && comparison_ge && comparison_not);
+    auto comparison_interpreter =
+        elaborated_comparisons.design->create_interpreter();
+    const auto run_comparison =
+        [&](const std::string_view lhs,
+            const std::string_view rhs,
+            const std::array<std::string_view, 6>& expected) {
+          comparison_interpreter->deposit_signal(
+              *comparison_lhs,
+              fsim::runtime::PackedLogic4::from_msb_string(lhs));
+          comparison_interpreter->deposit_signal(
+              *comparison_rhs,
+              fsim::runtime::PackedLogic4::from_msb_string(rhs));
+          (void)comparison_interpreter->run();
+          const std::array signals{
+              *comparison_neq,
+              *comparison_lt,
+              *comparison_le,
+              *comparison_gt,
+              *comparison_ge,
+              *comparison_not};
+          for (std::size_t index = 0; index < signals.size();
+               ++index) {
+            assert(
+                comparison_interpreter
+                    ->signal_value(signals[index])
+                    .to_msb_string()
+                == expected[index]);
+          }
+        };
+    run_comparison(
+        "0010", "0011", {"1", "1", "1", "0", "0", "0"});
+    run_comparison(
+        "0000", "0000", {"0", "0", "1", "0", "1", "1"});
+    run_comparison(
+        "00X0", "0011", {"X", "X", "X", "X", "X", "X"});
+    run_comparison(
+        "01X0", "0011", {"X", "X", "X", "X", "X", "0"});
+
+    const auto signed_comparison = fsim::frontend::parse_text(
+        "signed_comparison.sv",
+        R"(
+module signed_comparison;
+  logic signed [3:0] lhs;
+  logic signed [3:0] rhs;
+  logic result;
+  always_comb result = lhs < rhs;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(signed_comparison.ok());
+    const auto rejected_signed_comparison =
+        fsim::elaboration::elaborate(
+            signed_comparison.design,
+            "sv:work.signed_comparison");
+    assert(!rejected_signed_comparison.ok());
+    assert(has_diagnostic(
+        rejected_signed_comparison, "FSIM-ELAB-066"));
 
     const auto empty_wildcard = fsim::frontend::parse_text(
         "empty_wildcard.sv",

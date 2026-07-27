@@ -42,6 +42,13 @@ struct UnaryNot {
   RegisterId source{};
 };
 
+/// SystemVerilog logical negation. The source may be a packed vector; the
+/// destination is a scalar four-state truth value.
+struct LogicalNot {
+  RegisterId destination{};
+  RegisterId source{};
+};
+
 enum class BinaryOperator : std::uint8_t {
   bit_and,
   bit_or,
@@ -49,6 +56,11 @@ enum class BinaryOperator : std::uint8_t {
   add_unsigned,
   equal,
   case_equal,
+  not_equal,
+  less_unsigned,
+  less_equal_unsigned,
+  greater_unsigned,
+  greater_equal_unsigned,
 };
 
 struct Binary {
@@ -179,10 +191,10 @@ struct Stop {};
 struct Halt {};
 
 using Operation =
-    std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, Binary,
-                 ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
-                 WaitFor, WaitOn, WaitSensitivity, Yield, Jump, Branch,
-                 DebugPoint, Assert, Stop, Halt>;
+    std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, LogicalNot,
+                 Binary, ConditionalSelect, WriteBlocking, WriteUpdate,
+                 WriteAfter, WaitFor, WaitOn, WaitSensitivity, Yield, Jump,
+                 Branch, DebugPoint, Assert, Stop, Halt>;
 
 struct Signal {
   std::string name;

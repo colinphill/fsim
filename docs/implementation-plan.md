@@ -98,6 +98,9 @@ The following foundation is implemented:
 - bounded SystemVerilog conditional expressions with scalar four-state
   conditions, equal-width alternatives, exact unknown-condition merging,
   and interpreter/O0/O2 evidence;
+- vector-aware SystemVerilog logical negation and unsigned
+  inequality/relational comparisons with exact four-state unknown
+  propagation and interpreter/O0/O2 evidence;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
 - a stable catalog covering 281 unique current production diagnostic codes.
