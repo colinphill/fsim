@@ -83,7 +83,9 @@ and SDF.
 The SystemC v1 target is the signal-level subset described in
 [systemc-subset.md](systemc-subset.md). Arbitrary ordinary C++ may run inside
 registered callbacks, but TLM, AMS, CCI, dynamic processes, arbitrary custom
-primitive channels, and Accellera kernel/ABI compatibility are deferred.
+primitive-channel interfaces/binding beyond the bounded registered
+`sc_prim_channel` update callback, and Accellera kernel/ABI compatibility are
+deferred.
 
 ## Release evidence
 

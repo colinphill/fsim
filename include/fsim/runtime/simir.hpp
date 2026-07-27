@@ -340,6 +340,7 @@ enum class EventNotificationKind : std::uint8_t {
   immediate,
   delta,
   timed,
+  delayed,
 };
 
 class ProcessExecutionContext {
@@ -448,6 +449,15 @@ public:
         "alternate process executor does not support event cancellation"};
   }
 
+  /// Request one alternate-language primitive-channel update. `channel` is a
+  /// stable executor-owned identity. The kernel deduplicates it until the
+  /// corresponding update callback finishes and invokes that callback in the
+  /// common update phase.
+  virtual void request_channel_update(std::uint64_t) {
+    throw std::logic_error{
+        "alternate process executor does not support channel updates"};
+  }
+
   /// True when an embedding debugger currently requests source boundaries.
   [[nodiscard]] virtual bool execution_points_enabled() const noexcept {
     return false;
@@ -521,6 +531,15 @@ public:
   [[nodiscard]] virtual ProcessResumeResult
   resume(ProcessExecutionContext& context,
          InstructionIndex start_instruction) = 0;
+
+  /// Execute a previously requested primitive-channel update. Only
+  /// alternate-language executors which expose such channels override this.
+  virtual void update_channel(
+      std::uint64_t,
+      ProcessExecutionContext&) {
+    throw std::logic_error{
+        "alternate process executor has no primitive-channel callback"};
+  }
 
   [[nodiscard]] virtual PackedLogic4
   read_register(RegisterId, std::size_t) const {

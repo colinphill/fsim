@@ -3112,6 +3112,10 @@ private:
                     {event.name, event.handle, signal->second});
             }
         }
+        for (const auto& channel : instance.primitive_channels) {
+            info.primitive_channels.push_back(
+                {channel.name, channel.handle});
+        }
         design_.systemc_instances_.push_back(std::move(info));
 
         for (const auto& external : instance.processes) {

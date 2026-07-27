@@ -8,6 +8,7 @@
 #include <sstream>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace fsim::runtime::simir {
@@ -611,6 +612,8 @@ AssertionError::AssertionError(ProcessId process,
       severity_(severity), source_(std::move(source)) {}
 
 struct Interpreter::Impl {
+  struct ExecutionContext;
+
   struct ProcessState {
     Process program;
     InstructionIndex pc{};
@@ -660,6 +663,7 @@ struct Interpreter::Impl {
   std::vector<std::vector<Fanout>> dynamic_fanout;
   std::vector<EventState> event_states;
   std::vector<PendingUpdate> pending_updates;
+  std::unordered_set<std::uint64_t> pending_channel_updates;
   SignalChangeHook signal_change_hook;
   ExecutionPointHook execution_point_hook;
   bool update_commit_scheduled{};
@@ -746,6 +750,8 @@ struct Interpreter::Impl {
       InstructionIndex instruction,
       InstructionIndex next_instruction,
       const ExternalSuspension& suspension);
+  void request_channel_update(
+      ProcessId process, std::uint64_t channel);
   void execute(ProcessId id);
 
   void queue_at(ProcessId id, SimulationTick time) {
@@ -860,8 +866,20 @@ struct Interpreter::Impl {
       const StableOrder order) {
     (void)get_signal(event);
     auto& state = event_states[event];
+    auto effective_kind = kind;
 
-    if (kind == EventNotificationKind::immediate) {
+    if (kind == EventNotificationKind::delayed) {
+      if (state.kind != PendingEventKind::none) {
+        throw std::logic_error{
+            "notify_delayed requires an event with no pending notification"};
+      }
+      effective_kind =
+          delay == 0
+              ? EventNotificationKind::delta
+              : EventNotificationKind::timed;
+    }
+
+    if (effective_kind == EventNotificationKind::immediate) {
       if (delay != 0) {
         throw std::invalid_argument{
             "immediate event notification cannot have a delay"};
@@ -871,7 +889,7 @@ struct Interpreter::Impl {
       return;
     }
 
-    if (kind == EventNotificationKind::delta) {
+    if (effective_kind == EventNotificationKind::delta) {
       if (delay != 0) {
         throw std::invalid_argument{
             "delta event notification cannot have a delay"};
@@ -898,7 +916,7 @@ struct Interpreter::Impl {
       return;
     }
 
-    if (kind != EventNotificationKind::timed || delay == 0) {
+    if (effective_kind != EventNotificationKind::timed || delay == 0) {
       throw std::invalid_argument{
           "timed event notification requires a non-zero delay"};
     }
@@ -1092,6 +1110,206 @@ struct Interpreter::Impl {
     throw InterpreterError(process.program.id, process.pc, message);
   }
 };
+
+struct Interpreter::Impl::ExecutionContext final
+    : ProcessExecutionContext {
+  Impl& owner;
+  ProcessId process;
+
+  ExecutionContext(Impl& owner_value, const ProcessId process_value)
+      : owner(owner_value), process(process_value) {}
+
+  [[nodiscard]] PackedLogic4
+  read_signal(const SignalId signal) const override {
+    return owner.get_signal(signal).initial_value;
+  }
+
+  [[nodiscard]] Logic4Word
+  read_signal_word(const SignalId signal) const override {
+    return owner.get_signal(signal).initial_value.low_word();
+  }
+
+  void write_blocking(
+      const SignalId signal, PackedLogic4 value) override {
+    owner.commit(signal, std::move(value));
+  }
+
+  void write_blocking_word(
+      const SignalId signal,
+      const Logic4Word value) override {
+    owner.commit(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval));
+  }
+
+  void write_blocking_slice(
+      const SignalId signal,
+      PackedLogic4 value,
+      const std::size_t offset) override {
+    owner.commit_slice(signal, std::move(value), offset);
+  }
+
+  void write_blocking_slice_word(
+      const SignalId signal,
+      const Logic4Word value,
+      const std::uint32_t offset) override {
+    owner.commit_slice(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset);
+  }
+
+  void write_update(
+      const SignalId signal, PackedLogic4 value) override {
+    owner.stage_update(signal, std::move(value));
+  }
+
+  void write_update_word(
+      const SignalId signal,
+      const Logic4Word value) override {
+    owner.stage_update(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval));
+  }
+
+  void write_update_slice(
+      const SignalId signal,
+      PackedLogic4 value,
+      const std::size_t offset) override {
+    owner.stage_update_slice(
+        signal, std::move(value), offset);
+  }
+
+  void write_update_slice_word(
+      const SignalId signal,
+      const Logic4Word value,
+      const std::uint32_t offset) override {
+    owner.stage_update_slice(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset);
+  }
+
+  void write_after(
+      const SignalId signal,
+      PackedLogic4 value,
+      const SimulationTick delay) override {
+    owner.scheduler.schedule_after(
+        delay,
+        SchedulerPhase::update,
+        process,
+        [&owner = owner, signal, value = std::move(value)](
+            Scheduler&) mutable {
+          owner.stage_update(signal, std::move(value));
+        });
+  }
+
+  void write_after_word(
+      const SignalId signal,
+      const Logic4Word value,
+      const SimulationTick delay) override {
+    auto packed = PackedLogic4::from_aval_bval(
+        value.width, value.aval, value.bval);
+    owner.scheduler.schedule_after(
+        delay,
+        SchedulerPhase::update,
+        process,
+        [&owner = owner, signal, value = std::move(packed)](
+            Scheduler&) mutable {
+          owner.stage_update(signal, std::move(value));
+        });
+  }
+
+  void write_after_slice(
+      const SignalId signal,
+      PackedLogic4 value,
+      const std::size_t offset,
+      const SimulationTick delay) override {
+    owner.scheduler.schedule_after(
+        delay,
+        SchedulerPhase::update,
+        process,
+        [&owner = owner,
+         signal,
+         value = std::move(value),
+         offset](Scheduler&) mutable {
+          owner.stage_update_slice(
+              signal, std::move(value), offset);
+        });
+  }
+
+  void write_after_slice_word(
+      const SignalId signal,
+      const Logic4Word value,
+      const std::uint32_t offset,
+      const SimulationTick delay) override {
+    write_after_slice(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset,
+        delay);
+  }
+
+  void notify_event(
+      const SignalId event,
+      const SimulationTick delay,
+      const EventNotificationKind kind) override {
+    owner.notify_event(event, delay, kind, process);
+  }
+
+  void cancel_event(const SignalId event) override {
+    owner.cancel_event(event);
+  }
+
+  void request_channel_update(
+      const std::uint64_t channel) override {
+    owner.request_channel_update(process, channel);
+  }
+
+  [[nodiscard]] bool
+  execution_points_enabled() const noexcept override {
+    return static_cast<bool>(owner.execution_point_hook);
+  }
+};
+
+void Interpreter::Impl::request_channel_update(
+    const ProcessId process_id,
+    const std::uint64_t channel) {
+  auto& process = get_process(process_id);
+  if (!process.executor) {
+    throw std::logic_error{
+        "primitive-channel update requires an alternate executor"};
+  }
+  if (!pending_channel_updates.insert(channel).second) {
+    return;
+  }
+
+  auto callback =
+      [this, process_id, channel](Scheduler&) {
+        auto& state = get_process(process_id);
+        ExecutionContext context{*this, process_id};
+        try {
+          state.executor->update_channel(channel, context);
+        } catch (...) {
+          pending_channel_updates.erase(channel);
+          throw;
+        }
+        pending_channel_updates.erase(channel);
+      };
+  const auto phase = scheduler.current_phase();
+  if (phase && *phase >= SchedulerPhase::update) {
+    scheduler.schedule_next_delta(
+        SchedulerPhase::update, channel, std::move(callback));
+  } else {
+    scheduler.schedule(
+        SchedulerPhase::update, channel, std::move(callback));
+  }
+}
 
 void Interpreter::Impl::handle_boundary(
     ProcessState& process,
@@ -1353,166 +1571,6 @@ void Interpreter::Impl::handle_external_boundary(
 void Interpreter::Impl::execute(ProcessId id) {
   auto &process = get_process(id);
   if (process.executor) {
-    struct ExecutionContext final : ProcessExecutionContext {
-      Impl& owner;
-      ProcessId process;
-
-      ExecutionContext(Impl& owner_value, const ProcessId process_value)
-          : owner(owner_value), process(process_value) {}
-
-      [[nodiscard]] PackedLogic4
-      read_signal(const SignalId signal) const override {
-        return owner.get_signal(signal).initial_value;
-      }
-
-      [[nodiscard]] Logic4Word
-      read_signal_word(const SignalId signal) const override {
-        return owner.get_signal(signal).initial_value.low_word();
-      }
-
-      void write_blocking(
-          const SignalId signal, PackedLogic4 value) override {
-        owner.commit(signal, std::move(value));
-      }
-
-      void write_blocking_word(
-          const SignalId signal,
-          const Logic4Word value) override {
-        owner.commit(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval));
-      }
-
-      void write_blocking_slice(
-          const SignalId signal,
-          PackedLogic4 value,
-          const std::size_t offset) override {
-        owner.commit_slice(signal, std::move(value), offset);
-      }
-
-      void write_blocking_slice_word(
-          const SignalId signal,
-          const Logic4Word value,
-          const std::uint32_t offset) override {
-        owner.commit_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset);
-      }
-
-      void write_update(
-          const SignalId signal, PackedLogic4 value) override {
-        owner.stage_update(signal, std::move(value));
-      }
-
-      void write_update_word(
-          const SignalId signal,
-          const Logic4Word value) override {
-        owner.stage_update(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval));
-      }
-
-      void write_update_slice(
-          const SignalId signal,
-          PackedLogic4 value,
-          const std::size_t offset) override {
-        owner.stage_update_slice(
-            signal, std::move(value), offset);
-      }
-
-      void write_update_slice_word(
-          const SignalId signal,
-          const Logic4Word value,
-          const std::uint32_t offset) override {
-        owner.stage_update_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset);
-      }
-
-      void write_after(
-          const SignalId signal,
-          PackedLogic4 value,
-          const SimulationTick delay) override {
-        owner.scheduler.schedule_after(
-            delay,
-            SchedulerPhase::update,
-            process,
-            [&owner = owner, signal, value = std::move(value)](
-                Scheduler&) mutable {
-              owner.stage_update(signal, std::move(value));
-            });
-      }
-
-      void write_after_word(
-          const SignalId signal,
-          const Logic4Word value,
-          const SimulationTick delay) override {
-        auto packed = PackedLogic4::from_aval_bval(
-            value.width, value.aval, value.bval);
-        owner.scheduler.schedule_after(
-            delay,
-            SchedulerPhase::update,
-            process,
-            [&owner = owner, signal, value = std::move(packed)](
-                Scheduler&) mutable {
-              owner.stage_update(signal, std::move(value));
-            });
-      }
-
-      void write_after_slice(
-          const SignalId signal,
-          PackedLogic4 value,
-          const std::size_t offset,
-          const SimulationTick delay) override {
-        owner.scheduler.schedule_after(
-            delay,
-            SchedulerPhase::update,
-            process,
-            [&owner = owner,
-             signal,
-             value = std::move(value),
-             offset](Scheduler&) mutable {
-              owner.stage_update_slice(
-                  signal, std::move(value), offset);
-            });
-      }
-
-      void write_after_slice_word(
-          const SignalId signal,
-          const Logic4Word value,
-          const std::uint32_t offset,
-          const SimulationTick delay) override {
-        write_after_slice(
-            signal,
-            PackedLogic4::from_aval_bval(
-                value.width, value.aval, value.bval),
-            offset,
-            delay);
-      }
-
-      void notify_event(
-          const SignalId event,
-          const SimulationTick delay,
-          const EventNotificationKind kind) override {
-        owner.notify_event(event, delay, kind, process);
-      }
-
-      void cancel_event(const SignalId event) override {
-        owner.cancel_event(event);
-      }
-
-      [[nodiscard]] bool
-      execution_points_enabled() const noexcept override {
-        return static_cast<bool>(owner.execution_point_hook);
-      }
-    };
-
     ExecutionContext context{*this, id};
     while (!process.halted) {
       const auto boundary = process.executor->resume(context, process.pc);

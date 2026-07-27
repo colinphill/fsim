@@ -780,6 +780,77 @@ SC_MODULE(EventLists) {
   }
 };
 
+class DeferredChannel final : public sc_core::sc_prim_channel {
+ public:
+  DeferredChannel(
+      const char* name,
+      sc_core::sc_out<sc_dt::sc_uint<8>>& value,
+      sc_core::sc_out<sc_dt::sc_uint<8>>& updates)
+      : sc_core::sc_prim_channel(name),
+        value_(value),
+        updates_(updates) {}
+
+  void write(const unsigned value) {
+    pending_ = value;
+    request_update();
+  }
+
+ protected:
+  void update() override {
+    ++update_count_;
+    value_.write(sc_dt::sc_uint<8>{pending_});
+    updates_.write(sc_dt::sc_uint<8>{update_count_});
+    request_update();
+  }
+
+ private:
+  sc_core::sc_out<sc_dt::sc_uint<8>>& value_;
+  sc_core::sc_out<sc_dt::sc_uint<8>>& updates_;
+  unsigned pending_{};
+  unsigned update_count_{};
+};
+
+SC_MODULE(KernelChannels) {
+  sc_core::sc_out<sc_dt::sc_uint<8>> value{"value"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> updates{"updates"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> event_count{"event_count"};
+  sc_core::sc_event pulse{"pulse"};
+  DeferredChannel deferred;
+  unsigned producer_state{};
+  unsigned observed_events{};
+
+  SC_CTOR(KernelChannels), deferred{"deferred", value, updates} {
+    SC_METHOD(produce);
+    SC_METHOD(consume);
+  }
+
+  void produce() {
+    if (producer_state == 0) {
+      ++producer_state;
+      deferred.write(1);
+      deferred.write(2);
+      pulse.notify_delayed(
+          sc_core::sc_time{2, sc_core::SC_NS});
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else if (producer_state == 1) {
+      ++producer_state;
+      deferred.write(3);
+      next_trigger(sc_core::sc_time{2, sc_core::SC_NS});
+    } else {
+      deferred.write(4);
+    }
+  }
+
+  void consume() {
+    if (observed_events != 0) {
+      event_count.write(
+          sc_dt::sc_uint<8>{observed_events});
+    }
+    ++observed_events;
+    next_trigger(pulse);
+  }
+};
+
 namespace {
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
@@ -919,8 +990,14 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (dynamic_status != FSIM_SC_OK) {
     return dynamic_status;
   }
-  return fsim::systemc::register_module_factory<EventLists>(
-      host, registrar, "event_lists");
+  const auto event_list_status =
+      fsim::systemc::register_module_factory<EventLists>(
+          host, registrar, "event_lists");
+  if (event_list_status != FSIM_SC_OK) {
+    return event_list_status;
+  }
+  return fsim::systemc::register_module_factory<KernelChannels>(
+      host, registrar, "kernel_channels");
 }
 )";
   }
@@ -1486,6 +1563,71 @@ end architecture rtl;
   assert(
       std::get<2>(event_lists_reference)
       == std::get<2>(event_lists_compiled));
+
+  auto kernel_channel_config = systemc_method_top_config;
+  kernel_channel_config.project.top =
+      "systemc:models.kernel_channels";
+  fsim::diagnostic::Engine kernel_channel_diagnostics;
+  auto kernel_channel_reference = fsim::app::build_project(
+      kernel_channel_config, kernel_channel_diagnostics);
+  auto kernel_channel_compiled = fsim::app::build_project(
+      kernel_channel_config, kernel_channel_diagnostics);
+  assert(kernel_channel_reference);
+  assert(kernel_channel_compiled);
+  assert(
+      kernel_channel_reference->design.systemc_instances()
+          .front().primitive_channels.size()
+      == 1);
+  const auto run_kernel_channels =
+      [&](fsim::app::BuiltProject project,
+          const fsim::app::SimulationEngine engine) {
+        const auto value =
+            project.design.find_signal("kernel_channels.value");
+        const auto updates =
+            project.design.find_signal("kernel_channels.updates");
+        const auto event_count =
+            project.design.find_signal(
+                "kernel_channels.event_count");
+        assert(value && updates && event_count);
+        fsim::app::Simulation simulation{
+            std::move(project),
+            kernel_channel_config.run.max_deltas,
+            engine};
+        const auto result = simulation.run();
+        return std::tuple{
+            result,
+            simulation.read_signal(*value).to_msb_string(),
+            simulation.read_signal(*updates).to_msb_string(),
+            simulation.read_signal(*event_count).to_msb_string()};
+      };
+  const auto kernel_reference = run_kernel_channels(
+      std::move(*kernel_channel_reference),
+      fsim::app::SimulationEngine::interpreter);
+  const auto kernel_compiled = run_kernel_channels(
+      std::move(*kernel_channel_compiled),
+      fsim::app::SimulationEngine::compiled);
+  assert(
+      std::get<0>(kernel_reference).status
+      == fsim::runtime::RunStatus::completed);
+  assert(std::get<0>(kernel_reference).time == 3);
+  assert(std::get<1>(kernel_reference) == "00000100");
+  assert(std::get<2>(kernel_reference) == "00000011");
+  assert(std::get<3>(kernel_reference) == "00000001");
+  assert(
+      std::get<0>(kernel_reference).status
+      == std::get<0>(kernel_compiled).status);
+  assert(
+      std::get<0>(kernel_reference).time
+      == std::get<0>(kernel_compiled).time);
+  assert(
+      std::get<1>(kernel_reference)
+      == std::get<1>(kernel_compiled));
+  assert(
+      std::get<2>(kernel_reference)
+      == std::get<2>(kernel_compiled));
+  assert(
+      std::get<3>(kernel_reference)
+      == std::get<3>(kernel_compiled));
 
   struct CapturedSimulation {
     fsim::runtime::RunResult result;

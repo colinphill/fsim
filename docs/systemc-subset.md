@@ -15,8 +15,9 @@ shared library, loads it, constructs the requested factory instances, and
 retains their native objects for the design lifetime. Common-kernel SystemC
 execution now covers statically sensitive `SC_METHOD` callbacks, dynamic
 time/event and OR/AND-list `next_trigger`, named-event
-notification/replacement/cancellation, and port updates. Internal primitive
-channels and fiber-backed thread execution are still work in progress.
+notification/replacement/cancellation, strict `notify_delayed`, port updates,
+and registered primitive-channel update callbacks. Standard signal/channel
+internals and fiber-backed thread execution are still work in progress.
 
 ## Source inclusion
 
@@ -40,6 +41,8 @@ The current facade defines:
   `sc_gen_unique_name`;
 - `sc_core::sc_interface`, `sc_export<IF>`, `sc_signal<T>`, `sc_in<T>`,
   `sc_out<T>`, and `sc_inout<T>`;
+- `sc_core::sc_prim_channel` registration and deduplicated
+  `request_update()`;
 - positive/negative edge event finders for input and inout sensitivity;
 - `SC_MODULE`, `SC_CTOR`, `SC_HAS_PROCESS`, `SC_METHOD`, `SC_THREAD`, and
   `SC_CTHREAD`;
@@ -192,7 +195,19 @@ An already-pending delta notification wins. A timed notification is replaced
 only by an earlier due time. Immediate notification cancels pending work before
 triggering, and `sc_event::cancel()` invalidates a pending delta or timed
 notification. Canceled/replaced timestamp-heap entries are generation-checked
-no-ops when eventually dequeued. `notify_delayed` is not implemented yet.
+no-ops when eventually dequeued. `notify_delayed()` and
+`notify_delayed(sc_time)` require no existing pending notification and report
+an error otherwise; zero delay targets the next delta and non-zero delay
+targets the requested future time.
+
+An `sc_prim_channel` constructed during module elaboration receives a stable
+native handle and debug-visible hierarchy record. `request_update()` is
+deduplicated until the channel's virtual `update()` callback returns. The
+callback runs in stable channel-handle order in the common update phase; a
+request for another channel made during that phase is deferred to the next
+delta, and a self-request made from `update()` is ignored while the original
+request remains pending. Channel callbacks can use registered ports and events
+through the same contained native invocation boundary as `SC_METHOD`.
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0
 fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
@@ -207,16 +222,18 @@ SystemC work participates in fsim's common phase policy:
 - changed channels awaken dependents in the next delta.
 
 The facade and native host callbacks implement dynamic method sensitivity,
-port reads, update-phase port writes, and named-event notification and
-cancellation, including OR/AND dynamic event expressions. It does not yet
-provide internal primitive-channel registration or fiber suspension.
+port reads, update-phase port writes, named-event notification/cancellation,
+OR/AND dynamic event expressions, and primitive-channel registration/update
+dispatch. It does not yet provide full `sc_signal` kernel integration,
+arbitrary user-defined channel binding semantics, lifecycle phase callbacks,
+asynchronous updates, or fiber suspension.
 
 ## Deliberately outside v1
 
 - Accellera binary or kernel compatibility
 - TLM, AMS, and CCI
 - dynamic process creation
-- arbitrary custom primitive channels
+- arbitrary custom primitive-channel interfaces and binding semantics
 - user replacement of the scheduler
 - ARM64 context switching
 

@@ -369,6 +369,7 @@ endmodule
                  }},
             },
             {},
+            {},
             {}};
     const std::vector<fsim::elaboration::Binding>
         hdl_to_systemc_bindings{
@@ -554,6 +555,7 @@ end architecture rtl;
                       fsim::frontend::PortDirection::Output, 202},
                  }},
             },
+            {},
             {},
             {}};
     const std::vector<fsim::elaboration::Binding>

@@ -1765,6 +1765,200 @@ void test_simir_alternate_executor_event_replacement_and_cancel() {
       "only the earliest timed and final immediate event must trigger");
 }
 
+void test_simir_alternate_executor_notify_delayed() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  class Producer final : public ProcessExecutor {
+  public:
+    Producer(
+        const SignalId event,
+        bool& duplicate_rejected)
+        : event_(event),
+          duplicate_rejected_(duplicate_rejected) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        InstructionIndex) override {
+      ProcessResumeResult result{0, 1};
+      if (state_++ == 0) {
+        context.notify_event(
+            event_, 2, EventNotificationKind::delayed);
+        try {
+          context.notify_event(
+              event_, 1, EventNotificationKind::delayed);
+        } catch (const std::logic_error&) {
+          duplicate_rejected_ = true;
+        }
+        result.external.kind = ExternalSuspendKind::wait_for;
+        result.external.delay = 1;
+      } else {
+        context.cancel_event(event_);
+        context.notify_event(
+            event_, 0, EventNotificationKind::delayed);
+        result.external.kind = ExternalSuspendKind::halt;
+      }
+      return result;
+    }
+
+  private:
+    SignalId event_{};
+    bool& duplicate_rejected_;
+    std::size_t state_{};
+  };
+
+  class Consumer final : public ProcessExecutor {
+  public:
+    Consumer(
+        const SignalId event,
+        std::size_t& notifications)
+        : event_(event), notifications_(notifications) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext&,
+        InstructionIndex) override {
+      ProcessResumeResult result{0, 1};
+      if (initialized_) {
+        ++notifications_;
+        result.external.kind = ExternalSuspendKind::halt;
+      } else {
+        initialized_ = true;
+        result.external.kind = ExternalSuspendKind::wait_on;
+        result.external.sensitivity.push_back(
+            {event_, EdgeKind::any});
+      }
+      return result;
+    }
+
+  private:
+    SignalId event_{};
+    std::size_t& notifications_;
+    bool initialized_{};
+  };
+
+  Interpreter interpreter;
+  const auto event = interpreter.add_signal(
+      {"delayed_event", PackedLogic4::from_msb_string("0")});
+
+  Process producer;
+  producer.id = 0;
+  producer.name = "notify_delayed_producer";
+  producer.operations = {Halt{}};
+  const auto producer_id =
+      interpreter.add_process(std::move(producer));
+
+  Process consumer;
+  consumer.id = 1;
+  consumer.name = "notify_delayed_consumer";
+  consumer.operations = {Halt{}};
+  const auto consumer_id =
+      interpreter.add_process(std::move(consumer));
+
+  bool duplicate_rejected = false;
+  std::size_t notifications = 0;
+  interpreter.set_process_executor(
+      producer_id,
+      std::make_unique<Producer>(
+          event, duplicate_rejected));
+  interpreter.set_process_executor(
+      consumer_id,
+      std::make_unique<Consumer>(event, notifications));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 2,
+      "canceled notify_delayed entries must drain harmlessly");
+  require(
+      duplicate_rejected,
+      "notify_delayed must reject an event with a pending notification");
+  require(
+      notifications == 1,
+      "the replacement delta notify_delayed must trigger exactly once");
+}
+
+void test_simir_alternate_executor_primitive_channel_updates() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  class ChannelExecutor final : public ProcessExecutor {
+  public:
+    ChannelExecutor(
+        const SignalId output,
+        std::vector<std::uint64_t>& updates)
+        : output_(output), updates_(updates) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        InstructionIndex) override {
+      context.request_channel_update(10);
+      context.request_channel_update(10);
+      context.request_channel_update(20);
+      ProcessResumeResult result{0, 1};
+      result.external.kind = ExternalSuspendKind::halt;
+      return result;
+    }
+
+    void update_channel(
+        const std::uint64_t channel,
+        ProcessExecutionContext& context) override {
+      updates_.push_back(channel);
+      context.write_update(
+          output_,
+          PackedLogic4::from_msb_string(
+              channel == 10 ? "01"
+              : channel == 20 ? "10"
+                              : "11"));
+      if (channel == 10) {
+        context.request_channel_update(10);
+        context.request_channel_update(30);
+      }
+    }
+
+  private:
+    SignalId output_{};
+    std::vector<std::uint64_t>& updates_;
+  };
+
+  Interpreter interpreter;
+  const auto output = interpreter.add_signal(
+      {"channel_output", PackedLogic4::from_msb_string("00")});
+  Process process;
+  process.id = 0;
+  process.name = "primitive_channel_requester";
+  process.operations = {Halt{}};
+  const auto process_id =
+      interpreter.add_process(std::move(process));
+
+  std::vector<std::uint64_t> updates;
+  std::size_t commits = 0;
+  interpreter.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4&,
+          const SimulationTick) {
+        if (signal == output) {
+          ++commits;
+        }
+      });
+  interpreter.set_process_executor(
+      process_id,
+      std::make_unique<ChannelExecutor>(output, updates));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed
+          && result.time == 0,
+      "updates requested during the update phase must enter the next delta");
+  require(
+      updates == std::vector<std::uint64_t>{10, 20, 30},
+      "primitive-channel updates must be deduplicated and stably ordered");
+  require(
+      commits == 2,
+      "an update-phase request must commit in a later delta");
+  require(
+      interpreter.signal_value(output).to_msb_string() == "11",
+      "primitive-channel writes must commit through the common update phase");
+}
+
 void test_simir_alternate_executor_event_lists() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2044,6 +2238,8 @@ int main() {
     test_simir_alternate_executor_cpp_exception_containment();
     test_simir_alternate_executor_validation();
     test_simir_alternate_executor_event_replacement_and_cancel();
+    test_simir_alternate_executor_notify_delayed();
+    test_simir_alternate_executor_primitive_channel_updates();
     test_simir_alternate_executor_event_lists();
     test_simir_assertion_metadata();
     test_simir_execution_point_ordering();

@@ -26,6 +26,18 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, cancel_event),
     "event-list waits must remain an append-only host field");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, notify_event_delayed)
+        > offsetof(fsim_sc_host_v1, wait_event_list),
+    "notify_delayed must remain an append-only host field");
+_Static_assert(
+    offsetof(fsim_sc_host_v1, register_primitive_channel)
+        > offsetof(fsim_sc_host_v1, notify_event_delayed),
+    "primitive-channel registration must remain append-only");
+_Static_assert(
+    offsetof(fsim_sc_host_v1, request_update)
+        > offsetof(fsim_sc_host_v1, register_primitive_channel),
+    "primitive-channel updates must remain append-only");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");

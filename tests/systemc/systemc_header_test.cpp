@@ -41,6 +41,11 @@ struct ValueImplementation final : ValueInterface {
     [[nodiscard]] unsigned value() const override { return 42; }
 };
 
+struct TestPrimitiveChannel final : sc_core::sc_prim_channel {
+    TestPrimitiveChannel() : sc_core::sc_prim_channel("test_channel") {}
+    void update() override {}
+};
+
 int main() {
     const sc_core::sc_time period{10, sc_core::SC_NS};
     assert(period.value() == 10'000'000);
@@ -103,6 +108,13 @@ int main() {
         rejected_notify = true;
     }
     assert(rejected_notify);
+    bool rejected_notify_delayed = false;
+    try {
+        event.notify_delayed(sc_core::SC_ZERO_TIME);
+    } catch (const std::logic_error&) {
+        rejected_notify_delayed = true;
+    }
+    assert(rejected_notify_delayed);
     bool rejected_cancel = false;
     try {
         event.cancel();
@@ -125,6 +137,15 @@ int main() {
         rejected_and_trigger = true;
     }
     assert(rejected_and_trigger);
+    TestPrimitiveChannel channel;
+    assert(!channel.update_requested());
+    bool rejected_channel_update = false;
+    try {
+        channel.request_update();
+    } catch (const std::logic_error&) {
+        rejected_channel_update = true;
+    }
+    assert(rejected_channel_update);
 
     ValueImplementation implementation;
     sc_core::sc_export<ValueInterface> exported{"exported"};

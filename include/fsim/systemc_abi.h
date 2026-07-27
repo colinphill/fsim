@@ -78,6 +78,7 @@ typedef struct fsim_sc_value_view_v1 {
 } fsim_sc_value_view_v1;
 
 typedef void (*fsim_sc_process_entry_v1)(void* user);
+typedef void (*fsim_sc_channel_update_v1)(void* user);
 typedef void* (*fsim_sc_module_factory_v1)(
     void* user, const char* instance_name, fsim_sc_handle_v1 parent);
 typedef void (*fsim_sc_module_destroy_v1)(void* user, void* module);
@@ -178,6 +179,28 @@ typedef struct fsim_sc_host_v1 {
         const fsim_sc_handle_v1* events,
         size_t event_count,
         fsim_sc_event_list_kind_v1 kind);
+
+    /*
+     * Append-only delayed-notification and primitive-channel surface.
+     * notify_event_delayed differs from notify_event_mode by rejecting an
+     * event which already has a pending delta or timed notification.
+     * Primitive-channel updates are deduplicated and run in the common update
+     * phase. The callback must not throw across this C ABI.
+     */
+    fsim_sc_status_v1 (*notify_event_delayed)(
+        void* context,
+        fsim_sc_handle_v1 event,
+        uint64_t delay_femtoseconds);
+    fsim_sc_status_v1 (*register_primitive_channel)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* name,
+        fsim_sc_channel_update_v1 update,
+        void* user,
+        fsim_sc_handle_v1* result);
+    fsim_sc_status_v1 (*request_update)(
+        void* context,
+        fsim_sc_handle_v1 channel);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

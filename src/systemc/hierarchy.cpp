@@ -44,6 +44,11 @@ struct HierarchyRegistry::Impl {
         std::size_t event{};
     };
 
+    struct PrimitiveChannel {
+        fsim_sc_handle_v1 module{};
+        std::size_t channel{};
+    };
+
     struct LiveModule {
         ModuleDescription description;
         fsim_sc_module_destroy_v1 destroy{};
@@ -59,6 +64,8 @@ struct HierarchyRegistry::Impl {
     std::unordered_map<fsim_sc_handle_v1, Child> children;
     std::unordered_map<fsim_sc_handle_v1, Process> processes;
     std::unordered_map<fsim_sc_handle_v1, Event> events;
+    std::unordered_map<fsim_sc_handle_v1, PrimitiveChannel>
+        primitive_channels;
     std::unordered_map<fsim_sc_handle_v1, std::uint32_t> runtime_objects;
     std::vector<LiveModule> live;
     fsim_sc_handle_v1 next_handle{1};
@@ -85,6 +92,9 @@ struct HierarchyRegistry::Impl {
         }
         for (const auto& event : description.events) {
             events.erase(event.handle);
+        }
+        for (const auto& channel : description.primitive_channels) {
+            primitive_channels.erase(channel.handle);
         }
         pending.erase(description.handle);
     }
@@ -210,6 +220,57 @@ extern "C" fsim_sc_status_v1 registry_register_event(
         registry.events.emplace(
             *handle,
             HierarchyRegistry::Impl::Event{module, index});
+        *result = *handle;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_register_primitive_channel(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* name,
+    const fsim_sc_channel_update_v1 update,
+    void* user,
+    fsim_sc_handle_v1* result) noexcept {
+    if (context == nullptr || update == nullptr || user == nullptr
+        || result == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.pending.find(module);
+        if (found == registry.pending.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        std::string channel_name =
+            name == nullptr || *name == '\0'
+                ? "$channel_"
+                    + std::to_string(
+                        found->second.primitive_channels.size())
+                : std::string{name};
+        if (std::any_of(
+                found->second.primitive_channels.begin(),
+                found->second.primitive_channels.end(),
+                [&](const PrimitiveChannelDescription& channel) {
+                    return channel.name == channel_name;
+                })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto handle = registry.allocate_handle();
+        if (!handle) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+        const auto index =
+            found->second.primitive_channels.size();
+        found->second.primitive_channels.push_back(
+            {*handle, std::move(channel_name), update, user});
+        registry.primitive_channels.emplace(
+            *handle,
+            HierarchyRegistry::Impl::PrimitiveChannel{
+                module, index});
         *result = *handle;
         return FSIM_SC_OK;
     } catch (...) {
@@ -744,6 +805,44 @@ extern "C" fsim_sc_status_v1 registry_notify_mode(
     }
 }
 
+extern "C" fsim_sc_status_v1 registry_notify_delayed(
+    void* context,
+    const fsim_sc_handle_v1 event,
+    const std::uint64_t femtoseconds) noexcept {
+    if (context == nullptr || active_invocation == nullptr
+        || active_invocation->registry != context) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto metadata = registry.events.find(event);
+        const auto binding = registry.runtime_objects.find(event);
+        if (metadata == registry.events.end()
+            || binding == registry.runtime_objects.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        std::uint64_t ticks = 0;
+        const auto status =
+            convert_delay(registry, femtoseconds, ticks);
+        if (status != FSIM_SC_OK) {
+            return status;
+        }
+        active_invocation->context->notify_event(
+            binding->second,
+            ticks,
+            runtime::simir::EventNotificationKind::delayed);
+        return FSIM_SC_OK;
+    } catch (const std::exception& exception) {
+        active_invocation->failure = exception.what();
+        return FSIM_SC_RUNTIME_ERROR;
+    } catch (...) {
+        active_invocation->failure =
+            "unknown SystemC delayed-event notification failure";
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
 extern "C" fsim_sc_status_v1 registry_cancel_event(
     void* context,
     const fsim_sc_handle_v1 event) noexcept {
@@ -768,6 +867,32 @@ extern "C" fsim_sc_status_v1 registry_cancel_event(
     } catch (...) {
         active_invocation->failure =
             "unknown SystemC event cancellation failure";
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_request_update(
+    void* context,
+    const fsim_sc_handle_v1 channel) noexcept {
+    if (context == nullptr || active_invocation == nullptr
+        || active_invocation->registry != context
+        || active_invocation->context == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        if (!registry.primitive_channels.contains(channel)) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        active_invocation->context->request_channel_update(channel);
+        return FSIM_SC_OK;
+    } catch (const std::exception& exception) {
+        active_invocation->failure = exception.what();
+        return FSIM_SC_RUNTIME_ERROR;
+    } catch (...) {
+        active_invocation->failure =
+            "unknown SystemC primitive-channel update failure";
         return FSIM_SC_RUNTIME_ERROR;
     }
 }
@@ -907,6 +1032,10 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.notify_event_mode = registry_notify_mode;
     host.cancel_event = registry_cancel_event;
     host.wait_event_list = registry_wait_event_list;
+    host.notify_event_delayed = registry_notify_delayed;
+    host.register_primitive_channel =
+        registry_register_primitive_channel;
+    host.request_update = registry_request_update;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -976,6 +1105,7 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
         parent,
         std::string{factory},
         std::string{instance},
+        {},
         {},
         {},
         {},
@@ -1114,6 +1244,59 @@ MethodSuspendResult HierarchyRegistry::invoke_method(
         0,
         {},
         false};
+}
+
+void HierarchyRegistry::invoke_primitive_channel(
+    const fsim_sc_handle_v1 channel,
+    runtime::simir::ProcessExecutionContext& context) {
+    if (impl_ == nullptr) {
+        throw std::logic_error{"SystemC hierarchy registry is unavailable"};
+    }
+    const auto found = impl_->primitive_channels.find(channel);
+    if (found == impl_->primitive_channels.end()) {
+        throw std::invalid_argument{
+            "unknown SystemC primitive-channel handle"};
+    }
+    const PrimitiveChannelDescription* description = nullptr;
+    for (const auto& module : impl_->live) {
+        if (module.description.handle != found->second.module
+            || found->second.channel
+                >= module.description.primitive_channels.size()) {
+            continue;
+        }
+        description =
+            &module.description
+                 .primitive_channels[found->second.channel];
+        break;
+    }
+    if (description == nullptr || description->update == nullptr) {
+        throw std::logic_error{
+            "SystemC primitive channel has no executable update callback"};
+    }
+    if (active_invocation != nullptr) {
+        throw std::logic_error{
+            "recursive SystemC callback invocation is not supported"};
+    }
+    ActiveInvocation invocation{impl_.get(), &context, {}, {}, std::nullopt};
+    InvocationScope scope{invocation};
+    try {
+        description->update(description->user);
+    } catch (const std::exception& exception) {
+        invocation.failure =
+            "SystemC primitive-channel callback escaped with an "
+            "exception: " + std::string{exception.what()};
+    } catch (...) {
+        invocation.failure =
+            "SystemC primitive-channel callback escaped with an "
+            "unknown exception";
+    }
+    if (invocation.suspension && invocation.failure.empty()) {
+        invocation.failure =
+            "SystemC primitive-channel update cannot suspend";
+    }
+    if (!invocation.failure.empty()) {
+        throw std::runtime_error{std::move(invocation.failure)};
+    }
 }
 
 const std::filesystem::path& HierarchyRegistry::path() const noexcept {

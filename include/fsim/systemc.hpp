@@ -169,6 +169,10 @@ template <typename T>
 void write_object(fsim_sc_handle_v1 object, const T& value);
 
 [[nodiscard]] fsim_sc_handle_v1 register_event(const char* name);
+[[nodiscard]] fsim_sc_handle_v1 register_primitive_channel(
+    const char* name,
+    fsim_sc_channel_update_v1 update,
+    void* user);
 
 } // namespace detail
 
@@ -201,6 +205,25 @@ public:
             detail::current_host->cancel_event(
                 detail::current_host->context, handle_),
             "cancel event");
+    }
+
+    void notify_delayed() const {
+        notify_delayed(SC_ZERO_TIME);
+    }
+
+    void notify_delayed(const sc_time delay) const {
+        if (detail::current_host == nullptr
+            || detail::current_host->notify_event_delayed == nullptr) {
+            throw std::logic_error{
+                "sc_event::notify_delayed requires an active fsim "
+                "SystemC process"};
+        }
+        detail::check_status(
+            detail::current_host->notify_event_delayed(
+                detail::current_host->context,
+                handle_,
+                delay.value()),
+            "notify event with notify_delayed");
     }
 
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept { return handle_; }
@@ -475,6 +498,79 @@ class sc_module;
 class sc_interface {
 public:
     virtual ~sc_interface() = default;
+};
+
+class sc_prim_channel {
+public:
+    virtual ~sc_prim_channel() = default;
+
+    sc_prim_channel(const sc_prim_channel&) = delete;
+    sc_prim_channel& operator=(const sc_prim_channel&) = delete;
+
+    [[nodiscard]] bool update_requested() const noexcept {
+        return update_requested_;
+    }
+
+    void request_update() {
+        if (update_requested_) {
+            return;
+        }
+        if (host_ == nullptr || handle_ == 0
+            || host_->request_update == nullptr) {
+            throw std::logic_error{
+                "sc_prim_channel::request_update requires an active "
+                "fsim SystemC kernel"};
+        }
+        detail::check_status(
+            host_->request_update(host_->context, handle_),
+            "request primitive-channel update");
+        update_requested_ = true;
+    }
+
+    [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
+        return handle_;
+    }
+
+protected:
+    sc_prim_channel()
+        : sc_prim_channel(nullptr) {}
+
+    explicit sc_prim_channel(const char* name)
+        : host_(detail::current_host),
+          handle_(detail::register_primitive_channel(
+              name, invoke_update, this)) {}
+
+    virtual void update() {}
+
+private:
+    static void invoke_update(void* user) noexcept {
+        auto* channel = static_cast<sc_prim_channel*>(user);
+        if (channel == nullptr || channel->host_ == nullptr) {
+            return;
+        }
+        detail::host_scope scope{channel->host_};
+        try {
+            channel->update();
+        } catch (const std::exception& exception) {
+            if (channel->host_->report != nullptr) {
+                channel->host_->report(
+                    channel->host_->context, 3, exception.what());
+            }
+        } catch (...) {
+            if (channel->host_->report != nullptr) {
+                channel->host_->report(
+                    channel->host_->context,
+                    3,
+                    "SystemC primitive-channel update threw an "
+                    "unknown exception");
+            }
+        }
+        channel->update_requested_ = false;
+    }
+
+    const fsim_sc_host_v1* host_{};
+    fsim_sc_handle_v1 handle_{};
+    bool update_requested_{};
 };
 
 template <typename Interface>
@@ -1221,6 +1317,32 @@ inline fsim_sc_handle_v1 register_event(const char* name) {
     return handle;
 }
 
+inline fsim_sc_handle_v1 register_primitive_channel(
+    const char* name,
+    const fsim_sc_channel_update_v1 update,
+    void* user) {
+    if (current_host == nullptr || current_module == 0) {
+        return 0;
+    }
+    if (current_host->register_primitive_channel == nullptr
+        || update == nullptr || user == nullptr) {
+        throw std::logic_error{
+            "SystemC primitive channel requires a channel-capable "
+            "elaboration host"};
+    }
+    fsim_sc_handle_v1 handle = 0;
+    check_status(
+        current_host->register_primitive_channel(
+            current_host->context,
+            current_module,
+            name,
+            update,
+            user,
+            &handle),
+        "register primitive channel");
+    return handle;
+}
+
 [[nodiscard]] inline std::size_t value_plane_size(
     const std::uint32_t width) noexcept {
     return (static_cast<std::size_t>(width) + 7U) / 8U;
@@ -1373,7 +1495,10 @@ template <typename Module>
         || host->register_event == nullptr
         || host->notify_event_mode == nullptr
         || host->cancel_event == nullptr
-        || host->wait_event_list == nullptr) {
+        || host->wait_event_list == nullptr
+        || host->notify_event_delayed == nullptr
+        || host->register_primitive_channel == nullptr
+        || host->request_update == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

@@ -98,6 +98,12 @@ class SystemCMethodExecutor final
     return result;
   }
 
+  void update_channel(
+      const std::uint64_t channel,
+      runtime::simir::ProcessExecutionContext& context) override {
+    hierarchy_->invoke_primitive_channel(channel, context);
+  }
+
  private:
   std::shared_ptr<systemc::HierarchyRegistry> hierarchy_;
   std::uint64_t process_{};
@@ -862,6 +868,12 @@ elaboration::SystemCInstanceDescription systemc_description(
   result.events.reserve(module.events.size());
   for (const auto& event : module.events) {
     result.events.push_back({event.handle, event.name});
+  }
+  result.primitive_channels.reserve(
+      module.primitive_channels.size());
+  for (const auto& channel : module.primitive_channels) {
+    result.primitive_channels.push_back(
+        {channel.handle, channel.name});
   }
   return result;
 }

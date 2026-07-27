@@ -60,6 +60,13 @@ struct EventDescription {
     std::string name;
 };
 
+struct PrimitiveChannelDescription {
+    fsim_sc_handle_v1 handle{};
+    std::string name;
+    fsim_sc_channel_update_v1 update{};
+    void* user{};
+};
+
 struct ModuleDescription {
     fsim_sc_handle_v1 handle{};
     fsim_sc_handle_v1 parent{};
@@ -69,6 +76,7 @@ struct ModuleDescription {
     std::vector<ForeignChildDescription> foreign_children;
     std::vector<ProcessDescription> processes;
     std::vector<EventDescription> events;
+    std::vector<PrimitiveChannelDescription> primitive_channels;
 };
 
 enum class MethodSuspendKind : std::uint8_t {
@@ -131,6 +139,12 @@ public:
     /// supplied common-kernel execution context.
     [[nodiscard]] MethodSuspendResult invoke_method(
         fsim_sc_handle_v1 process,
+        runtime::simir::ProcessExecutionContext& context);
+
+    /// Invoke a registered primitive-channel update inside the supplied
+    /// common-kernel update-phase context.
+    void invoke_primitive_channel(
+        fsim_sc_handle_v1 channel,
         runtime::simir::ProcessExecutionContext& context);
 
     [[nodiscard]] const std::filesystem::path& path() const noexcept;
