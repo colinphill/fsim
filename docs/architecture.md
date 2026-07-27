@@ -108,6 +108,18 @@ Fractional SV delays and `timeunit`/`timeprecision` declarations, rounding at a
 declared precision, and SystemC participation in automatic resolution
 selection are not complete.
 
+The same ordered token stream carries Verilog compiler state across shared
+roots. `` `default_nettype`` selects scalar implicit-net and untyped-port net
+types, with `none` producing a source diagnostic. `` `celldefine`` marks each
+following module and that bit is retained on its elaborated specialization.
+`` `unconnected_drive`` is captured on each instance and materializes an
+omitted input as a `pull0`/`pull1` initialized signal. `` `resetall`` restores
+time, net, cell, and unconnected-drive defaults. `` `begin_keywords`` scopes
+the IEEE 1364/1800 reserved-identifier set until its matching
+`` `end_keywords``. The current runtime executes these net forms with one
+four-state driver; wired resolution, trireg charge storage, `` `line`` source
+remapping, and standardized pragma behavior remain incomplete.
+
 ## Scheduler
 
 Future events are grouped by timestamp. Work at one timestamp is processed in

@@ -102,12 +102,22 @@ struct PortConnection {
   SourceSpan span;
 };
 
+enum class VerilogUnconnectedDrive {
+  None,
+  Pull0,
+  Pull1,
+};
+
 struct Instance {
   // The source-language unit name is retained even when an explicit
   // cross-language manifest binding overrides it.
   std::string unit_name;
   std::string name;
   std::vector<PortConnection> connections;
+  // Compilation-directive state at the instance declaration. Pull values
+  // apply only to omitted input ports.
+  VerilogUnconnectedDrive unconnected_drive{
+      VerilogUnconnectedDrive::None};
   SourceSpan span;
 };
 
@@ -230,6 +240,9 @@ struct DesignUnit {
   // `timescale directive precedes this unit.
   std::string time_unit;
   std::string time_precision;
+  // Verilog/SystemVerilog compilation-directive state at unit declaration.
+  std::string default_nettype;
+  bool is_cell{};
   // VHDL context items immediately preceding this library unit. Context
   // declarations and semantic visibility resolution are not part of the
   // current frontend slice.

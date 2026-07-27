@@ -180,6 +180,13 @@ therefore excluded.
 | `FSIM-SV-PP-029` | error | Macro expansion is recursive or exceeds the configured depth limit. |
 | `FSIM-SV-PP-030` | error | A function-like macro receives the wrong number of arguments. |
 | `FSIM-SV-PP-031` | error | A Verilog preprocessing compilation unit contains no root files. |
+| `FSIM-SV-PP-032` | error | A no-argument state directive has trailing tokens. |
+| `FSIM-SV-PP-033` | error | `` `endcelldefine`` has no active `` `celldefine`` state. |
+| `FSIM-SV-PP-034` | error | `` `default_nettype`` has a missing, invalid, or trailing value. |
+| `FSIM-SV-PP-035` | error | `` `unconnected_drive`` does not contain exactly `pull0` or `pull1`. |
+| `FSIM-SV-PP-036` | error | `` `begin_keywords`` has a missing, unsupported, or trailing IEEE version string. |
+| `FSIM-SV-PP-037` | error | `` `end_keywords`` has no matching `` `begin_keywords``. |
+| `FSIM-SV-PP-038` | error | A `` `begin_keywords`` region is unterminated. |
 
 ### Verilog/SystemVerilog syntax
 
@@ -261,6 +268,8 @@ therefore excluded.
 | `FSIM-SV-SEM-012` | error | An `always_comb` or `always_latch` contains a timing control. |
 | `FSIM-SV-SEM-013` | error | An `always_comb` or `always_latch` contains a nonblocking assignment. |
 | `FSIM-SV-SEM-014` | error | A `case` statement contains more than one `default` item. |
+| `FSIM-SV-SEM-015` | error | An undeclared implicit net is forbidden by `` `default_nettype none``. |
+| `FSIM-SV-SEM-016` | error | An untyped ANSI or non-ANSI port is forbidden by `` `default_nettype none``. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-003` | error | Parameter port lists are not implemented. |
@@ -273,7 +282,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-010` | error | ANSI port default expressions are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-011` | error | Declaration initializers are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-012` | error | Integer objects are parsed but not executable. |
-| `FSIM-SV-UNSUPPORTED-013` | error | `` `default_nettype`` is recognized but implicit-net legality is not implemented. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-015` | error | A nested procedural block declaration requires unsupported local-scope semantics. |
 | `FSIM-SV-UNSUPPORTED-016` | error | `casez` or `casex` requires unsupported wildcard matching. |

@@ -60,6 +60,7 @@ endmodule
         == fsim::frontend::Language::SystemVerilog2017);
     assert(counter_specialization.library == "work");
     assert(counter_specialization.parameter_values.empty());
+    assert(!counter_specialization.is_cell);
     assert((
         counter_specialization.processes
         == std::vector<fsim::runtime::simir::ProcessId>{0, 1}));
@@ -82,6 +83,66 @@ endmodule
     interpreter->deposit_signal(*clock, fsim::runtime::PackedLogic4::from_msb_string("1"));
     (void)interpreter->run();
     assert(interpreter->signal_value(*q).to_msb_string() == "00000010");
+
+    const auto directive_parsed = fsim::frontend::parse_text(
+        "directives.sv",
+        R"(
+`celldefine
+module pulled_child(input logic value);
+endmodule
+`endcelldefine
+`unconnected_drive pull1
+module pulled_parent;
+  pulled_child child_instance();
+endmodule
+`nounconnected_drive
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(directive_parsed.ok());
+    const auto directive_elaborated = fsim::elaboration::elaborate(
+        directive_parsed.design, "sv:work.pulled_parent");
+    assert(directive_elaborated.ok());
+    const auto pulled_value =
+        directive_elaborated.design->find_signal(
+            "pulled_parent.child_instance.value");
+    assert(pulled_value);
+    const auto directive_interpreter =
+        directive_elaborated.design->create_interpreter();
+    assert(
+        directive_interpreter->signal_value(*pulled_value).to_msb_string()
+        == "1");
+    assert(directive_elaborated.design->specializations().size() == 2);
+    const auto& directive_specializations =
+        directive_elaborated.design->specializations();
+    assert(!directive_specializations.front().is_cell);
+    assert(directive_specializations.back().is_cell);
+
+    const auto implicit_parsed = fsim::frontend::parse_text(
+        "implicit.sv",
+        R"(
+`default_nettype tri0
+module implicit_top;
+  assign created = 1'b1;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(implicit_parsed.ok());
+    const auto implicit_elaborated = fsim::elaboration::elaborate(
+        implicit_parsed.design, "sv:work.implicit_top");
+    assert(implicit_elaborated.ok());
+    const auto created =
+        implicit_elaborated.design->find_signal("created");
+    assert(created);
+    auto implicit_interpreter =
+        implicit_elaborated.design->create_interpreter();
+    assert(
+        implicit_interpreter->signal_value(*created).to_msb_string()
+        == "0");
+    implicit_interpreter->start();
+    (void)implicit_interpreter->run();
+    assert(
+        implicit_interpreter->signal_value(*created).to_msb_string()
+        == "1");
 
     constexpr std::string_view vhdl_source = R"(
 entity counter_vhdl is
@@ -1320,7 +1381,7 @@ endmodule
     const auto wildcard_processes = fsim::frontend::parse_text(
         "wildcard.sv",
         R"(
-module wildcard;
+module wildcard_processes;
   logic a;
   logic q;
   logic y;
@@ -1334,7 +1395,7 @@ endmodule
     assert(wildcard_processes.ok());
     const auto elaborated_wildcard =
         fsim::elaboration::elaborate(
-            wildcard_processes.design, "sv:work.wildcard");
+            wildcard_processes.design, "sv:work.wildcard_processes");
     assert(elaborated_wildcard.ok());
     assert(elaborated_wildcard.design->processes().size() == 3);
     const auto wildcard_a =

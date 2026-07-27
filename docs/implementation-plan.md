@@ -54,6 +54,10 @@ The following foundation is implemented:
   concatenation/stringification, conditional compilation, persistent
   timescale context, include/macro diagnostic ancestry, and executable
   `file`/`source-set`/`combined` policies;
+- executable scalar implicit-net/default-port semantics for
+  `` `default_nettype``, including `none`, plus reset, cell,
+  keyword-version, and omitted-input pull directive state carried through
+  elaboration and shared compilation units;
 - recursive VHDL/SV hierarchy in both language directions with explicit
   bindings and boundary checks;
 - buffered VCD, a bounded command-line debugger, and a versioned native C API;
@@ -175,7 +179,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 339 unique current production diagnostic codes.
+- a stable catalog covering 347 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -188,7 +192,7 @@ Current Linux validation:
 | Concurrent LLVM Debug and Release suites | Both pass; cache-test paths are isolated |
 | GCC ASan/UBSan | 13/13 tests pass with no findings |
 | Boost.Context 1.91.0 fibers | Checksum-verified fetch/configure/build; GCC Debug full suite 13/13, ASan/UBSan focused application, and LLVM 22 compiled-SV/SystemC application tests pass |
-| Verilog/SV preprocessing | GCC Debug atomic single/multi-root frontend plus interpreter application pass; exact LLVM 22 source-set/combined compiled-engine differential validation is recorded at the checkpoint |
+| Verilog/SV preprocessing/directives | GCC Debug and exact LLVM 22 atomic frontend/elaboration plus source-set/combined interpreter/compiled differentials pass, including shared default-net/cell/reset state and omitted-input pulls |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -331,10 +335,11 @@ Planned implementation sequence:
 2. Implement VHDL libraries, packages/bodies, contexts, configurations,
    generics, overload/type resolution, constant evaluation, and reviewed IEEE
    packages.
-3. Complete the remaining Verilog/SV compiler directives, parameters,
+3. Complete the remaining Verilog/SV `` `line``/pragma semantics, parameters,
    packages, interfaces/modports, generates, and complete synthesizable types.
    Includes, macros with default arguments, conditionals, compilation-unit
-   sharing, and cache provenance are implemented.
+   sharing, cache provenance, `` `default_nettype``, and
+   reset/cell/keyword/unconnected-drive state are implemented.
 4. Complete synthesizable statements, expressions, aggregates, memories,
    arrays, records/structs/unions/enums, functions/tasks, and hierarchy
    specialization.

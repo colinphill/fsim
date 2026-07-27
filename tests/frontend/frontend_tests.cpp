@@ -276,6 +276,7 @@ endmodule
       R"(`define TWO(first,second) first
 `TWO(one)
 `resetall
+`pragma protect
 `ifdef LEFT_OPEN
 )");
   const auto directive_errors = preprocess_verilog_file(
@@ -294,7 +295,7 @@ endmodule
           && has_preprocessor_code("FSIM-SV-PP-030")
           && has_preprocessor_code("FSIM-SV-PP-011")
           && has_preprocessor_code("FSIM-SV-PP-002"),
-      "macro arity, unsupported directive, and open conditional diagnostics");
+      "macro arity, unsupported pragma, and open conditional diagnostics");
 
   const auto cycle_a = directory / "cycle-a.svh";
   const auto cycle_b = directory / "cycle-b.svh";
@@ -960,12 +961,162 @@ endmodule
           }),
       "coarse precision diagnostic");
 
-  const auto default_nettype = parse_text(
-      "default_nettype.sv",
-      "`default_nettype none\nmodule guarded; endmodule\n",
+}
+
+void test_systemverilog_compiler_directives() {
+  const auto directives = parse_text(
+      "directives.sv",
+      R"(`default_nettype none
+module strict;
+  assign forbidden = 1'b1;
+endmodule
+`default_nettype tri1
+module implicit_net;
+  assign created = 1'b0;
+endmodule
+`celldefine
+module cell_unit;
+endmodule
+`endcelldefine
+module child(input logic value);
+endmodule
+`unconnected_drive pull1
+module driven_parent;
+  child child_instance();
+endmodule
+`nounconnected_drive
+`begin_keywords "1800-2009"
+module soft;
+endmodule
+`end_keywords
+`begin_keywords "1364-2005"
+module logic;
+endmodule
+`end_keywords
+`timescale 10ns/1ns
+`default_nettype tri0
+`celldefine
+`unconnected_drive pull0
+`resetall
+module reset_unit;
+  initial #2 $finish;
+endmodule
+)",
       Language::SystemVerilog2017);
-  require(!default_nettype.ok(),
-          "unimplemented `default_nettype semantics must not be ignored");
+  require(
+      !directives.ok(),
+      "`default_nettype none must reject an implicit declaration");
+  require(
+      std::any_of(
+          directives.diagnostics.begin(),
+          directives.diagnostics.end(),
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-015";
+          }),
+      "forbidden implicit net diagnostic");
+  require(
+      directives.design.units.size() == 8,
+      "all directive-state modules remain represented");
+
+  const auto* implicit_net =
+      directives.design.find(UnitKind::VerilogModule, "implicit_net");
+  require(
+      implicit_net != nullptr
+          && implicit_net->default_nettype == "tri1"
+          && implicit_net->signals.size() == 1
+          && implicit_net->signals.front().name == "created"
+          && implicit_net->signals.front().type.spelling == "tri1",
+      "`default_nettype creates a typed implicit scalar net");
+  const auto* cell =
+      directives.design.find(UnitKind::VerilogModule, "cell_unit");
+  require(cell != nullptr && cell->is_cell,
+          "`celldefine marks following modules");
+  const auto* child =
+      directives.design.find(UnitKind::VerilogModule, "child");
+  require(child != nullptr && !child->is_cell,
+          "`endcelldefine restores ordinary module metadata");
+  const auto* parent =
+      directives.design.find(UnitKind::VerilogModule, "driven_parent");
+  require(
+      parent != nullptr && parent->instances.size() == 1
+          && parent->instances.front().unconnected_drive
+              == VerilogUnconnectedDrive::Pull1,
+      "`unconnected_drive state is captured by an instance");
+  require(
+      directives.design.find(UnitKind::VerilogModule, "soft") != nullptr,
+      "1800-2009 keyword scope precedes the 1800-2012 soft keyword");
+  require(
+      directives.design.find(UnitKind::VerilogModule, "logic") != nullptr,
+      "legacy begin_keywords permits a later SystemVerilog keyword as a name");
+  const auto* reset =
+      directives.design.find(UnitKind::VerilogModule, "reset_unit");
+  require(
+      reset != nullptr && reset->default_nettype == "wire"
+          && !reset->is_cell && reset->time_unit.empty()
+          && reset->processes.front().statements.front().delay->magnitude == 2
+          && reset->processes.front().statements.front().delay->unit.empty(),
+      "`resetall restores directive defaults before a following module");
+
+  const auto port_none = parse_text(
+      "default-none-port.sv",
+      "`default_nettype none\nmodule bad(input value); endmodule\n",
+      Language::SystemVerilog2017);
+  require(
+      !port_none.ok()
+          && std::any_of(
+              port_none.diagnostics.begin(),
+              port_none.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-016";
+              }),
+      "`default_nettype none rejects an untyped ANSI port");
+
+  const auto reserved_name = parse_text(
+      "reserved-name.sv",
+      R"(`begin_keywords "1800-2012"
+module soft;
+endmodule
+`end_keywords
+)",
+      Language::SystemVerilog2017);
+  require(
+      !reserved_name.ok()
+          && std::any_of(
+              reserved_name.diagnostics.begin(),
+              reserved_name.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-001";
+              }),
+      "1800-2012 keyword scope rejects soft as an identifier");
+
+  const auto malformed = parse_text(
+      "malformed-directives.sv",
+      R"(`default_nettype banana
+`unconnected_drive highz
+`begin_keywords "1800-2099"
+`end_keywords
+`resetall extra
+`begin_keywords "1800-2017"
+module valid;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto has_code = [&](const std::string_view code) {
+    return std::any_of(
+        malformed.diagnostics.begin(),
+        malformed.diagnostics.end(),
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !malformed.ok() && has_code("FSIM-SV-PP-032")
+          && has_code("FSIM-SV-PP-034")
+          && has_code("FSIM-SV-PP-035")
+          && has_code("FSIM-SV-PP-036")
+          && has_code("FSIM-SV-PP-037")
+          && has_code("FSIM-SV-PP-038"),
+      "malformed directive forms have stable targeted diagnostics");
 }
 
 void test_immediate_assertions() {
@@ -1795,6 +1946,7 @@ int main() {
     test_ignored_initializers_are_rejected();
     test_duplicate_declarations_are_rejected();
     test_systemverilog_timescale_context();
+    test_systemverilog_compiler_directives();
     test_immediate_assertions();
     test_process_variable_declarations();
     test_procedural_wait_statements();

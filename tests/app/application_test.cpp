@@ -4069,21 +4069,22 @@ endmodule
       [&](const std::string_view value) {
         std::ofstream output(
             shared_macro_source, std::ios::binary);
-        output << "`define SHARED_RUNTIME_VALUE "
+        output << "`default_nettype tri0\n"
+               << "`celldefine\n"
+               << "`define SHARED_RUNTIME_VALUE "
                << value << '\n';
         assert(output.good());
       };
-  write_shared_macro("4'b0110");
+  write_shared_macro("1'b0");
   {
     std::ofstream output(
         shared_module_source, std::ios::binary);
     output << R"(module shared_preprocessor_app;
-  logic [3:0] value;
-  initial begin
-    value = `SHARED_RUNTIME_VALUE;
-    #1 $finish;
-  end
+  assign value = `SHARED_RUNTIME_VALUE;
+  initial #1 $finish;
 endmodule
+`endcelldefine
+`resetall
 )";
     assert(output.good());
   }
@@ -4117,6 +4118,16 @@ endmodule
   assert(
       shared_checked->hdl_sources[0].compilation_unit_digest
       == shared_checked->hdl_sources[1].compilation_unit_digest);
+  assert(shared_checked->parsed.units.size() == 1);
+  assert(shared_checked->parsed.units.front().is_cell);
+  assert(
+      shared_checked->parsed.units.front().default_nettype == "tri0");
+  assert(shared_checked->parsed.units.front().signals.size() == 1);
+  assert(
+      shared_checked->parsed.units.front().signals.front().name == "value");
+  assert(
+      shared_checked->parsed.units.front().signals.front().type.spelling
+      == "tri0");
 
   const auto run_shared_preprocessor =
       [&](const fsim::project::Config& run_config,
@@ -4126,6 +4137,8 @@ endmodule
             run_config, run_diagnostics);
         assert(project);
         assert(project->specialization_cache_keys.size() == 1);
+        assert(project->design.specializations().size() == 1);
+        assert(project->design.specializations().front().is_cell);
         auto key = project->specialization_cache_keys.front();
         auto capture =
             capture_simulation(std::move(*project), engine);
@@ -4144,9 +4157,9 @@ endmodule
   compare_captures(shared_reference_a, shared_hybrid_a);
   assert(
       shared_hybrid_a.final_values
-      == std::vector<std::string>{"0110"});
+      == std::vector<std::string>{"0"});
 
-  write_shared_macro("4'b1001");
+  write_shared_macro("1'b1");
   auto [shared_key_b, shared_reference_b] =
       run_shared_preprocessor(
           shared_preprocessor_config,
@@ -4160,7 +4173,7 @@ endmodule
   compare_captures(shared_reference_b, shared_hybrid_b);
   assert(
       shared_hybrid_b.final_values
-      == std::vector<std::string>{"1001"});
+      == std::vector<std::string>{"1"});
 
   auto independent_file_config = shared_preprocessor_config;
   independent_file_config.source_sets.front().compilation_unit =
@@ -4206,7 +4219,7 @@ endmodule
   compare_captures(combined_reference, combined_hybrid);
   assert(
       combined_hybrid.final_values
-      == std::vector<std::string>{"1001"});
+      == std::vector<std::string>{"1"});
 
   fsim::diagnostic::Engine mixed_diagnostics;
   const auto mixed_manifest =

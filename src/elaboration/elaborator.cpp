@@ -2589,12 +2589,24 @@ private:
             declaration.is_port,
             declaration.direction});
         auto initial = Logic4::x;
-        if (declaration.type.domain == frontend::ValueDomain::Bit2
+        if (declaration.type.spelling == "tri0") {
+            initial = Logic4::zero;
+        } else if (declaration.type.spelling == "tri1") {
+            initial = Logic4::one;
+        } else if (
+            declaration.type.domain == frontend::ValueDomain::Bit2
             || declaration.type.domain == frontend::ValueDomain::Boolean) {
             initial = Logic4::zero;
         } else if (
             declaration.type.domain == frontend::ValueDomain::Logic4
-            && declaration.type.spelling == "wire") {
+            && (declaration.type.spelling == "wire"
+                || declaration.type.spelling == "tri"
+                || declaration.type.spelling == "wand"
+                || declaration.type.spelling == "triand"
+                || declaration.type.spelling == "wor"
+                || declaration.type.spelling == "trior"
+                || declaration.type.spelling == "trireg"
+                || declaration.type.spelling == "uwire")) {
             initial = Logic4::z;
         }
         design_.signals_.push_back({
@@ -2851,6 +2863,25 @@ private:
                 || port.direction == frontend::PortDirection::Buffer) {
                 note_boundary_driver(
                     actual->second, binding, path, connection.span);
+            }
+        }
+        if (instance.unconnected_drive
+            != frontend::VerilogUnconnectedDrive::None) {
+            for (std::size_t port_index = 0;
+                 port_index < ports.size(); ++port_index) {
+                const auto& port = ports[port_index];
+                if (connected[port_index]
+                    || port.direction
+                        != frontend::PortDirection::Input) {
+                    continue;
+                }
+                auto pulled = port;
+                pulled.type.spelling =
+                    instance.unconnected_drive
+                            == frontend::VerilogUnconnectedDrive::Pull0
+                        ? "tri0"
+                        : "tri1";
+                (void)add_owned_signal(pulled, path, aliases);
             }
         }
         return aliases;
@@ -3569,6 +3600,7 @@ private:
         specialization.language = unit.language;
         specialization.library =
             unit.library.empty() ? "work" : unit.library;
+        specialization.is_cell = unit.is_cell;
 
         Lowerer lowerer{design_, local, diagnostics_};
         for (std::size_t index = 0;

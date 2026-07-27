@@ -24,13 +24,175 @@ struct VerilogTypeSpec {
   PortDirection direction{PortDirection::Unknown};
 };
 
+enum class KeywordSet {
+  Verilog1995,
+  Verilog2001,
+  Verilog2001NoConfig,
+  Verilog2005,
+  SystemVerilog2005,
+  SystemVerilog2009,
+  SystemVerilog2012,
+  SystemVerilog2017,
+};
+
+[[nodiscard]] bool contains_word(
+    const std::initializer_list<std::string_view> words,
+    const std::string_view word) {
+  return std::find(words.begin(), words.end(), word) != words.end();
+}
+
+[[nodiscard]] bool is_verilog_1995_keyword(
+    const std::string_view word) {
+  return contains_word(
+      {"always", "and", "assign", "begin", "buf", "bufif0",
+       "bufif1", "case", "casex", "casez", "cmos", "deassign",
+       "default", "defparam", "disable", "edge", "else", "end",
+       "endcase", "endfunction", "endmodule", "endprimitive",
+       "endspecify", "endtable", "endtask", "event", "for", "force",
+       "forever", "fork", "function", "highz0", "highz1", "if",
+       "ifnone", "initial", "inout", "input", "integer", "join",
+       "large", "macromodule", "medium", "module", "nand", "negedge",
+       "nmos", "nor", "not", "notif0", "notif1", "or", "output",
+       "parameter", "pmos", "posedge", "primitive", "pull0", "pull1",
+       "pulldown", "pullup", "rcmos", "real", "realtime", "reg",
+       "release", "repeat", "rnmos", "rpmos", "rtran", "rtranif0",
+       "rtranif1", "scalared", "small", "specify", "specparam",
+       "strong0", "strong1", "supply0", "supply1", "table", "task",
+       "time", "tran", "tranif0", "tranif1", "tri", "tri0", "tri1",
+       "triand", "trior", "trireg", "vectored", "wait", "wand",
+       "weak0", "weak1", "while", "wire", "wor", "xnor", "xor"},
+      word);
+}
+
+[[nodiscard]] bool is_verilog_2001_keyword(
+    const std::string_view word,
+    const bool include_config) {
+  if (is_verilog_1995_keyword(word)) {
+    return true;
+  }
+  if (contains_word(
+          {"automatic", "endgenerate", "generate", "genvar",
+           "localparam", "noshowcancelled", "pulsestyle_ondetect",
+           "pulsestyle_onevent", "showcancelled", "signed", "unsigned"},
+          word)) {
+    return true;
+  }
+  return include_config
+      && contains_word(
+          {"cell", "config", "design", "endconfig", "incdir",
+           "include", "instance", "liblist", "library", "use"},
+          word);
+}
+
+[[nodiscard]] bool is_system_verilog_2005_keyword(
+    const std::string_view word) {
+  return is_verilog_2001_keyword(word, true)
+      || word == "uwire"
+      || contains_word(
+          {"alias", "always_comb", "always_ff", "always_latch",
+           "assert", "assume", "before", "bind", "bins", "binsof",
+           "bit", "break", "byte", "chandle", "class", "clocking",
+           "const", "constraint", "context", "continue", "cover",
+           "covergroup", "coverpoint", "cross", "dist", "do",
+           "endclass", "endclocking", "endgroup", "endinterface",
+           "endpackage", "endprogram", "endproperty", "endsequence",
+           "enum", "expect", "export", "extends", "extern", "final",
+           "first_match", "foreach", "forkjoin", "iff", "ignore_bins",
+           "illegal_bins", "import", "inside", "int", "interface",
+           "intersect", "join_any", "join_none", "local", "logic",
+           "longint", "matches", "modport", "new", "null", "package",
+           "packed", "priority", "program", "property", "protected",
+           "pure", "rand", "randc", "randcase", "randsequence", "ref",
+           "return", "sequence", "shortint", "shortreal", "solve",
+           "static", "string", "struct", "super", "tagged", "this",
+           "throughout", "timeprecision", "timeunit", "type", "typedef",
+           "union", "unique", "var", "virtual", "void", "wait_order",
+           "wildcard", "with", "within"},
+          word);
+}
+
+[[nodiscard]] bool is_system_verilog_2009_keyword(
+    const std::string_view word) {
+  return is_system_verilog_2005_keyword(word)
+      || contains_word(
+          {"accept_on", "checker", "endchecker", "eventually", "global",
+           "implies", "let", "nexttime", "reject_on", "restrict",
+           "s_always", "s_eventually", "s_nexttime", "s_until",
+           "s_until_with", "strong", "sync_accept_on", "sync_reject_on",
+           "unique0", "until", "until_with", "untyped", "weak"},
+          word);
+}
+
+[[nodiscard]] bool is_system_verilog_2012_keyword(
+    const std::string_view word) {
+  return is_system_verilog_2009_keyword(word)
+      || contains_word(
+          {"implements", "interconnect", "nettype", "soft"},
+          word);
+}
+
+[[nodiscard]] bool keyword_reserved(
+    const KeywordSet set,
+    const std::string_view word) {
+  switch (set) {
+    case KeywordSet::Verilog1995:
+      return is_verilog_1995_keyword(word);
+    case KeywordSet::Verilog2001:
+      return is_verilog_2001_keyword(word, true);
+    case KeywordSet::Verilog2001NoConfig:
+      return is_verilog_2001_keyword(word, false);
+    case KeywordSet::Verilog2005:
+      return is_verilog_2001_keyword(word, true) || word == "uwire";
+    case KeywordSet::SystemVerilog2005:
+      return is_system_verilog_2005_keyword(word);
+    case KeywordSet::SystemVerilog2009:
+      return is_system_verilog_2009_keyword(word);
+    case KeywordSet::SystemVerilog2012:
+    case KeywordSet::SystemVerilog2017:
+      return is_system_verilog_2012_keyword(word);
+  }
+  return false;
+}
+
+[[nodiscard]] std::optional<KeywordSet> parse_keyword_set(
+    const std::string_view spelling) {
+  if (spelling == "1364-1995") {
+    return KeywordSet::Verilog1995;
+  }
+  if (spelling == "1364-2001") {
+    return KeywordSet::Verilog2001;
+  }
+  if (spelling == "1364-2001-noconfig") {
+    return KeywordSet::Verilog2001NoConfig;
+  }
+  if (spelling == "1364-2005") {
+    return KeywordSet::Verilog2005;
+  }
+  if (spelling == "1800-2005") {
+    return KeywordSet::SystemVerilog2005;
+  }
+  if (spelling == "1800-2009") {
+    return KeywordSet::SystemVerilog2009;
+  }
+  if (spelling == "1800-2012") {
+    return KeywordSet::SystemVerilog2012;
+  }
+  if (spelling == "1800-2017") {
+    return KeywordSet::SystemVerilog2017;
+  }
+  return std::nullopt;
+}
+
 class VerilogParser final : private detail::ParserBase {
  public:
   VerilogParser(LexResult lexed, bool system_verilog)
       : ParserBase(std::move(lexed.tokens),
                    std::move(lexed.diagnostics)),
         language_(system_verilog ? Language::SystemVerilog2017
-                                 : Language::Verilog2005) {}
+                                 : Language::Verilog2005),
+        keyword_set_(
+            system_verilog ? KeywordSet::SystemVerilog2017
+                           : KeywordSet::Verilog2005) {}
 
   ParseResult run() {
     ParsedDesign design;
@@ -46,10 +208,61 @@ class VerilogParser final : private detail::ParserBase {
         skip_to_semicolon();
       }
     }
+    if (!keyword_stack_.empty()) {
+      error(
+          current(),
+          "FSIM-SV-PP-038",
+          "unterminated `begin_keywords region");
+      keyword_stack_.clear();
+    }
     return ParseResult{std::move(design), std::move(diagnostics_)};
   }
 
  private:
+  [[nodiscard]] bool keyword(
+      const std::string_view text,
+      const std::size_t lookahead = 0,
+      const bool case_insensitive = false) const {
+    if (!detail::ParserBase::keyword(
+            text, lookahead, case_insensitive)) {
+      return false;
+    }
+    return text.front() == '$' || keyword_reserved(keyword_set_, text);
+  }
+
+  [[nodiscard]] bool any_keyword(
+      const std::initializer_list<std::string_view> words,
+      const bool case_insensitive = false) const {
+    return std::any_of(
+        words.begin(), words.end(),
+        [&](const std::string_view word) {
+          return keyword(word, 0, case_insensitive);
+        });
+  }
+
+  bool match_keyword(
+      const std::string_view text,
+      const bool case_insensitive = false) {
+    if (!keyword(text, 0, case_insensitive)) {
+      return false;
+    }
+    advance();
+    return true;
+  }
+
+  Token expect_keyword(
+      const std::string_view word,
+      const bool case_insensitive,
+      std::string code = "FSIM-FE-PARSE-001") {
+    if (keyword(word, 0, case_insensitive)) {
+      return advance();
+    }
+    error(
+        current(), std::move(code),
+        "expected '" + std::string(word) + "'");
+    return current();
+  }
+
   static SourceSpan span_from(const Token& first, const Token& last) {
     return cover(first.span, last.span);
   }
@@ -63,7 +276,43 @@ class VerilogParser final : private detail::ParserBase {
   }
 
   Token expect_identifier(std::string_view description) {
-    return expect(TokenKind::Identifier, description, "FSIM-SV-PARSE-001");
+    if (at(TokenKind::Identifier)
+        && !keyword_reserved(keyword_set_, current().text)) {
+      return advance();
+    }
+    error(
+        current(),
+        "FSIM-SV-PARSE-001",
+        "expected " + std::string(description)
+            + ", found reserved keyword or non-identifier '"
+            + current().text + "'");
+    return current();
+  }
+
+  [[nodiscard]] bool on_directive_line(const Token& tick) const {
+    return !at_end()
+        && current().span.source_name == tick.span.source_name
+        && current().span.begin.line == tick.span.begin.line;
+  }
+
+  void reject_directive_arguments(
+      const Token& tick,
+      const Token& directive) {
+    if (on_directive_line(tick)) {
+      error(
+          current(),
+          "FSIM-SV-PP-032",
+          "`" + directive.text + " does not accept arguments");
+    }
+  }
+
+  void reset_compiler_directives() {
+    current_time_unit_magnitude_ = 1;
+    current_time_unit_.clear();
+    current_time_precision_.clear();
+    current_default_nettype_ = "wire";
+    current_cell_define_ = false;
+    current_unconnected_drive_ = VerilogUnconnectedDrive::None;
   }
 
   void parse_directive() {
@@ -72,11 +321,40 @@ class VerilogParser final : private detail::ParserBase {
     if (directive.text == "timescale") {
       parse_timescale(directive);
     } else if (directive.text == "default_nettype") {
-      error(
-          directive,
-          "FSIM-SV-UNSUPPORTED-013",
-          "`default_nettype is recognized but not executable until the "
-          "preprocessor and implicit-net legality rules are implemented");
+      parse_default_nettype(tick, directive);
+    } else if (directive.text == "resetall") {
+      reset_compiler_directives();
+      reject_directive_arguments(tick, directive);
+    } else if (directive.text == "celldefine") {
+      current_cell_define_ = true;
+      reject_directive_arguments(tick, directive);
+    } else if (directive.text == "endcelldefine") {
+      if (!current_cell_define_) {
+        error(
+            directive,
+            "FSIM-SV-PP-033",
+            "`endcelldefine without an active `celldefine");
+      }
+      current_cell_define_ = false;
+      reject_directive_arguments(tick, directive);
+    } else if (directive.text == "unconnected_drive") {
+      parse_unconnected_drive(tick, directive);
+    } else if (directive.text == "nounconnected_drive") {
+      current_unconnected_drive_ = VerilogUnconnectedDrive::None;
+      reject_directive_arguments(tick, directive);
+    } else if (directive.text == "begin_keywords") {
+      parse_begin_keywords(tick, directive);
+    } else if (directive.text == "end_keywords") {
+      if (keyword_stack_.empty()) {
+        error(
+            directive,
+            "FSIM-SV-PP-037",
+            "`end_keywords without a matching `begin_keywords");
+      } else {
+        keyword_set_ = keyword_stack_.back();
+        keyword_stack_.pop_back();
+      }
+      reject_directive_arguments(tick, directive);
     } else {
       error(directive, "FSIM-SV-UNSUPPORTED-002",
             "preprocessor directive `" + directive.text +
@@ -88,6 +366,100 @@ class VerilogParser final : private detail::ParserBase {
            && current().span.source_name == source_name
            && current().span.begin.line == line) {
       advance();
+    }
+  }
+
+  void parse_default_nettype(
+      const Token& tick,
+      const Token& directive) {
+    if (!on_directive_line(tick)
+        || current().kind != TokenKind::Identifier) {
+      error(
+          directive,
+          "FSIM-SV-PP-034",
+          "`default_nettype requires a standard net type or none");
+      return;
+    }
+    const auto net_type = advance();
+    constexpr std::string_view legal[] = {
+        "wire", "tri", "tri0", "tri1", "wand", "triand",
+        "wor", "trior", "trireg", "uwire", "none"};
+    if (std::find(
+            std::begin(legal), std::end(legal), net_type.text)
+        == std::end(legal)) {
+      error(
+          net_type,
+          "FSIM-SV-PP-034",
+          "invalid `default_nettype value '" + net_type.text + "'");
+    } else {
+      current_default_nettype_ = net_type.text;
+    }
+    if (on_directive_line(tick)) {
+      error(
+          current(),
+          "FSIM-SV-PP-034",
+          "unexpected tokens after `default_nettype value");
+    }
+  }
+
+  void parse_unconnected_drive(
+      const Token& tick,
+      const Token& directive) {
+    if (!on_directive_line(tick)
+        || current().kind != TokenKind::Identifier) {
+      error(
+          directive,
+          "FSIM-SV-PP-035",
+          "`unconnected_drive requires pull0 or pull1");
+      return;
+    }
+    const auto pull = advance();
+    if (pull.text == "pull0") {
+      current_unconnected_drive_ = VerilogUnconnectedDrive::Pull0;
+    } else if (pull.text == "pull1") {
+      current_unconnected_drive_ = VerilogUnconnectedDrive::Pull1;
+    } else {
+      error(
+          pull,
+          "FSIM-SV-PP-035",
+          "`unconnected_drive requires pull0 or pull1");
+    }
+    if (on_directive_line(tick)) {
+      error(
+          current(),
+          "FSIM-SV-PP-035",
+          "unexpected tokens after `unconnected_drive value");
+    }
+  }
+
+  void parse_begin_keywords(
+      const Token& tick,
+      const Token& directive) {
+    if (!on_directive_line(tick)
+        || current().kind != TokenKind::StringLiteral) {
+      error(
+          directive,
+          "FSIM-SV-PP-036",
+          "`begin_keywords requires a quoted IEEE language version");
+      return;
+    }
+    const auto version = advance();
+    const auto spelling = string_literal_text(version);
+    const auto parsed = parse_keyword_set(spelling);
+    if (!parsed) {
+      error(
+          version,
+          "FSIM-SV-PP-036",
+          "unsupported `begin_keywords version '" + spelling + "'");
+    } else {
+      keyword_stack_.push_back(keyword_set_);
+      keyword_set_ = *parsed;
+    }
+    if (on_directive_line(tick)) {
+      error(
+          current(),
+          "FSIM-SV-PP-036",
+          "unexpected tokens after `begin_keywords version");
     }
   }
 
@@ -183,16 +555,75 @@ class VerilogParser final : private detail::ParserBase {
         std::to_string(*precision_magnitude) + precision_token.text;
   }
 
+  struct ImplicitNetReference {
+    std::string name;
+    std::string net_type;
+    SourceSpan span;
+    std::vector<std::string> expansion_stack;
+  };
+
+  void note_implicit_net_reference(const Token& name) {
+    if (!current_procedural_names_.contains(name.text)) {
+      implicit_net_references_.push_back(
+          {name.text, current_default_nettype_, name.span,
+           name.expansion_stack});
+    }
+  }
+
+  void resolve_implicit_nets(DesignUnit& unit) {
+    std::unordered_set<std::string> known;
+    for (const auto& port : unit.ports) {
+      known.insert(port.name);
+    }
+    for (const auto& signal : unit.signals) {
+      known.insert(signal.name);
+    }
+    std::unordered_set<std::string> rejected;
+    for (const auto& reference : implicit_net_references_) {
+      if (known.contains(reference.name)
+          || rejected.contains(reference.name)) {
+        continue;
+      }
+      if (reference.net_type == "none") {
+        diagnostics_.push_back({
+            DiagnosticSeverity::Error,
+            "FSIM-SV-SEM-015",
+            "implicit net '" + reference.name
+                + "' is forbidden by `default_nettype none",
+            reference.span,
+            reference.expansion_stack});
+        rejected.insert(reference.name);
+        continue;
+      }
+      Type type{
+          ValueDomain::Logic4,
+          reference.net_type,
+          std::nullopt,
+          false};
+      unit.signals.push_back({
+          reference.name,
+          std::move(type),
+          PortDirection::Unknown,
+          false,
+          reference.span});
+      known.insert(reference.name);
+    }
+  }
+
   DesignUnit parse_module(const Token& start) {
     non_ansi_ports_.clear();
     body_port_declarations_.clear();
     port_type_refinements_.clear();
+    implicit_net_references_.clear();
+    current_procedural_names_.clear();
     module_time_unit_magnitude_ = current_time_unit_magnitude_;
     module_time_unit_ = current_time_unit_;
     module_time_precision_ = current_time_precision_;
     DesignUnit unit;
     unit.kind = UnitKind::VerilogModule;
     unit.language = language_;
+    unit.default_nettype = current_default_nettype_;
+    unit.is_cell = current_cell_define_;
     if (!module_time_unit_.empty()) {
       unit.time_unit =
           std::to_string(module_time_unit_magnitude_)
@@ -228,7 +659,12 @@ class VerilogParser final : private detail::ParserBase {
         }
       } else if (
           keyword("always") || keyword("always_ff")
-          || keyword("always_comb") || keyword("always_latch")) {
+          || keyword("always_comb") || keyword("always_latch")
+          || (language_ == Language::Verilog2005
+              && at(TokenKind::Identifier)
+              && (current().text == "always_ff"
+                  || current().text == "always_comb"
+                  || current().text == "always_latch"))) {
         unit.processes.push_back(parse_always());
       } else if (keyword("initial")) {
         unit.processes.push_back(parse_initial());
@@ -250,6 +686,7 @@ class VerilogParser final : private detail::ParserBase {
     if (match(TokenKind::Colon)) {
       expect_identifier("module name after endmodule");
     }
+    resolve_implicit_nets(unit);
     unit.span = span_from(start, previous());
     return unit;
   }
@@ -260,6 +697,7 @@ class VerilogParser final : private detail::ParserBase {
     Instance instance;
     instance.unit_name = start.text;
     instance.name = name.text;
+    instance.unconnected_drive = current_unconnected_drive_;
     expect(
         TokenKind::LeftParen, "'(' after instance name",
         "FSIM-SV-PARSE-034");
@@ -309,9 +747,11 @@ class VerilogParser final : private detail::ParserBase {
         bool declared_here = false;
         if (is_direction_keyword()) {
           spec.direction = parse_direction();
-          spec.type = default_verilog_type();
+          spec.type = default_port_net_type();
           declared_here = true;
+          const bool explicit_type = is_net_type_keyword();
           parse_optional_net_type(spec.type);
+          require_default_port_net_type(current(), explicit_type);
           parse_optional_signedness(spec.type);
           parse_optional_range(spec.type);
           inherited = spec;
@@ -407,6 +847,29 @@ class VerilogParser final : private detail::ParserBase {
     return Type{ValueDomain::Logic4, "wire", std::nullopt, false};
   }
 
+  Type default_port_net_type() const {
+    if (current_default_nettype_ == "none") {
+      return default_verilog_type();
+    }
+    return Type{
+        ValueDomain::Logic4,
+        current_default_nettype_,
+        std::nullopt,
+        false};
+  }
+
+  void require_default_port_net_type(
+      const Token& location,
+      const bool explicit_type) {
+    if (current_default_nettype_ == "none" && !explicit_type) {
+      error(
+          location,
+          "FSIM-SV-SEM-016",
+          "a port without an explicit net or variable type is forbidden by "
+          "`default_nettype none");
+    }
+  }
+
   [[nodiscard]] bool is_net_type_keyword() const {
     return any_keyword({"wire", "reg", "logic", "bit", "integer"});
   }
@@ -476,7 +939,10 @@ class VerilogParser final : private detail::ParserBase {
     spec.type = default_verilog_type();
     if (is_direction_keyword()) {
       spec.direction = parse_direction();
+      spec.type = default_port_net_type();
+      const bool explicit_type = is_net_type_keyword();
       parse_optional_net_type(spec.type);
+      require_default_port_net_type(current(), explicit_type);
     } else {
       parse_optional_net_type(spec.type);
     }
@@ -581,6 +1047,7 @@ class VerilogParser final : private detail::ParserBase {
           type,
           std::move(initializer),
           span_from(name, previous())});
+      current_procedural_names_.insert(name.text);
       if (!match(TokenKind::Comma)) {
         break;
       }
@@ -645,6 +1112,7 @@ class VerilogParser final : private detail::ParserBase {
 
   Process parse_always() {
     const auto start = advance();
+    current_procedural_names_.clear();
     Process process;
     if (start.text == "always_ff") {
       process.kind = ProcessKind::SystemVerilogAlwaysFF;
@@ -749,12 +1217,14 @@ class VerilogParser final : private detail::ParserBase {
       }
     }
     process.span = span_from(start, previous());
+    current_procedural_names_.clear();
     return process;
   }
 
   Process parse_initial() {
     const auto start =
         expect_keyword("initial", false, "FSIM-SV-PARSE-013");
+    current_procedural_names_.clear();
     Process process;
     process.kind = ProcessKind::Initial;
     auto body = parse_statement();
@@ -767,6 +1237,7 @@ class VerilogParser final : private detail::ParserBase {
       }
     }
     process.span = span_from(start, previous());
+    current_procedural_names_.clear();
     return process;
   }
 
@@ -797,6 +1268,9 @@ class VerilogParser final : private detail::ParserBase {
       while (match(TokenKind::Dot)) {
         signal_name += '.';
         signal_name += expect_identifier("selected signal name").text;
+      }
+      if (signal_name.find('.') == std::string::npos) {
+        note_implicit_net_reference(signal);
       }
       sensitivities.push_back(
           Sensitivity{edge, std::move(signal_name), signal.span});
@@ -1150,6 +1624,16 @@ class VerilogParser final : private detail::ParserBase {
         break;
       }
     }
+    const Expression* root = &expression;
+    while ((root->kind == ExpressionKind::Index
+            || root->kind == ExpressionKind::Slice)
+           && !root->operands.empty()) {
+      root = &root->operands.front();
+    }
+    if (root->kind == ExpressionKind::Identifier
+        && root->text == name.text) {
+      note_implicit_net_reference(name);
+    }
     return expression;
   }
 
@@ -1265,8 +1749,20 @@ class VerilogParser final : private detail::ParserBase {
         expression = Expression{ExpressionKind::Call, name.text,
                                 std::move(arguments),
                                 cover(name.span, previous().span)};
+        return parse_postfix(std::move(expression));
       }
-      return parse_postfix(std::move(expression));
+      expression = parse_postfix(std::move(expression));
+      const Expression* root = &expression;
+      while ((root->kind == ExpressionKind::Index
+              || root->kind == ExpressionKind::Slice)
+             && !root->operands.empty()) {
+        root = &root->operands.front();
+      }
+      if (root->kind == ExpressionKind::Identifier
+          && root->text == name.text) {
+        note_implicit_net_reference(name);
+      }
+      return expression;
     }
     if (match(TokenKind::LeftParen)) {
       const auto open = previous();
@@ -1329,9 +1825,17 @@ class VerilogParser final : private detail::ParserBase {
   }
 
   Language language_;
+  KeywordSet keyword_set_;
+  std::vector<KeywordSet> keyword_stack_;
   std::unordered_set<std::string> non_ansi_ports_;
   std::unordered_set<std::string> body_port_declarations_;
   std::unordered_set<std::string> port_type_refinements_;
+  std::unordered_set<std::string> current_procedural_names_;
+  std::vector<ImplicitNetReference> implicit_net_references_;
+  std::string current_default_nettype_{"wire"};
+  bool current_cell_define_{};
+  VerilogUnconnectedDrive current_unconnected_drive_{
+      VerilogUnconnectedDrive::None};
   std::uint64_t current_time_unit_magnitude_{1};
   std::string current_time_unit_;
   std::string current_time_precision_;

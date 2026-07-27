@@ -36,6 +36,9 @@ The current tree contains:
   compilation-unit-wide cache provenance;
 - bounded Verilog/SystemVerilog `` `timescale`` context, integer-delay scaling,
   and automatic selection of the finest declared directive precision;
+- executable scalar `` `default_nettype`` implicit nets plus
+  reset/cell/keyword-version/unconnected-drive compiler state, including
+  cell specialization metadata and pull initialization for omitted inputs;
 - recursive VHDL/SV instance elaboration in both hierarchy directions with
   explicit cross-language bindings, whole-signal port aliasing, and boundary
   validation;

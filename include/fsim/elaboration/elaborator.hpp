@@ -152,6 +152,7 @@ struct SpecializationInfo {
     std::string source;
     frontend::Language language{frontend::Language::SystemVerilog2017};
     std::string library{"work"};
+    bool is_cell{};
     // Canonical name/value pairs once frontend parameters and generics are
     // represented. Empty for the current bounded frontend subset.
     std::vector<std::pair<std::string, std::string>> parameter_values;

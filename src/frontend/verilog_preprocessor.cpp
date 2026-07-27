@@ -533,7 +533,11 @@ class VerilogPreprocessor {
           tokens, arguments, end, name_token, include_depth);
       return;
     }
-    if (name == "timescale" || name == "default_nettype") {
+    if (name == "timescale" || name == "default_nettype"
+        || name == "resetall" || name == "celldefine"
+        || name == "endcelldefine" || name == "begin_keywords"
+        || name == "end_keywords" || name == "unconnected_drive"
+        || name == "nounconnected_drive") {
       output_.push_back(tokens[begin]);
       output_.push_back(tokens[begin + 1]);
       const std::vector<Token> directive_arguments{

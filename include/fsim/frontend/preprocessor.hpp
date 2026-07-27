@@ -12,7 +12,7 @@
 namespace fsim::frontend {
 
 inline constexpr std::string_view verilog_preprocessor_cache_version =
-    "fsim-verilog-preprocessor-v2";
+    "fsim-verilog-preprocessor-v3";
 
 struct PreprocessorOptions {
   std::vector<std::filesystem::path> include_directories;
@@ -59,7 +59,8 @@ struct PreprocessCompilationUnitResult {
 // Preprocesses one Verilog/SystemVerilog compilation-unit root. Object-like and
 // function-like macros, command-line definitions, quoted/angle includes,
 // conditional compilation, undefinition, and token concatenation are applied
-// before parsing. Source and expansion provenance remain attached to tokens.
+// before parsing. Parser-state directives remain in the ordered token stream.
+// Source and expansion provenance remain attached to tokens.
 [[nodiscard]] PreprocessResult preprocess_verilog_file(
     const std::filesystem::path& path,
     Language language,
