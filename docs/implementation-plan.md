@@ -124,8 +124,10 @@ The following foundation is implemented:
   `Insert` and partial blocking/update/delayed writes, with stable overlap
   merging and interpreter/LLVM O0/O2 differential evidence;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
-  compiler; and
-- a stable catalog covering 284 unique current production diagnostic codes.
+  compiler;
+- typed, bidirectional SystemC/HDL hierarchy construction with either side as
+  the selected top while SystemC process execution remains pending; and
+- a stable catalog covering 297 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -319,7 +321,11 @@ Completed groundwork:
 - SystemC values, signals, ports, exports, time/event/process declarations in
   the compatibility facade;
 - versioned plug-in registration, exception containment, dynamic loading, and
-  cached GCC/Clang/MSVC command construction; and
+  cached GCC/Clang/MSVC command construction;
+- typed SystemC factory construction with owned native-module lifetime,
+  ABI-neutral port metadata, and append-only foreign-child registration;
+- recursive HDL-to-SystemC and SystemC-to-HDL elaboration with either language
+  family as the selected top; and
 - compiler-emitted dependency closure for GCC-like SystemC builds.
 
 Planned implementation sequence:
@@ -329,16 +335,12 @@ Planned implementation sequence:
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
-3. Instantiate registered SystemC factories into DesignIR and add
-   bidirectional hierarchy: HDL instances bind to SystemC factories, while a
-   SystemC factory registers typed foreign-child placeholders whose explicit
-   manifest bindings resolve to VHDL architectures or SV modules.
-4. Implement SystemC channel updates, sensitivity, `SC_METHOD`, and event
+3. Implement SystemC channel updates, sensitivity, `SC_METHOD`, and event
    notification in the common scheduler.
-5. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
+4. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
-6. Complete nested/scoped debug locals and add call safe points.
-7. Complete public C API metadata, remaining object kinds, and
+5. Complete nested/scoped debug locals and add call safe points.
+6. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
    process, severity, source location, and message.
 

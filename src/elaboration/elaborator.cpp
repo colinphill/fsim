@@ -2427,7 +2427,9 @@ public:
         const frontend::ParsedDesign& parsed,
         ElaboratedDesign& design,
         std::vector<Diagnostic>& diagnostics,
-        const std::span<const Binding> bindings)
+        const std::span<const Binding> bindings,
+        const std::span<const SystemCInstanceDescription>
+            systemc_instances)
         : parsed_(parsed), design_(design), diagnostics_(diagnostics) {
         for (const auto& binding : bindings) {
             if (!bindings_.emplace(binding.instance, &binding).second) {
@@ -2437,10 +2439,34 @@ public:
                     {});
             }
         }
+        for (const auto& instance : systemc_instances) {
+            if (!systemc_instances_
+                     .emplace(instance.path, &instance)
+                     .second) {
+                report(
+                    "FSIM-ELAB-BIND-032",
+                    "duplicate constructed SystemC instance path '"
+                        + instance.path + "'",
+                    {});
+            }
+        }
     }
 
     void build(const DesignUnit& root) {
         instantiate(root, design_.top_, {});
+        finish();
+    }
+
+    void build(const SystemCInstanceDescription& root) {
+        instantiate_systemc(root, root.path, {}, {});
+        finish();
+    }
+
+private:
+    using SignalMap = std::unordered_map<std::string, SignalId>;
+    using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
+
+    void finish() {
         validate_process_drivers();
         for (const auto& [path, binding] : bindings_) {
             (void)binding;
@@ -2452,10 +2478,17 @@ public:
                     {});
             }
         }
+        for (const auto& [path, instance] : systemc_instances_) {
+            (void)instance;
+            if (!used_systemc_instances_.contains(path)) {
+                report(
+                    "FSIM-ELAB-BIND-033",
+                    "constructed SystemC instance path '" + path
+                        + "' was not reached from the elaborated hierarchy",
+                    {});
+            }
+        }
     }
-
-private:
-    using SignalMap = std::unordered_map<std::string, SignalId>;
 
     void validate_process_drivers() {
         std::unordered_map<SignalId, std::vector<ProcessId>> drivers;
@@ -2583,8 +2616,7 @@ private:
         const frontend::Instance& instance,
         const DesignUnit& parent,
         const std::string& path,
-        const Binding*& binding) {
-        binding = binding_for(path);
+        const Binding* binding) {
         if (binding == nullptr) {
             const auto* target = choose_same_language_instance(
                 parsed_, parent, instance.unit_name);
@@ -2724,43 +2756,35 @@ private:
         }
     }
 
-    SignalMap connect_instance(
+    SignalMap connect_ports(
         const frontend::Instance& instance,
-        const DesignUnit& target,
+        const std::vector<frontend::SignalDeclaration>& ports,
         const std::string& path,
         const SignalMap& parent_signals,
         const Binding* binding,
         const bool cross_language) {
         SignalMap aliases;
-        const auto* ports = unit_ports(parsed_, target);
-        if (ports == nullptr) {
-            report(
-                "FSIM-ELAB-002",
-                "architecture '" + target.name + "' has no matching entity",
-                target.span);
-            return aliases;
-        }
-        std::vector<bool> connected(ports->size());
+        std::vector<bool> connected(ports.size());
         std::size_t positional = 0;
         for (const auto& connection : instance.connections) {
-            std::size_t port_index = ports->size();
+            std::size_t port_index = ports.size();
             if (connection.port) {
                 const auto found = std::find_if(
-                    ports->begin(), ports->end(),
+                    ports.begin(), ports.end(),
                     [&](const frontend::SignalDeclaration& port) {
                         return port.name == *connection.port;
                     });
-                if (found != ports->end()) {
+                if (found != ports.end()) {
                     port_index = static_cast<std::size_t>(
-                        std::distance(ports->begin(), found));
+                        std::distance(ports.begin(), found));
                 }
             } else {
-                while (positional < ports->size() && connected[positional]) {
+                while (positional < ports.size() && connected[positional]) {
                     ++positional;
                 }
                 port_index = positional++;
             }
-            if (port_index >= ports->size()) {
+            if (port_index >= ports.size()) {
                 report(
                     "FSIM-ELAB-BIND-025",
                     connection.port
@@ -2774,7 +2798,7 @@ private:
             if (connected[port_index]) {
                 report(
                     "FSIM-ELAB-BIND-026",
-                    "port '" + (*ports)[port_index].name
+                    "port '" + ports[port_index].name
                         + "' is connected more than once on instance '"
                         + path + "'",
                     connection.span);
@@ -2797,7 +2821,7 @@ private:
                     connection.value.span);
                 continue;
             }
-            const auto& port = (*ports)[port_index];
+            const auto& port = ports[port_index];
             const auto& actual_info = design_.signal_info_.at(actual->second);
             validate_boundary_type(port, actual_info, path, connection.span);
             if (cross_language
@@ -2830,6 +2854,289 @@ private:
             }
         }
         return aliases;
+    }
+
+    SignalMap connect_instance(
+        const frontend::Instance& instance,
+        const DesignUnit& target,
+        const std::string& path,
+        const SignalMap& parent_signals,
+        const Binding* binding,
+        const bool cross_language) {
+        const auto* ports = unit_ports(parsed_, target);
+        if (ports == nullptr) {
+            report(
+                "FSIM-ELAB-002",
+                "architecture '" + target.name
+                    + "' has no matching entity",
+                target.span);
+            return {};
+        }
+        return connect_ports(
+            instance,
+            *ports,
+            path,
+            parent_signals,
+            binding,
+            cross_language);
+    }
+
+    static frontend::SignalDeclaration external_port_declaration(
+        const ExternalPort& port) {
+        return {
+            port.name,
+            port.type,
+            port.direction,
+            true,
+            {}};
+    }
+
+    static frontend::SignalDeclaration foreign_port_declaration(
+        const ForeignPort& port) {
+        return {
+            port.name,
+            port.type,
+            port.direction,
+            true,
+            {}};
+    }
+
+    std::pair<SignalMap, ObjectMap> connect_systemc_instance(
+        const frontend::Instance& instance,
+        const SystemCInstanceDescription& target,
+        const std::string& path,
+        const SignalMap& parent_signals,
+        const Binding* binding) {
+        std::vector<frontend::SignalDeclaration> ports;
+        ports.reserve(target.ports.size());
+        for (const auto& port : target.ports) {
+            ports.push_back(external_port_declaration(port));
+        }
+        auto aliases = connect_ports(
+            instance,
+            ports,
+            path,
+            parent_signals,
+            binding,
+            true);
+        ObjectMap objects;
+        for (const auto& port : target.ports) {
+            if (const auto signal = aliases.find(port.name);
+                signal != aliases.end()) {
+                objects.emplace(port.handle, signal->second);
+            }
+        }
+        return {std::move(aliases), std::move(objects)};
+    }
+
+    SignalMap connect_foreign_child(
+        const ForeignChild& child,
+        const DesignUnit& target,
+        const std::string& path,
+        const ObjectMap& objects) {
+        SignalMap aliases;
+        const auto* target_ports = unit_ports(parsed_, target);
+        if (target_ports == nullptr) {
+            report(
+                "FSIM-ELAB-002",
+                "architecture '" + target.name
+                    + "' has no matching entity",
+                target.span);
+            return aliases;
+        }
+        std::unordered_set<std::string> connected;
+        for (const auto& foreign_port : child.ports) {
+            const auto formal = std::find_if(
+                target_ports->begin(),
+                target_ports->end(),
+                [&](const frontend::SignalDeclaration& port) {
+                    return port.name == foreign_port.name;
+                });
+            if (formal == target_ports->end()) {
+                report(
+                    "FSIM-ELAB-BIND-034",
+                    "foreign child '" + path
+                        + "' declares unknown target port '"
+                        + foreign_port.name + "'",
+                    {});
+                continue;
+            }
+            if (!connected.insert(foreign_port.name).second) {
+                report(
+                    "FSIM-ELAB-BIND-035",
+                    "foreign child port '" + path + "."
+                        + foreign_port.name
+                        + "' is connected more than once",
+                    {});
+                continue;
+            }
+            const auto actual = objects.find(foreign_port.object);
+            if (actual == objects.end()) {
+                report(
+                    "FSIM-ELAB-BIND-036",
+                    "foreign child port '" + path + "."
+                        + foreign_port.name
+                        + "' references an unknown SystemC object",
+                    {});
+                continue;
+            }
+            const auto placeholder =
+                foreign_port_declaration(foreign_port);
+            const auto& actual_info =
+                design_.signal_info_.at(actual->second);
+            validate_boundary_type(
+                placeholder, actual_info, path, {});
+            validate_boundary_type(
+                *formal, actual_info, path, {});
+            if (placeholder.direction != formal->direction) {
+                report(
+                    "FSIM-ELAB-BIND-037",
+                    "foreign child port direction mismatch on '"
+                        + path + "." + foreign_port.name + "'",
+                    {});
+            }
+            aliases.emplace(formal->name, actual->second);
+            aliases.emplace(
+                path + "." + formal->name, actual->second);
+            design_.signal_by_name_.emplace(
+                path + "." + formal->name, actual->second);
+            // The foreign child is an implementation detail of the enclosing
+            // SystemC module. Its output reaches the parent through that
+            // module's already-recorded boundary driver, so recording a
+            // second boundary driver here would turn one hierarchical drive
+            // path into a false multi-driver conflict.
+        }
+        return aliases;
+    }
+
+    const SystemCInstanceDescription* systemc_description(
+        const std::string& path,
+        const std::string_view target,
+        const frontend::SourceSpan& source) {
+        const auto found = systemc_instances_.find(path);
+        if (found == systemc_instances_.end()) {
+            report(
+                "FSIM-ELAB-BIND-038",
+                "SystemC target '" + std::string{target}
+                    + "' at '" + path
+                    + "' was not constructed before HDL elaboration",
+                source);
+            return nullptr;
+        }
+        if (found->second->target != target) {
+            report(
+                "FSIM-ELAB-BIND-039",
+                "constructed SystemC target '"
+                    + found->second->target + "' at '" + path
+                    + "' does not match binding target '"
+                    + std::string{target} + "'",
+                source);
+            return nullptr;
+        }
+        used_systemc_instances_.insert(path);
+        return found->second;
+    }
+
+    void instantiate_systemc(
+        const SystemCInstanceDescription& instance,
+        const std::string& path,
+        SignalMap aliases,
+        ObjectMap objects) {
+        if (!instance_paths_.insert(path).second) {
+            report(
+                "FSIM-ELAB-HIER-001",
+                "duplicate instance path '" + path + "'",
+                {});
+            return;
+        }
+        if (std::find(
+                stack_.begin(), stack_.end(), instance.target)
+            != stack_.end()) {
+            report(
+                "FSIM-ELAB-HIER-002",
+                "recursive instantiation of '" + instance.target
+                    + "' at '" + path + "'",
+                {});
+            return;
+        }
+        stack_.push_back(instance.target);
+        used_systemc_instances_.insert(path);
+
+        for (const auto& port : instance.ports) {
+            if (!aliases.contains(port.name)) {
+                const auto declaration =
+                    external_port_declaration(port);
+                const auto signal =
+                    add_owned_signal(declaration, path, aliases);
+                if (signal) {
+                    objects.emplace(port.handle, *signal);
+                }
+            } else if (!objects.contains(port.handle)) {
+                objects.emplace(port.handle, aliases.at(port.name));
+            }
+        }
+
+        SystemCInstanceInfo info;
+        info.id = static_cast<std::uint32_t>(
+            design_.systemc_instances_.size());
+        info.target = instance.target;
+        info.instance = path;
+        info.native_handle = instance.handle;
+        for (const auto& port : instance.ports) {
+            if (const auto signal = aliases.find(port.name);
+                signal != aliases.end()) {
+                info.ports.emplace_back(port.name, signal->second);
+            }
+        }
+        design_.systemc_instances_.push_back(std::move(info));
+
+        for (const auto& child : instance.foreign_children) {
+            const auto child_path = path + "." + child.name;
+            const auto* binding = binding_for(child_path);
+            if (binding == nullptr) {
+                report(
+                    "FSIM-ELAB-BIND-040",
+                    "SystemC foreign child '" + child_path
+                        + "' requires an explicit VHDL or "
+                          "Verilog/SystemVerilog binding",
+                    {});
+                continue;
+            }
+            const auto target = parse_target(binding->target);
+            if (!target || target->language == "systemc") {
+                report(
+                    "FSIM-ELAB-BIND-041",
+                    "SystemC foreign child '" + child_path
+                        + "' must bind to an HDL target",
+                    {});
+                continue;
+            }
+            if (target->language == "vhdl"
+                && !target->architecture) {
+                report(
+                    "FSIM-ELAB-BIND-016",
+                    "an explicit VHDL binding target must name an "
+                    "architecture, for example "
+                    "vhdl:work.entity(rtl)",
+                    {});
+                continue;
+            }
+            const auto* selected =
+                choose_bound_unit(parsed_, *target);
+            if (selected == nullptr) {
+                report(
+                    "FSIM-ELAB-BIND-015",
+                    "binding target '" + binding->target
+                        + "' was not found",
+                    {});
+                continue;
+            }
+            auto child_aliases = connect_foreign_child(
+                child, *selected, child_path, objects);
+            instantiate(
+                *selected, child_path, std::move(child_aliases));
+        }
+        stack_.pop_back();
     }
 
     void instantiate(
@@ -2911,7 +3218,34 @@ private:
 
         for (const auto& instance : unit.instances) {
             const auto child_path = path + "." + instance.name;
-            const Binding* binding = nullptr;
+            const auto* binding = binding_for(child_path);
+            if (binding != nullptr) {
+                const auto target = parse_target(binding->target);
+                if (target
+                    && target->language == "systemc") {
+                    const auto* description =
+                        systemc_description(
+                            child_path,
+                            binding->target,
+                            instance.span);
+                    if (description == nullptr) {
+                        continue;
+                    }
+                    auto [child_aliases, child_objects] =
+                        connect_systemc_instance(
+                            instance,
+                            *description,
+                            child_path,
+                            local,
+                            binding);
+                    instantiate_systemc(
+                        *description,
+                        child_path,
+                        std::move(child_aliases),
+                        std::move(child_objects));
+                    continue;
+                }
+            }
             const auto* target =
                 bound_target(instance, unit, child_path, binding);
             if (target == nullptr) {
@@ -2942,6 +3276,10 @@ private:
     std::vector<Diagnostic>& diagnostics_;
     std::unordered_map<std::string, const Binding*> bindings_;
     std::unordered_set<std::string> used_bindings_;
+    std::unordered_map<
+        std::string, const SystemCInstanceDescription*>
+        systemc_instances_;
+    std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
     std::vector<std::string> stack_;
     std::unordered_map<SignalId, std::size_t> boundary_driver_count_;
@@ -2963,6 +3301,11 @@ const std::vector<runtime::simir::Process>& ElaboratedDesign::processes() const 
 const std::vector<SpecializationInfo>&
 ElaboratedDesign::specializations() const noexcept {
     return specializations_;
+}
+
+const std::vector<SystemCInstanceInfo>&
+ElaboratedDesign::systemc_instances() const noexcept {
+    return systemc_instances_;
 }
 
 std::optional<runtime::simir::SignalId> ElaboratedDesign::find_signal(
@@ -3006,15 +3349,33 @@ std::unique_ptr<runtime::simir::Interpreter> ElaboratedDesign::create_interprete
 
 ElaborationResult elaborate(
     const frontend::ParsedDesign& parsed, const std::string_view top) {
-    return elaborate(parsed, top, std::span<const Binding>{});
+    return elaborate(
+        parsed,
+        top,
+        std::span<const Binding>{},
+        std::span<const SystemCInstanceDescription>{});
 }
 
 ElaborationResult elaborate(
     const frontend::ParsedDesign& parsed,
     const std::string_view top,
     const std::span<const Binding> bindings) {
+    return elaborate(
+        parsed,
+        top,
+        bindings,
+        std::span<const SystemCInstanceDescription>{});
+}
+
+ElaborationResult elaborate(
+    const frontend::ParsedDesign& parsed,
+    const std::string_view top,
+    const std::span<const Binding> bindings,
+    const std::span<const SystemCInstanceDescription>
+        systemc_instances) {
     ElaborationResult result;
     const auto requested = simple_top_name(top);
+    bool systemc_top = false;
     if (top.find(':') != std::string_view::npos) {
         const auto target = parse_target(top);
         if (!target) {
@@ -3025,6 +3386,7 @@ ElaborationResult elaborate(
                 {}});
             return result;
         }
+        systemc_top = target->language == "systemc";
         if (target->language == "vhdl" && !target->architecture) {
             result.diagnostics.push_back({
                 "FSIM-ELAB-004",
@@ -3034,20 +3396,44 @@ ElaborationResult elaborate(
             return result;
         }
     }
-    const auto* unit = choose_top_unit(parsed, top);
-    if (unit == nullptr) {
-        result.diagnostics.push_back({
-            "FSIM-ELAB-001",
-            "top-level design unit '" + requested + "' was not found",
-            {}});
-        return result;
-    }
 
     ElaboratedDesign design;
     design.top_ = requested;
     HierarchyBuilder builder{
-        parsed, design, result.diagnostics, bindings};
-    builder.build(*unit);
+        parsed,
+        design,
+        result.diagnostics,
+        bindings,
+        systemc_instances};
+    if (systemc_top) {
+        const auto root = std::find_if(
+            systemc_instances.begin(),
+            systemc_instances.end(),
+            [&](const SystemCInstanceDescription& instance) {
+                return instance.path == requested
+                    && instance.target == top;
+            });
+        if (root == systemc_instances.end()) {
+            result.diagnostics.push_back({
+                "FSIM-ELAB-001",
+                "top-level SystemC factory '" + std::string{top}
+                    + "' was not constructed",
+                {}});
+            return result;
+        }
+        builder.build(*root);
+    } else {
+        const auto* unit = choose_top_unit(parsed, top);
+        if (unit == nullptr) {
+            result.diagnostics.push_back({
+                "FSIM-ELAB-001",
+                "top-level design unit '" + requested
+                    + "' was not found",
+                {}});
+            return result;
+        }
+        builder.build(*unit);
+    }
 
     if (!result.diagnostics.empty()) {
         return result;

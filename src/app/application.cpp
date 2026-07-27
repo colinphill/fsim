@@ -8,8 +8,8 @@
 #include "fsim/frontend/parser.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/systemc/hierarchy.hpp"
 #include "fsim/systemc/plugin_compiler.hpp"
-#include "fsim/systemc/plugin_loader.hpp"
 #include "fsim/version.hpp"
 
 #include <algorithm>
@@ -28,6 +28,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -600,125 +601,41 @@ std::optional<systemc::PluginCompileRequest> systemc_request(
       : std::optional{std::move(request)};
 }
 
-struct SystemCFactoryCollector {
-  std::set<std::string> names;
-};
-
-extern "C" fsim_sc_status_v1 validate_sc_register_port(
-    void*,
-    fsim_sc_handle_v1,
-    const char*,
-    fsim_sc_port_direction_v1,
-    fsim_sc_value_encoding_v1,
-    std::uint32_t,
-    fsim_sc_handle_v1*) {
-  return FSIM_SC_NOT_SUPPORTED;
-}
-
-extern "C" fsim_sc_status_v1 validate_sc_register_process(
-    void*,
-    fsim_sc_handle_v1,
-    const char*,
-    fsim_sc_process_kind_v1,
-    fsim_sc_process_entry_v1,
-    void*,
-    fsim_sc_handle_v1*) {
-  return FSIM_SC_NOT_SUPPORTED;
-}
-
-extern "C" fsim_sc_status_v1 validate_sc_add_sensitivity(
-    void*,
-    fsim_sc_handle_v1,
-    fsim_sc_handle_v1,
-    fsim_sc_edge_kind_v1) {
-  return FSIM_SC_NOT_SUPPORTED;
-}
-
-extern "C" fsim_sc_status_v1 validate_sc_read_value(
-    void*, fsim_sc_handle_v1, fsim_sc_value_view_v1*) {
-  return FSIM_SC_NOT_SUPPORTED;
-}
-
-extern "C" fsim_sc_status_v1 validate_sc_write_value(
-    void*, fsim_sc_handle_v1, const fsim_sc_value_view_v1*) {
-  return FSIM_SC_NOT_SUPPORTED;
-}
-
-extern "C" fsim_sc_status_v1 validate_sc_wait_time(
-    void*, std::uint64_t) {
-  return FSIM_SC_NOT_SUPPORTED;
-}
-
-extern "C" fsim_sc_status_v1 validate_sc_wait_event(
-    void*, fsim_sc_handle_v1) {
-  return FSIM_SC_NOT_SUPPORTED;
-}
-
-extern "C" fsim_sc_status_v1 validate_sc_notify_event(
-    void*, fsim_sc_handle_v1, std::uint64_t) {
-  return FSIM_SC_NOT_SUPPORTED;
-}
-
-extern "C" void validate_sc_report(void*, int, const char*) {}
-
-extern "C" fsim_sc_status_v1 validate_sc_register_factory(
-    void* context,
-    const char* name,
-    fsim_sc_module_factory_v1 factory,
-    fsim_sc_module_destroy_v1 destroy,
-    void*) {
-  if (context == nullptr || name == nullptr || *name == '\0'
-      || factory == nullptr || destroy == nullptr) {
-    return FSIM_SC_INVALID_ARGUMENT;
-  }
-  try {
-    auto& collector = *static_cast<SystemCFactoryCollector*>(context);
-    return collector.names.insert(name).second
-        ? FSIM_SC_OK
-        : FSIM_SC_INVALID_ARGUMENT;
-  } catch (...) {
-    return FSIM_SC_RUNTIME_ERROR;
-  }
-}
-
-bool validate_systemc_plugin(
+std::shared_ptr<systemc::HierarchyRegistry> load_systemc_plugin(
     const std::filesystem::path& path,
     diagnostic::Engine& diagnostics) {
-  fsim_sc_host_v1 host{};
-  host.abi_version = FSIM_SYSTEMC_ABI_VERSION;
-  host.struct_size = sizeof(host);
-  host.register_port = validate_sc_register_port;
-  host.register_process = validate_sc_register_process;
-  host.add_sensitivity = validate_sc_add_sensitivity;
-  host.read_value = validate_sc_read_value;
-  host.write_value = validate_sc_write_value;
-  host.wait_time = validate_sc_wait_time;
-  host.wait_event = validate_sc_wait_event;
-  host.notify_event = validate_sc_notify_event;
-  host.report = validate_sc_report;
-
-  SystemCFactoryCollector collector;
-  fsim_sc_registrar_v1 registrar{};
-  registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
-  registrar.struct_size = sizeof(registrar);
-  registrar.context = &collector;
-  registrar.register_factory = validate_sc_register_factory;
-
+  static std::mutex registry_mutex;
+  static std::map<
+      std::filesystem::path,
+      std::weak_ptr<systemc::HierarchyRegistry>>
+      registries;
+  const auto normalized = path.lexically_normal();
+  std::lock_guard lock(registry_mutex);
+  if (const auto found = registries.find(normalized);
+      found != registries.end()) {
+    if (auto registry = found->second.lock()) {
+      return registry;
+    }
+    registries.erase(found);
+  }
   std::string error;
-  auto plugin = systemc::Plugin::load(path, host, registrar, error);
-  if (!plugin) {
+  auto registry = systemc::HierarchyRegistry::load(normalized, error);
+  if (!registry) {
     diagnostics.error(
         "FSIM-SC-C009",
         "compiled SystemC plug-in failed ABI validation: " + error);
-    return false;
+    return {};
   }
-  if (collector.names.empty()) {
+  if (registry->factory_count() == 0) {
     diagnostics.error(
         "FSIM-SC-A001",
         "compiled SystemC plug-in did not register a module factory");
-    return false;
+    return {};
   }
-  return true;
+  auto shared = std::shared_ptr<systemc::HierarchyRegistry>(
+      std::move(registry));
+  registries.emplace(normalized, shared);
+  return shared;
 }
 
 std::string unit_key(const frontend::DesignUnit& unit) {
@@ -768,6 +685,7 @@ std::string selected_top(
 
 struct BindingTarget {
   std::string language;
+  std::string qualifier;
   std::string unit;
 };
 
@@ -780,6 +698,7 @@ std::optional<BindingTarget> parse_binding_target(std::string_view target) {
   result.language = std::string(target.substr(0, colon));
   auto remainder = target.substr(colon + 1);
   if (const auto dot = remainder.rfind('.'); dot != std::string_view::npos) {
+    result.qualifier = std::string(remainder.substr(0, dot));
     remainder.remove_prefix(dot + 1);
   }
   if (const auto architecture = remainder.find('(');
@@ -793,9 +712,203 @@ std::optional<BindingTarget> parse_binding_target(std::string_view target) {
   return result;
 }
 
+frontend::PortDirection systemc_direction(
+    const fsim_sc_port_direction_v1 direction) {
+  switch (direction) {
+    case FSIM_SC_INPUT:
+      return frontend::PortDirection::Input;
+    case FSIM_SC_OUTPUT:
+      return frontend::PortDirection::Output;
+    case FSIM_SC_INOUT:
+      return frontend::PortDirection::Inout;
+  }
+  return frontend::PortDirection::Unknown;
+}
+
+frontend::Type systemc_type(
+    const fsim_sc_value_encoding_v1 encoding,
+    const std::uint32_t width) {
+  frontend::Type result;
+  switch (encoding) {
+    case FSIM_SC_BIT2:
+      result.domain = frontend::ValueDomain::Bit2;
+      result.spelling = "systemc.bit";
+      break;
+    case FSIM_SC_LOGIC4:
+      result.domain = frontend::ValueDomain::Logic4;
+      result.spelling = "systemc.logic";
+      break;
+    case FSIM_SC_SIGNED:
+      result.domain = frontend::ValueDomain::Logic4;
+      result.spelling = "systemc.signed";
+      result.is_signed = true;
+      break;
+    case FSIM_SC_UNSIGNED:
+      result.domain = frontend::ValueDomain::Logic4;
+      result.spelling = "systemc.unsigned";
+      break;
+  }
+  if (width > 1) {
+    result.packed_range = frontend::PackedRange{
+        static_cast<std::int64_t>(width - 1), 0, true};
+  }
+  return result;
+}
+
+elaboration::SystemCInstanceDescription systemc_description(
+    const std::string_view path,
+    const std::string_view target,
+    const systemc::ModuleDescription& module) {
+  elaboration::SystemCInstanceDescription result;
+  result.path = path;
+  result.target = target;
+  result.handle = module.handle;
+  result.parent = module.parent;
+  result.ports.reserve(module.ports.size());
+  for (const auto& port : module.ports) {
+    result.ports.push_back({
+        port.handle,
+        port.name,
+        systemc_type(port.encoding, port.width),
+        systemc_direction(port.direction),
+    });
+  }
+  result.foreign_children.reserve(module.foreign_children.size());
+  for (const auto& child : module.foreign_children) {
+    elaboration::ForeignChild converted;
+    converted.name = child.name;
+    converted.ports.reserve(child.ports.size());
+    for (const auto& port : child.ports) {
+      converted.ports.push_back({
+          port.name,
+          systemc_type(port.encoding, port.width),
+          systemc_direction(port.direction),
+          port.object,
+      });
+    }
+    result.foreign_children.push_back(std::move(converted));
+  }
+  return result;
+}
+
+std::optional<std::vector<elaboration::SystemCInstanceDescription>>
+construct_systemc_instances(
+    const project::Config& config,
+    const std::string_view top,
+    systemc::HierarchyRegistry* registry,
+    diagnostic::Engine& diagnostics) {
+  struct Request {
+    std::string path;
+    std::string target;
+    BindingTarget parsed;
+  };
+  std::vector<Request> requests;
+  if (const auto parsed = parse_binding_target(top);
+      parsed && parsed->language == "systemc") {
+    requests.push_back({parsed->unit, std::string{top}, *parsed});
+  }
+  for (const auto& binding : config.bindings) {
+    const auto parsed = parse_binding_target(binding.target);
+    if (parsed && parsed->language == "systemc") {
+      requests.push_back(
+          {binding.instance, binding.target, *parsed});
+    }
+  }
+  std::sort(
+      requests.begin(), requests.end(),
+      [](const Request& left, const Request& right) {
+        const auto left_depth =
+            std::count(left.path.begin(), left.path.end(), '.');
+        const auto right_depth =
+            std::count(right.path.begin(), right.path.end(), '.');
+        return left_depth != right_depth
+            ? left_depth < right_depth
+            : left.path < right.path;
+      });
+
+  std::vector<Request> unique;
+  for (auto& request : requests) {
+    if (request.parsed.qualifier.empty()) {
+      diagnostics.error(
+          "FSIM-ELAB-BIND-0001",
+          "SystemC target '" + request.target
+              + "' must use systemc:plugin.factory spelling");
+      continue;
+    }
+    const auto duplicate = std::find_if(
+        unique.begin(), unique.end(),
+        [&](const Request& candidate) {
+          return candidate.path == request.path;
+        });
+    if (duplicate == unique.end()) {
+      unique.push_back(std::move(request));
+    } else if (duplicate->target != request.target) {
+      diagnostics.error(
+          "FSIM-SC-A005",
+          "SystemC instance path '" + request.path
+              + "' has conflicting factory targets");
+    }
+  }
+  if (diagnostics.has_error()) {
+    return std::nullopt;
+  }
+  if (!unique.empty() && registry == nullptr) {
+    diagnostics.error(
+        "FSIM-SC-A002",
+        "SystemC hierarchy requires a compiled plug-in");
+    return std::nullopt;
+  }
+
+  std::vector<elaboration::SystemCInstanceDescription> result;
+  std::map<std::string, fsim_sc_handle_v1> handles;
+  result.reserve(unique.size());
+  for (const auto& request : unique) {
+    if (!registry->has_factory(request.parsed.unit)) {
+      diagnostics.error(
+          "FSIM-SC-A002",
+          "SystemC factory '" + request.parsed.unit
+              + "' was not registered by the compiled plug-in");
+      continue;
+    }
+    if (!registry->has_elaboration_factory(request.parsed.unit)) {
+      diagnostics.error(
+          "FSIM-SC-A003",
+          "SystemC factory '" + request.parsed.unit
+              + "' uses the legacy untyped construction ABI");
+      continue;
+    }
+    fsim_sc_handle_v1 parent = 0;
+    if (const auto separator = request.path.rfind('.');
+        separator != std::string::npos) {
+      const auto found = handles.find(request.path.substr(0, separator));
+      if (found != handles.end()) {
+        parent = found->second;
+      }
+    }
+    std::string error;
+    auto module = registry->instantiate(
+        request.parsed.unit, request.path, parent, error);
+    if (!module) {
+      diagnostics.error(
+          "FSIM-SC-A004",
+          "cannot construct SystemC instance '" + request.path
+              + "': " + error);
+      continue;
+    }
+    handles.emplace(request.path, module->handle);
+    result.push_back(systemc_description(
+        request.path, request.target, *module));
+  }
+  if (diagnostics.has_error()) {
+    return std::nullopt;
+  }
+  return result;
+}
+
 void validate_bindings(
     const project::Config& config,
     const frontend::ParsedDesign& parsed,
+    const systemc::HierarchyRegistry* systemc_hierarchy,
     diagnostic::Engine& diagnostics) {
   for (const auto& binding : config.bindings) {
     const auto target = parse_binding_target(binding.target);
@@ -818,11 +931,22 @@ void validate_bindings(
                 && unit.primary_name == target->unit;
           });
     } else if (target->language == "systemc") {
-      diagnostics.error(
-          "FSIM-SC-UNSUPPORTED-0002",
-          "SystemC factory binding and kernel elaboration are not implemented "
-          "in this vertical slice");
-      continue;
+      if (target->qualifier.empty()) {
+        diagnostics.error(
+            "FSIM-ELAB-BIND-0001",
+            "SystemC target '" + binding.target
+                + "' must use systemc:plugin.factory spelling");
+        continue;
+      }
+      found = systemc_hierarchy != nullptr
+          && systemc_hierarchy->has_factory(target->unit);
+      if (found
+          && !systemc_hierarchy->has_elaboration_factory(target->unit)) {
+        diagnostics.error(
+            "FSIM-SC-A003",
+            "SystemC factory '" + target->unit
+                + "' uses the legacy untyped construction ABI");
+      }
     } else {
       diagnostics.error(
           "FSIM-ELAB-BIND-0002",
@@ -859,6 +983,7 @@ std::string make_cache_key(
     const CheckedProject& checked,
     const std::string_view top,
     const std::string_view resolution,
+    const std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics) {
   compiler::CacheKeyBuilder key;
   key.add("fsim-version", version);
@@ -869,6 +994,7 @@ std::string make_cache_key(
   key.add("optimization", project::to_string(config.build.optimization));
   key.add("llvm", production_llvm_version);
   key.add("standard-library", standard_library_cache_version);
+  key.add("systemc-plugin", systemc_plugin_key);
   std::size_t hdl_source_index = 0;
   for (const auto& set : config.source_sets) {
     key.add("language", project::to_string(set.language));
@@ -2691,14 +2817,19 @@ std::optional<BuiltProject> build_project(
     return std::nullopt;
   }
   std::vector<std::filesystem::path> systemc_plugins;
+  std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
+  std::string systemc_plugin_key;
   if (const auto request = systemc_request(config)) {
     auto compiled = systemc::compile_plugin(*request, diagnostics);
     if (!compiled.success) {
       return std::nullopt;
     }
-    if (!validate_systemc_plugin(compiled.library_path, diagnostics)) {
+    systemc_hierarchy =
+        load_systemc_plugin(compiled.library_path, diagnostics);
+    if (!systemc_hierarchy) {
       return std::nullopt;
     }
+    systemc_plugin_key = compiled.cache_key;
     systemc_plugins.push_back(std::move(compiled.library_path));
   }
   const auto resolution = effective_resolution(config, checked->parsed);
@@ -2708,9 +2839,15 @@ std::optional<BuiltProject> build_project(
           checked->parsed, resolution, diagnostics)) {
     return std::nullopt;
   }
-  validate_bindings(config, checked->parsed, diagnostics);
   const auto top = selected_top(config, checked->parsed, diagnostics);
+  validate_bindings(
+      config, checked->parsed, systemc_hierarchy.get(), diagnostics);
   if (diagnostics.has_error()) {
+    return std::nullopt;
+  }
+  auto systemc_instances = construct_systemc_instances(
+      config, top, systemc_hierarchy.get(), diagnostics);
+  if (!systemc_instances) {
     return std::nullopt;
   }
   std::vector<elaboration::Binding> bindings;
@@ -2720,7 +2857,7 @@ std::optional<BuiltProject> build_project(
         {binding.instance, binding.target, binding.resolver});
   }
   auto elaborated = elaboration::elaborate(
-      checked->parsed, top, bindings);
+      checked->parsed, top, bindings, *systemc_instances);
   for (const auto& input : elaborated.diagnostics) {
     diagnostics.error(input.code, input.message, span(input.span));
   }
@@ -2735,7 +2872,12 @@ std::optional<BuiltProject> build_project(
     return std::nullopt;
   }
   const auto key = make_cache_key(
-      config, *checked, top, resolution, diagnostics);
+      config,
+      *checked,
+      top,
+      resolution,
+      systemc_plugin_key,
+      diagnostics);
   if (key.empty()) {
     return std::nullopt;
   }
@@ -2774,6 +2916,7 @@ std::optional<BuiltProject> build_project(
       config.build.optimization,
       std::move(*specialization_cache_keys),
       std::move(systemc_plugins),
+      std::move(systemc_hierarchy),
       hit};
 }
 

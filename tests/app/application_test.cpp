@@ -620,10 +620,82 @@ endmodule
 #include <fsim/systemc_abi.h>
 
 namespace {
+const fsim_sc_host_v1* active_host = nullptr;
+
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
 }
 void destroy_model(void*, void*) {}
+
+fsim_sc_status_v1 elaborate_bridge(
+    void*,
+    const char* instance_name,
+    fsim_sc_handle_v1 module,
+    fsim_sc_handle_v1,
+    void** result) {
+  if (active_host == nullptr || instance_name == nullptr
+      || *instance_name == '\0' || result == nullptr) {
+    return FSIM_SC_INVALID_ARGUMENT;
+  }
+  fsim_sc_handle_v1 value = 0;
+  fsim_sc_handle_v1 inverted = 0;
+  fsim_sc_handle_v1 child = 0;
+  auto status = active_host->register_port(
+      active_host->context,
+      module,
+      "value",
+      FSIM_SC_INPUT,
+      FSIM_SC_LOGIC4,
+      1,
+      &value);
+  if (status != FSIM_SC_OK) {
+    return status;
+  }
+  status = active_host->register_port(
+      active_host->context,
+      module,
+      "inverted",
+      FSIM_SC_OUTPUT,
+      FSIM_SC_LOGIC4,
+      1,
+      &inverted);
+  if (status != FSIM_SC_OK) {
+    return status;
+  }
+  status = active_host->register_foreign_child(
+      active_host->context, module, "u_hdl", &child);
+  if (status != FSIM_SC_OK) {
+    return status;
+  }
+  status = active_host->connect_foreign_port(
+      active_host->context,
+      child,
+      "value",
+      FSIM_SC_INPUT,
+      FSIM_SC_LOGIC4,
+      1,
+      value);
+  if (status != FSIM_SC_OK) {
+    return status;
+  }
+  status = active_host->connect_foreign_port(
+      active_host->context,
+      child,
+      "inverted",
+      FSIM_SC_OUTPUT,
+      FSIM_SC_LOGIC4,
+      1,
+      inverted);
+  if (status != FSIM_SC_OK) {
+    return status;
+  }
+  *result = new int{42};
+  return FSIM_SC_OK;
+}
+
+void destroy_bridge(void*, void* object) {
+  delete static_cast<int*>(object);
+}
 }
 
 extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
@@ -631,16 +703,57 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     fsim_sc_registrar_v1* registrar) {
   if (host == nullptr || registrar == nullptr
       || host->abi_version != FSIM_SYSTEMC_ABI_VERSION
-      || registrar->register_factory == nullptr) {
+      || registrar->abi_version != FSIM_SYSTEMC_ABI_VERSION
+      || host->struct_size < sizeof(fsim_sc_host_v1)
+      || registrar->struct_size < sizeof(fsim_sc_registrar_v1)
+      || registrar->register_factory == nullptr
+      || registrar->register_elaboration_factory == nullptr) {
     return FSIM_SC_ABI_MISMATCH;
   }
-  return registrar->register_factory(
+  active_host = host;
+  const auto status = registrar->register_factory(
       registrar->context,
       "model",
       create_model,
       destroy_model,
       nullptr);
+  if (status != FSIM_SC_OK) {
+    return status;
+  }
+  return registrar->register_elaboration_factory(
+      registrar->context,
+      "bridge",
+      elaborate_bridge,
+      destroy_bridge,
+      nullptr);
 }
+)";
+  }
+
+  const auto systemc_boundary_source =
+      directory / "systemc_boundary.sv";
+  {
+    std::ofstream output(systemc_boundary_source);
+    output << R"(
+module systemc_hdl_child(
+  input logic value,
+  output logic inverted
+);
+  assign inverted = ~value;
+endmodule
+
+module systemc_host;
+  logic value;
+  logic inverted;
+  bridge_placeholder u_bridge(
+      .value(value),
+      .inverted(inverted));
+  initial begin
+    value = 1'b0;
+    #1 value = 1'b1;
+    #1 $finish;
+  end
+endmodule
 )";
   }
 
@@ -681,6 +794,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   auto second = fsim::app::build_project(config, diagnostics);
   assert(second);
   assert(second->cache_hit);
+  assert(first->systemc_hierarchy == second->systemc_hierarchy);
   const auto child_q = first->design.find_signal("tb.u_child.value");
   assert(child_q);
   const auto paths = first->design.signal_paths();
@@ -690,6 +804,114 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
                return path.first == "tb.u_child.value";
          })
          != paths.end());
+
+  auto hdl_systemc_config = config;
+  hdl_systemc_config.project.top = "sv:work.systemc_host";
+  hdl_systemc_config.build.cache_path =
+      directory / "hdl-systemc-cache";
+  hdl_systemc_config.source_sets.front().files = {
+      systemc_boundary_source};
+  hdl_systemc_config.bindings = {
+      {"systemc_host.u_bridge",
+       "systemc:models.bridge",
+       std::nullopt},
+      {"systemc_host.u_bridge.u_hdl",
+       "sv:work.systemc_hdl_child",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine hdl_systemc_diagnostics;
+  auto hdl_systemc_project = fsim::app::build_project(
+      hdl_systemc_config, hdl_systemc_diagnostics);
+  assert(hdl_systemc_project);
+  assert(hdl_systemc_project->systemc_hierarchy);
+  assert(
+      hdl_systemc_project->design.systemc_instances().size()
+      == 1);
+  const auto hdl_systemc_value =
+      hdl_systemc_project->design.find_signal("value");
+  const auto hdl_systemc_child_value =
+      hdl_systemc_project->design.find_signal(
+          "systemc_host.u_bridge.u_hdl.value");
+  const auto hdl_systemc_inverted =
+      hdl_systemc_project->design.find_signal("inverted");
+  assert(
+      hdl_systemc_value && hdl_systemc_child_value
+      && hdl_systemc_inverted);
+  assert(*hdl_systemc_value == *hdl_systemc_child_value);
+  auto hdl_systemc_interpreter =
+      hdl_systemc_project->design.create_interpreter();
+  const auto hdl_systemc_result =
+      hdl_systemc_interpreter->run();
+  assert(
+      hdl_systemc_result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(
+      hdl_systemc_interpreter
+          ->signal_value(*hdl_systemc_inverted)
+          .to_msb_string()
+      == "0");
+
+  auto legacy_systemc_config = hdl_systemc_config;
+  legacy_systemc_config.build.cache_path =
+      directory / "legacy-systemc-cache";
+  legacy_systemc_config.bindings.front().target =
+      "systemc:models.model";
+  fsim::diagnostic::Engine legacy_systemc_diagnostics;
+  assert(!fsim::app::build_project(
+      legacy_systemc_config, legacy_systemc_diagnostics));
+  assert(std::any_of(
+      legacy_systemc_diagnostics.diagnostics().begin(),
+      legacy_systemc_diagnostics.diagnostics().end(),
+      [](const fsim::diagnostic::Diagnostic& diagnostic) {
+        return diagnostic.code == "FSIM-SC-A003";
+      }));
+
+  auto systemc_hdl_config = hdl_systemc_config;
+  systemc_hdl_config.project.top = "systemc:models.bridge";
+  systemc_hdl_config.build.cache_path =
+      directory / "systemc-hdl-cache";
+  systemc_hdl_config.bindings = {
+      {"bridge.u_hdl",
+       "sv:work.systemc_hdl_child",
+       std::nullopt},
+  };
+  fsim::diagnostic::Engine systemc_hdl_diagnostics;
+  auto systemc_hdl_project = fsim::app::build_project(
+      systemc_hdl_config, systemc_hdl_diagnostics);
+  assert(systemc_hdl_project);
+  assert(systemc_hdl_project->systemc_hierarchy);
+  assert(
+      systemc_hdl_project->design.systemc_instances().size()
+      == 1);
+  assert(
+      systemc_hdl_project->design.systemc_instances().front().instance
+      == "bridge");
+  const auto systemc_root_value =
+      systemc_hdl_project->design.find_signal("bridge.value");
+  const auto systemc_root_inverted =
+      systemc_hdl_project->design.find_signal("bridge.inverted");
+  const auto systemc_root_child_inverted =
+      systemc_hdl_project->design.find_signal(
+          "bridge.u_hdl.inverted");
+  assert(
+      systemc_root_value && systemc_root_inverted
+      && systemc_root_child_inverted);
+  assert(*systemc_root_inverted == *systemc_root_child_inverted);
+  auto systemc_hdl_interpreter =
+      systemc_hdl_project->design.create_interpreter();
+  systemc_hdl_interpreter->deposit_signal(
+      *systemc_root_value,
+      fsim::runtime::PackedLogic4::from_msb_string("1"));
+  const auto systemc_hdl_result =
+      systemc_hdl_interpreter->run();
+  assert(
+      systemc_hdl_result.status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      systemc_hdl_interpreter
+          ->signal_value(*systemc_root_inverted)
+          .to_msb_string()
+      == "0");
 
   struct CapturedSimulation {
     fsim::runtime::RunResult result;

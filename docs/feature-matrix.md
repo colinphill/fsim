@@ -188,17 +188,16 @@ version is development evidence only.
 | SC-003 | Versioned plug-in entry point and factory registration through a dynamically loaded library | execute | [sample plug-in](../tests/systemc/sample_plugin.cpp) | — | — | [loader test](../tests/systemc/plugin_loader_test.cpp) |
 | SC-004 | Missing symbol, ABI mismatch, initialization failure, transactional registration, and exception containment | v1 target | — | [throwing-initializer test](../tests/systemc/plugin_loader_test.cpp) | — | [exception containment and no partial registration](../tests/systemc/plugin_loader_test.cpp) |
 | SC-005 | Direct-argv GCC-like/MSVC planning and checksummed cached host shared-library compilation; GCC-like compiler-emitted dependency closure includes implicit system headers, and publication rejects volatile or concurrently changed inputs | execute | [compiler-plan test](../tests/systemc/plugin_compiler_test.cpp) | [unsafe option, missing source/compiler, volatile-macro, and compile-race tests](../tests/systemc/plugin_compiler_test.cpp) | [source/header/library/dependency-closure key and non-cacheable-input tests](../tests/systemc/plugin_compiler_test.cpp) | [cold/warm compile, implicit-header invalidation, mutation rejection, and stale-lock tests](../tests/systemc/plugin_compiler_test.cpp) |
-| SC-006 | Integrated module hierarchy, exports, ports, factories, and common-kernel elaboration | v1 target | — | — | — | — |
+| SC-006 | Typed factory construction, module lifetime ownership, registered ports, and ABI-neutral common-hierarchy metadata | execute | [typed sample factory](../tests/systemc/sample_plugin.cpp) | [legacy untyped factories rejected for hierarchy use](../src/app/application.cpp) | [registry and application hierarchy tests](../tests/systemc/plugin_loader_test.cpp) | [native object lifetime plus application build](../tests/app/application_test.cpp) |
 | SC-007 | `SC_METHOD`, static/dynamic sensitivity, events, notifications, and channel updates in the common phase lattice | v1 target | — | — | — | — |
 | SC-008 | `SC_THREAD`/`SC_CTHREAD` suspension through Boost.Context 1.91 fibers | v1 target | — | — | — | — |
 | SC-009 | Common fixed-width signed/unsigned operations and logic-vector semantics needed by signal-level models | v1 target | [facade smoke coverage only](../tests/systemc/systemc_header_test.cpp) | — | — | — |
 | SC-010 | Manifest SystemC source sets compiled, cached, and loaded for entry-point/factory validation during an application build | execute | [application SystemC source test](../tests/app/application_test.cpp) | [loader diagnostics implemented; atomic negative application test missing](../src/app/application.cpp) | [application build test](../tests/app/application_test.cpp) | [cold/warm application build](../tests/app/application_test.cpp) |
-| SC-011 | Bidirectional elaboration-time hierarchy: HDL instance to SystemC factory and SystemC typed foreign-child placeholder to VHDL/SV target | v1 target | [documented binding contract](systemc-subset.md#bidirectional-mixed-language-hierarchy) | — | — | — |
+| SC-011 | Bidirectional elaboration-time hierarchy: HDL instance to SystemC factory and SystemC typed foreign-child placeholder to VHDL/SV target | execute | [typed sample factory](../tests/systemc/sample_plugin.cpp) | [missing foreign-child binding](../tests/elaboration/elaborator_test.cpp) | [SV and VHDL hierarchy paths](../tests/elaboration/elaborator_test.cpp) | [compiled plug-in in both directions](../tests/app/application_test.cpp) |
 
-“Execute” in SC-001 through SC-003, SC-005, and SC-010 means the source facade,
-plug-in boundary, compiler component, or build-time validation itself executes.
-It does not mean that a SystemC module is instantiated or that a SystemC
-process participates in the fsim scheduler.
+“Execute” in these rows is bounded by the named evidence. SC-006 and SC-011
+construct native modules and elaborate their mixed hierarchy, but no SystemC
+process participates in the fsim scheduler yet.
 
 ## Mixed-language behavior
 
@@ -214,7 +213,7 @@ process participates in the fsim scheduler.
 | ML-008 | Full deterministic cross-language phase lattice | v1 target | — | — | — | [common four-phase spine and one SV→VHDL→SV path](../tests/elaboration/elaborator_test.cpp) |
 | ML-009 | Explicit VHDL-parent/SV-child binding with whole-vector port aliases and delta propagation | execute | [both instance ASTs](../tests/frontend/frontend_tests.cpp) | [bounded VHDL association rejection](../tests/frontend/frontend_tests.cpp) | [reverse mixed hierarchy test](../tests/elaboration/elaborator_test.cpp) | [`1010` → inverted `0101`](../tests/elaboration/elaborator_test.cpp) |
 | ML-010 | Mixed parameters/generics, broader delay interaction, and complete cross-language failure diagnostics | v1 target | — | — | — | — |
-| ML-011 | Recursive bidirectional SystemC hierarchy using explicit HDL-to-factory bindings and factory-registered foreign HDL child placeholders, with any language as top | v1 target | [documented hierarchy contract](systemc-subset.md#bidirectional-mixed-language-hierarchy) | — | — | — |
+| ML-011 | Recursive bidirectional SystemC hierarchy using explicit HDL-to-factory bindings and factory-registered foreign HDL child placeholders, with any language as top | execute | [typed factory and manifest bindings](../tests/app/application_test.cpp) | [missing foreign-child binding](../tests/elaboration/elaborator_test.cpp) | [SV → SystemC → SV, VHDL → SystemC → VHDL, and SystemC → HDL](../tests/elaboration/elaborator_test.cpp) | [real compiled plug-in in both top-level directions](../tests/app/application_test.cpp) |
 
 The files under
 [examples/vertical_slice](../examples/vertical_slice/README.md) are an

@@ -18,6 +18,10 @@
 #include <string_view>
 #include <vector>
 
+namespace fsim::systemc {
+class HierarchyRegistry;
+}
+
 namespace fsim::app {
 
 struct CheckedSource {
@@ -41,6 +45,7 @@ struct BuiltProject {
   /// Dense specialization-ID-indexed provenance keys for native modules.
   std::vector<std::string> specialization_cache_keys;
   std::vector<std::filesystem::path> systemc_plugins;
+  std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
   bool cache_hit{};
 };
 

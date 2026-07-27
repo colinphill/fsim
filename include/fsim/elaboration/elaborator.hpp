@@ -26,12 +26,50 @@ struct Binding {
     std::optional<std::string> resolver;
 };
 
+struct ExternalPort {
+    std::uint64_t handle{};
+    std::string name;
+    frontend::Type type;
+    frontend::PortDirection direction{
+        frontend::PortDirection::Unknown};
+};
+
+struct ForeignPort {
+    std::string name;
+    frontend::Type type;
+    frontend::PortDirection direction{
+        frontend::PortDirection::Unknown};
+    std::uint64_t object{};
+};
+
+struct ForeignChild {
+    std::string name;
+    std::vector<ForeignPort> ports;
+};
+
+/// Immutable, ABI-neutral description produced by one constructed SystemC
+/// elaboration factory. `path` is the full DesignIR instance path and `target`
+/// is the canonical `systemc:plugin.factory` manifest spelling.
+struct SystemCInstanceDescription {
+    std::string path;
+    std::string target;
+    std::uint64_t handle{};
+    std::uint64_t parent{};
+    std::vector<ExternalPort> ports;
+    std::vector<ForeignChild> foreign_children;
+};
+
 [[nodiscard]] ElaborationResult elaborate(
     const frontend::ParsedDesign& parsed, std::string_view top);
 [[nodiscard]] ElaborationResult elaborate(
     const frontend::ParsedDesign& parsed,
     std::string_view top,
     std::span<const Binding> bindings);
+[[nodiscard]] ElaborationResult elaborate(
+    const frontend::ParsedDesign& parsed,
+    std::string_view top,
+    std::span<const Binding> bindings,
+    std::span<const SystemCInstanceDescription> systemc_instances);
 
 struct Diagnostic {
     std::string code;
@@ -72,6 +110,16 @@ struct SpecializationInfo {
     std::vector<std::pair<std::string, std::string>> parameter_values;
 };
 
+struct SystemCInstanceInfo {
+    std::uint32_t id{};
+    std::string target;
+    std::string instance;
+    std::uint64_t native_handle{};
+    std::vector<
+        std::pair<std::string, runtime::simir::SignalId>>
+        ports;
+};
+
 class ElaboratedDesign final {
 public:
     ElaboratedDesign() = default;
@@ -81,6 +129,8 @@ public:
     [[nodiscard]] const std::vector<runtime::simir::Process>& processes() const noexcept;
     [[nodiscard]] const std::vector<SpecializationInfo>&
     specializations() const noexcept;
+    [[nodiscard]] const std::vector<SystemCInstanceInfo>&
+    systemc_instances() const noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view name) const noexcept;
     /// Return every debug-visible signal path in lexical order. Boundary-port
@@ -102,12 +152,18 @@ private:
         const frontend::ParsedDesign&,
         std::string_view,
         std::span<const Binding>);
+    friend ElaborationResult elaborate(
+        const frontend::ParsedDesign&,
+        std::string_view,
+        std::span<const Binding>,
+        std::span<const SystemCInstanceDescription>);
 
     std::string top_;
     std::vector<SignalInfo> signal_info_;
     std::vector<runtime::simir::Signal> signals_;
     std::vector<runtime::simir::Process> processes_;
     std::vector<SpecializationInfo> specializations_;
+    std::vector<SystemCInstanceInfo> systemc_instances_;
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
 };
 

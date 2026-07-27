@@ -8,11 +8,13 @@ the Accellera kernel and does not claim source completeness, binary
 compatibility, or ABI compatibility with an Accellera SystemC installation.
 
 The repository currently supplies the source facade, native plug-in ABI,
-dynamic loader, and a manifest-driven host compiler with a persistent plug-in
-cache. A project build collects the configured SystemC sources into one shared
-library, loads it to validate the ABI entry point, and requires at least one
-module factory registration. Integrated module instantiation, common-kernel
-elaboration, and fiber-backed thread execution are still work in progress.
+dynamic loader, a manifest-driven host compiler with a persistent plug-in
+cache, and typed factory construction integrated into common hierarchy
+elaboration. A project build collects the configured SystemC sources into one
+shared library, loads it, constructs the requested factory instances, and
+retains their native objects for the design lifetime. Common-kernel SystemC
+process execution and fiber-backed thread execution are still work in
+progress.
 
 ## Source inclusion
 
@@ -58,16 +60,18 @@ register a named foreign-child placeholder and its typed ports during
 elaboration; an `fsim.toml` binding for that full instance path then selects a
 `vhdl:LIBRARY.ENTITY(ARCHITECTURE)` or `sv:LIBRARY.MODULE` target.
 
-Both directions are elaborated recursively into the same `DesignIR`. The
+Both directions are now elaborated recursively into the same `DesignIR`. The
 common elaborator assigns hierarchy/object/process IDs, checks every port and
 conversion, detects recursive instantiation, and applies the same explicit
 resolver policy. A SystemC parent may therefore contain an HDL child which
 contains another bound SystemC child. Any language may be the project top.
 
-The SystemC-facing API will expose this as an elaboration-only foreign-module
-wrapper backed by an append-only native host callback. It does not permit
-arbitrary HDL creation after simulation starts. Cross-language binding is
-never inferred from a C++ type or unqualified name.
+The SystemC-facing ABI exposes this through an elaboration factory plus
+append-only host callbacks for registered ports and typed foreign-child
+placeholders. Factory, module, port, and foreign-child identities are opaque
+64-bit handles; no C++ or internal IR layout crosses the boundary. It does not
+permit arbitrary HDL creation after simulation starts. Cross-language binding
+is never inferred from a C++ type or unqualified name.
 
 ## Plug-in compilation
 
@@ -130,12 +134,14 @@ and explicit byte views. A plug-in registers module factories through the
 registrar. Factories and modules then register ports, processes, sensitivities,
 reads, writes, waits, and notifications through the host table.
 
-The first integrated-elaboration ABI extension will also let a running factory
-register a foreign-child placeholder beneath its module handle. The factory
-registers the child name and typed port surface, while the manifest—not plug-in
-C++ code—selects the HDL implementation. This keeps SystemC-to-HDL hierarchy
-recursive and symmetric with HDL-to-SystemC binding without exposing frontend
-or `DesignIR` layouts through the native ABI.
+The integrated-elaboration ABI lets a running typed factory register a
+foreign-child placeholder beneath its module handle. The factory registers the
+child name and typed port surface, while the manifest—not plug-in C++ code—
+selects the HDL implementation. This keeps SystemC-to-HDL hierarchy recursive
+and symmetric with HDL-to-SystemC binding without exposing frontend or
+`DesignIR` layouts through the native ABI. The earlier untyped factory callback
+remains loadable for compatibility but cannot satisfy an integrated hierarchy
+binding.
 
 The loader rejects a missing entry point, host/registrar ABI mismatch, or failed
 initialization. Factory registrations are buffered until initialization
@@ -162,9 +168,9 @@ SystemC work participates in fsim's common phase policy:
 - changed channels awaken dependents in the next delta.
 
 The current header routes timed/event waits, edge sensitivity, and
-notifications through host callbacks when a host is bound. During build-time
-plug-in validation these kernel operations intentionally report unsupported;
-only ABI and factory registration are validated. The facade does not yet
+notifications through host callbacks when a host is bound. During
+elaboration, process and kernel callbacks intentionally report unsupported;
+typed ports and foreign hierarchy are accepted. The facade does not yet
 provide fiber suspension or the integrated common update phase.
 
 ## Deliberately outside v1

@@ -438,9 +438,13 @@ using `__DATE__`, `__TIME__`, or `__TIMESTAMP__` are likewise non-cacheable.
 The compiler recomputes the plan and key after compilation and discards an
 output when a tracked input changed before publication. A project build loads
 the resulting library, checks `fsim_plugin_init_v1`, contains initialization
-exceptions, and requires at least one valid factory registration. Instantiating
-those factories into the common hierarchy, including HDL-to-SystemC bindings
-and SystemC-registered foreign HDL children, remains planned.
+exceptions, and requires at least one valid factory registration. Typed
+elaboration factories are constructed before HDL elaboration; their registered
+ports and foreign HDL children are copied into ABI-neutral descriptions and
+recursively incorporated into the common hierarchy in either direction.
+Native module objects remain owned beside the built design until simulation
+teardown. Registering and executing SystemC processes in the common scheduler
+remains planned.
 
 This cache boundary does not yet fingerprint every helper behind the selected
 compiler driver or every environment-injected code-generation setting. The

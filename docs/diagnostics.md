@@ -307,7 +307,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-011` | error | A binding path was not found in the elaborated hierarchy. |
 | `FSIM-ELAB-BIND-012` | error | An instance target was not found in the same language and needs an explicit cross-language binding. |
 | `FSIM-ELAB-BIND-013` | error | An elaboration binding target is malformed. |
-| `FSIM-ELAB-BIND-014` | error | SystemC factory hierarchy is not executable in this slice. |
+| `FSIM-ELAB-BIND-014` | error | A SystemC binding reached HDL target selection without a matching preconstructed typed factory instance. |
 | `FSIM-ELAB-BIND-015` | error | An explicit binding target was not found. |
 | `FSIM-ELAB-BIND-016` | error | An explicit VHDL binding does not name an architecture. |
 | `FSIM-ELAB-BIND-019` | error | A boundary port or actual uses an unsupported value domain. |
@@ -323,6 +323,16 @@ therefore excluded.
 | `FSIM-ELAB-BIND-029` | error | A resolved multi-driver boundary still requires unimplemented driver-slot resolution. |
 | `FSIM-ELAB-BIND-030` | error | A cross-language `inout` lacks an explicit resolver. |
 | `FSIM-ELAB-BIND-031` | error | A cross-language `inout` has a resolver but still requires unimplemented driver-slot resolution. |
+| `FSIM-ELAB-BIND-032` | error | More than one preconstructed SystemC description names the same instance path. |
+| `FSIM-ELAB-BIND-033` | error | A preconstructed SystemC instance was not reached from the selected top. |
+| `FSIM-ELAB-BIND-034` | error | A SystemC foreign child declares a port absent from its bound HDL target. |
+| `FSIM-ELAB-BIND-035` | error | A SystemC foreign-child port is connected more than once. |
+| `FSIM-ELAB-BIND-036` | error | A SystemC foreign-child port references an unknown registered object. |
+| `FSIM-ELAB-BIND-037` | error | A SystemC foreign-child port direction differs from its bound HDL target. |
+| `FSIM-ELAB-BIND-038` | error | An HDL-to-SystemC binding has no matching preconstructed factory instance. |
+| `FSIM-ELAB-BIND-039` | error | A preconstructed SystemC instance target differs from its manifest binding. |
+| `FSIM-ELAB-BIND-040` | error | A SystemC foreign child lacks its required explicit HDL binding. |
+| `FSIM-ELAB-BIND-041` | error | A SystemC foreign child is bound to a non-HDL target. |
 
 ## Time, runtime, trace, and design cache
 
@@ -349,6 +359,10 @@ therefore excluded.
 | Code | Severity | Meaning |
 |---|---|---|
 | `FSIM-SC-A001` | error | A validated SystemC plug-in registered no module factory. |
+| `FSIM-SC-A002` | error | A requested SystemC hierarchy has no compiled plug-in or registered factory. |
+| `FSIM-SC-A003` | error | A requested SystemC factory uses the legacy untyped construction ABI. |
+| `FSIM-SC-A004` | error | A typed SystemC factory failed during module construction. |
+| `FSIM-SC-A005` | error | One SystemC instance path has conflicting factory targets. |
 | `FSIM-SC-C001` | error | The SystemC compiler working directory cannot be resolved. |
 | `FSIM-SC-C002` | error | A SystemC source set contains no C++ sources. |
 | `FSIM-SC-C003` | error | A SystemC source or dependency is missing, unreadable, invalid, or cannot be hashed/scanned. |
@@ -362,7 +376,6 @@ therefore excluded.
 | `FSIM-SC-C011` | error | A raw compiler option hides inputs from the persistent cache dependency model. |
 | `FSIM-SC-C012` | warning | Dependency closure or a volatile predefined macro prevents safe persistent plug-in cache reuse. |
 | `FSIM-SC-C013` | error | A tracked plug-in input or compiler identity changed during compilation; the unpublished output was discarded. |
-| `FSIM-SC-UNSUPPORTED-0002` | error | SystemC factory binding and common-kernel elaboration are not implemented. |
 
 ## Consistency check
 

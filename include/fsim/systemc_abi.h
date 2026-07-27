@@ -64,6 +64,12 @@ typedef void (*fsim_sc_process_entry_v1)(void* user);
 typedef void* (*fsim_sc_module_factory_v1)(
     void* user, const char* instance_name, fsim_sc_handle_v1 parent);
 typedef void (*fsim_sc_module_destroy_v1)(void* user, void* module);
+typedef fsim_sc_status_v1 (*fsim_sc_module_elaborate_v1)(
+    void* user,
+    const char* instance_name,
+    fsim_sc_handle_v1 module,
+    fsim_sc_handle_v1 parent,
+    void** result);
 
 typedef struct fsim_sc_host_v1 {
     uint32_t abi_version;
@@ -100,6 +106,25 @@ typedef struct fsim_sc_host_v1 {
     fsim_sc_status_v1 (*notify_event)(
         void* context, fsim_sc_handle_v1 event, uint64_t delay_ticks);
     void (*report)(void* context, int severity, const char* message);
+
+    /*
+     * Append-only v1 elaboration extension. A foreign child is a named,
+     * elaboration-time placeholder whose implementation is selected by the
+     * manifest. Its ports connect to objects already registered on `module`.
+     */
+    fsim_sc_status_v1 (*register_foreign_child)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* name,
+        fsim_sc_handle_v1* result);
+    fsim_sc_status_v1 (*connect_foreign_port)(
+        void* context,
+        fsim_sc_handle_v1 child,
+        const char* name,
+        fsim_sc_port_direction_v1 direction,
+        fsim_sc_value_encoding_v1 encoding,
+        uint32_t width,
+        fsim_sc_handle_v1 object);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {
@@ -110,6 +135,18 @@ typedef struct fsim_sc_registrar_v1 {
         void* context,
         const char* name,
         fsim_sc_module_factory_v1 factory,
+        fsim_sc_module_destroy_v1 destroy,
+        void* user);
+
+    /*
+     * Append-only v1 factory form for integrated elaboration. Unlike the
+     * legacy factory, this callback receives the newly allocated module
+     * handle separately from its parent and returns status explicitly.
+     */
+    fsim_sc_status_v1 (*register_elaboration_factory)(
+        void* context,
+        const char* name,
+        fsim_sc_module_elaborate_v1 factory,
         fsim_sc_module_destroy_v1 destroy,
         void* user);
 } fsim_sc_registrar_v1;

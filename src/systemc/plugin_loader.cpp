@@ -14,6 +14,7 @@ namespace {
 struct PendingFactory {
     std::string name;
     fsim_sc_module_factory_v1 factory{};
+    fsim_sc_module_elaborate_v1 elaboration_factory{};
     fsim_sc_module_destroy_v1 destroy{};
     void* user{};
 };
@@ -34,7 +35,26 @@ extern "C" fsim_sc_status_v1 buffer_factory(
     }
     try {
         static_cast<RegistrationBuffer*>(context)->factories.push_back(
-            PendingFactory{name, factory, destroy, user});
+            PendingFactory{name, factory, nullptr, destroy, user});
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 buffer_elaboration_factory(
+    void* context,
+    const char* name,
+    const fsim_sc_module_elaborate_v1 factory,
+    const fsim_sc_module_destroy_v1 destroy,
+    void* user) noexcept {
+    if (context == nullptr || name == nullptr || *name == '\0'
+        || factory == nullptr || destroy == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        static_cast<RegistrationBuffer*>(context)->factories.push_back(
+            PendingFactory{name, nullptr, factory, destroy, user});
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -73,7 +93,8 @@ std::unique_ptr<Plugin> Plugin::load(
         || host.struct_size < sizeof(fsim_sc_host_v1)
         || registrar.abi_version != FSIM_SYSTEMC_ABI_VERSION
         || registrar.struct_size < sizeof(fsim_sc_registrar_v1)
-        || registrar.register_factory == nullptr) {
+        || registrar.register_factory == nullptr
+        || registrar.register_elaboration_factory == nullptr) {
         error = "SystemC host/registrar ABI mismatch";
         return nullptr;
     }
@@ -101,6 +122,8 @@ std::unique_ptr<Plugin> Plugin::load(
     buffered_registrar.struct_size = sizeof(fsim_sc_registrar_v1);
     buffered_registrar.context = &registrations;
     buffered_registrar.register_factory = buffer_factory;
+    buffered_registrar.register_elaboration_factory =
+        buffer_elaboration_factory;
     fsim_sc_status_v1 status = FSIM_SC_RUNTIME_ERROR;
     try {
         status = init(plugin->host_.get(), &buffered_registrar);
@@ -120,12 +143,20 @@ std::unique_ptr<Plugin> Plugin::load(
     }
     for (const auto& factory : registrations.factories) {
         try {
-            status = registrar.register_factory(
-                registrar.context,
-                factory.name.c_str(),
-                factory.factory,
-                factory.destroy,
-                factory.user);
+            status =
+                factory.elaboration_factory != nullptr
+                ? registrar.register_elaboration_factory(
+                      registrar.context,
+                      factory.name.c_str(),
+                      factory.elaboration_factory,
+                      factory.destroy,
+                      factory.user)
+                : registrar.register_factory(
+                      registrar.context,
+                      factory.name.c_str(),
+                      factory.factory,
+                      factory.destroy,
+                      factory.user);
         } catch (const std::exception& exception) {
             error =
                 "SystemC factory registration threw an exception: "

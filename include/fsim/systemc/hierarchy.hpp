@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#include "fsim/systemc_abi.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace fsim::systemc {
+
+struct PortDescription {
+    fsim_sc_handle_v1 handle{};
+    std::string name;
+    fsim_sc_port_direction_v1 direction{FSIM_SC_INPUT};
+    fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
+    std::uint32_t width{};
+};
+
+struct ForeignPortDescription {
+    std::string name;
+    fsim_sc_port_direction_v1 direction{FSIM_SC_INPUT};
+    fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
+    std::uint32_t width{};
+    fsim_sc_handle_v1 object{};
+};
+
+struct ForeignChildDescription {
+    fsim_sc_handle_v1 handle{};
+    std::string name;
+    std::vector<ForeignPortDescription> ports;
+};
+
+struct ModuleDescription {
+    fsim_sc_handle_v1 handle{};
+    fsim_sc_handle_v1 parent{};
+    std::string factory;
+    std::string instance;
+    std::vector<PortDescription> ports;
+    std::vector<ForeignChildDescription> foreign_children;
+};
+
+/// Owns one loaded SystemC plug-in and every module object constructed from
+/// its append-only elaboration factory ABI.
+///
+/// The resulting descriptions contain no C++ or plug-in-owned layout and can
+/// be copied into DesignIR. Module objects stay alive until this registry is
+/// destroyed, before the dynamic library is unloaded.
+class HierarchyRegistry final {
+public:
+    struct Impl;
+
+    HierarchyRegistry(HierarchyRegistry&&) noexcept;
+    HierarchyRegistry& operator=(HierarchyRegistry&&) noexcept;
+    HierarchyRegistry(const HierarchyRegistry&) = delete;
+    HierarchyRegistry& operator=(const HierarchyRegistry&) = delete;
+    ~HierarchyRegistry();
+
+    [[nodiscard]] static std::unique_ptr<HierarchyRegistry> load(
+        const std::filesystem::path& path,
+        std::string& error);
+
+    [[nodiscard]] bool has_factory(std::string_view name) const noexcept;
+    [[nodiscard]] bool has_elaboration_factory(
+        std::string_view name) const noexcept;
+    [[nodiscard]] std::size_t factory_count() const noexcept;
+
+    [[nodiscard]] std::optional<ModuleDescription> instantiate(
+        std::string_view factory,
+        std::string_view instance,
+        fsim_sc_handle_v1 parent,
+        std::string& error);
+
+    [[nodiscard]] const std::filesystem::path& path() const noexcept;
+
+private:
+    explicit HierarchyRegistry(std::unique_ptr<Impl> impl) noexcept;
+    std::unique_ptr<Impl> impl_;
+};
+
+} // namespace fsim::systemc

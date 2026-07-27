@@ -190,6 +190,7 @@ target_include_directories(
 add_library(
   fsim_systemc
   STATIC
+    src/systemc/hierarchy.cpp
     src/systemc/plugin_compiler.cpp
     src/systemc/plugin_loader.cpp
 )

@@ -82,15 +82,19 @@ The current tree contains:
 - a schema-1 project-manifest loader and command-line driver;
 - an executable versioned C session API for build, hierarchy/value access,
   simulation control, and synchronous callbacks;
-- versioned SystemC plug-in ABI and dynamic-library loading; and
+- versioned SystemC plug-in ABI, dynamic-library loading, typed factory
+  construction, and foreign-child registration; and
 - an fsim SystemC compatibility header plus a shell-free, cached host compiler
   for plug-in shared libraries, with build-time entry-point and factory
   validation.
 
-The v1 SystemC hierarchy contract is bidirectional: HDL instances may bind to
-SystemC factories, and SystemC factories may declare elaboration-time foreign
-children explicitly bound to VHDL or SystemVerilog targets. Integrated factory
-instantiation is still planned.
+The implemented SystemC hierarchy spine is bidirectional: HDL instances may
+bind to typed SystemC factories, and those factories may declare
+elaboration-time foreign children explicitly bound to VHDL or SystemVerilog
+targets. Either HDL or SystemC may be the selected top. The resulting ports,
+aliases, HDL descendants, and stable SystemC instance metadata enter the common
+elaborated design. SystemC process registration and scheduler execution are
+still planned.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
