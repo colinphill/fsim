@@ -966,8 +966,9 @@ class VhdlParser final : private detail::ParserBase {
     if (keyword("and", 0, true) || keyword("nand", 0, true)) {
       return BinaryOperation{2, detail::ascii_lower(current().text)};
     }
-    if (at(TokenKind::Assign) || at(TokenKind::NotEqual) ||
-        at(TokenKind::Less) || at(TokenKind::LessEqual) ||
+    if (at(TokenKind::Assign)
+        || (at(TokenKind::NotEqual) && current().text == "/=")
+        || at(TokenKind::Less) || at(TokenKind::LessEqual) ||
         at(TokenKind::Greater) || at(TokenKind::GreaterEqual)) {
       return BinaryOperation{3, current().text};
     }
@@ -996,6 +997,14 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   Expression parse_primary() {
+    if (keyword("true", 0, true) || keyword("false", 0, true)) {
+      const auto token = advance();
+      return Expression{
+          ExpressionKind::BooleanLiteral,
+          vhdl_name(token.text),
+          {},
+          token.span};
+    }
     if (at(TokenKind::Number)) {
       const auto token = advance();
       return Expression{ExpressionKind::IntegerLiteral, token.text, {},

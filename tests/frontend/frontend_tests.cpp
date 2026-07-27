@@ -1326,6 +1326,143 @@ endmodule
       "SystemVerilog selected assignment target nodes");
 }
 
+void test_conditional_statement_trees() {
+  const auto vhdl = parse_text(
+      "conditionals.vhd",
+      R"(
+entity conditionals is end entity;
+architecture rtl of conditionals is
+  signal result : boolean;
+begin
+  choose: process
+  begin
+    if true then
+      result <= false;
+    elsif false then
+      if true then
+        result <= true;
+      else
+        result <= false;
+      end if;
+    else
+      result <= true;
+    end if;
+    result <= (true nand false) and (false nor false)
+              and (true xnor true) and (true /= false);
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !vhdl.ok(),
+      "the unsupported bare wait should be the only VHDL diagnostic");
+  require(
+      vhdl.diagnostics.size() == 1
+          && vhdl.diagnostics.front().code
+              == "FSIM-VHDL-UNSUPPORTED-016",
+      "VHDL conditional parsing must recover through a trailing bare wait");
+  const auto* architecture =
+      vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->processes.front().statements.size() == 2,
+      "VHDL conditional process representation");
+  const auto& outer =
+      architecture->processes.front().statements.front();
+  require(
+      outer.kind == StatementKind::If
+          && outer.condition.kind == ExpressionKind::BooleanLiteral
+          && outer.condition.text == "true"
+          && outer.statements.size() == 1
+          && outer.statements.front().value.kind
+              == ExpressionKind::BooleanLiteral
+          && outer.else_statements.size() == 1,
+      "VHDL true branch and boolean literal nodes");
+  const auto& elsif = outer.else_statements.front();
+  require(
+      elsif.kind == StatementKind::If
+          && elsif.condition.kind == ExpressionKind::BooleanLiteral
+          && elsif.condition.text == "false"
+          && elsif.statements.size() == 1
+          && elsif.statements.front().kind == StatementKind::If
+          && elsif.else_statements.size() == 1,
+      "VHDL elsif is retained as an ordered nested false branch");
+  require(
+      elsif.statements.front().else_statements.size() == 1,
+      "nested VHDL else branch representation");
+  const auto& boolean_assignment =
+      architecture->processes.front().statements[1];
+  require(
+      boolean_assignment.kind == StatementKind::Assignment
+          && boolean_assignment.value.kind == ExpressionKind::Binary
+          && boolean_assignment.value.text == "and",
+      "VHDL Boolean operator expression root");
+  const auto contains_operator =
+      [](const auto& self,
+         const Expression& expression,
+         const std::string_view operation) -> bool {
+        if (expression.kind == ExpressionKind::Binary
+            && expression.text == operation) {
+          return true;
+        }
+        return std::any_of(
+            expression.operands.begin(),
+            expression.operands.end(),
+            [&](const Expression& operand) {
+              return self(self, operand, operation);
+            });
+      };
+  for (const auto operation : {"nand", "nor", "xnor", "/="}) {
+    require(
+        contains_operator(
+            contains_operator,
+            boolean_assignment.value,
+            operation),
+        "VHDL Boolean operator node");
+  }
+
+  const auto systemverilog = parse_text(
+      "conditionals.sv",
+      R"(
+module conditionals;
+  logic [3:0] selector;
+  logic result;
+  initial begin
+    if (selector)
+      if (selector[3])
+        result = 1'b1;
+      else
+        result = 1'b0;
+    else begin
+      result = 1'bx;
+    end
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "nested SystemVerilog conditional statements must parse");
+  const auto& sv_outer =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements.front();
+  require(
+      sv_outer.kind == StatementKind::If
+          && sv_outer.condition.kind == ExpressionKind::Identifier
+          && sv_outer.statements.size() == 1
+          && sv_outer.statements.front().kind == StatementKind::If
+          && sv_outer.else_statements.size() == 1,
+      "SystemVerilog dangling else binds to the nested if");
+  require(
+      sv_outer.statements.front().else_statements.size() == 1
+          && sv_outer.else_statements.front().kind
+              == StatementKind::Assignment,
+      "SystemVerilog nested and outer false branches");
+}
+
 }  // namespace
 
 int main() {
@@ -1358,6 +1495,7 @@ int main() {
     test_systemverilog_comparison_expressions();
     test_systemverilog_arithmetic_expressions();
     test_systemverilog_select_and_concatenation_expressions();
+    test_conditional_statement_trees();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

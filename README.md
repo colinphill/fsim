@@ -42,6 +42,10 @@ The current tree contains:
   time-zero `always_comb`/`always_latch`, and dynamic `@*`;
 - ordered Verilog/SystemVerilog exact `case`/`default` lowering with
   comma-separated choices and four-state `X`/`Z` matching;
+- nested VHDL `if`/`elsif`/`else` with Boolean typing and nested
+  Verilog/SystemVerilog `if`/`else` with packed four-state truth conversion;
+- VHDL Boolean literals, equality/inequality, and `not`/`and`/`or`/`xor` plus
+  `nand`/`nor`/`xnor` Boolean operations;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - vector-aware SystemVerilog logical negation and unsigned

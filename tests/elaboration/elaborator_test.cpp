@@ -2400,5 +2400,268 @@ endmodule
     assert(has_diagnostic(
         rejected_empty_dynamic_wildcard, "FSIM-ELAB-062"));
 
+    const auto parsed_sv_conditionals =
+        fsim::frontend::parse_text(
+            "conditional_flow.sv",
+            R"(
+module conditional_flow;
+  logic zero_case;
+  logic one_x_case;
+  logic unknown_case;
+  logic [3:0] nested_case;
+  initial begin
+    if (4'b0000)
+      zero_case = 1'b1;
+    else
+      zero_case = 1'b0;
+    if (4'bx001)
+      one_x_case = 1'b1;
+    else
+      one_x_case = 1'b0;
+    if (4'bx000)
+      unknown_case = 1'b1;
+    else
+      unknown_case = 1'b0;
+    if (4'b0010) begin
+      if (1'b0)
+        nested_case = 4'b0001;
+      else
+        nested_case = 4'b0010;
+    end else begin
+      nested_case = 4'b0011;
+    end
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed_sv_conditionals.ok());
+    const auto elaborated_sv_conditionals =
+        fsim::elaboration::elaborate(
+            parsed_sv_conditionals.design,
+            "sv:work.conditional_flow");
+    assert(elaborated_sv_conditionals.ok());
+    const auto& sv_conditional_process =
+        elaborated_sv_conditionals.design->processes().front();
+    assert(
+        std::count_if(
+            sv_conditional_process.operations.begin(),
+            sv_conditional_process.operations.end(),
+            [](const fsim::runtime::simir::Operation& operation) {
+                return std::holds_alternative<
+                    fsim::runtime::simir::Branch>(operation);
+            })
+        == 5);
+    assert(
+        std::count_if(
+            sv_conditional_process.operations.begin(),
+            sv_conditional_process.operations.end(),
+            [](const fsim::runtime::simir::Operation& operation) {
+                return std::holds_alternative<
+                    fsim::runtime::simir::LogicalNot>(operation);
+            })
+        == 10);
+    auto sv_conditional_interpreter =
+        elaborated_sv_conditionals.design->create_interpreter();
+    const auto sv_conditional_result =
+        sv_conditional_interpreter->run();
+    assert(
+        sv_conditional_result.status
+        == fsim::runtime::RunStatus::completed);
+    const auto zero_case =
+        elaborated_sv_conditionals.design->find_signal("zero_case");
+    const auto one_x_case =
+        elaborated_sv_conditionals.design->find_signal("one_x_case");
+    const auto unknown_case =
+        elaborated_sv_conditionals.design->find_signal("unknown_case");
+    const auto nested_case =
+        elaborated_sv_conditionals.design->find_signal("nested_case");
+    assert(zero_case && one_x_case && unknown_case && nested_case);
+    assert(
+        sv_conditional_interpreter
+            ->signal_value(*zero_case)
+            .to_msb_string()
+        == "0");
+    assert(
+        sv_conditional_interpreter
+            ->signal_value(*one_x_case)
+            .to_msb_string()
+        == "1");
+    assert(
+        sv_conditional_interpreter
+            ->signal_value(*unknown_case)
+            .to_msb_string()
+        == "0");
+    assert(
+        sv_conditional_interpreter
+            ->signal_value(*nested_case)
+            .to_msb_string()
+        == "0010");
+
+    const auto parsed_vhdl_conditionals =
+        fsim::frontend::parse_text(
+            "conditional_flow.vhd",
+            R"(
+entity conditional_flow is
+  port (
+    true_case : out boolean;
+    elsif_case : out boolean;
+    nested_case : out boolean;
+    boolean_expression_case : out boolean
+  );
+end entity;
+
+architecture rtl of conditional_flow is
+  signal trigger : std_logic;
+begin
+  choose: process(trigger)
+  begin
+    if true then
+      true_case <= true;
+    else
+      true_case <= false;
+    end if;
+    if false then
+      elsif_case <= false;
+    elsif true /= false then
+      elsif_case <= true;
+    else
+      elsif_case <= false;
+    end if;
+    if 1 = 1 then
+      if false then
+        nested_case <= false;
+      else
+        nested_case <= true;
+      end if;
+    else
+      nested_case <= false;
+    end if;
+    if (not false) and (true nand false)
+       and (false nor false) and (true xnor true)
+       and (true /= false) then
+      boolean_expression_case <= true;
+    else
+      boolean_expression_case <= false;
+    end if;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(parsed_vhdl_conditionals.ok());
+    const auto elaborated_vhdl_conditionals =
+        fsim::elaboration::elaborate(
+            parsed_vhdl_conditionals.design,
+            "vhdl:work.conditional_flow(rtl)");
+    if (!elaborated_vhdl_conditionals.ok()) {
+        for (const auto& diagnostic :
+             elaborated_vhdl_conditionals.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_vhdl_conditionals.ok());
+    auto vhdl_conditional_interpreter =
+        elaborated_vhdl_conditionals.design->create_interpreter();
+    const auto vhdl_conditional_result =
+        vhdl_conditional_interpreter->run();
+    assert(
+        vhdl_conditional_result.status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto name :
+         {"true_case", "elsif_case", "nested_case",
+          "boolean_expression_case"}) {
+        const auto signal =
+            elaborated_vhdl_conditionals.design->find_signal(name);
+        assert(signal);
+        assert(
+            vhdl_conditional_interpreter
+                ->signal_value(*signal)
+                .to_msb_string()
+            == "1");
+    }
+
+    const auto invalid_vhdl_condition =
+        fsim::frontend::parse_text(
+            "invalid_condition.vhd",
+            R"(
+entity invalid_condition is
+  port (gate : in std_logic);
+end entity;
+architecture rtl of invalid_condition is
+begin
+  invalid: process(gate)
+  begin
+    if gate then
+      null;
+    end if;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_condition.ok());
+    const auto rejected_vhdl_condition =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_condition.design,
+            "vhdl:work.invalid_condition(rtl)");
+    assert(!rejected_vhdl_condition.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_condition, "FSIM-ELAB-048"));
+
+    const auto invalid_vhdl_assertion =
+        fsim::frontend::parse_text(
+            "invalid_assertion.vhd",
+            R"(
+entity invalid_assertion is
+  port (gate : in std_logic);
+end entity;
+architecture rtl of invalid_assertion is
+begin
+  invalid: process(gate)
+  begin
+    assert gate;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_assertion.ok());
+    const auto rejected_vhdl_assertion =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_assertion.design,
+            "vhdl:work.invalid_assertion(rtl)");
+    assert(!rejected_vhdl_assertion.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_assertion, "FSIM-ELAB-051"));
+
+    const auto vector_assertion =
+        fsim::frontend::parse_text(
+            "vector_assertion.sv",
+            R"(
+module vector_assertion;
+  initial begin
+    assert (4'bx001);
+    assert (4'bx000) else $error("vector condition failed");
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(vector_assertion.ok());
+    const auto elaborated_vector_assertion =
+        fsim::elaboration::elaborate(
+            vector_assertion.design,
+            "sv:work.vector_assertion");
+    assert(elaborated_vector_assertion.ok());
+    auto vector_assertion_interpreter =
+        elaborated_vector_assertion.design->create_interpreter();
+    bool saw_vector_assertion = false;
+    try {
+        (void)vector_assertion_interpreter->run();
+    } catch (const fsim::runtime::simir::AssertionError& error) {
+        saw_vector_assertion =
+            std::string_view{error.what()}.find(
+                "vector condition failed")
+            != std::string_view::npos;
+    }
+    assert(saw_vector_assertion);
+
     std::cout << "elaborator tests passed\n";
 }

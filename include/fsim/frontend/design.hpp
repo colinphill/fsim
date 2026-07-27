@@ -64,6 +64,7 @@ enum class ExpressionKind {
   Invalid,
   Identifier,
   IntegerLiteral,
+  BooleanLiteral,
   LogicLiteral,
   StringLiteral,
   Unary,

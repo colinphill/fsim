@@ -158,6 +158,18 @@ two-state condition, so interpreter and LLVM branch behavior is identical.
 `casez`, `casex`, `case inside`, and `unique`/`unique0`/`priority`
 qualifiers remain targeted unsupported forms.
 
+Sequential conditional statements lower recursively to explicit SimIR
+branches and exit jumps, preserving source order and the nearest-`else`
+association. VHDL `if` and `elsif` conditions must lower to the Boolean domain;
+Boolean literals and Boolean logical/equality operations retain that domain.
+SystemVerilog conditions first reduce the complete packed expression to
+four-state truth: any known `1` is true, an all-zero value is false, and a
+value containing only zero plus `X`/`Z` is indeterminate. The procedural
+branch policy treats that indeterminate result as false. Immediate
+SystemVerilog assertions use the same normalization but retain the
+indeterminate scalar so the assertion fails. Both interpreter and LLVM paths
+execute the resulting common logical and branch operations.
+
 Bounded SystemVerilog conditional expressions lower to a typed SimIR select.
 A scalar `0` or `1` chooses its corresponding equal-width alternative. An
 `X` or `Z` condition compares the alternatives bit by bit, preserves identical

@@ -110,6 +110,9 @@ The following foundation is implemented:
   VHDL and SystemVerilog, including distinct signed remainder/modulo,
   arbitrary-width interpreter algorithms, guarded LLVM lowering, and
   differential source tests;
+- nested VHDL `if`/`elsif`/`else` with Boolean literals and typed Boolean
+  operators, plus nested SystemVerilog `if`/`else` and immediate assertions
+  using packed four-state truth conversion, with O0/O2 differential evidence;
 - declared-range-aware constant SystemVerilog bit/part selects and packed
   concatenations with arbitrary-width interpreter operations, LLVM
   single-word lowering, and ascending/non-zero-based range tests;
@@ -301,6 +304,8 @@ Completed groundwork:
   `always_latch`, and dynamic `@*`;
 - bounded exact Verilog/SystemVerilog `case` statements with ordered,
   four-state alternatives and default fallback;
+- bounded nested VHDL and SystemVerilog conditional statements, including
+  language-specific Boolean/four-state condition rules;
 - deterministic project seed handling;
 - scope/signal navigation, source/time/signal-change breakpoints including
   exact-state signal conditions, all four step modes, live debug-trace

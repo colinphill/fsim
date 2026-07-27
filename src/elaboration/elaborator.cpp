@@ -113,6 +113,15 @@ std::optional<LoweredLiteral> literal_value(
     const std::size_t expected_width,
     const frontend::Language language) {
     auto text = expression.text;
+    if (expression.kind == ExpressionKind::BooleanLiteral
+        && language == frontend::Language::Vhdl2008
+        && (text == "true" || text == "false")) {
+        return LoweredLiteral{
+            PackedLogic4(
+                1,
+                text == "true" ? Logic4::one : Logic4::zero),
+            frontend::ValueDomain::Boolean};
+    }
     if (expression.kind == ExpressionKind::LogicLiteral && text.size() == 3
         && text.front() == '\'' && text.back() == '\'') {
         if (language == frontend::Language::Vhdl2008) {
@@ -724,17 +733,50 @@ private:
                 static_cast<std::uint32_t>(span.begin.column)}});
     }
 
-    void lower_assert(const Statement& statement) {
-        const auto condition = lower_expression(statement.condition, 1);
-        if (!condition) {
-            return;
+    std::optional<RegisterId> lower_condition(
+        const Expression& expression,
+        std::string diagnostic_code,
+        std::string_view construct) {
+        const auto expression_width =
+            infer_width(expression).value_or(std::size_t{1});
+        const auto source =
+            lower_expression(expression, expression_width);
+        if (!source) {
+            return std::nullopt;
         }
-        if (register_width(*condition) != 1) {
-            report(
-                "FSIM-ELAB-051",
-                "an assertion condition must produce one bit in this "
-                "executable slice",
-                statement.condition.span);
+        if (language_ == frontend::Language::Vhdl2008) {
+            if (register_width(*source) != 1
+                || register_domain(*source)
+                    != frontend::ValueDomain::Boolean) {
+                report(
+                    std::move(diagnostic_code),
+                    "a VHDL " + std::string{construct}
+                        + " condition must have type boolean",
+                    expression.span);
+                return std::nullopt;
+            }
+            return source;
+        }
+
+        // SystemVerilog conditionals apply logical truth conversion to the
+        // complete expression. Reusing logical negation twice preserves 0,
+        // 1, and unknown truth while normalizing any packed width to a
+        // scalar. Branching subsequently treats X/Z as false, as required
+        // for procedural conditions.
+        const auto inverted =
+            allocate_register(1, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalNot{inverted, *source});
+        const auto normalized =
+            allocate_register(1, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(
+            LogicalNot{normalized, inverted});
+        return normalized;
+    }
+
+    void lower_assert(const Statement& statement) {
+        const auto condition = lower_condition(
+            statement.condition, "FSIM-ELAB-051", "assertion");
+        if (!condition) {
             return;
         }
         AssertionSeverity severity = AssertionSeverity::error;
@@ -997,15 +1039,9 @@ private:
     }
 
     void lower_if(const Statement& statement) {
-        const auto condition = lower_expression(statement.condition, 1);
+        const auto condition = lower_condition(
+            statement.condition, "FSIM-ELAB-048", "if");
         if (!condition) {
-            return;
-        }
-        if (register_width(*condition) != 1) {
-            report(
-                "FSIM-ELAB-048",
-                "an if condition must produce one bit in this executable slice",
-                statement.condition.span);
             return;
         }
         const auto branch_index =
@@ -1146,6 +1182,7 @@ private:
             return destination;
         }
         if (expression.kind == ExpressionKind::IntegerLiteral
+            || expression.kind == ExpressionKind::BooleanLiteral
             || expression.kind == ExpressionKind::LogicLiteral
             || expression.kind == ExpressionKind::StringLiteral) {
             const auto literal =
@@ -1678,12 +1715,19 @@ private:
                 return std::nullopt;
             }
             std::optional<BinaryOperator> operation;
-            if (expression.text == "&" || expression.text == "and") {
+            bool invert_result = false;
+            if (expression.text == "&" || expression.text == "and"
+                || expression.text == "nand") {
                 operation = BinaryOperator::bit_and;
-            } else if (expression.text == "|" || expression.text == "or") {
+                invert_result = expression.text == "nand";
+            } else if (expression.text == "|" || expression.text == "or"
+                       || expression.text == "nor") {
                 operation = BinaryOperator::bit_or;
-            } else if (expression.text == "^" || expression.text == "xor") {
+                invert_result = expression.text == "nor";
+            } else if (expression.text == "^" || expression.text == "xor"
+                       || expression.text == "xnor") {
                 operation = BinaryOperator::bit_xor;
+                invert_result = expression.text == "xnor";
             } else if (expression.text == "+") {
                 operation = BinaryOperator::add_unsigned;
             } else if (expression.text == "-") {
@@ -1707,6 +1751,10 @@ private:
             } else if (
                 language_ != frontend::Language::Vhdl2008
                 && expression.text == "!=") {
+                operation = BinaryOperator::not_equal;
+            } else if (
+                language_ == frontend::Language::Vhdl2008
+                && expression.text == "/=") {
                 operation = BinaryOperator::not_equal;
             } else if (expression.text == "<") {
                 operation = BinaryOperator::less_unsigned;
@@ -1828,7 +1876,18 @@ private:
                         || domain == frontend::ValueDomain::Boolean;
                 };
             auto result_domain =
-                is_two_state(register_domain(*lhs))
+                scalar_result
+                    && language_
+                        == frontend::Language::Vhdl2008
+                ? frontend::ValueDomain::Boolean
+                : language_
+                            == frontend::Language::Vhdl2008
+                        && register_domain(*lhs)
+                            == frontend::ValueDomain::Boolean
+                        && register_domain(*rhs)
+                            == frontend::ValueDomain::Boolean
+                    ? frontend::ValueDomain::Boolean
+                : is_two_state(register_domain(*lhs))
                         && is_two_state(register_domain(*rhs))
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic4;
@@ -1842,6 +1901,13 @@ private:
             const auto destination =
                 allocate_register(result_width, result_domain);
             process_.operations.emplace_back(Binary{*operation, destination, *lhs, *rhs});
+            if (invert_result) {
+                const auto inverted =
+                    allocate_register(result_width, result_domain);
+                process_.operations.emplace_back(
+                    UnaryNot{inverted, destination});
+                return inverted;
+            }
             return destination;
         }
         report(
@@ -1852,6 +1918,9 @@ private:
     }
 
     std::optional<std::size_t> infer_width(const Expression& expression) const {
+        if (expression.kind == ExpressionKind::BooleanLiteral) {
+            return std::size_t{1};
+        }
         if (language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
             && expression.operands.size() == 1
@@ -2019,6 +2088,8 @@ private:
             return false;
         case ExpressionKind::IntegerLiteral:
             return true;
+        case ExpressionKind::BooleanLiteral:
+            return false;
         case ExpressionKind::LogicLiteral:
             return expression.text.find("'s") != std::string::npos
                 || expression.text.find("'S") != std::string::npos;

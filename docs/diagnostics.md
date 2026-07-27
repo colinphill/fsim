@@ -268,10 +268,10 @@ therefore excluded.
 | `FSIM-ELAB-045` | error | A VHDL edge predicate appears outside the one supported process-guard form. |
 | `FSIM-ELAB-046` | error | A procedural blocking intra-assignment delay cannot yet suspend after RHS evaluation. |
 | `FSIM-ELAB-047` | error | Assignment target and expression widths differ. |
-| `FSIM-ELAB-048` | error | An executable `if` condition does not produce one bit. |
+| `FSIM-ELAB-048` | error | A VHDL `if` condition does not have scalar Boolean type. |
 | `FSIM-ELAB-049` | error | Binary operands have different widths and would require implicit sizing. |
 | `FSIM-ELAB-050` | error | Assignment into a two-state target would implicitly lose four- or nine-state values. |
-| `FSIM-ELAB-051` | error | An executable assertion condition does not produce one bit. |
+| `FSIM-ELAB-051` | error | A VHDL assertion condition does not have scalar Boolean type. |
 | `FSIM-ELAB-052` | error | A local variable has no executable packed width. |
 | `FSIM-ELAB-053` | error | A local variable duplicates another local or shadows a signal in the bounded slice. |
 | `FSIM-ELAB-054` | error | A local variable initializer has the wrong packed width. |

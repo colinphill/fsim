@@ -462,6 +462,97 @@ begin
 end architecture;
 )";
   }
+  const auto conditional_statement_source =
+      directory / "conditional_statements.sv";
+  {
+    std::ofstream output(conditional_statement_source);
+    output << R"(
+module conditional_statement_app;
+  logic [3:0] selector;
+  logic zero_case;
+  logic one_x_case;
+  logic unknown_case;
+  logic [3:0] nested_case;
+  always_comb begin
+    if (selector) begin
+      if (selector[3])
+        nested_case = 4'b0001;
+      else
+        nested_case = 4'b0010;
+    end else begin
+      nested_case = 4'b0011;
+    end
+  end
+  initial begin
+    if (4'b0000)
+      zero_case = 1'b1;
+    else
+      zero_case = 1'b0;
+    if (4'bx001)
+      one_x_case = 1'b1;
+    else
+      one_x_case = 1'b0;
+    if (4'bx000)
+      unknown_case = 1'b1;
+    else
+      unknown_case = 1'b0;
+    selector = 4'b0000;
+    #1 selector = 4'b0010;
+    #1 selector = 4'b1000;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
+  const auto vhdl_conditional_statement_source =
+      directory / "vhdl_conditional_statements.vhd";
+  {
+    std::ofstream output(vhdl_conditional_statement_source);
+    output << R"(
+entity vhdl_conditional_statement_app is
+end entity;
+
+architecture rtl of vhdl_conditional_statement_app is
+  signal trigger : std_logic;
+  signal true_case : boolean;
+  signal elsif_case : boolean;
+  signal nested_case : boolean;
+  signal boolean_expression_case : boolean;
+begin
+  choose: process(trigger)
+  begin
+    if true then
+      true_case <= true;
+    else
+      true_case <= false;
+    end if;
+    if false then
+      elsif_case <= false;
+    elsif true /= false then
+      elsif_case <= true;
+    else
+      elsif_case <= false;
+    end if;
+    if 1 = 1 then
+      if false then
+        nested_case <= false;
+      else
+        nested_case <= true;
+      end if;
+    else
+      nested_case <= false;
+    end if;
+    if (not false) and (true nand false)
+       and (false nor false) and (true xnor true)
+       and (true /= false) then
+      boolean_expression_case <= true;
+    else
+      boolean_expression_case <= false;
+    end if;
+  end process;
+end architecture;
+)";
+  }
   const auto partial_group_source = directory / "partial_group.sv";
   {
     std::ofstream output(partial_group_source);
@@ -1613,6 +1704,128 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
           "11111011", "00000011", "11111110", "11111000",
           "11110001", "11111111", "11111110", "00000001",
           "1"}));
+
+  auto conditional_statement_config = config;
+  conditional_statement_config.project.name =
+      "conditional-statement-test";
+  conditional_statement_config.project.top =
+      "sv:work.conditional_statement_app";
+  conditional_statement_config.build.cache_path =
+      directory / "conditional-statement-cache";
+  conditional_statement_config.source_sets.clear();
+  fsim::project::SourceSet conditional_statement_sources;
+  conditional_statement_sources.language =
+      fsim::project::Language::system_verilog;
+  conditional_statement_sources.standard = "2017";
+  conditional_statement_sources.library = "work";
+  conditional_statement_sources.files.push_back(
+      conditional_statement_source);
+  conditional_statement_config.source_sets.push_back(
+      std::move(conditional_statement_sources));
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    conditional_statement_config.build.optimization =
+        optimization;
+    fsim::diagnostic::Engine conditional_statement_diagnostics;
+    auto conditional_statement_reference_project =
+        fsim::app::build_project(
+            conditional_statement_config,
+            conditional_statement_diagnostics);
+    auto conditional_statement_hybrid_project =
+        fsim::app::build_project(
+            conditional_statement_config,
+            conditional_statement_diagnostics);
+    assert(conditional_statement_reference_project);
+    assert(conditional_statement_hybrid_project);
+    const auto conditional_statement_reference =
+        capture_simulation(
+            std::move(*conditional_statement_reference_project),
+            fsim::app::SimulationEngine::interpreter);
+    const auto conditional_statement_hybrid =
+        capture_simulation(
+            std::move(*conditional_statement_hybrid_project),
+            fsim::app::SimulationEngine::compiled);
+    compare_captures(
+        conditional_statement_reference,
+        conditional_statement_hybrid);
+    assert(
+        conditional_statement_hybrid.result.status
+        == fsim::runtime::RunStatus::stopped);
+    assert(conditional_statement_hybrid.result.time == 3);
+    assert(conditional_statement_hybrid.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+    assert(conditional_statement_hybrid.compiled_processes == 2);
+    assert(conditional_statement_hybrid.compiled_modules == 1);
+#endif
+    assert((
+        conditional_statement_hybrid.final_values
+        == std::vector<std::string>{
+            "1000", "0", "1", "0", "0001"}));
+  }
+
+  auto vhdl_conditional_statement_config = config;
+  vhdl_conditional_statement_config.project.name =
+      "vhdl-conditional-statement-test";
+  vhdl_conditional_statement_config.project.top =
+      "vhdl:work.vhdl_conditional_statement_app(rtl)";
+  vhdl_conditional_statement_config.build.cache_path =
+      directory / "vhdl-conditional-statement-cache";
+  vhdl_conditional_statement_config.source_sets.clear();
+  fsim::project::SourceSet vhdl_conditional_statement_sources;
+  vhdl_conditional_statement_sources.language =
+      fsim::project::Language::vhdl;
+  vhdl_conditional_statement_sources.standard = "2008";
+  vhdl_conditional_statement_sources.library = "work";
+  vhdl_conditional_statement_sources.files.push_back(
+      vhdl_conditional_statement_source);
+  vhdl_conditional_statement_config.source_sets.push_back(
+      std::move(vhdl_conditional_statement_sources));
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    vhdl_conditional_statement_config.build.optimization =
+        optimization;
+    fsim::diagnostic::Engine vhdl_conditional_statement_diagnostics;
+    auto vhdl_conditional_statement_reference_project =
+        fsim::app::build_project(
+            vhdl_conditional_statement_config,
+            vhdl_conditional_statement_diagnostics);
+    auto vhdl_conditional_statement_hybrid_project =
+        fsim::app::build_project(
+            vhdl_conditional_statement_config,
+            vhdl_conditional_statement_diagnostics);
+    assert(vhdl_conditional_statement_reference_project);
+    assert(vhdl_conditional_statement_hybrid_project);
+    const auto vhdl_conditional_statement_reference =
+        capture_simulation(
+            std::move(*vhdl_conditional_statement_reference_project),
+            fsim::app::SimulationEngine::interpreter);
+    const auto vhdl_conditional_statement_hybrid =
+        capture_simulation(
+            std::move(*vhdl_conditional_statement_hybrid_project),
+            fsim::app::SimulationEngine::compiled);
+    compare_captures(
+        vhdl_conditional_statement_reference,
+        vhdl_conditional_statement_hybrid);
+    assert(
+        vhdl_conditional_statement_hybrid.result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(vhdl_conditional_statement_hybrid.result.time == 0);
+    assert(vhdl_conditional_statement_hybrid.process_count == 1);
+#if defined(FSIM_HAS_LLVM)
+    assert(
+        vhdl_conditional_statement_hybrid.compiled_processes
+        == 1);
+    assert(
+        vhdl_conditional_statement_hybrid.compiled_modules
+        == 1);
+#endif
+    assert((
+        vhdl_conditional_statement_hybrid.final_values
+        == std::vector<std::string>{
+            "X", "1", "1", "1", "1"}));
+  }
 
   auto partial_group_config = config;
   partial_group_config.project.name =

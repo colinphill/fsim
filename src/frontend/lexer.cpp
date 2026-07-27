@@ -428,7 +428,11 @@ class Lexer {
         emit(TokenKind::Star, begin);
         return;
       case '/':
-        emit(TokenKind::Slash, begin);
+        if (consume_if('=')) {
+          emit(TokenKind::NotEqual, begin);
+        } else {
+          emit(TokenKind::Slash, begin);
+        }
         return;
       case '%':
         emit(TokenKind::Percent, begin);
