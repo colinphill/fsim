@@ -336,6 +336,12 @@ struct Process {
 /// this interface, then must return at a validated SimIR boundary operation.
 /// Executors must not retain a ProcessExecutionContext beyond the resume()
 /// call that supplies it.
+enum class EventNotificationKind : std::uint8_t {
+  immediate,
+  delta,
+  timed,
+};
+
 class ProcessExecutionContext {
 public:
   virtual ~ProcessExecutionContext() = default;
@@ -433,9 +439,13 @@ public:
   virtual void notify_event(
       SignalId,
       SimulationTick,
-      bool) {
+      EventNotificationKind) {
     throw std::logic_error{
         "alternate process executor does not support event notification"};
+  }
+  virtual void cancel_event(SignalId) {
+    throw std::logic_error{
+        "alternate process executor does not support event cancellation"};
   }
 
   /// True when an embedding debugger currently requests source boundaries.

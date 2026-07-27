@@ -667,10 +667,24 @@ extern "C" fsim_sc_status_v1 registry_notify_mode(
         if (status != FSIM_SC_OK) {
             return status;
         }
+        auto notification_kind =
+            runtime::simir::EventNotificationKind::immediate;
+        switch (kind) {
+        case FSIM_SC_NOTIFY_IMMEDIATE:
+            break;
+        case FSIM_SC_NOTIFY_DELTA:
+            notification_kind =
+                runtime::simir::EventNotificationKind::delta;
+            break;
+        case FSIM_SC_NOTIFY_TIMED:
+            notification_kind =
+                runtime::simir::EventNotificationKind::timed;
+            break;
+        }
         active_invocation->context->notify_event(
             binding->second,
             ticks,
-            kind == FSIM_SC_NOTIFY_DELTA);
+            notification_kind);
         return FSIM_SC_OK;
     } catch (const std::exception& exception) {
         active_invocation->failure = exception.what();
@@ -678,6 +692,34 @@ extern "C" fsim_sc_status_v1 registry_notify_mode(
     } catch (...) {
         active_invocation->failure =
             "unknown SystemC event notification failure";
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_cancel_event(
+    void* context,
+    const fsim_sc_handle_v1 event) noexcept {
+    if (context == nullptr || active_invocation == nullptr
+        || active_invocation->registry != context) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto metadata = registry.events.find(event);
+        const auto binding = registry.runtime_objects.find(event);
+        if (metadata == registry.events.end()
+            || binding == registry.runtime_objects.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        active_invocation->context->cancel_event(binding->second);
+        return FSIM_SC_OK;
+    } catch (const std::exception& exception) {
+        active_invocation->failure = exception.what();
+        return FSIM_SC_RUNTIME_ERROR;
+    } catch (...) {
+        active_invocation->failure =
+            "unknown SystemC event cancellation failure";
         return FSIM_SC_RUNTIME_ERROR;
     }
 }
@@ -815,6 +857,7 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
         registry_set_process_initialize;
     host.register_event = registry_register_event;
     host.notify_event_mode = registry_notify_mode;
+    host.cancel_event = registry_cancel_event;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;

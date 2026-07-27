@@ -635,6 +635,18 @@ struct Interpreter::Impl {
     PackedLogic4 value;
   };
 
+  enum class PendingEventKind : std::uint8_t {
+    none,
+    delta,
+    timed,
+  };
+
+  struct EventState {
+    PendingEventKind kind{PendingEventKind::none};
+    SimulationTick due{};
+    std::uint64_t generation{};
+  };
+
   explicit Impl(SchedulerOptions options) : scheduler(options) {}
 
   Scheduler scheduler;
@@ -644,6 +656,7 @@ struct Interpreter::Impl {
   std::vector<ProcessState> processes;
   std::vector<std::vector<Fanout>> static_fanout;
   std::vector<std::vector<Fanout>> dynamic_fanout;
+  std::vector<EventState> event_states;
   std::vector<PendingUpdate> pending_updates;
   SignalChangeHook signal_change_hook;
   ExecutionPointHook execution_point_hook;
@@ -790,6 +803,105 @@ struct Interpreter::Impl {
     for (const auto& sensitivity : dynamic) {
       queue_active_current(sensitivity.process);
     }
+  }
+
+  [[nodiscard]] std::uint64_t invalidate_event(
+      const SignalId event) {
+    (void)get_signal(event);
+    auto& state = event_states[event];
+    if (state.generation
+        == std::numeric_limits<std::uint64_t>::max()) {
+      throw std::overflow_error{
+          "event notification generation overflow"};
+    }
+    state.kind = PendingEventKind::none;
+    state.due = 0;
+    return ++state.generation;
+  }
+
+  void cancel_event(const SignalId event) {
+    (void)invalidate_event(event);
+  }
+
+  void notify_event(
+      const SignalId event,
+      const SimulationTick delay,
+      const EventNotificationKind kind,
+      const StableOrder order) {
+    (void)get_signal(event);
+    auto& state = event_states[event];
+
+    if (kind == EventNotificationKind::immediate) {
+      if (delay != 0) {
+        throw std::invalid_argument{
+            "immediate event notification cannot have a delay"};
+      }
+      (void)invalidate_event(event);
+      trigger_event(event);
+      return;
+    }
+
+    if (kind == EventNotificationKind::delta) {
+      if (delay != 0) {
+        throw std::invalid_argument{
+            "delta event notification cannot have a delay"};
+      }
+      if (state.kind == PendingEventKind::delta) {
+        return;
+      }
+      const auto generation = invalidate_event(event);
+      state.kind = PendingEventKind::delta;
+      state.due = scheduler.now();
+      scheduler.schedule_next_delta(
+          SchedulerPhase::active,
+          order,
+          [this, event, generation](Scheduler&) {
+            auto& pending = event_states[event];
+            if (pending.generation != generation
+                || pending.kind != PendingEventKind::delta) {
+              return;
+            }
+            pending.kind = PendingEventKind::none;
+            pending.due = 0;
+            trigger_event(event);
+          });
+      return;
+    }
+
+    if (kind != EventNotificationKind::timed || delay == 0) {
+      throw std::invalid_argument{
+          "timed event notification requires a non-zero delay"};
+    }
+    if (delay
+        > std::numeric_limits<SimulationTick>::max()
+            - scheduler.now()) {
+      throw std::overflow_error{
+          "simulation time overflow while scheduling event notification"};
+    }
+    const auto due = scheduler.now() + delay;
+    if (state.kind == PendingEventKind::delta
+        || (state.kind == PendingEventKind::timed
+            && state.due <= due)) {
+      return;
+    }
+    const auto generation = invalidate_event(event);
+    state.kind = PendingEventKind::timed;
+    state.due = due;
+    scheduler.schedule_at(
+        due,
+        SchedulerPhase::active,
+        order,
+        [this, event, generation, due](Scheduler&) {
+          auto& pending = event_states[event];
+          if (pending.generation != generation
+              || pending.kind != PendingEventKind::timed
+              || pending.due != due) {
+            return;
+          }
+          pending.kind = PendingEventKind::none;
+          pending.due = 0;
+          trigger_event(event);
+        });
   }
 
   void notify_execution_point(
@@ -1350,28 +1462,12 @@ void Interpreter::Impl::execute(ProcessId id) {
       void notify_event(
           const SignalId event,
           const SimulationTick delay,
-          const bool delta_notification) override {
-        (void)owner.get_signal(event);
-        if (delay == 0 && !delta_notification) {
-          owner.trigger_event(event);
-          return;
-        }
-        if (delay == 0) {
-          owner.scheduler.schedule_next_delta(
-              SchedulerPhase::active,
-              process,
-              [&owner = owner, event](Scheduler&) {
-                owner.trigger_event(event);
-              });
-          return;
-        }
-        owner.scheduler.schedule_after(
-            delay,
-            SchedulerPhase::active,
-            process,
-            [&owner = owner, event](Scheduler&) {
-              owner.trigger_event(event);
-            });
+          const EventNotificationKind kind) override {
+        owner.notify_event(event, delay, kind, process);
+      }
+
+      void cancel_event(const SignalId event) override {
+        owner.cancel_event(event);
       }
 
       [[nodiscard]] bool
@@ -1663,6 +1759,7 @@ SignalId Interpreter::add_signal(Signal signal) {
   impl_->signals.push_back(std::move(signal));
   impl_->static_fanout.emplace_back();
   impl_->dynamic_fanout.emplace_back();
+  impl_->event_states.emplace_back();
   return id;
 }
 

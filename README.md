@@ -89,8 +89,9 @@ The current tree contains:
   validation; and
 - executable facade-defined `SC_METHOD` processes with time-zero
   initialization, `dont_initialize()`, static any-change/edge sensitivity,
-  dynamic time/event `next_trigger`, immediate/delta/timed named events,
-  canonical packed port reads, and common update-phase writes.
+  dynamic time/event `next_trigger`, immediate/delta/timed named events with
+  pending replacement/cancellation, canonical packed port reads, and common
+  update-phase writes.
 
 The implemented SystemC hierarchy spine is bidirectional: HDL instances may
 bind to typed SystemC factories, and those factories may declare
@@ -98,7 +99,7 @@ elaboration-time foreign children explicitly bound to VHDL or SystemVerilog
 targets. Either HDL or SystemC may be the selected top. The resulting ports,
 aliases, HDL descendants, and stable SystemC instance metadata enter the common
 elaborated design. Static `SC_METHOD` callbacks execute in that hierarchy;
-event cancellation, channel internals, and fiber-backed
+event lists, channel internals, and fiber-backed
 `SC_THREAD`/`SC_CTHREAD` suspension remain planned.
 
 The full v1 language coverage described in

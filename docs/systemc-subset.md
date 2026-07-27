@@ -14,9 +14,9 @@ elaboration. A project build collects the configured SystemC sources into one
 shared library, loads it, constructs the requested factory instances, and
 retains their native objects for the design lifetime. Common-kernel SystemC
 execution now covers statically sensitive `SC_METHOD` callbacks, dynamic
-time/event `next_trigger`, named-event notification, and port updates.
-Event cancellation, internal primitive channels, and fiber-backed thread
-execution are still work in progress.
+time/event `next_trigger`, named-event notification/replacement/cancellation,
+and port updates. Event lists/expressions, internal primitive channels, and
+fiber-backed thread execution are still work in progress.
 
 ## Source inclusion
 
@@ -185,8 +185,12 @@ notification enters the future timestamp heap. SystemC time values cross the
 native ABI in femtoseconds and must divide exactly by the elaborated global
 tick. The common kernel owns the resulting wait lists and event scheduling, so
 the interpreter and hybrid LLVM execution paths use identical semantics.
-Multiple pending-notification replacement/cancellation and event
-lists/expressions are not implemented yet.
+An already-pending delta notification wins. A timed notification is replaced
+only by an earlier due time. Immediate notification cancels pending work before
+triggering, and `sc_event::cancel()` invalidates a pending delta or timed
+notification. Canceled/replaced timestamp-heap entries are generation-checked
+no-ops when eventually dequeued. Event lists/expressions and
+`notify_delayed` are not implemented yet.
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0
 fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
@@ -201,9 +205,9 @@ SystemC work participates in fsim's common phase policy:
 - changed channels awaken dependents in the next delta.
 
 The facade and native host callbacks implement dynamic method sensitivity,
-port reads, update-phase port writes, and named-event notification. It does
-not yet provide event cancellation, internal primitive-channel registration,
-or fiber suspension.
+port reads, update-phase port writes, and named-event notification and
+cancellation. It does not yet provide event lists/expressions, internal
+primitive-channel registration, or fiber suspension.
 
 ## Deliberately outside v1
 

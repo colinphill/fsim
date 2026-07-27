@@ -1656,6 +1656,115 @@ void test_simir_alternate_executor_validation() {
   }
 }
 
+void test_simir_alternate_executor_event_replacement_and_cancel() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  class Producer final : public ProcessExecutor {
+  public:
+    explicit Producer(const SignalId event) : event_(event) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        InstructionIndex) override {
+      ProcessResumeResult result{0, 1};
+      switch (state_++) {
+      case 0:
+        context.notify_event(
+            event_, 5, EventNotificationKind::timed);
+        context.notify_event(
+            event_, 7, EventNotificationKind::timed);
+        context.notify_event(
+            event_, 3, EventNotificationKind::timed);
+        result.external.kind = ExternalSuspendKind::wait_for;
+        result.external.delay = 4;
+        break;
+      case 1:
+        context.notify_event(
+            event_, 2, EventNotificationKind::timed);
+        result.external.kind = ExternalSuspendKind::wait_for;
+        result.external.delay = 1;
+        break;
+      case 2:
+        context.cancel_event(event_);
+        result.external.kind = ExternalSuspendKind::wait_for;
+        result.external.delay = 1;
+        break;
+      default:
+        context.notify_event(
+            event_, 0, EventNotificationKind::immediate);
+        result.external.kind = ExternalSuspendKind::halt;
+        break;
+      }
+      return result;
+    }
+
+  private:
+    SignalId event_{};
+    std::size_t state_{};
+  };
+
+  class Consumer final : public ProcessExecutor {
+  public:
+    Consumer(
+        const SignalId event,
+        std::size_t& notifications)
+        : event_(event), notifications_(notifications) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext&,
+        InstructionIndex) override {
+      if (initialized_) {
+        ++notifications_;
+      }
+      initialized_ = true;
+      ProcessResumeResult result{0, 1};
+      result.external.kind = ExternalSuspendKind::wait_on;
+      result.external.sensitivity.push_back(
+          {event_, EdgeKind::any});
+      return result;
+    }
+
+  private:
+    SignalId event_{};
+    std::size_t& notifications_;
+    bool initialized_{};
+  };
+
+  Interpreter interpreter;
+  const auto event = interpreter.add_signal(
+      {"event", PackedLogic4::from_msb_string("0")});
+
+  Process producer;
+  producer.id = 0;
+  producer.name = "event_producer";
+  producer.operations = {Halt{}};
+  const auto producer_id =
+      interpreter.add_process(std::move(producer));
+
+  Process consumer;
+  consumer.id = 1;
+  consumer.name = "event_consumer";
+  consumer.operations = {Halt{}};
+  const auto consumer_id =
+      interpreter.add_process(std::move(consumer));
+
+  std::size_t notifications = 0;
+  interpreter.set_process_executor(
+      producer_id, std::make_unique<Producer>(event));
+  interpreter.set_process_executor(
+      consumer_id,
+      std::make_unique<Consumer>(event, notifications));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 6,
+      "replaced and canceled event notifications must not run");
+  require(
+      notifications == 2,
+      "only the earliest timed and final immediate event must trigger");
+}
+
 void test_simir_assertion_metadata() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1810,6 +1919,7 @@ int main() {
     test_simir_alternate_executor_zero_delay_and_frame();
     test_simir_alternate_executor_cpp_exception_containment();
     test_simir_alternate_executor_validation();
+    test_simir_alternate_executor_event_replacement_and_cancel();
     test_simir_assertion_metadata();
     test_simir_execution_point_ordering();
     test_vcd();

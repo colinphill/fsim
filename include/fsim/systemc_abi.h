@@ -165,6 +165,9 @@ typedef struct fsim_sc_host_v1 {
         fsim_sc_handle_v1 event,
         uint64_t delay_femtoseconds,
         fsim_sc_notification_kind_v1 kind);
+    fsim_sc_status_v1 (*cancel_event)(
+        void* context,
+        fsim_sc_handle_v1 event);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

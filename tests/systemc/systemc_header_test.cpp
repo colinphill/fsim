@@ -103,6 +103,13 @@ int main() {
         rejected_notify = true;
     }
     assert(rejected_notify);
+    bool rejected_cancel = false;
+    try {
+        event.cancel();
+    } catch (const std::logic_error&) {
+        rejected_cancel = true;
+    }
+    assert(rejected_cancel);
 
     ValueImplementation implementation;
     sc_core::sc_export<ValueInterface> exported{"exported"};

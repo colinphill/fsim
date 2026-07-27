@@ -696,6 +696,9 @@ SC_MODULE(DynamicEvents) {
   void produce() {
     if (producer_state == 0) {
       ++producer_state;
+      pulse.notify(sc_core::sc_time{5, sc_core::SC_NS});
+      pulse.notify(sc_core::sc_time{7, sc_core::SC_NS});
+      pulse.notify(sc_core::SC_ZERO_TIME);
       next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
     } else if (producer_state == 1) {
       ++producer_state;
@@ -703,10 +706,16 @@ SC_MODULE(DynamicEvents) {
       next_trigger(sc_core::sc_time{2, sc_core::SC_NS});
     } else if (producer_state == 2) {
       ++producer_state;
-      pulse.notify(sc_core::SC_ZERO_TIME);
-      next_trigger(sc_core::sc_time{2, sc_core::SC_NS});
-    } else {
       pulse.notify(sc_core::sc_time{1, sc_core::SC_NS});
+      next_trigger(sc_core::sc_time{2, sc_core::SC_NS});
+    } else if (producer_state == 3) {
+      ++producer_state;
+      pulse.notify(sc_core::sc_time{2, sc_core::SC_NS});
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else {
+      pulse.cancel();
+      pulse.notify(sc_core::sc_time{2, sc_core::SC_NS});
+      pulse.notify();
     }
   }
 
@@ -1357,8 +1366,8 @@ end architecture rtl;
   assert(
       dynamic_reference.first.status
       == fsim::runtime::RunStatus::completed);
-  assert(dynamic_reference.first.time == 6);
-  assert(dynamic_reference.second == "00000011");
+  assert(dynamic_reference.first.time == 8);
+  assert(dynamic_reference.second == "00000100");
   assert(dynamic_reference.first.status == dynamic_compiled.first.status);
   assert(dynamic_reference.first.time == dynamic_compiled.first.time);
   assert(dynamic_reference.second == dynamic_compiled.second);

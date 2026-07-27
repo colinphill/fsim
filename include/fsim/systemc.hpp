@@ -191,6 +191,18 @@ public:
                 : FSIM_SC_NOTIFY_TIMED);
     }
 
+    void cancel() const {
+        if (detail::current_host == nullptr
+            || detail::current_host->cancel_event == nullptr) {
+            throw std::logic_error{
+                "sc_event::cancel requires an active fsim SystemC process"};
+        }
+        detail::check_status(
+            detail::current_host->cancel_event(
+                detail::current_host->context, handle_),
+            "cancel event");
+    }
+
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept { return handle_; }
 
 private:
@@ -1180,7 +1192,8 @@ template <typename Module>
         || host->report == nullptr
         || host->set_process_initialize == nullptr
         || host->register_event == nullptr
-        || host->notify_event_mode == nullptr) {
+        || host->notify_event_mode == nullptr
+        || host->cancel_event == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

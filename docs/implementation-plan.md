@@ -130,8 +130,9 @@ The following foundation is implemented:
 - statically sensitive facade-defined `SC_METHOD` callbacks using common
   scheduler/update semantics and contained native exceptions;
 - dynamic `SC_METHOD` time/event `next_trigger`, opaque named-event
-  elaboration, and immediate/delta/timed notifications owned by the common
-  scheduler with interpreter/hybrid equivalence; and
+  elaboration, immediate/delta/timed notifications, earliest-notification
+  replacement, and cancellation owned by the common scheduler with
+  interpreter/hybrid equivalence; and
 - a stable catalog covering 304 unique current production diagnostic codes.
 
 Current Linux validation:
@@ -334,8 +335,8 @@ Completed groundwork:
 - facade-defined `SC_METHOD` registration, time-zero initialization,
   `dont_initialize()`, static any-change/scalar-edge sensitivities, packed
   runtime port access, common update-phase writes, dynamic time/event
-  `next_trigger`, and immediate/delta/timed named-event notification through
-  the common scheduler; and
+  `next_trigger`, and immediate/delta/timed named-event notification,
+  replacement, and cancellation through the common scheduler; and
 - compiler-emitted dependency closure for GCC-like SystemC builds.
 
 Planned implementation sequence:
@@ -345,9 +346,9 @@ Planned implementation sequence:
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
-3. Complete SystemC event cancellation rules and internal primitive-channel
-   registration; dynamic method sensitivity and event notification now use
-   the common scheduler.
+3. Complete SystemC event lists/expressions and internal primitive-channel
+   registration; dynamic method sensitivity, pending-notification rules, and
+   cancellation now use the common scheduler.
 4. Integrate Boost.Context 1.91.0 fibers for `SC_THREAD`/`SC_CTHREAD`
    suspension on Linux and Windows x86-64.
 5. Complete nested/scoped debug locals and add call safe points.
