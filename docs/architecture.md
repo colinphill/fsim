@@ -145,6 +145,14 @@ two-state condition, so interpreter and LLVM branch behavior is identical.
 `casez`, `casex`, `case inside`, and `unique`/`unique0`/`priority`
 qualifiers remain targeted unsupported forms.
 
+Bounded SystemVerilog conditional expressions lower to a typed SimIR select.
+A scalar `0` or `1` chooses its corresponding equal-width alternative. An
+`X` or `Z` condition compares the alternatives bit by bit, preserves identical
+four-state bits, and produces `X` where they differ. This operation has the
+same interpreter and allocation-free LLVM single-word implementation.
+Vector truth conversion and the standard's complete expression sizing rules
+remain pending.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

@@ -1134,6 +1134,51 @@ void test_scalar_truth_tables_and_64_bits() {
                         UINT64_C(0x8000000000000000)}));
 }
 
+void test_conditional_select_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 4;
+  process.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      ReadSignal{2, 2},
+      ConditionalSelect{3, 0, 1, 2},
+      WriteBlocking{3, 3},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 4> widths{1, 4, 4, 4};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  const auto when_true =
+      PackedLogic4::from_msb_string("101Z").low_word();
+  const auto when_false =
+      PackedLogic4::from_msb_string("100Z").low_word();
+  for (const auto& [condition, expected] :
+       std::array{
+           std::pair{Logic4::zero, std::string_view{"100Z"}},
+           std::pair{Logic4::one, std::string_view{"101Z"}},
+           std::pair{Logic4::x, std::string_view{"10XZ"}},
+           std::pair{Logic4::z, std::string_view{"10XZ"}}}) {
+    TestRuntime runtime;
+    runtime.signals[0] = encode(condition);
+    runtime.signals[1] = {when_true.aval, when_true.bval};
+    runtime.signals[2] = {when_false.aval, when_false.bval};
+    auto descriptor = abi(runtime);
+    assert(
+        jit.execute(handle, descriptor)
+        == JitExecutionStatus::completed);
+    const auto expected_word =
+        PackedLogic4::from_msb_string(expected).low_word();
+    assert((runtime.signals[3] == EncodedSignal{
+        expected_word.aval, expected_word.bval}));
+  }
+}
+
 void test_initialized_bval_slot(const JitOptimizationLevel optimization,
                                 const std::string_view symbol) {
   LlvmJit jit{LlvmJitOptions{optimization, {}}};
@@ -2299,6 +2344,10 @@ int main() {
   run_at_level(JitOptimizationLevel::o0, "arithmetic_o0");
   run_at_level(JitOptimizationLevel::o2, "arithmetic_o2");
   test_scalar_truth_tables_and_64_bits();
+  test_conditional_select_at_level(
+      JitOptimizationLevel::o0, "conditional_select_o0");
+  test_conditional_select_at_level(
+      JitOptimizationLevel::o2, "conditional_select_o2");
   test_initialized_bval_slot(JitOptimizationLevel::o0, "initialized_bval_o0");
   test_initialized_bval_slot(JitOptimizationLevel::o2, "initialized_bval_o2");
   test_debug_point_instrumentation();

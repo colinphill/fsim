@@ -1143,6 +1143,114 @@ endmodule
     assert(!rejected_case.ok());
     assert(has_diagnostic(rejected_case, "FSIM-ELAB-063"));
 
+    const auto conditional_process = fsim::frontend::parse_text(
+        "conditional_process.sv",
+        R"(
+module conditional_process;
+  logic select;
+  logic [3:0] lhs;
+  logic [3:0] rhs;
+  logic [3:0] result;
+  always_comb result = select ? lhs : rhs;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(conditional_process.ok());
+    const auto elaborated_conditional =
+        fsim::elaboration::elaborate(
+            conditional_process.design,
+            "sv:work.conditional_process");
+    assert(elaborated_conditional.ok());
+    const auto conditional_select =
+        elaborated_conditional.design->find_signal("select");
+    const auto conditional_lhs =
+        elaborated_conditional.design->find_signal("lhs");
+    const auto conditional_rhs =
+        elaborated_conditional.design->find_signal("rhs");
+    const auto conditional_result =
+        elaborated_conditional.design->find_signal("result");
+    assert(
+        conditional_select && conditional_lhs
+        && conditional_rhs && conditional_result);
+    assert((
+        elaborated_conditional.design->processes().front()
+            .static_sensitivity
+        == std::vector<fsim::runtime::simir::Sensitivity>{
+            {*conditional_lhs,
+             fsim::runtime::simir::EdgeKind::any},
+            {*conditional_rhs,
+             fsim::runtime::simir::EdgeKind::any},
+            {*conditional_select,
+             fsim::runtime::simir::EdgeKind::any}}));
+    auto conditional_interpreter =
+        elaborated_conditional.design->create_interpreter();
+    conditional_interpreter->deposit_signal(
+        *conditional_lhs,
+        fsim::runtime::PackedLogic4::from_msb_string("101z"));
+    conditional_interpreter->deposit_signal(
+        *conditional_rhs,
+        fsim::runtime::PackedLogic4::from_msb_string("100z"));
+    conditional_interpreter->deposit_signal(
+        *conditional_select,
+        fsim::runtime::PackedLogic4::from_msb_string("0"));
+    (void)conditional_interpreter->run();
+    assert(
+        conditional_interpreter
+            ->signal_value(*conditional_result)
+            .to_msb_string()
+        == "100Z");
+    conditional_interpreter->deposit_signal(
+        *conditional_select,
+        fsim::runtime::PackedLogic4::from_msb_string("1"));
+    (void)conditional_interpreter->run();
+    assert(
+        conditional_interpreter
+            ->signal_value(*conditional_result)
+            .to_msb_string()
+        == "101Z");
+    for (const auto unknown : {"x", "z"}) {
+        conditional_interpreter->deposit_signal(
+            *conditional_select,
+            fsim::runtime::PackedLogic4::from_msb_string(unknown));
+        (void)conditional_interpreter->run();
+        assert(
+            conditional_interpreter
+                ->signal_value(*conditional_result)
+                .to_msb_string()
+            == "10XZ");
+    }
+
+    const auto invalid_conditional = fsim::frontend::parse_text(
+        "invalid_conditional.sv",
+        R"(
+module vector_condition;
+  logic [1:0] select;
+  logic result;
+  always_comb result = select ? 1'b0 : 1'b1;
+endmodule
+module mismatched_alternatives;
+  logic select;
+  logic [1:0] result;
+  always_comb result = select ? 2'b00 : 1'b1;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_conditional.ok());
+    const auto rejected_vector_condition =
+        fsim::elaboration::elaborate(
+            invalid_conditional.design,
+            "sv:work.vector_condition");
+    assert(!rejected_vector_condition.ok());
+    assert(has_diagnostic(
+        rejected_vector_condition, "FSIM-ELAB-064"));
+    const auto rejected_alternatives =
+        fsim::elaboration::elaborate(
+            invalid_conditional.design,
+            "sv:work.mismatched_alternatives");
+    assert(!rejected_alternatives.ok());
+    assert(has_diagnostic(
+        rejected_alternatives, "FSIM-ELAB-065"));
+
     const auto empty_wildcard = fsim::frontend::parse_text(
         "empty_wildcard.sv",
         R"(

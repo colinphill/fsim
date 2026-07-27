@@ -58,6 +58,16 @@ struct Binary {
   RegisterId rhs{};
 };
 
+/// Select between equal-width values using SystemVerilog conditional
+/// semantics. An X/Z condition merges matching bits and produces X for
+/// differing bits.
+struct ConditionalSelect {
+  RegisterId destination{};
+  RegisterId condition{};
+  RegisterId when_true{};
+  RegisterId when_false{};
+};
+
 /// Commit a new value immediately in the active phase.
 struct WriteBlocking {
   SignalId signal{};
@@ -170,9 +180,9 @@ struct Halt {};
 
 using Operation =
     std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, Binary,
-                 WriteBlocking, WriteUpdate, WriteAfter, WaitFor, WaitOn,
-                 WaitSensitivity, Yield, Jump, Branch, DebugPoint, Assert,
-                 Stop, Halt>;
+                 ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
+                 WaitFor, WaitOn, WaitSensitivity, Yield, Jump, Branch,
+                 DebugPoint, Assert, Stop, Halt>;
 
 struct Signal {
   std::string name;

@@ -126,6 +126,33 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return result;
 }
 
+[[nodiscard]] PackedLogic4 conditional_value(
+    const PackedLogic4& condition,
+    const PackedLogic4& when_true,
+    const PackedLogic4& when_false) {
+  if (condition.width() != 1) {
+    throw std::invalid_argument(
+        "conditional-select condition is not scalar");
+  }
+  if (when_true.width() != when_false.width()) {
+    throw std::invalid_argument(
+        "conditional-select values have different widths");
+  }
+  if (condition.get(0) == Logic4::one) {
+    return when_true;
+  }
+  if (condition.get(0) == Logic4::zero) {
+    return when_false;
+  }
+  PackedLogic4 result(when_true.width(), Logic4::x);
+  for (std::size_t index = 0; index < result.width(); ++index) {
+    if (when_true.get(index) == when_false.get(index)) {
+      result.set(index, when_true.get(index));
+    }
+  }
+  return result;
+}
+
 } // namespace
 
 InterpreterError::InterpreterError(ProcessId process,
@@ -691,6 +718,18 @@ void Interpreter::Impl::execute(ProcessId id) {
                     binary_value(op.operation, get_register(process, op.lhs),
                                  get_register(process, op.rhs));
               } catch (const std::invalid_argument &error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
+            [&](const ConditionalSelect& op) {
+              try {
+                get_register(process, op.destination) =
+                    conditional_value(
+                        get_register(process, op.condition),
+                        get_register(process, op.when_true),
+                        get_register(process, op.when_false));
+              } catch (const std::invalid_argument& error) {
                 fail(process, error.what());
               }
               ++process.pc;

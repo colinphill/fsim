@@ -1017,6 +1017,67 @@ private:
                 expression.span);
             return std::nullopt;
         }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "?:"
+            && expression.operands.size() == 3) {
+            const auto condition =
+                lower_expression(expression.operands[0], 1);
+            if (!condition) {
+                return std::nullopt;
+            }
+            if (register_width(*condition) != 1) {
+                report(
+                    "FSIM-ELAB-064",
+                    "a conditional-expression condition must produce one "
+                    "bit in this executable slice",
+                    expression.operands[0].span);
+                return std::nullopt;
+            }
+            const auto value_width =
+                infer_width(expression.operands[1])
+                    .value_or(
+                        infer_width(expression.operands[2])
+                            .value_or(expected_width));
+            const auto when_true =
+                lower_expression(expression.operands[1], value_width);
+            const auto when_false =
+                lower_expression(expression.operands[2], value_width);
+            if (!when_true || !when_false) {
+                return std::nullopt;
+            }
+            if (register_width(*when_true)
+                != register_width(*when_false)) {
+                report(
+                    "FSIM-ELAB-065",
+                    "conditional-expression alternatives have different "
+                    "widths ("
+                        + std::to_string(register_width(*when_true))
+                        + " and "
+                        + std::to_string(register_width(*when_false))
+                        + ")",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto is_two_state =
+                [](const frontend::ValueDomain domain) {
+                    return domain == frontend::ValueDomain::Bit2
+                        || domain == frontend::ValueDomain::Boolean;
+                };
+            const auto result_domain =
+                is_two_state(register_domain(*when_true))
+                        && is_two_state(register_domain(*when_false))
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            const auto destination =
+                allocate_register(
+                    register_width(*when_true), result_domain);
+            process_.operations.emplace_back(ConditionalSelect{
+                destination,
+                *condition,
+                *when_true,
+                *when_false});
+            return destination;
+        }
         if (expression.kind == ExpressionKind::Binary && expression.operands.size() == 2) {
             const auto width = infer_width(expression).value_or(expected_width);
             const auto lhs = lower_expression(expression.operands[0], width);
@@ -1088,6 +1149,14 @@ private:
     }
 
     std::optional<std::size_t> infer_width(const Expression& expression) const {
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "?:"
+            && expression.operands.size() == 3) {
+            if (const auto width = infer_width(expression.operands[1])) {
+                return width;
+            }
+            return infer_width(expression.operands[2]);
+        }
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
                 local != locals_.end()) {

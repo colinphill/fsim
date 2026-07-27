@@ -48,6 +48,7 @@ using runtime::simir::Assert;
 using runtime::simir::Binary;
 using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
+using runtime::simir::ConditionalSelect;
 using runtime::simir::CopyRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::EdgeKind;
@@ -534,6 +535,17 @@ validate_process(const Process &process,
                 unify_registers(operation.destination, operation.lhs, index);
               }
             },
+            [&](const ConditionalSelect& operation) {
+              record_definition(operation.destination, index);
+              record_use(operation.condition, index);
+              record_use(operation.when_true, index);
+              record_use(operation.when_false, index);
+              constrain_width(operation.condition, 1U, index);
+              unify_registers(
+                  operation.when_true, operation.when_false, index);
+              unify_registers(
+                  operation.destination, operation.when_true, index);
+            },
             [&](const WriteBlocking &operation) {
               record_use(operation.source, index);
               constrain_width(operation.source,
@@ -922,6 +934,13 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "lhs", value.lhs);
               add_key_u64(builder, "rhs", value.rhs);
+            },
+            [&](const ConditionalSelect& value) {
+              builder.add("operation", "ConditionalSelect");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "condition", value.condition);
+              add_key_u64(builder, "when-true", value.when_true);
+              add_key_u64(builder, "when-false", value.when_false);
             },
             [&](const WriteBlocking &value) {
               builder.add("operation", "WriteBlocking");
@@ -1553,6 +1572,54 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       load_register(builder, registers, operation.rhs));
               store_register(
                   builder, registers, operation.destination, value);
+              branch_to_next();
+            },
+            [&](const ConditionalSelect& operation) {
+              const auto condition =
+                  load_register(
+                      builder, registers, operation.condition);
+              const auto when_true =
+                  load_register(
+                      builder, registers, operation.when_true);
+              const auto when_false =
+                  load_register(
+                      builder, registers, operation.when_false);
+              auto *mask =
+                  constant_i64(context, width_mask(when_true.width));
+              auto *different = builder.CreateAnd(
+                  builder.CreateOr(
+                      builder.CreateXor(
+                          when_true.aval, when_false.aval),
+                      builder.CreateXor(
+                          when_true.bval, when_false.bval)),
+                  mask);
+              auto *same = builder.CreateXor(different, mask);
+              auto *merged_aval = builder.CreateOr(
+                  builder.CreateAnd(when_true.aval, same),
+                  different);
+              auto *merged_bval = builder.CreateOr(
+                  builder.CreateAnd(when_true.bval, same),
+                  different);
+              auto *unknown = builder.CreateICmpNE(
+                  builder.CreateAnd(
+                      condition.bval, constant_i64(context, 1)),
+                  constant_i64(context, 0));
+              auto *select_true = builder.CreateICmpNE(
+                  builder.CreateAnd(
+                      condition.aval, constant_i64(context, 1)),
+                  constant_i64(context, 0));
+              auto *known_aval = builder.CreateSelect(
+                  select_true, when_true.aval, when_false.aval);
+              auto *known_bval = builder.CreateSelect(
+                  select_true, when_true.bval, when_false.bval);
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateSelect(
+                          unknown, merged_aval, known_aval),
+                      builder.CreateSelect(
+                          unknown, merged_bval, known_bval),
+                      when_true.width});
               branch_to_next();
             },
             [&](const WriteBlocking &operation) {

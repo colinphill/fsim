@@ -183,6 +183,28 @@ module case_app;
 endmodule
 )";
   }
+  const auto conditional_source = directory / "conditional.sv";
+  {
+    std::ofstream output(conditional_source);
+    output << R"(
+module conditional_app;
+  logic select;
+  logic [3:0] lhs;
+  logic [3:0] rhs;
+  logic [3:0] result;
+  always_comb result = select ? lhs : rhs;
+  initial begin
+    lhs = 4'b101z;
+    rhs = 4'b100z;
+    select = 1'b0;
+    #1 select = 1'b1;
+    #1 select = 1'bx;
+    #1 select = 1'bz;
+    #1 $finish;
+  end
+endmodule
+)";
+  }
   const auto partial_group_source = directory / "partial_group.sv";
   {
     std::ofstream output(partial_group_source);
@@ -985,6 +1007,55 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
                  fsim::runtime::SimulationTick{3},
                  std::uint64_t{1}})
          != case_hybrid.changes.end());
+
+  auto conditional_config = config;
+  conditional_config.project.name =
+      "conditional-expression-test";
+  conditional_config.project.top =
+      "sv:work.conditional_app";
+  conditional_config.build.optimization =
+      fsim::project::Optimization::o2;
+  conditional_config.build.cache_path =
+      directory / "conditional-cache";
+  conditional_config.source_sets.clear();
+  fsim::project::SourceSet conditional_sources;
+  conditional_sources.language =
+      fsim::project::Language::system_verilog;
+  conditional_sources.standard = "2017";
+  conditional_sources.library = "work";
+  conditional_sources.files.push_back(conditional_source);
+  conditional_config.source_sets.push_back(
+      std::move(conditional_sources));
+  fsim::diagnostic::Engine conditional_diagnostics;
+  auto conditional_reference_project =
+      fsim::app::build_project(
+          conditional_config, conditional_diagnostics);
+  auto conditional_hybrid_project =
+      fsim::app::build_project(
+          conditional_config, conditional_diagnostics);
+  assert(conditional_reference_project);
+  assert(conditional_hybrid_project);
+  const auto conditional_reference = capture_simulation(
+      std::move(*conditional_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto conditional_hybrid = capture_simulation(
+      std::move(*conditional_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      conditional_reference, conditional_hybrid);
+  assert(
+      conditional_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(conditional_hybrid.result.time == 4);
+  assert(conditional_hybrid.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(conditional_hybrid.compiled_processes == 2);
+  assert(conditional_hybrid.compiled_modules == 1);
+#endif
+  assert((
+      conditional_hybrid.final_values
+      == std::vector<std::string>{
+          "Z", "101Z", "100Z", "10XZ"}));
 
   auto partial_group_config = config;
   partial_group_config.project.name =

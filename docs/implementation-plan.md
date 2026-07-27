@@ -95,9 +95,12 @@ The following foundation is implemented:
 - ordered exact Verilog/SystemVerilog `case`/`default` lowering with
   comma-separated choices, four-state `X`/`Z` matching, width diagnostics,
   and an interpreter/O2 differential;
+- bounded SystemVerilog conditional expressions with scalar four-state
+  conditions, equal-width alternatives, exact unknown-condition merging,
+  and interpreter/O0/O2 evidence;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
-- a stable catalog covering 279 unique current production diagnostic codes.
+- a stable catalog covering 281 unique current production diagnostic codes.
 
 Current Linux validation:
 

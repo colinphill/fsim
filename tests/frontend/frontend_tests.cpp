@@ -964,6 +964,34 @@ endmodule
       "case diagnostics must recover to following processes");
 }
 
+void test_systemverilog_conditional_expression() {
+  const auto result = parse_text(
+      "conditional.sv",
+      R"(
+module conditional;
+  logic select;
+  logic [3:0] lhs;
+  logic [3:0] rhs;
+  logic [3:0] result;
+  always_comb result = select ? lhs : rhs;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(), "SystemVerilog conditional expression must parse");
+  const auto& value =
+      result.design.units.front().processes.front()
+          .statements.front().value;
+  require(
+      value.kind == ExpressionKind::Call
+          && value.text == "?:"
+          && value.operands.size() == 3
+          && value.operands[0].text == "select"
+          && value.operands[1].text == "lhs"
+          && value.operands[2].text == "rhs",
+      "conditional-expression operand order");
+}
+
 }  // namespace
 
 int main() {
@@ -990,6 +1018,7 @@ int main() {
     test_procedural_wait_statements();
     test_wildcard_and_always_comb_processes();
     test_systemverilog_case_statements();
+    test_systemverilog_conditional_expression();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

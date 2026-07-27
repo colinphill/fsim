@@ -285,6 +285,8 @@ therefore excluded.
 | `FSIM-ELAB-061` | error | A wildcard process has no readable signal dependency. |
 | `FSIM-ELAB-062` | error | A dynamic wildcard event control has no readable signal dependency. |
 | `FSIM-ELAB-063` | error | A case-item choice width does not match its selector width. |
+| `FSIM-ELAB-064` | error | A conditional-expression condition is not scalar in the bounded executable slice. |
+| `FSIM-ELAB-065` | error | Conditional-expression alternatives have different widths. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
