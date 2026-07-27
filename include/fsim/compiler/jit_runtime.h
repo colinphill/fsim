@@ -24,6 +24,8 @@ extern "C" {
 #define FSIM_JIT_RESUME_STATUS_YIELDED UINT32_C(3)
 #define FSIM_JIT_RESUME_STATUS_STOPPED UINT32_C(4)
 #define FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR UINT32_C(5)
+#define FSIM_JIT_RESUME_STATUS_WAIT_ON UINT32_C(6)
+#define FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY UINT32_C(7)
 
 #define FSIM_JIT_INVALID_INSTRUCTION UINT32_MAX
 
@@ -52,6 +54,23 @@ typedef struct fsim_jit_runtime_v1 {
       uint32_t instruction,
       const char* message,
       uint64_t message_size);
+
+  /*
+   * Append-only v1 extension for writes committed by the simulator kernel.
+   * Callers advertise availability through struct_size. Existing fields above
+   * retain their original offsets.
+   */
+  void (*write_update)(
+      void* context,
+      uint32_t signal,
+      uint64_t aval,
+      uint64_t bval);
+  void (*write_after)(
+      void* context,
+      uint32_t signal,
+      uint64_t aval,
+      uint64_t bval,
+      uint64_t delay);
 } fsim_jit_runtime_v1;
 
 /*
@@ -74,7 +93,8 @@ typedef struct fsim_jit_frame_v1 {
 
 /*
  * Caller-owned result for one invocation. status mirrors the generated
- * function's return value. delay is meaningful only for WAIT_FOR.
+ * function's return value. delay is meaningful only for WAIT_FOR. WAIT_ON and
+ * WAIT_SENSITIVITY identify their immutable SimIR operands through instruction.
  */
 typedef struct fsim_jit_resume_result_v1 {
   uint32_t abi_version;

@@ -36,15 +36,31 @@ The following foundation is implemented:
   bindings and boundary checks;
 - buffered VCD, a bounded command-line debugger, and a versioned native C API;
 - an LLVM 22.1.8 ORC adapter with caller-owned resumable process frames for
-  values up to 64 bits, integrated as a hybrid per-process engine for
-  `build`/`run`;
+  processes whose value-bearing operations are up to 64 bits, with O0/O2
+  lowering for update-phase/delayed writes plus dynamic/static sensitivity
+  waits, integrated as a hybrid per-process engine for `build`/`run`;
 - a persistent LLVM native-object cache selected beneath the configured
-  application cache, with application-visible cold/warm telemetry;
-- a shared checked single-word `Logic4` path between generated callbacks and
-  the runtime for values up to 64 bits;
+  application cache, with application-visible cold/warm telemetry and
+  identity for scheduled-write kind/delay and wait kind, operands, widths, and
+  static edge data;
+- a shared checked allocation-free single-word `Logic4` path between generated
+  callbacks and the runtime for values up to 64 bits;
+- append-only, per-process size-gated v1 runtime-table callbacks for
+  `write_update` and `write_after`;
+- appended `WaitOn`/`WaitSensitivity` resume statuses that preserve existing
+  status values and the v1 result layout, with immutable SimIR retaining wait
+  operands and edge rules;
+- complete validation of the bounded compiled-wait representation and support
+  for sensitivity-only signals wider than 64 bits when no value crosses the
+  ABI;
 - bounded O0/O2 SystemVerilog and O2 mixed SV/VHDL/SV application differential
   coverage comparing status, time, deltas, committed-change callbacks, and
   final values;
+- an exact interpreter/O2-hybrid scheduled-write application test covering a
+  tick-0 update commit, tick-2 delayed commit, and callback-contained scheduler
+  overflow;
+- an exact interpreter/O2-hybrid positive-edge test covering tick 0, tick
+  1/delta 1, and tick 2 with both application processes compiled;
 - a SystemC compatibility header, native plug-in ABI, loader, and cached host
   compiler; and
 - a stable catalog covering 239 current production diagnostic codes.
@@ -113,20 +129,36 @@ Completed:
   force/deposit/release, VCD, and debugger safe-point callbacks;
 - a shared kernel boundary for interpreter and external process executors;
 - LLVM lowering for O0/O2 control flow, timed waits, next-delta yields, stop,
-  and loops containing suspension safe points;
+  update-phase/delayed writes, dynamic/static sensitivity waits, and loops cut
+  by any supported suspension point;
+- append-only `write_update`/`write_after` v1 ABI fields with per-process
+  structure-size and callback validation;
+- allocation-free checked word handoff for generated blocking, update-phase,
+  and delayed writes;
+- appended `WaitOn`/`WaitSensitivity` v1 resume statuses without changing the
+  result structure or existing numeric values; immutable SimIR owns dynamic
+  operands and static edge rules;
+- validation of wait lists, signal IDs and widths, edge kinds/scalar edge
+  rules, boundary instructions, resume PCs, and frame states, while allowing
+  sensitivity-only signals wider than 64 bits;
 - LLVM-enabled build/run selection with typed per-process fallback;
 - bounded O0/O2 SystemVerilog and O2 mixed-language application
   interpreter-versus-hybrid differential tests;
+- exact interpreter/O2-hybrid application evidence for tick-0 update and
+  tick-2 delayed commits, plus interpreter/compiled overflow exception
+  containment;
+- exact interpreter/O2-hybrid application evidence for positive-edge wakeup at
+  tick 1/delta 1, including tick-0/tick-2 signal changes and two of two
+  processes compiled;
 - application native-cache telemetry with cold miss/store and warm-hit
   assertions for every compiled process at O0 and O2;
 - persistent object-cache cold/warm, invalidation, corruption, and
-  incompatible-object tests; and
+  incompatible-object tests, including scheduled-write kind and delay cache
+  identity plus wait kind, operands, referenced widths, and static edge data;
 - checked-in SV-testbench/VHDL-counter/SV-child example.
 
 Remaining before the architecture gate passes:
 
-- lower delayed writes, NBA/update writes, and sensitivity waits into the
-  resumable LLVM process state machines;
 - compile one module per elaborated design-unit specialization;
 - replace the interpreter-only debugger with an instrumented O0 JIT path and
   demonstrate semantic equivalence with the default O2 hybrid run;
@@ -178,7 +210,8 @@ Completed groundwork:
 
 - deterministic scheduler phases for active, inactive, update, and postponed
   work;
-- delayed and update operations in SimIR/interpreter;
+- delayed/update and dynamic/static wait operations in the SimIR interpreter
+  and bounded LLVM compiled subset;
 - deterministic project seed handling;
 - scope/signal navigation, time and signal-change breakpoints, delta/time
   stepping, and value mutation in the CLI debugger;
@@ -242,10 +275,10 @@ Remaining before v1 release:
 
 The next development iterations should occur in this order:
 
-1. **Close the architecture gate:** lower scheduled/delayed writes and
-   sensitivity waits, group LLVM modules per design-unit specialization,
-   integrate instrumented O0 debugging, complete native-cache identity, and
-   broaden the interpreter/JIT differential harness.
+1. **Close the architecture gate:** group LLVM modules per design-unit
+   specialization, integrate instrumented O0 debugging, complete
+   source/include/specialization cache identity, and broaden the
+   interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.
 3. **Expand synthesizable coverage:** packages/parameters/generics, generates,

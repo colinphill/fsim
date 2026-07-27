@@ -6,6 +6,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -40,6 +41,30 @@ struct EncodedSignal {
   friend bool operator==(EncodedSignal, EncodedSignal) = default;
 };
 
+enum class ScheduledWriteKind : std::uint8_t {
+  update,
+  after,
+};
+
+struct ScheduledWrite {
+  ScheduledWriteKind kind = ScheduledWriteKind::update;
+  std::uint32_t signal{};
+  EncodedSignal value;
+  std::uint64_t scheduled_at{};
+  std::uint64_t delay{};
+  std::uint64_t due{};
+
+  friend bool operator==(ScheduledWrite, ScheduledWrite) = default;
+};
+
+struct ObservedWrite {
+  std::uint64_t time{};
+  std::uint32_t signal{};
+  EncodedSignal value;
+
+  friend bool operator==(ObservedWrite, ObservedWrite) = default;
+};
+
 struct TestRuntime {
   std::array<EncodedSignal, 8> signals{};
   std::uint32_t assertion_count{};
@@ -48,6 +73,8 @@ struct TestRuntime {
   std::string assertion_message;
   bool leave_bval_untouched{};
   std::vector<std::pair<std::uint32_t, EncodedSignal>> writes;
+  std::uint64_t current_time{};
+  std::vector<ScheduledWrite> scheduled_writes;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -82,6 +109,29 @@ extern "C" void assert_failed(void *opaque, const std::uint32_t process,
       message, static_cast<std::size_t>(message_size));
 }
 
+extern "C" void write_update(void *opaque, const std::uint32_t signal,
+                              const std::uint64_t aval,
+                              const std::uint64_t bval) {
+  auto &runtime = *static_cast<TestRuntime *>(opaque);
+  assert(signal < runtime.signals.size());
+  runtime.scheduled_writes.push_back(
+      {ScheduledWriteKind::update, signal, {aval, bval},
+       runtime.current_time, 0, runtime.current_time});
+}
+
+extern "C" void write_after(void *opaque, const std::uint32_t signal,
+                             const std::uint64_t aval,
+                             const std::uint64_t bval,
+                             const std::uint64_t delay) {
+  auto &runtime = *static_cast<TestRuntime *>(opaque);
+  assert(signal < runtime.signals.size());
+  assert(delay <=
+         std::numeric_limits<std::uint64_t>::max() - runtime.current_time);
+  runtime.scheduled_writes.push_back(
+      {ScheduledWriteKind::after, signal, {aval, bval},
+       runtime.current_time, delay, runtime.current_time + delay});
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -90,6 +140,8 @@ extern "C" void assert_failed(void *opaque, const std::uint32_t process,
       &read_signal,
       &write_signal,
       &assert_failed,
+      &write_update,
+      &write_after,
   };
 }
 
@@ -247,6 +299,18 @@ void run_at_level(const JitOptimizationLevel optimization,
   wrong_abi.abi_version = 99;
   expect_fatal_error([&] { (void)jit.execute(handle, wrong_abi); },
                      "ABI version mismatch");
+
+  TestRuntime legacy_runtime;
+  legacy_runtime.signals[0] = {0x35, 0};
+  legacy_runtime.signals[1] = {0x0f, 0};
+  auto legacy_descriptor = abi(legacy_runtime);
+  legacy_descriptor.struct_size = static_cast<std::uint32_t>(
+      offsetof(fsim_jit_runtime_v1, write_update));
+  legacy_descriptor.write_update = nullptr;
+  legacy_descriptor.write_after = nullptr;
+  assert(jit.execute(handle, legacy_descriptor) ==
+         JitExecutionStatus::completed);
+
   expect_error([&] { (void)jit.lookup("not_added"); }, "was not added");
   assert(jit.cache_statistics() ==
          fsim::compiler::LlvmJitCacheStatistics{});
@@ -270,6 +334,207 @@ void run_at_level(const JitOptimizationLevel optimization,
   assert(value.width() > 0);
   assert(value.width() <= 64);
   return {value.aval_words().front(), value.bval_words().front()};
+}
+
+[[nodiscard]] Process make_scheduled_callback_process() {
+  Process process;
+  process.id = 3;
+  process.name = "scheduled_callbacks";
+  process.register_count = 1;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10XZ0101")},
+      WriteUpdate{2, 0},
+      WriteAfter{3, 0, 0},
+      WriteAfter{4, 0, std::numeric_limits<std::uint64_t>::max()},
+      Halt{},
+  };
+  return process;
+}
+
+void test_scheduled_callbacks_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol_prefix) {
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  const auto process = make_scheduled_callback_process();
+  const std::array<std::uint32_t, 5> widths{8, 8, 8, 8, 8};
+  const auto symbol = std::string{symbol_prefix} + "_scheduled_callbacks";
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
+  const auto value =
+      encode(PackedLogic4::from_msb_string("10XZ0101"));
+  const std::vector<ScheduledWrite> expected{
+      {ScheduledWriteKind::update, 2, value, 0, 0, 0},
+      {ScheduledWriteKind::after, 3, value, 0, 0, 0},
+      {ScheduledWriteKind::after, 4, value, 0,
+       std::numeric_limits<std::uint64_t>::max(),
+       std::numeric_limits<std::uint64_t>::max()},
+  };
+  assert(runtime.scheduled_writes == expected);
+  assert(runtime.writes.empty());
+
+  {
+    auto too_short = descriptor;
+    too_short.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_update));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, too_short); },
+        "does not include write_update");
+  }
+  {
+    auto no_delayed_tail = descriptor;
+    no_delayed_tail.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_after));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, no_delayed_tail); },
+        "does not include write_after");
+  }
+  {
+    auto missing_update = descriptor;
+    missing_update.write_update = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing_update); },
+        "requires write_update");
+  }
+  {
+    auto missing_after = descriptor;
+    missing_after.write_after = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing_after); },
+        "requires write_after");
+  }
+
+  Process update_only;
+  update_only.id = 4;
+  update_only.name = "update_only";
+  update_only.register_count = 1;
+  update_only.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10100101")},
+      WriteUpdate{0, 0},
+      Halt{},
+  };
+  const auto update_symbol = std::string{symbol_prefix} + "_update_only";
+  jit.add_process(update_symbol, update_only, widths);
+  TestRuntime update_runtime;
+  auto update_descriptor = abi(update_runtime);
+  update_descriptor.struct_size = static_cast<std::uint32_t>(
+      offsetof(fsim_jit_runtime_v1, write_after));
+  update_descriptor.write_after = nullptr;
+  assert(jit.execute(jit.lookup(update_symbol), update_descriptor) ==
+         JitExecutionStatus::completed);
+  assert(update_runtime.scheduled_writes.size() == 1);
+  assert(update_runtime.scheduled_writes.front().kind ==
+         ScheduledWriteKind::update);
+
+  Process after_only;
+  after_only.id = 5;
+  after_only.name = "after_only";
+  after_only.register_count = 1;
+  after_only.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("00111100")},
+      WriteAfter{1, 0, 7},
+      Halt{},
+  };
+  const auto after_symbol = std::string{symbol_prefix} + "_after_only";
+  jit.add_process(after_symbol, after_only, widths);
+  TestRuntime after_runtime;
+  auto after_descriptor = abi(after_runtime);
+  after_descriptor.write_update = nullptr;
+  assert(jit.execute(jit.lookup(after_symbol), after_descriptor) ==
+         JitExecutionStatus::completed);
+  assert(after_runtime.scheduled_writes.size() == 1);
+  assert(after_runtime.scheduled_writes.front().kind ==
+         ScheduledWriteKind::after);
+  assert(after_runtime.scheduled_writes.front().delay == 7);
+}
+
+[[nodiscard]] Process make_scheduling_differential_process() {
+  Process process;
+  process.id = 0;
+  process.name = "scheduled_differential";
+  process.register_count = 2;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10XZ0101")},
+      WriteUpdate{0, 0},
+      WriteAfter{1, 0, 4},
+      WaitFor{2},
+      LoadConstant{1, PackedLogic4::from_msb_string("00111100")},
+      WriteUpdate{2, 1},
+      WriteAfter{3, 1, 1},
+      WaitFor{2},
+      Halt{},
+  };
+  return process;
+}
+
+void test_scheduling_differential_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol_prefix) {
+  const auto process = make_scheduling_differential_process();
+  const std::array<std::uint32_t, 4> widths{8, 8, 8, 8};
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  const auto symbol = std::string{symbol_prefix} + "_scheduled_differential";
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+  const auto layout = jit.frame_layout(handle);
+  std::vector<std::uint64_t> register_aval(layout.register_count);
+  std::vector<std::uint64_t> register_bval(layout.register_count);
+  fsim_jit_frame_v1 frame{};
+  jit.initialize_frame(handle, frame, register_aval, register_bval);
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  auto result = new_resume_result();
+  assert(jit.resume(handle, descriptor, frame, result) ==
+         JitResumeStatus::wait_for);
+  assert(result.instruction == 3);
+  assert(result.delay == 2);
+  runtime.current_time += result.delay;
+  assert(jit.resume(handle, descriptor, frame, result) ==
+         JitResumeStatus::wait_for);
+  assert(result.instruction == 7);
+  assert(result.delay == 2);
+  runtime.current_time += result.delay;
+  assert(jit.resume(handle, descriptor, frame, result) ==
+         JitResumeStatus::completed);
+  assert(result.instruction == 8);
+  assert(runtime.current_time == 4);
+
+  std::vector<ObservedWrite> generated;
+  generated.reserve(runtime.scheduled_writes.size());
+  for (const auto &write : runtime.scheduled_writes) {
+    generated.push_back({write.due, write.signal, write.value});
+  }
+  const auto order = [](const ObservedWrite &lhs,
+                        const ObservedWrite &rhs) {
+    if (lhs.time != rhs.time) {
+      return lhs.time < rhs.time;
+    }
+    return lhs.signal < rhs.signal;
+  };
+  std::sort(generated.begin(), generated.end(), order);
+
+  fsim::runtime::simir::Interpreter interpreter;
+  for (std::uint32_t signal = 0; signal < widths.size(); ++signal) {
+    (void)interpreter.add_signal(
+        {"scheduled" + std::to_string(signal),
+         PackedLogic4::from_msb_string("XXXXXXXX")});
+  }
+  std::vector<ObservedWrite> reference;
+  interpreter.set_signal_change_hook(
+      [&](const SignalId signal, const PackedLogic4 &value,
+          const fsim::runtime::SimulationTick time) {
+        reference.push_back({time, signal, encode(value)});
+      });
+  (void)interpreter.add_process(process);
+  const auto reference_result = interpreter.run();
+  assert(reference_result.status == fsim::runtime::RunStatus::completed);
+  assert(reference_result.time == 4);
+  std::sort(reference.begin(), reference.end(), order);
+  assert(generated == reference);
 }
 
 [[nodiscard]] Process
@@ -638,6 +903,135 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   assert((loop_runtime.signals[0] == EncodedSignal{0, 0}));
 }
 
+[[nodiscard]] Process make_signal_wait_process() {
+  Process process;
+  process.id = 7;
+  process.name = "signal_waits";
+  process.static_sensitivity = {
+      {0, EdgeKind::posedge},
+      {1, EdgeKind::any},
+  };
+  process.operations = {
+      WaitOn{{2, 0, 2}},
+      WaitSensitivity{},
+      Halt{},
+  };
+  return process;
+}
+
+void test_signal_waits_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol_prefix) {
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  const auto process = make_signal_wait_process();
+  const std::array<std::uint32_t, 3> widths{1, 128, 257};
+  const auto symbol = std::string{symbol_prefix} + "_signal_waits";
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  expect_unsupported(
+      [&] { (void)jit.execute(handle, descriptor); },
+      "compiled process can suspend");
+
+  const auto layout = jit.frame_layout(handle);
+  assert(layout.register_count == 0);
+  std::vector<std::uint64_t> register_aval;
+  std::vector<std::uint64_t> register_bval;
+  fsim_jit_frame_v1 frame{};
+  jit.initialize_frame(
+      handle, frame, register_aval, register_bval);
+  auto result = new_resume_result();
+
+  assert(jit.resume(handle, descriptor, frame, result) ==
+         JitResumeStatus::wait_on);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_ON);
+  assert(result.instruction == 0);
+  assert(result.delay == 0);
+  assert(frame.program_counter == 1);
+  assert(frame.last_instruction == 0);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+  assert((std::get<WaitOn>(process.operations[0]).signals ==
+          std::vector<SignalId>{2, 0, 2}));
+
+  assert(jit.resume(handle, descriptor, frame, result) ==
+         JitResumeStatus::wait_sensitivity);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY);
+  assert(result.instruction == 1);
+  assert(result.delay == 0);
+  assert(frame.program_counter == 2);
+  assert(frame.last_instruction == 1);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+  assert(process.static_sensitivity.size() == 2);
+  assert(process.static_sensitivity[0].signal == 0);
+  assert(process.static_sensitivity[0].edge == EdgeKind::posedge);
+  assert(process.static_sensitivity[1].signal == 1);
+  assert(process.static_sensitivity[1].edge == EdgeKind::any);
+
+  assert(jit.resume(handle, descriptor, frame, result) ==
+         JitResumeStatus::completed);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_COMPLETED);
+  assert(result.instruction == 2);
+  assert(frame.program_counter == process.operations.size());
+  assert(frame.last_instruction == 2);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_COMPLETED);
+  assert(runtime.writes.empty());
+  assert(runtime.scheduled_writes.empty());
+
+  Process wait_on_loop;
+  wait_on_loop.id = 8;
+  wait_on_loop.name = "wait_on_loop";
+  wait_on_loop.operations = {
+      WaitOn{{0}},
+      Jump{0},
+  };
+  const auto wait_on_symbol = std::string{symbol_prefix} + "_wait_on_loop";
+  jit.add_process(wait_on_symbol, wait_on_loop, widths);
+  const auto wait_on_handle = jit.lookup(wait_on_symbol);
+  fsim_jit_frame_v1 wait_on_frame{};
+  jit.initialize_frame(
+      wait_on_handle, wait_on_frame, register_aval, register_bval);
+  auto wait_on_result = new_resume_result();
+  assert(jit.resume(
+             wait_on_handle, descriptor, wait_on_frame, wait_on_result) ==
+         JitResumeStatus::wait_on);
+  assert(wait_on_frame.program_counter == 1);
+  assert(jit.resume(
+             wait_on_handle, descriptor, wait_on_frame, wait_on_result) ==
+         JitResumeStatus::wait_on);
+  assert(wait_on_result.instruction == 0);
+  assert(wait_on_frame.program_counter == 1);
+
+  Process sensitivity_loop;
+  sensitivity_loop.id = 9;
+  sensitivity_loop.name = "sensitivity_loop";
+  sensitivity_loop.static_sensitivity = {{1, EdgeKind::any}};
+  sensitivity_loop.operations = {
+      WaitSensitivity{},
+      Jump{0},
+  };
+  const auto sensitivity_symbol =
+      std::string{symbol_prefix} + "_sensitivity_loop";
+  jit.add_process(sensitivity_symbol, sensitivity_loop, widths);
+  const auto sensitivity_handle = jit.lookup(sensitivity_symbol);
+  fsim_jit_frame_v1 sensitivity_frame{};
+  jit.initialize_frame(
+      sensitivity_handle, sensitivity_frame, register_aval, register_bval);
+  auto sensitivity_result = new_resume_result();
+  assert(jit.resume(
+             sensitivity_handle, descriptor, sensitivity_frame,
+             sensitivity_result) ==
+         JitResumeStatus::wait_sensitivity);
+  assert(sensitivity_frame.program_counter == 1);
+  assert(jit.resume(
+             sensitivity_handle, descriptor, sensitivity_frame,
+             sensitivity_result) ==
+         JitResumeStatus::wait_sensitivity);
+  assert(sensitivity_result.instruction == 0);
+  assert(sensitivity_frame.program_counter == 1);
+}
+
 [[nodiscard]] Logic4 equality(const Logic4 lhs, const Logic4 rhs) {
   const auto known = [](const Logic4 value) {
     return value == Logic4::zero || value == Logic4::one;
@@ -770,6 +1164,39 @@ make_cached_signal_process(const SignalId signal) {
   return process;
 }
 
+[[nodiscard]] Process
+make_cached_scheduled_process(const bool delayed,
+                              const std::uint64_t delay) {
+  Process process;
+  process.id = 13;
+  process.name = "cached_scheduled_process";
+  process.register_count = 1;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10100101")},
+      delayed ? Operation{WriteAfter{0, 0, delay}}
+              : Operation{WriteUpdate{0, 0}},
+      Halt{},
+  };
+  return process;
+}
+
+[[nodiscard]] Process
+make_cached_wait_process(const bool static_wait,
+                         std::vector<SignalId> signals) {
+  Process process;
+  process.id = 14;
+  process.name = "cached_wait_process";
+  for (const auto signal : signals) {
+    process.static_sensitivity.push_back({signal, EdgeKind::any});
+  }
+  if (static_wait) {
+    process.operations = {WaitSensitivity{}, Halt{}};
+  } else {
+    process.operations = {WaitOn{std::move(signals)}, Halt{}};
+  }
+  return process;
+}
+
 void expect_cache_statistics(const LlvmJit &jit, const std::uint64_t hits,
                              const std::uint64_t misses,
                              const std::uint64_t stores,
@@ -800,6 +1227,24 @@ void run_cached_signal_process(LlvmJit &jit,
   runtime.signals[1] = {UINT64_C(0x3c), 0};
   auto descriptor = abi(runtime);
   assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
+}
+
+void run_cached_scheduled_process(
+    LlvmJit &jit, const std::string_view symbol,
+    const ScheduledWriteKind expected_kind,
+    const std::uint64_t expected_delay) {
+  const auto handle = jit.lookup(symbol);
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(jit.execute(handle, descriptor) == JitExecutionStatus::completed);
+  assert(runtime.scheduled_writes.size() == 1);
+  assert(runtime.scheduled_writes.front().kind == expected_kind);
+  assert(runtime.scheduled_writes.front().delay == expected_delay);
+}
+
+void materialize_cached_wait_process(
+    LlvmJit &jit, const std::string_view symbol) {
+  assert(jit.lookup(symbol));
 }
 
 [[nodiscard]] std::vector<std::filesystem::path>
@@ -955,6 +1400,115 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     expect_cache_statistics(changed_signal, 0, 1, 1);
   }
   assert(cached_object_paths(cache_directory).size() == 5);
+
+  constexpr std::string_view scheduled_symbol =
+      "persistent_cache_scheduled_process";
+  const std::array<std::uint32_t, 1> scheduled_widths{8};
+  {
+    LlvmJit cold{options};
+    cold.add_process(
+        scheduled_symbol, make_cached_scheduled_process(true, 3),
+        scheduled_widths);
+    run_cached_scheduled_process(
+        cold, scheduled_symbol, ScheduledWriteKind::after, 3);
+    expect_cache_statistics(cold, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 6);
+  {
+    LlvmJit warm{options};
+    warm.add_process(
+        scheduled_symbol, make_cached_scheduled_process(true, 3),
+        scheduled_widths);
+    run_cached_scheduled_process(
+        warm, scheduled_symbol, ScheduledWriteKind::after, 3);
+    expect_cache_statistics(warm, 1, 0, 0);
+  }
+
+  // Delayed-write delay and operation kind both participate in identity.
+  {
+    LlvmJit changed_delay{options};
+    changed_delay.add_process(
+        scheduled_symbol, make_cached_scheduled_process(true, 4),
+        scheduled_widths);
+    run_cached_scheduled_process(
+        changed_delay, scheduled_symbol, ScheduledWriteKind::after, 4);
+    expect_cache_statistics(changed_delay, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 7);
+  {
+    LlvmJit changed_kind{options};
+    changed_kind.add_process(
+        scheduled_symbol, make_cached_scheduled_process(false, 0),
+        scheduled_widths);
+    run_cached_scheduled_process(
+        changed_kind, scheduled_symbol, ScheduledWriteKind::update, 0);
+    expect_cache_statistics(changed_kind, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 8);
+
+  constexpr std::string_view wait_symbol =
+      "persistent_cache_wait_process";
+  const std::array<std::uint32_t, 2> wait_widths{1, 1};
+  {
+    LlvmJit cold{options};
+    cold.add_process(
+        wait_symbol, make_cached_wait_process(false, {0, 1}),
+        wait_widths);
+    materialize_cached_wait_process(cold, wait_symbol);
+    expect_cache_statistics(cold, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 9);
+  {
+    LlvmJit warm{options};
+    warm.add_process(
+        wait_symbol, make_cached_wait_process(false, {0, 1}),
+        wait_widths);
+    materialize_cached_wait_process(warm, wait_symbol);
+    expect_cache_statistics(warm, 1, 0, 0);
+  }
+
+  // Wait operands, referenced widths, operation kind, and static edge rules
+  // participate in native cache identity.
+  {
+    LlvmJit changed_operands{options};
+    changed_operands.add_process(
+        wait_symbol, make_cached_wait_process(false, {1, 0}),
+        wait_widths);
+    materialize_cached_wait_process(changed_operands, wait_symbol);
+    expect_cache_statistics(changed_operands, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 10);
+  {
+    LlvmJit changed_kind{options};
+    changed_kind.add_process(
+        wait_symbol, make_cached_wait_process(true, {0, 1}),
+        wait_widths);
+    materialize_cached_wait_process(changed_kind, wait_symbol);
+    expect_cache_statistics(changed_kind, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 11);
+  {
+    LlvmJit changed_width{options};
+    const std::array<std::uint32_t, 2> wider_wait_signal{2, 1};
+    changed_width.add_process(
+        wait_symbol, make_cached_wait_process(false, {0, 1}),
+        wider_wait_signal);
+    materialize_cached_wait_process(changed_width, wait_symbol);
+    expect_cache_statistics(changed_width, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 12);
+  {
+    LlvmJit changed_edge{options};
+    auto edge_process =
+        make_cached_wait_process(true, {0, 1});
+    edge_process.static_sensitivity.front().edge =
+        EdgeKind::posedge;
+    changed_edge.add_process(
+        wait_symbol, edge_process, wait_widths);
+    materialize_cached_wait_process(changed_edge, wait_symbol);
+    expect_cache_statistics(changed_edge, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 13);
 }
 
 void test_optimization_cache_invalidation(
@@ -1007,30 +1561,131 @@ void test_persistent_object_cache() {
 
 void test_rejections() {
   LlvmJit jit;
-  const std::vector<std::pair<Operation, std::string_view>> unsupported{
-      {WriteUpdate{0, 0}, "WriteUpdate"},
-      {WriteAfter{0, 0, 1}, "WriteAfter"},
-      {WaitOn{{0}}, "WaitOn"},
-      {WaitSensitivity{}, "WaitSensitivity"},
-  };
-  std::uint32_t suffix = 0;
-  for (const auto &[operation, diagnostic] : unsupported) {
-    Process rejected;
-    rejected.id = 0;
-    rejected.name = std::string{diagnostic};
-    rejected.register_count = 1;
-    rejected.operations = {
+  const std::array<std::uint32_t, 1> one_signal{1};
+
+  Process empty_wait_on;
+  empty_wait_on.id = 0;
+  empty_wait_on.name = "empty_wait_on";
+  empty_wait_on.operations = {WaitOn{}, Halt{}};
+  expect_fatal_error(
+      [&] { jit.add_process("empty_wait_on", empty_wait_on, one_signal); },
+      "WaitOn requires at least one signal");
+
+  Process empty_static_wait;
+  empty_static_wait.id = 0;
+  empty_static_wait.name = "empty_static_wait";
+  empty_static_wait.operations = {WaitSensitivity{}, Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "empty_static_wait", empty_static_wait, one_signal);
+      },
+      "WaitSensitivity requires a static sensitivity list");
+
+  Process invalid_static_signal;
+  invalid_static_signal.id = 0;
+  invalid_static_signal.name = "invalid_static_signal";
+  invalid_static_signal.static_sensitivity = {{1, EdgeKind::any}};
+  invalid_static_signal.operations = {Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_static_signal", invalid_static_signal, one_signal);
+      },
+      "signal ID is outside signal_widths");
+
+  Process vector_edge;
+  vector_edge.id = 0;
+  vector_edge.name = "vector_edge";
+  vector_edge.static_sensitivity = {{0, EdgeKind::posedge}};
+  vector_edge.operations = {WaitSensitivity{}, Halt{}};
+  const std::array<std::uint32_t, 1> vector_signal{8};
+  expect_fatal_error(
+      [&] { jit.add_process("vector_edge", vector_edge, vector_signal); },
+      "edge sensitivity requires a scalar signal");
+
+  Process invalid_edge;
+  invalid_edge.id = 0;
+  invalid_edge.name = "invalid_edge";
+  invalid_edge.static_sensitivity = {
+      {0, static_cast<EdgeKind>(UINT8_MAX)}};
+  invalid_edge.operations = {WaitSensitivity{}, Halt{}};
+  expect_fatal_error(
+      [&] { jit.add_process("invalid_edge", invalid_edge, one_signal); },
+      "static sensitivity has an invalid edge kind");
+
+  Process zero_width_wait;
+  zero_width_wait.id = 0;
+  zero_width_wait.name = "zero_width_wait";
+  zero_width_wait.operations = {WaitOn{{0}}, Halt{}};
+  const std::array<std::uint32_t, 1> zero_width_signal{0};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "zero_width_wait", zero_width_wait, zero_width_signal);
+      },
+      "signal width must be greater than zero");
+
+  const std::array<std::uint32_t, 1> scalar_signal{1};
+  std::uint32_t scheduled_suffix = 0;
+  for (const auto &operation :
+       std::array<Operation, 2>{WriteUpdate{0, 1},
+                                WriteAfter{0, 1, UINT64_MAX}}) {
+    Process bad_source;
+    bad_source.id = 0;
+    bad_source.name = "scheduled_bad_source";
+    bad_source.register_count = 1;
+    bad_source.operations = {operation, Halt{}};
+    expect_fatal_error(
+        [&] {
+          jit.add_process(
+              "scheduled_bad_source_" +
+                  std::to_string(scheduled_suffix++),
+              bad_source, scalar_signal);
+        },
+        "source register ID is out of range");
+  }
+  for (const auto &operation :
+       std::array<Operation, 2>{WriteUpdate{1, 0},
+                                WriteAfter{1, 0, UINT64_MAX}}) {
+    Process bad_signal;
+    bad_signal.id = 0;
+    bad_signal.name = "scheduled_bad_signal";
+    bad_signal.register_count = 1;
+    bad_signal.operations = {
         LoadConstant{0, PackedLogic4::from_msb_string("0")},
         operation,
         Halt{},
     };
-    if (std::holds_alternative<WaitSensitivity>(operation)) {
-      rejected.static_sensitivity.push_back({0, EdgeKind::any});
-    }
-    const std::array<std::uint32_t, 1> one_signal{1};
-    const auto symbol = "rejected_" + std::to_string(suffix++);
-    expect_unsupported(
-        [&] { jit.add_process(symbol, rejected, one_signal); }, diagnostic);
+    expect_fatal_error(
+        [&] {
+          jit.add_process(
+              "scheduled_bad_signal_" +
+                  std::to_string(scheduled_suffix++),
+              bad_signal, scalar_signal);
+        },
+        "signal ID is outside signal_widths");
+  }
+  for (const auto &operation :
+       std::array<Operation, 2>{WriteUpdate{0, 0},
+                                WriteAfter{0, 0, UINT64_MAX}}) {
+    Process bad_width;
+    bad_width.id = 0;
+    bad_width.name = "scheduled_bad_width";
+    bad_width.register_count = 1;
+    bad_width.operations = {
+        LoadConstant{0, PackedLogic4::from_msb_string("10100101")},
+        operation,
+        Halt{},
+    };
+    expect_fatal_error(
+        [&] {
+          jit.add_process(
+              "scheduled_bad_width_" +
+                  std::to_string(scheduled_suffix++),
+              bad_width, scalar_signal);
+        },
+        "register width constraints are inconsistent");
   }
 
   Process too_wide;
@@ -1074,7 +1729,6 @@ void test_rejections() {
   unsupported_then_bad_signal.name = "unsupported_then_bad_signal";
   unsupported_then_bad_signal.operations = {WaitOn{{0}}, WaitOn{{1}},
                                              Halt{}};
-  const std::array<std::uint32_t, 1> one_signal{1};
   expect_fatal_error(
       [&] {
         jit.add_process("unsupported_then_bad_signal",
@@ -1177,7 +1831,7 @@ void test_rejections() {
       [&] {
         jit.add_process("zero_time_cycle", zero_time_cycle, no_signals);
       },
-      "cycle has no WaitFor or Yield safe point");
+      "cycle has no suspension safe point");
 
   Process reachable_cycle;
   reachable_cycle.id = 0;
@@ -1190,7 +1844,7 @@ void test_rejections() {
   };
   expect_unsupported(
       [&] { jit.add_process("reachable_cycle", reachable_cycle, no_signals); },
-      "cycle has no WaitFor or Yield safe point");
+      "cycle has no suspension safe point");
 
   expect_error(
       [&] {
@@ -1213,8 +1867,20 @@ int main() {
   test_initialized_bval_slot(JitOptimizationLevel::o2, "initialized_bval_o2");
   test_control_flow_at_level(JitOptimizationLevel::o0, "control_flow_o0");
   test_control_flow_at_level(JitOptimizationLevel::o2, "control_flow_o2");
+  test_scheduled_callbacks_at_level(
+      JitOptimizationLevel::o0, "scheduled_o0");
+  test_scheduled_callbacks_at_level(
+      JitOptimizationLevel::o2, "scheduled_o2");
+  test_scheduling_differential_at_level(
+      JitOptimizationLevel::o0, "scheduled_diff_o0");
+  test_scheduling_differential_at_level(
+      JitOptimizationLevel::o2, "scheduled_diff_o2");
   test_resumable_at_level(JitOptimizationLevel::o0, "resume_o0");
   test_resumable_at_level(JitOptimizationLevel::o2, "resume_o2");
+  test_signal_waits_at_level(
+      JitOptimizationLevel::o0, "signal_wait_o0");
+  test_signal_waits_at_level(
+      JitOptimizationLevel::o2, "signal_wait_o2");
   test_persistent_object_cache();
   test_rejections();
   std::cout << "LLVM JIT tests passed with LLVM " << LlvmJit::llvm_version()

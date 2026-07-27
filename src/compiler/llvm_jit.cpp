@@ -78,10 +78,23 @@ static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_resume_result_v1>);
 static_assert(sizeof(std::uint32_t) == 4);
 static_assert(sizeof(std::uint64_t) == 8);
+static_assert(offsetof(fsim_jit_runtime_v1, abi_version) == 0);
+static_assert(offsetof(fsim_jit_runtime_v1, struct_size) == 4);
+static_assert(offsetof(fsim_jit_runtime_v1, context) == 8);
+static_assert(offsetof(fsim_jit_runtime_v1, read_signal) == 16);
+static_assert(offsetof(fsim_jit_runtime_v1, write_signal) == 24);
+static_assert(offsetof(fsim_jit_runtime_v1, assert_failed) == 32);
+static_assert(offsetof(fsim_jit_runtime_v1, write_update) == 40);
+static_assert(offsetof(fsim_jit_runtime_v1, write_after) == 48);
+static_assert(sizeof(fsim_jit_runtime_v1) == 56);
 static_assert(sizeof(fsim_jit_frame_v1) == 56);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
 static_assert(sizeof(fsim_jit_resume_result_v1) == 24);
+
+constexpr auto kJitRuntimeV1PrefixSize =
+    static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_update));
 
 class PersistentLlvmObjectCache final : public llvm::ObjectCache {
 public:
@@ -268,6 +281,8 @@ reject_unsupported(const Process &process, const std::size_t instruction,
 struct ValidatedProcess {
   std::vector<std::uint32_t> register_widths;
   bool requires_resume{};
+  bool uses_write_update{};
+  bool uses_write_after{};
 };
 
 [[nodiscard]] ValidatedProcess
@@ -309,7 +324,7 @@ validate_process(const Process &process,
         }
       };
 
-  const auto signal_width =
+  const auto referenced_signal_width =
       [&](const std::uint32_t signal,
           const std::size_t instruction) -> std::uint32_t {
     if (signal >= signal_widths.size()) {
@@ -319,6 +334,13 @@ validate_process(const Process &process,
     if (width == 0) {
       reject(process, instruction, "signal width must be greater than zero");
     }
+    return width;
+  };
+
+  const auto signal_width =
+      [&](const std::uint32_t signal,
+          const std::size_t instruction) -> std::uint32_t {
+    const auto width = referenced_signal_width(signal, instruction);
     if (width > 64) {
       record_unsupported(
           instruction,
@@ -417,6 +439,38 @@ validate_process(const Process &process,
     }
   };
 
+  const auto first_wait_sensitivity = std::find_if(
+      process.operations.begin(), process.operations.end(),
+      [](const Operation &operation) {
+        return std::holds_alternative<WaitSensitivity>(operation);
+      });
+  const auto sensitivity_instruction =
+      first_wait_sensitivity == process.operations.end()
+          ? std::size_t{0}
+          : static_cast<std::size_t>(
+                std::distance(
+                    process.operations.begin(), first_wait_sensitivity));
+  for (const auto sensitivity : process.static_sensitivity) {
+    const auto width = referenced_signal_width(
+        sensitivity.signal, sensitivity_instruction);
+    switch (sensitivity.edge) {
+    case EdgeKind::any:
+      break;
+    case EdgeKind::posedge:
+    case EdgeKind::negedge:
+      if (width != 1) {
+        reject(
+            process, sensitivity_instruction,
+            "edge sensitivity requires a scalar signal");
+      }
+      break;
+    default:
+      reject(
+          process, sensitivity_instruction,
+          "static sensitivity has an invalid edge kind");
+    }
+  }
+
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     std::visit(
         Overloaded{
@@ -497,19 +551,13 @@ validate_process(const Process &process,
               record_use(operation.source, index);
               constrain_width(operation.source,
                               signal_width(operation.signal, index), index);
-              record_unsupported(
-                  index,
-                  "WriteUpdate schedules state and is not supported by the "
-                  "resumable JIT ABI");
+              result.uses_write_update = true;
             },
             [&](const WriteAfter &operation) {
               record_use(operation.source, index);
               constrain_width(operation.source,
                               signal_width(operation.signal, index), index);
-              record_unsupported(
-                  index,
-                  "WriteAfter schedules state and is not supported by the "
-                  "resumable JIT ABI");
+              result.uses_write_after = true;
             },
             [&](const WaitFor &) {},
             [&](const WaitOn &operation) {
@@ -518,39 +566,14 @@ validate_process(const Process &process,
                        "WaitOn requires at least one signal");
               }
               for (const auto signal : operation.signals) {
-                (void)signal_width(signal, index);
+                (void)referenced_signal_width(signal, index);
               }
-              record_unsupported(
-                  index,
-                  "WaitOn kernel dynamic-sensitivity integration is not "
-                  "supported by the current resumable JIT ABI");
             },
             [&](const WaitSensitivity &) {
               if (process.static_sensitivity.empty()) {
                 reject(process, index,
                        "WaitSensitivity requires a static sensitivity list");
               }
-              for (const auto sensitivity : process.static_sensitivity) {
-                const auto width = signal_width(sensitivity.signal, index);
-                switch (sensitivity.edge) {
-                case EdgeKind::any:
-                  break;
-                case EdgeKind::posedge:
-                case EdgeKind::negedge:
-                  if (width != 1) {
-                    reject(process, index,
-                           "edge sensitivity requires a scalar signal");
-                  }
-                  break;
-                default:
-                  reject(process, index,
-                         "static sensitivity has an invalid edge kind");
-                }
-              }
-              record_unsupported(
-                  index,
-                  "WaitSensitivity kernel static-sensitivity integration is "
-                  "not supported by the current resumable JIT ABI");
             },
             [&](const Yield &) {},
             [&](const Stop &) {}},
@@ -620,10 +643,14 @@ validate_process(const Process &process,
     pending.insert(pending.end(), successors[instruction].begin(),
                    successors[instruction].end());
   }
+  const auto is_suspension = [](const Operation &operation) {
+    return std::holds_alternative<WaitFor>(operation) ||
+           std::holds_alternative<WaitOn>(operation) ||
+           std::holds_alternative<WaitSensitivity>(operation) ||
+           std::holds_alternative<Yield>(operation);
+  };
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
-    if (reachable[index] &&
-        (std::holds_alternative<WaitFor>(process.operations[index]) ||
-         std::holds_alternative<Yield>(process.operations[index]))) {
+    if (reachable[index] && is_suspension(process.operations[index])) {
       result.requires_resume = true;
     }
   }
@@ -634,8 +661,7 @@ validate_process(const Process &process,
       process.operations.size());
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     if (!reachable[index] ||
-        std::holds_alternative<WaitFor>(process.operations[index]) ||
-        std::holds_alternative<Yield>(process.operations[index]) ||
+        is_suspension(process.operations[index]) ||
         std::holds_alternative<Stop>(process.operations[index]) ||
         std::holds_alternative<Halt>(process.operations[index])) {
       continue;
@@ -687,7 +713,7 @@ validate_process(const Process &process,
     record_unsupported(
         static_cast<std::size_t>(
             std::distance(remaining_predecessors.begin(), cycle)),
-        "reachable control-flow cycle has no WaitFor or Yield safe point");
+        "reachable control-flow cycle has no suspension safe point");
   }
 
   std::vector<std::vector<bool>> definitely_defined_in(
@@ -853,6 +879,21 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                   builder, "signal-width", signal_widths[value.signal]);
               add_key_u64(builder, "source", value.source);
             },
+            [&](const WriteUpdate &value) {
+              builder.add("operation", "WriteUpdate");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const WriteAfter &value) {
+              builder.add("operation", "WriteAfter");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "delay", value.delay);
+            },
             [&](const Assert &value) {
               builder.add("operation", "Assert");
               add_key_u64(builder, "condition", value.condition);
@@ -876,6 +917,35 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
             [&](const WaitFor &value) {
               builder.add("operation", "WaitFor");
               add_key_u64(builder, "delay", value.delay);
+            },
+            [&](const WaitOn &value) {
+              builder.add("operation", "WaitOn");
+              add_key_u64(
+                  builder, "wait-on-signal-count", value.signals.size());
+              for (const auto signal : value.signals) {
+                add_key_u64(builder, "wait-on-signal", signal);
+                add_key_u64(
+                    builder, "wait-on-signal-width",
+                    signal_widths[signal]);
+              }
+            },
+            [&](const WaitSensitivity &) {
+              builder.add("operation", "WaitSensitivity");
+              add_key_u64(
+                  builder, "wait-sensitivity-count",
+                  process.static_sensitivity.size());
+              for (const auto sensitivity : process.static_sensitivity) {
+                add_key_u64(
+                    builder, "wait-sensitivity-signal",
+                    sensitivity.signal);
+                add_key_u64(
+                    builder, "wait-sensitivity-signal-width",
+                    signal_widths[sensitivity.signal]);
+                add_key_u64(
+                    builder, "wait-sensitivity-edge",
+                    static_cast<std::underlying_type_t<EdgeKind>>(
+                        sensitivity.edge));
+              }
             },
             [&](const Yield &) {
               builder.add("operation", "Yield");
@@ -1172,7 +1242,8 @@ lower_process(llvm::LLVMContext &context, const llvm::DataLayout &data_layout,
   auto *i64 = llvm::Type::getInt64Ty(context);
   auto *pointer = llvm::PointerType::getUnqual(context);
   auto *runtime_type = llvm::StructType::create(
-      context, {i32, i32, pointer, pointer, pointer, pointer},
+      context,
+      {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -1207,6 +1278,18 @@ lower_process(llvm::LLVMContext &context, const llvm::DataLayout &data_layout,
   auto *assert_callback = builder.CreateLoad(
       pointer, builder.CreateStructGEP(runtime_type, runtime_argument, 5),
       "assert_failed");
+  llvm::Value *write_update_callback = nullptr;
+  if (validated.uses_write_update) {
+    write_update_callback = builder.CreateLoad(
+        pointer, builder.CreateStructGEP(runtime_type, runtime_argument, 6),
+        "write_update");
+  }
+  llvm::Value *write_after_callback = nullptr;
+  if (validated.uses_write_after) {
+    write_after_callback = builder.CreateLoad(
+        pointer, builder.CreateStructGEP(runtime_type, runtime_argument, 7),
+        "write_after");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -1216,6 +1299,9 @@ lower_process(llvm::LLVMContext &context, const llvm::DataLayout &data_layout,
   auto *assert_type =
       llvm::FunctionType::get(llvm::Type::getVoidTy(context),
                               {pointer, i32, i32, pointer, i64}, false);
+  auto *write_after_type =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                              {pointer, i32, i64, i64, i64}, false);
 
   auto *register_aval = builder.CreateLoad(
       pointer, builder.CreateStructGEP(frame_type, frame_argument, 8),
@@ -1364,6 +1450,26 @@ lower_process(llvm::LLVMContext &context, const llvm::DataLayout &data_layout,
                    source.bval});
               branch_to_next();
             },
+            [&](const WriteUpdate &operation) {
+              const auto source =
+                  load_register(builder, registers, operation.source);
+              builder.CreateCall(
+                  write_type, write_update_callback,
+                  {context_pointer,
+                   llvm::ConstantInt::get(i32, operation.signal), source.aval,
+                   source.bval});
+              branch_to_next();
+            },
+            [&](const WriteAfter &operation) {
+              const auto source =
+                  load_register(builder, registers, operation.source);
+              builder.CreateCall(
+                  write_after_type, write_after_callback,
+                  {context_pointer,
+                   llvm::ConstantInt::get(i32, operation.signal), source.aval,
+                   source.bval, constant_i64(context, operation.delay)});
+              branch_to_next();
+            },
             [&](const Assert &operation) {
               const auto condition =
                   load_register(builder, registers, operation.condition);
@@ -1437,6 +1543,16 @@ lower_process(llvm::LLVMContext &context, const llvm::DataLayout &data_layout,
                   operation.delay, FSIM_JIT_FRAME_STATE_READY,
                   next_instruction);
             },
+            [&](const WaitOn &) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_WAIT_ON, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            },
+            [&](const WaitSensitivity &) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            },
             [&](const Yield &) {
               return_result(
                   FSIM_JIT_RESUME_STATUS_YIELDED, instruction, 0,
@@ -1498,6 +1614,8 @@ struct LlvmJit::Impl {
     JitProcessFrameLayout frame_layout;
     std::uint32_t operation_count{};
     bool requires_resume{};
+    bool uses_write_update{};
+    bool uses_write_after{};
   };
 
   struct NativeEntry {
@@ -1585,6 +1703,8 @@ void LlvmJit::add_process(
       make_frame_layout(cache_key, process.register_count),
       static_cast<std::uint32_t>(process.operations.size()),
       validated.requires_resume,
+      validated.uses_write_update,
+      validated.uses_write_after,
   };
   auto context = std::make_unique<llvm::LLVMContext>();
   auto module = lower_process(
@@ -1699,7 +1819,7 @@ LlvmJit::resume(const JitProcessHandle process,
   if (runtime.abi_version != FSIM_JIT_RUNTIME_ABI_VERSION_V1) {
     throw LlvmJitError("JIT runtime ABI version mismatch");
   }
-  if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+  if (runtime.struct_size < kJitRuntimeV1PrefixSize) {
     throw LlvmJitError("JIT runtime ABI structure is too small");
   }
   if (runtime.read_signal == nullptr || runtime.write_signal == nullptr ||
@@ -1718,6 +1838,27 @@ LlvmJit::resume(const JitProcessHandle process,
     throw LlvmJitError("invalid LLVM process handle");
   }
   const auto &entry = found->second;
+  if (entry.info.uses_write_update) {
+    if (runtime.struct_size <
+        offsetof(fsim_jit_runtime_v1, write_after)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include write_update");
+    }
+    if (runtime.write_update == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_update for this process");
+    }
+  }
+  if (entry.info.uses_write_after) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include write_after");
+    }
+    if (runtime.write_after == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_after for this process");
+    }
+  }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {
     throw LlvmJitError("JIT frame ABI version mismatch");
   }
@@ -1789,6 +1930,16 @@ LlvmJit::resume(const JitProcessHandle process,
       throw LlvmJitError("generated process returned an invalid frame state");
     }
     return JitResumeStatus::wait_for;
+  case FSIM_JIT_RESUME_STATUS_WAIT_ON:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::wait_on;
+  case FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::wait_sensitivity;
   case FSIM_JIT_RESUME_STATUS_YIELDED:
     if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
       throw LlvmJitError("generated process returned an invalid frame state");
@@ -1847,6 +1998,8 @@ LlvmJit::execute(const JitProcessHandle process,
   case JitResumeStatus::stopped:
     return JitExecutionStatus::stopped;
   case JitResumeStatus::wait_for:
+  case JitResumeStatus::wait_on:
+  case JitResumeStatus::wait_sensitivity:
   case JitResumeStatus::yielded:
     throw LlvmJitError(
         "compiled process suspended during one-shot execution");

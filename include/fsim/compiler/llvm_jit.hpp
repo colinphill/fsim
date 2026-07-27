@@ -57,6 +57,8 @@ enum class JitResumeStatus : std::uint32_t {
   wait_for = FSIM_JIT_RESUME_STATUS_WAIT_FOR,
   yielded = FSIM_JIT_RESUME_STATUS_YIELDED,
   stopped = FSIM_JIT_RESUME_STATUS_STOPPED,
+  wait_on = FSIM_JIT_RESUME_STATUS_WAIT_ON,
+  wait_sensitivity = FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY,
 };
 
 struct JitProcessFrameLayout {
@@ -114,11 +116,12 @@ private:
 /// Narrow LLVM ORC adapter for the first compiled SimIR subset.
 ///
 /// Supported processes may use LoadConstant, ReadSignal, UnaryNot, Binary,
-/// WriteBlocking, Assert, Jump, Branch, WaitFor, Yield, Stop, and Halt. Control
-/// flow is lowered to LLVM basic blocks backed by a versioned caller-owned
-/// frame. Values and signals must be between 1 and 64 bits. WaitOn,
-/// WaitSensitivity, scheduled writes, and control-flow cycles without a
-/// suspension safe point are rejected during add_process().
+/// WriteBlocking, WriteUpdate, WriteAfter, Assert, Jump, Branch, WaitFor,
+/// WaitOn, WaitSensitivity, Yield, Stop, and Halt. Control flow is lowered to
+/// LLVM basic blocks backed by a versioned caller-owned frame. Values crossing
+/// the native ABI must be between 1 and 64 bits; sensitivity-only signals may
+/// be wider. Control-flow cycles without a suspension safe point are rejected
+/// during add_process().
 ///
 /// Persistent caching is opt-in through LlvmJitOptions::cache_directory.
 /// Cached native objects are checksummed and keyed to the complete supported
@@ -159,8 +162,10 @@ public:
   /// Run from the frame PC until completion, failure, Stop, or suspension.
   ///
   /// result must advertise the v1 result ABI and structure size. WaitFor
-  /// reports its delay without scheduling it; Yield reports a next-delta
-  /// suspension. The caller decides when to invoke resume() again.
+  /// reports its delay without scheduling it; WaitOn and WaitSensitivity
+  /// report the immutable SimIR instruction containing their operands; Yield
+  /// reports a next-delta suspension. The caller decides when to invoke
+  /// resume() again.
   [[nodiscard]] JitResumeStatus
   resume(JitProcessHandle process, const fsim_jit_runtime_v1 &runtime,
          fsim_jit_frame_v1 &frame,

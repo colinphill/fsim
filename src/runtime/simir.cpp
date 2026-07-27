@@ -450,6 +450,15 @@ void Interpreter::Impl::execute(ProcessId id) {
         owner.stage_update(signal, std::move(value));
       }
 
+      void write_update_word(
+          const SignalId signal,
+          const Logic4Word value) override {
+        owner.stage_update(
+            signal,
+            PackedLogic4::from_aval_bval(
+                value.width, value.aval, value.bval));
+      }
+
       void write_after(
           const SignalId signal,
           PackedLogic4 value,
@@ -459,6 +468,22 @@ void Interpreter::Impl::execute(ProcessId id) {
             SchedulerPhase::update,
             process,
             [&owner = owner, signal, value = std::move(value)](
+                Scheduler&) mutable {
+              owner.stage_update(signal, std::move(value));
+            });
+      }
+
+      void write_after_word(
+          const SignalId signal,
+          const Logic4Word value,
+          const SimulationTick delay) override {
+        auto packed = PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval);
+        owner.scheduler.schedule_after(
+            delay,
+            SchedulerPhase::update,
+            process,
+            [&owner = owner, signal, value = std::move(packed)](
                 Scheduler&) mutable {
               owner.stage_update(signal, std::move(value));
             });

@@ -42,6 +42,44 @@ module tb;
 endmodule
 )";
   }
+  const auto scheduled_source = directory / "scheduled.sv";
+  {
+    std::ofstream output(scheduled_source);
+    output << R"(
+module scheduled;
+  logic q;
+  initial begin
+    q <= 1'b0;
+    q <= #2 1'b1;
+    #3 $finish;
+  end
+endmodule
+
+module scheduled_overflow;
+  logic q;
+  initial begin
+    #1 q <= #18446744073709551615 1'b1;
+  end
+endmodule
+)";
+  }
+  const auto sensitivity_source = directory / "sensitivity.sv";
+  {
+    std::ofstream output(sensitivity_source);
+    output << R"(
+module sensitivity;
+  logic trigger;
+  logic observed;
+  initial begin
+    trigger = 1'b0;
+    #1 trigger = 1'b1;
+    #1 trigger = 1'b0;
+    #1 $finish;
+  end
+  always @(posedge trigger) observed <= trigger;
+endmodule
+)";
+  }
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -175,7 +213,9 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
             == fsim::app::NativeCacheStatistics{});
 #if defined(FSIM_HAS_LLVM)
         assert(hybrid.compiled_processes > 0);
-        assert(hybrid.compiled_processes < hybrid.process_count);
+        assert(
+            hybrid.compiled_processes
+            <= hybrid.process_count);
 #else
         assert(hybrid.compiled_processes == 0);
 #endif
@@ -208,6 +248,12 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
         std::move(*hybrid_project),
         fsim::app::SimulationEngine::compiled);
     compare_captures(reference, hybrid);
+#if defined(FSIM_HAS_LLVM)
+    assert(hybrid.process_count == 2);
+    assert(
+        hybrid.compiled_processes
+        == hybrid.process_count);
+#endif
 
     auto warm_project = fsim::app::build_project(
         differential_config, differential_diagnostics);
@@ -239,6 +285,183 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
         == fsim::app::NativeCacheStatistics{});
 #endif
   }
+
+  auto scheduled_config = config;
+  scheduled_config.project.name = "scheduled-write-test";
+  scheduled_config.project.top = "sv:work.scheduled";
+  scheduled_config.build.optimization =
+      fsim::project::Optimization::o2;
+  scheduled_config.build.cache_path =
+      directory / "scheduled-write-cache";
+  scheduled_config.source_sets.clear();
+  fsim::project::SourceSet scheduled_sources;
+  scheduled_sources.language =
+      fsim::project::Language::system_verilog;
+  scheduled_sources.standard = "2017";
+  scheduled_sources.library = "work";
+  scheduled_sources.files.push_back(scheduled_source);
+  scheduled_config.source_sets.push_back(
+      std::move(scheduled_sources));
+  fsim::diagnostic::Engine scheduled_diagnostics;
+  auto scheduled_reference_project =
+      fsim::app::build_project(
+          scheduled_config, scheduled_diagnostics);
+  auto scheduled_hybrid_project =
+      fsim::app::build_project(
+          scheduled_config, scheduled_diagnostics);
+  assert(scheduled_reference_project);
+  assert(scheduled_hybrid_project);
+  const auto scheduled_reference = capture_simulation(
+      std::move(*scheduled_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto scheduled_hybrid = capture_simulation(
+      std::move(*scheduled_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      scheduled_reference, scheduled_hybrid);
+  assert(scheduled_hybrid.process_count == 1);
+#if defined(FSIM_HAS_LLVM)
+  assert(scheduled_hybrid.compiled_processes == 1);
+#endif
+  assert(
+      scheduled_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(scheduled_hybrid.result.time == 3);
+  assert(scheduled_hybrid.final_values.size() == 1);
+  assert(scheduled_hybrid.final_values.front() == "1");
+  assert(scheduled_hybrid.changes.size() == 2);
+  assert(
+      std::get<1>(scheduled_hybrid.changes.front())
+      == "0");
+  assert(
+      std::get<2>(scheduled_hybrid.changes.front())
+      == 0);
+  assert(
+      std::get<3>(scheduled_hybrid.changes.front())
+      == 0);
+  assert(
+      std::get<1>(scheduled_hybrid.changes.back())
+      == "1");
+  assert(
+      std::get<2>(scheduled_hybrid.changes.back())
+      == 2);
+  assert(
+      std::get<3>(scheduled_hybrid.changes.back())
+      == 0);
+
+  auto overflow_config = scheduled_config;
+  overflow_config.project.name =
+      "scheduled-write-overflow-test";
+  overflow_config.project.top =
+      "sv:work.scheduled_overflow";
+  overflow_config.build.cache_path =
+      directory / "scheduled-write-overflow-cache";
+  for (const auto engine : {
+           fsim::app::SimulationEngine::interpreter,
+           fsim::app::SimulationEngine::compiled}) {
+    fsim::diagnostic::Engine overflow_diagnostics;
+    auto overflow_project = fsim::app::build_project(
+        overflow_config, overflow_diagnostics);
+    assert(overflow_project);
+    fsim::app::Simulation overflow_simulation(
+        std::move(*overflow_project),
+        overflow_config.run.max_deltas,
+        engine);
+#if defined(FSIM_HAS_LLVM)
+    assert(
+        overflow_simulation.compiled_process_count()
+        == (engine == fsim::app::SimulationEngine::compiled
+                ? 1U
+                : 0U));
+#endif
+    const auto overflow_q =
+        overflow_simulation.find_signal("q");
+    assert(overflow_q);
+    bool overflow_thrown = false;
+    try {
+      (void)overflow_simulation.run();
+    } catch (const std::overflow_error& exception) {
+      overflow_thrown =
+          std::string_view{exception.what()}
+          == "simulation time overflow while scheduling event";
+    }
+    assert(overflow_thrown);
+    assert(overflow_simulation.poisoned());
+    assert(!overflow_simulation.finished());
+    assert(overflow_simulation.now() == 1);
+    assert(
+        overflow_simulation.read_signal(*overflow_q)
+            .to_msb_string()
+        == "X");
+  }
+
+  auto sensitivity_config = config;
+  sensitivity_config.project.name =
+      "sensitivity-wakeup-test";
+  sensitivity_config.project.top =
+      "sv:work.sensitivity";
+  sensitivity_config.build.optimization =
+      fsim::project::Optimization::o2;
+  sensitivity_config.build.cache_path =
+      directory / "sensitivity-cache";
+  sensitivity_config.source_sets.clear();
+  fsim::project::SourceSet sensitivity_sources;
+  sensitivity_sources.language =
+      fsim::project::Language::system_verilog;
+  sensitivity_sources.standard = "2017";
+  sensitivity_sources.library = "work";
+  sensitivity_sources.files.push_back(sensitivity_source);
+  sensitivity_config.source_sets.push_back(
+      std::move(sensitivity_sources));
+  fsim::diagnostic::Engine sensitivity_diagnostics;
+  auto sensitivity_reference_project =
+      fsim::app::build_project(
+          sensitivity_config, sensitivity_diagnostics);
+  auto sensitivity_hybrid_project =
+      fsim::app::build_project(
+          sensitivity_config, sensitivity_diagnostics);
+  assert(sensitivity_reference_project);
+  assert(sensitivity_hybrid_project);
+  const auto sensitivity_trigger =
+      sensitivity_reference_project->design.find_signal(
+          "sensitivity.trigger");
+  const auto sensitivity_observed =
+      sensitivity_reference_project->design.find_signal(
+          "sensitivity.observed");
+  assert(sensitivity_trigger);
+  assert(sensitivity_observed);
+  const auto sensitivity_reference = capture_simulation(
+      std::move(*sensitivity_reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto sensitivity_hybrid = capture_simulation(
+      std::move(*sensitivity_hybrid_project),
+      fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      sensitivity_reference, sensitivity_hybrid);
+  assert(sensitivity_hybrid.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(sensitivity_hybrid.compiled_processes == 2);
+#endif
+  assert(
+      sensitivity_hybrid.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(sensitivity_hybrid.result.time == 3);
+  const decltype(sensitivity_reference.changes)
+      expected_sensitivity_changes = {
+          {*sensitivity_trigger, "0", 0, 0},
+          {*sensitivity_trigger, "1", 1, 0},
+          {*sensitivity_observed, "1", 1, 1},
+          {*sensitivity_trigger, "0", 2, 0},
+      };
+  assert(
+      sensitivity_reference.changes
+      == expected_sensitivity_changes);
+  assert(
+      sensitivity_hybrid.changes
+      == expected_sensitivity_changes);
+  assert((
+      sensitivity_hybrid.final_values
+      == std::vector<std::string>{"0", "1"}));
 
   fsim::diagnostic::Engine mixed_diagnostics;
   const auto mixed_manifest =

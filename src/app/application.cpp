@@ -83,6 +83,8 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.read_signal = read_signal;
     runtime.write_signal = write_signal;
     runtime.assert_failed = assert_failed;
+    runtime.write_update = write_update;
+    runtime.write_after = write_after;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -154,6 +156,14 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
         }
         break;
       }
+      case compiler::JitResumeStatus::wait_on:
+        require_boundary<runtime::simir::WaitOn>(
+            result.instruction, "WaitOn");
+        break;
+      case compiler::JitResumeStatus::wait_sensitivity:
+        require_boundary<runtime::simir::WaitSensitivity>(
+            result.instruction, "WaitSensitivity");
+        break;
       case compiler::JitResumeStatus::yielded:
         require_boundary<runtime::simir::Yield>(
             result.instruction, "yield");
@@ -240,20 +250,69 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       return;
     }
     try {
-      if (state.context == nullptr
-          || signal >= state.signal_widths.size()) {
-        throw std::logic_error("invalid generated write-signal callback");
-      }
-      const auto width = state.signal_widths[signal];
-      if (width == 0 || width > 64) {
-        throw std::logic_error(
-            "generated write-signal callback received an invalid width");
-      }
+      const auto value =
+          checked_write_word(state, signal, aval, bval);
       state.context->write_blocking_word(
-          signal, runtime::Logic4Word{width, aval, bval});
+          signal, value);
     } catch (...) {
       capture_failure(state);
     }
+  }
+
+  static void write_update(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint64_t aval,
+      const std::uint64_t bval) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value =
+          checked_write_word(state, signal, aval, bval);
+      state.context->write_update_word(
+          signal, value);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_after(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint64_t aval,
+      const std::uint64_t bval,
+      const std::uint64_t delay) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value =
+          checked_write_word(state, signal, aval, bval);
+      state.context->write_after_word(
+          signal, value, delay);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  [[nodiscard]] static runtime::Logic4Word checked_write_word(
+      const CallbackState& state,
+      const std::uint32_t signal,
+      const std::uint64_t aval,
+      const std::uint64_t bval) {
+    if (state.context == nullptr
+        || signal >= state.signal_widths.size()) {
+      throw std::logic_error("invalid generated write-signal callback");
+    }
+    const auto width = state.signal_widths[signal];
+    if (width == 0 || width > 64) {
+      throw std::logic_error(
+          "generated write-signal callback received an invalid width");
+    }
+    return {width, aval, bval};
   }
 
   static void assert_failed(

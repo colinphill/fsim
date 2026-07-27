@@ -484,14 +484,14 @@ void test_simir_alternate_executor_context_and_boundaries() {
         require(start == 0, "alternate executor initial PC");
         const auto input = context.read_signal_word(input_);
         context.write_blocking_word(output_, input);
-        context.write_update(
-            output_, PackedLogic4::from_msb_string("0"));
+        context.write_update_word(
+            output_, Logic4Word{1, 0, 0});
         ++calls;
         return {4, 5};
       }
       require(calls == 1 && start == 5, "alternate executor resumed PC");
-      context.write_after(
-          output_, PackedLogic4::from_msb_string("1"), 2);
+      context.write_after_word(
+          output_, Logic4Word{1, 1, 0}, 2);
       ++calls;
       return {7, 8};
     }
@@ -595,6 +595,299 @@ void test_simir_alternate_executor_context_and_boundaries() {
       boundary_probe->starts
           == std::vector<InstructionIndex>{0, 1, 2},
       "alternate boundary executor resume sequence");
+}
+
+void test_simir_alternate_executor_dynamic_wait() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  struct Change {
+    SimulationTick time{};
+    std::uint64_t delta{};
+    std::string value;
+
+    bool operator==(const Change&) const = default;
+  };
+
+  const auto make_driver = [](const SignalId trigger) {
+    Process process;
+    process.id = 0;
+    process.name = "dynamic_wait_driver";
+    process.register_count = 1;
+    process.operations = {
+        LoadConstant{0, PackedLogic4::from_msb_string("1")},
+        WaitFor{1},
+        WriteBlocking{trigger, 0},
+        WaitFor{1},
+        LoadConstant{0, PackedLogic4::from_msb_string("0")},
+        WriteBlocking{trigger, 0},
+        Halt{},
+    };
+    return process;
+  };
+  const auto make_waiter =
+      [](const SignalId trigger, const SignalId output) {
+        Process process;
+        process.id = 1;
+        process.name = "dynamic_waiter";
+        process.register_count = 1;
+        process.operations = {
+            WaitOn{{trigger, trigger}},
+            ReadSignal{0, trigger},
+            WriteUpdate{output, 0},
+            WaitOn{{trigger}},
+            ReadSignal{0, trigger},
+            WriteUpdate{output, 0},
+            Halt{},
+        };
+        return process;
+      };
+
+  Interpreter reference;
+  const auto reference_trigger = reference.add_signal(
+      {"top.trigger", PackedLogic4::from_msb_string("0")});
+  const auto reference_output = reference.add_signal(
+      {"top.output", PackedLogic4::from_msb_string("X")});
+  (void)reference.add_process(make_driver(reference_trigger));
+  (void)reference.add_process(
+      make_waiter(reference_trigger, reference_output));
+  std::vector<Change> reference_changes;
+  reference.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        if (signal == reference_output) {
+          reference_changes.push_back(
+              {time, reference.scheduler().delta(),
+               value.to_msb_string()});
+        }
+      });
+  const auto reference_result = reference.run();
+
+  class DynamicWaitExecutor final : public ProcessExecutor {
+  public:
+    DynamicWaitExecutor(
+        const SignalId trigger, const SignalId output)
+        : trigger_(trigger), output_(output) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start) override {
+      starts.push_back(start);
+      if (start == 0) {
+        return {0, 1};
+      }
+      if (start == 1) {
+        context.write_update_word(
+            output_, context.read_signal_word(trigger_));
+        return {3, 4};
+      }
+      require(start == 4, "dynamic-wait executor resume PC");
+      context.write_update_word(
+          output_, context.read_signal_word(trigger_));
+      return {6, 7};
+    }
+
+    std::vector<InstructionIndex> starts;
+
+  private:
+    SignalId trigger_{};
+    SignalId output_{};
+  };
+
+  Interpreter alternate;
+  const auto alternate_trigger = alternate.add_signal(
+      {"top.trigger", PackedLogic4::from_msb_string("0")});
+  const auto alternate_output = alternate.add_signal(
+      {"top.output", PackedLogic4::from_msb_string("X")});
+  (void)alternate.add_process(make_driver(alternate_trigger));
+  const auto alternate_waiter = alternate.add_process(
+      make_waiter(alternate_trigger, alternate_output));
+  auto executor = std::make_unique<DynamicWaitExecutor>(
+      alternate_trigger, alternate_output);
+  auto* const executor_probe = executor.get();
+  alternate.set_process_executor(
+      alternate_waiter, std::move(executor));
+  std::vector<Change> alternate_changes;
+  alternate.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        if (signal == alternate_output) {
+          alternate_changes.push_back(
+              {time, alternate.scheduler().delta(),
+               value.to_msb_string()});
+        }
+      });
+  const auto alternate_result = alternate.run();
+
+  require(
+      reference_result.status == RunStatus::completed
+          && alternate_result.status == reference_result.status
+          && alternate_result.time == reference_result.time
+          && alternate_result.delta == reference_result.delta
+          && alternate_result.callbacks_executed
+              == reference_result.callbacks_executed,
+      "alternate dynamic wait must preserve run completion state");
+  const std::vector<Change> expected{
+      {1, 1, "1"},
+      {2, 1, "0"},
+  };
+  require(
+      reference_changes == expected
+          && alternate_changes == reference_changes
+          && alternate.signal_value(alternate_output)
+              == reference.signal_value(reference_output),
+      "alternate dynamic wait wakeups must match the interpreter");
+  require(
+      executor_probe->starts
+          == std::vector<InstructionIndex>{0, 1, 4},
+      "alternate dynamic-wait frame resume sequence");
+}
+
+void test_simir_alternate_executor_scheduled_word_writes() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto make_process =
+      [](const SignalId update_output,
+         const SignalId zero_delay_output,
+         const SignalId delayed_output) {
+        Process process;
+        process.id = 0;
+        process.name = "scheduled_word_writes";
+        process.register_count = 1;
+        process.operations = {
+            LoadConstant{0, PackedLogic4::from_msb_string("1")},
+            WriteUpdate{update_output, 0},
+            WriteAfter{zero_delay_output, 0, 0},
+            WriteAfter{delayed_output, 0, 3},
+            Halt{},
+        };
+        return process;
+      };
+
+  struct Change {
+    SignalId signal{};
+    SimulationTick time{};
+    std::uint64_t delta{};
+    SchedulerPhase phase = SchedulerPhase::active;
+    std::string value;
+
+    bool operator==(const Change&) const = default;
+  };
+
+  Interpreter reference;
+  const auto reference_update = reference.add_signal(
+      {"top.update", PackedLogic4::from_msb_string("0")});
+  const auto reference_zero = reference.add_signal(
+      {"top.zero_delay", PackedLogic4::from_msb_string("0")});
+  const auto reference_delayed = reference.add_signal(
+      {"top.delayed", PackedLogic4::from_msb_string("0")});
+  (void)reference.add_process(make_process(
+      reference_update, reference_zero, reference_delayed));
+  std::vector<Change> reference_changes;
+  reference.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        const auto phase = reference.scheduler().current_phase();
+        require(
+            phase.has_value(),
+            "reference scheduled write must occur in a phase");
+        reference_changes.push_back(
+            {signal,
+             time,
+             reference.scheduler().delta(),
+             *phase,
+             value.to_msb_string()});
+      });
+  const auto reference_result = reference.run();
+
+  class ScheduledExecutor final : public ProcessExecutor {
+  public:
+    ScheduledExecutor(
+        const SignalId update_output,
+        const SignalId zero_delay_output,
+        const SignalId delayed_output)
+        : update_output_(update_output),
+          zero_delay_output_(zero_delay_output),
+          delayed_output_(delayed_output) {}
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start) override {
+      require(start == 0, "scheduled executor initial PC");
+      const Logic4Word one{1, 1, 0};
+      context.write_update_word(update_output_, one);
+      context.write_after_word(zero_delay_output_, one, 0);
+      context.write_after_word(delayed_output_, one, 3);
+      require(
+          context.read_signal_word(update_output_).aval == 0
+              && context.read_signal_word(zero_delay_output_).aval == 0
+              && context.read_signal_word(delayed_output_).aval == 0,
+          "scheduled writes must not be visible during the active process");
+      return {4, 5};
+    }
+
+  private:
+    SignalId update_output_{};
+    SignalId zero_delay_output_{};
+    SignalId delayed_output_{};
+  };
+
+  Interpreter alternate;
+  const auto alternate_update = alternate.add_signal(
+      {"top.update", PackedLogic4::from_msb_string("0")});
+  const auto alternate_zero = alternate.add_signal(
+      {"top.zero_delay", PackedLogic4::from_msb_string("0")});
+  const auto alternate_delayed = alternate.add_signal(
+      {"top.delayed", PackedLogic4::from_msb_string("0")});
+  const auto alternate_process = alternate.add_process(make_process(
+      alternate_update, alternate_zero, alternate_delayed));
+  alternate.set_process_executor(
+      alternate_process,
+      std::make_unique<ScheduledExecutor>(
+          alternate_update, alternate_zero, alternate_delayed));
+  std::vector<Change> alternate_changes;
+  alternate.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        const auto phase = alternate.scheduler().current_phase();
+        require(
+            phase.has_value(),
+            "alternate scheduled write must occur in a phase");
+        alternate_changes.push_back(
+            {signal,
+             time,
+             alternate.scheduler().delta(),
+             *phase,
+             value.to_msb_string()});
+      });
+  const auto alternate_result = alternate.run();
+
+  const std::vector<Change> expected_changes = {
+      {reference_update, 0, 0, SchedulerPhase::update, "1"},
+      {reference_zero, 0, 0, SchedulerPhase::update, "1"},
+      {reference_delayed, 3, 0, SchedulerPhase::update, "1"},
+  };
+  require(
+      reference_changes == expected_changes,
+      "interpreted update and delayed writes must commit in update phases");
+  require(
+      alternate_result.status == reference_result.status
+          && alternate_result.time == reference_result.time
+          && alternate_result.delta == reference_result.delta
+          && alternate_result.callbacks_executed
+              == reference_result.callbacks_executed
+          && alternate_changes == reference_changes,
+      "external scheduled word writes must match interpreter scheduling");
+  require(
+      alternate.signal_value(alternate_update).to_msb_string() == "1"
+          && alternate.signal_value(alternate_zero).to_msb_string() == "1"
+          && alternate.signal_value(alternate_delayed).to_msb_string() == "1",
+      "external scheduled word writes must publish their final values");
 }
 
 void test_simir_alternate_executor_zero_delay_and_frame() {
@@ -900,6 +1193,8 @@ int main() {
     test_simir_force_release();
     test_simir_design_stop_identity();
     test_simir_alternate_executor_context_and_boundaries();
+    test_simir_alternate_executor_dynamic_wait();
+    test_simir_alternate_executor_scheduled_word_writes();
     test_simir_alternate_executor_zero_delay_and_frame();
     test_simir_alternate_executor_cpp_exception_containment();
     test_simir_alternate_executor_validation();

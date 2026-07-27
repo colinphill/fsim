@@ -27,7 +27,7 @@ The architectural invariants are:
 | Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive simple VHDL/SV hierarchy, explicit mixed bindings, port aliasing, and boundary checks are current; specialization and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
-| LLVM engine | Compile each design-unit specialization and execute via ORC | The application compiles eligible at-most-64-bit processes as separate LLVM modules and uses typed per-process interpreter fallback; scheduled writes, sensitivity waits, and per-design-unit-specialization module grouping remain planned |
+| LLVM engine | Compile each design-unit specialization and execute via ORC | The application compiles eligible processes as separate LLVM modules and uses typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current, while per-design-unit-specialization module grouping remains planned |
 | Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, value changes, deposit, and a force/release mask are current; full driver/resolution model is planned |
 | Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with time/signal breakpoints are current; source/statement/process debugging and locals are planned |
 
@@ -62,7 +62,8 @@ a lower-state domain must be explicit whenever information could be lost.
 `PackedLogic4` stores common values as inline `aval`/`bval` planes and exposes a
 checked `Logic4Word` representation for widths up to 64 bits. The simulation
 kernel's external-executor boundary and generated-code callbacks share this
-allocation-free word path, while preserving width validation at the boundary.
+allocation-free word path for reads and blocking, update-phase, and delayed
+writes, while preserving signal and width validation at the boundary.
 
 Simulation time is an unsigned 64-bit tick count at one elaborated global
 resolution. The v1 elaborator will select the finest declared VHDL, SV, or
@@ -118,6 +119,11 @@ The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths
 report waits, yields, stop, and halt through the same kernel boundary handler.
+For `WaitOn` and `WaitSensitivity`, the boundary reports only the instruction
+index. The immutable SimIR process continues to own the ordered dynamic signal
+list and the static signal/edge rules, so generated code does not copy scheduler
+metadata across the ABI. The kernel validates the returned instruction and
+sequential resume PC, then installs or observes the corresponding sensitivity.
 Every simulation test added for a compiled operation should run through both
 paths and compare output, final state, assertions, and trace events.
 
@@ -125,30 +131,58 @@ paths and compare output, final state, assertions, and trace events.
 
 Supported compiled builds use LLVM 22.1.8, ORC, and LLJIT. The adapter public
 header exposes no LLVM class. Generated functions receive a versioned C table
-containing opaque context plus signal-read, signal-write, and assertion
-callbacks. CMake requires the exact supported LLVM package when
-`FSIM_LLVM_MODE=ON`; the checked-in Linux LLVM job builds and runs the adapter
-suite against 22.1.8. A separate C11 test verifies that the runtime table is a
-genuine C ABI.
+containing opaque context plus signal-read, blocking-write, assertion,
+update-write, and delayed-write callbacks. The `write_update` and
+`write_after` callbacks are an append-only extension of the v1 table: original
+field offsets remain fixed, and each compiled process checks `struct_size` only
+for the callback tail it actually uses. A process using only the original
+operations therefore remains valid with the original v1 prefix. CMake requires
+the exact supported LLVM package when `FSIM_LLVM_MODE=ON`; the checked-in Linux
+LLVM job builds and runs the adapter suite against 22.1.8. A separate C11 test
+verifies the offsets, extended size, callback handoff, and genuine C ABI.
+`WAIT_ON` and `WAIT_SENSITIVITY` are appended resume-status values 6 and 7;
+values 0 through 5, the v1 result ABI version, and the 24-byte result layout are
+unchanged. The existing instruction field identifies the immutable SimIR wait
+operation, and delay remains meaningful only for `WAIT_FOR`.
 
 The current adapter compiles control-flow graphs containing loads, reads,
 common operations, blocking writes, assertions, jumps, branches, timed waits,
-next-delta yields, design stop, and halt. A versioned caller-owned plain-C frame
-holds the process PC plus separate `aval`/`bval` register planes; a versioned
-result reports completion, assertion failure, timed-wait delay, yield, or stop.
-The caller schedules the reported boundary and later resumes the same frame.
-Loops are accepted when every invocation reaches a `WaitFor` or `Yield` safe
-point; reachable zero-time cycles are rejected. `WriteUpdate`, `WriteAfter`,
-`WaitOn`, `WaitSensitivity`, and values wider than 64 bits remain outside the
-compiled subset. `LlvmJitUnsupportedError` identifies capability misses that
-the application hybrid engine handles with per-process interpreter fallback.
-Malformed SimIR, ABI mismatches, LLVM/cache failures, and generated-runtime
-failures remain fatal `LlvmJitError`s. LLVM-enabled `fsim build` and `fsim run`
-install compiled executors for eligible processes; builds without LLVM remain
+dynamic-signal waits, static-sensitivity waits, next-delta yields,
+update-phase writes, delayed writes, design stop, and halt.
+A versioned caller-owned plain-C frame holds the process PC plus separate
+`aval`/`bval` register planes; a versioned result reports completion, assertion
+failure, timed/dynamic/static wait, yield, or stop. Generated scheduled writes
+hand the checked `Logic4Word` planes directly to the kernel without allocating
+an intermediate wide value. The kernel, rather than generated code, owns
+update coalescing, timestamp overflow checks, sensitivity installation, edge
+rules, and phase scheduling. Loops are accepted when every invocation reaches
+a `WaitFor`, `WaitOn`, `WaitSensitivity`, or `Yield` suspension; reachable
+zero-time cycles without one of these safe boundaries are rejected.
+Sensitivity-only signals may be wider than 64 bits because their values never
+cross the native ABI; any operation that reads or writes a value remains on the
+1-to-64-bit compiled fast path.
+
+Validation rejects empty dynamic or static lists, invalid or zero-width signal
+references, invalid edge kinds, and non-scalar positive/negative-edge signals.
+It also retains the existing register/dataflow, control-flow, boundary
+instruction, resume-PC, frame-state, and ABI checks.
+`LlvmJitUnsupportedError` identifies capability misses that the application
+hybrid engine handles with per-process interpreter fallback. Malformed SimIR,
+ABI mismatches, LLVM/cache failures, and generated-runtime failures remain
+fatal `LlvmJitError`s. LLVM-enabled `fsim build` and `fsim run` install
+compiled executors for eligible processes; builds without LLVM remain
 interpreter-only. LLVM-enabled application tests compare a bounded
 SystemVerilog hierarchy through reference and hybrid execution at O0 and O2,
 and the vertical SV-to-VHDL-to-SV hierarchy through reference and O2 hybrid
-execution.
+execution. A separate exact scheduled-write comparison runs a fully compiled
+O2 process, observes its update at tick 0 and delayed commit at tick 2, and
+checks that callback-contained scheduling overflow is rethrown identically by
+the interpreter and hybrid engines without publishing the delayed value. An
+exact positive-edge application case compiles both of its two processes and
+matches initial trigger publication at tick 0, the rising edge at tick 1/delta
+0, the observer update at tick 1/delta 1, and the falling edge at tick 2/delta
+0. These are bounded SimIR and frontend forms, not complete HDL event-control
+coverage.
 
 The persistent cache primitive provides process-aware per-key locking,
 stale-owner recovery, checksummed entries, temporary-file plus atomic
@@ -160,11 +194,19 @@ signals referenced by that process, plus cache/runtime ABI schemas, exact LLVM
 version, O0/O2 mode, target triple and data layout, and the detected host
 CPU/features. An unrelated elaborated signal-width change therefore reuses the
 process object, while a referenced signal ID or width change invalidates it.
+Scheduled-write operation kind and signal/source identity participate in this
+key, as does the exact 64-bit delay for `WriteAfter`; changing a delayed write
+to an update write or changing its delay cannot reuse the object.
+Wait identity includes `WaitOn` versus `WaitSensitivity`, the ordered dynamic
+signal operands and their widths, and every static sensitivity signal, width,
+and edge kind.
 Cached objects are parsed and checked for the expected architecture before
 reuse; a rejected entry is recompiled and replaced. The frame and resume-result
-ABI versions and structure sizes participate in the key and in frame-layout
-identity. Cold, warm, corruption-recovery, SimIR/referenced-width invalidation,
-and optimization-mode invalidation are tested at O0 and O2.
+ABI versions and structure sizes, including the extended runtime-table size,
+participate in the key and in frame-layout identity. Cold, warm,
+corruption-recovery, SimIR/referenced-width invalidation, scheduled-write
+kind/delay invalidation, wait-kind/operand invalidation, and optimization-mode
+invalidation are tested at O0 and O2.
 
 LLVM-enabled `fsim build` and `fsim run` select this cache beneath the
 configured project cache as `llvm-native`. The adapter and application expose

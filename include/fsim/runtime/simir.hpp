@@ -176,8 +176,25 @@ public:
   }
 
   virtual void write_update(SignalId signal, PackedLogic4 value) = 0;
+  virtual void write_update_word(
+      SignalId signal, const Logic4Word value) {
+    write_update(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval));
+  }
+
   virtual void write_after(SignalId signal, PackedLogic4 value,
                            SimulationTick delay) = 0;
+  virtual void write_after_word(
+      SignalId signal, const Logic4Word value,
+      SimulationTick delay) {
+    write_after(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        delay);
+  }
 };
 
 /// Describes the boundary at which an alternate executor returned control.
