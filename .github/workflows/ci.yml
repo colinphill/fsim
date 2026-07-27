@@ -169,7 +169,9 @@ jobs:
 
   windows-llvm22:
     name: Windows / MSVC / LLVM 22.1.8 / ${{ matrix.configuration }}
-    runs-on: windows-latest
+    # LLVM's official 22.1.8 Windows archive was packaged against the
+    # Visual Studio 2022 DIA SDK and retains that SDK path in its CMake targets.
+    runs-on: windows-2022
     timeout-minutes: 45
     # The official archive uses the release MSVC STL ABI. CL augments every
     # compiler invocation without replacing CMake's /EHsc and configuration

@@ -2,8 +2,12 @@
 #include "fsim/platform/dynamic_library.hpp"
 
 #if defined(_WIN32)
-#  define NOMINMAX
-#  define WIN32_LEAN_AND_MEAN
+#  if !defined(NOMINMAX)
+#    define NOMINMAX
+#  endif
+#  if !defined(WIN32_LEAN_AND_MEAN)
+#    define WIN32_LEAN_AND_MEAN
+#  endif
 #  include <windows.h>
 #else
 #  include <dlfcn.h>

@@ -14,7 +14,9 @@
 #include <thread>
 
 #if defined(_WIN32)
-#  define NOMINMAX
+#  if !defined(NOMINMAX)
+#    define NOMINMAX
+#  endif
 #  include <windows.h>
 #else
 #  include <csignal>

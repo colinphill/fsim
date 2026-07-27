@@ -28,7 +28,9 @@
 #include <utility>
 
 #if defined(_WIN32)
-#  define NOMINMAX
+#  if !defined(NOMINMAX)
+#    define NOMINMAX
+#  endif
 #  include <windows.h>
 #else
 #  if defined(__linux__)
