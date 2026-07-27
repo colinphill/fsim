@@ -426,10 +426,42 @@ public:
         delay);
   }
 
+  /// Notify a kernel-owned event identity from an alternate language
+  /// executor. Immediate notifications re-enter the active worklist at the
+  /// current timestamp. Delta notifications enter the next delta; non-zero
+  /// delays enter the active worklist at the requested future timestamp.
+  virtual void notify_event(
+      SignalId,
+      SimulationTick,
+      bool) {
+    throw std::logic_error{
+        "alternate process executor does not support event notification"};
+  }
+
   /// True when an embedding debugger currently requests source boundaries.
   [[nodiscard]] virtual bool execution_points_enabled() const noexcept {
     return false;
   }
+};
+
+enum class ExternalSuspendKind : std::uint8_t {
+  simir_boundary,
+  wait_for,
+  wait_on,
+  wait_sensitivity,
+  yield,
+  halt,
+};
+
+/// A dynamic suspension selected by an alternate language executor.
+///
+/// This is deliberately expressed in common-kernel terms. The executor may
+/// choose the boundary at run time (for example SystemC `next_trigger`) but
+/// cannot schedule or own fanout itself.
+struct ExternalSuspension {
+  ExternalSuspendKind kind{ExternalSuspendKind::simir_boundary};
+  SimulationTick delay{};
+  std::vector<Sensitivity> sensitivity;
 };
 
 /// Describes the boundary at which an alternate executor returned control.
@@ -437,9 +469,19 @@ public:
 /// `instruction` identifies a WaitFor, WaitOn, WaitSensitivity, Yield, Stop,
 /// or Halt operation. `next_instruction` is the executor's persistent resume
 /// PC and must be exactly the following operation for the current SimIR.
+/// `external` overrides the placeholder SimIR boundary for an executor whose
+/// suspension kind is selected dynamically.
 struct ProcessResumeResult {
+  ProcessResumeResult() = default;
+  constexpr ProcessResumeResult(
+      const InstructionIndex boundary_instruction,
+      const InstructionIndex resume_instruction) noexcept
+      : instruction(boundary_instruction),
+        next_instruction(resume_instruction) {}
+
   InstructionIndex instruction{};
   InstructionIndex next_instruction{};
+  ExternalSuspension external;
 };
 
 enum class ExecutionPointKind : std::uint8_t {

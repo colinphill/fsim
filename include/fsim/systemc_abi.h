@@ -52,6 +52,12 @@ typedef enum fsim_sc_value_encoding_v1 {
     FSIM_SC_UNSIGNED = 3
 } fsim_sc_value_encoding_v1;
 
+typedef enum fsim_sc_notification_kind_v1 {
+    FSIM_SC_NOTIFY_IMMEDIATE = 0,
+    FSIM_SC_NOTIFY_DELTA = 1,
+    FSIM_SC_NOTIFY_TIMED = 2
+} fsim_sc_notification_kind_v1;
+
 typedef struct fsim_sc_value_view_v1 {
     /*
      * Packed planes are byte-addressed, least-significant bit first.
@@ -107,10 +113,13 @@ typedef struct fsim_sc_host_v1 {
         void* context, fsim_sc_handle_v1 object, fsim_sc_value_view_v1* result);
     fsim_sc_status_v1 (*write_value)(
         void* context, fsim_sc_handle_v1 object, const fsim_sc_value_view_v1* value);
-    fsim_sc_status_v1 (*wait_time)(void* context, uint64_t ticks);
+    fsim_sc_status_v1 (*wait_time)(
+        void* context, uint64_t delay_femtoseconds);
     fsim_sc_status_v1 (*wait_event)(void* context, fsim_sc_handle_v1 event);
     fsim_sc_status_v1 (*notify_event)(
-        void* context, fsim_sc_handle_v1 event, uint64_t delay_ticks);
+        void* context,
+        fsim_sc_handle_v1 event,
+        uint64_t delay_femtoseconds);
     void (*report)(void* context, int severity, const char* message);
 
     /*
@@ -141,6 +150,21 @@ typedef struct fsim_sc_host_v1 {
         void* context,
         fsim_sc_handle_v1 process,
         uint8_t initialize);
+
+    /*
+     * Append-only event surface. Time arguments are exact femtoseconds at
+     * this ABI; the host converts them to the elaborated global tick.
+     */
+    fsim_sc_status_v1 (*register_event)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* name,
+        fsim_sc_handle_v1* result);
+    fsim_sc_status_v1 (*notify_event_mode)(
+        void* context,
+        fsim_sc_handle_v1 event,
+        uint64_t delay_femtoseconds,
+        fsim_sc_notification_kind_v1 kind);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

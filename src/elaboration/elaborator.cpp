@@ -3075,6 +3075,22 @@ private:
                 objects.emplace(port.handle, aliases.at(port.name));
             }
         }
+        for (const auto& event : instance.events) {
+            frontend::Type type;
+            type.domain = frontend::ValueDomain::Bit2;
+            type.spelling = "systemc.event";
+            const frontend::SignalDeclaration declaration{
+                event.name,
+                std::move(type),
+                frontend::PortDirection::Unknown,
+                false,
+                {}};
+            const auto signal =
+                add_owned_signal(declaration, path, aliases);
+            if (signal) {
+                objects.emplace(event.handle, *signal);
+            }
+        }
 
         SystemCInstanceInfo info;
         info.id = static_cast<std::uint32_t>(
@@ -3087,6 +3103,13 @@ private:
                 signal != aliases.end()) {
                 info.ports.push_back(
                     {port.name, port.handle, signal->second});
+            }
+        }
+        for (const auto& event : instance.events) {
+            if (const auto signal = objects.find(event.handle);
+                signal != objects.end()) {
+                info.events.push_back(
+                    {event.name, event.handle, signal->second});
             }
         }
         design_.systemc_instances_.push_back(std::move(info));

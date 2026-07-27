@@ -64,8 +64,34 @@ class SystemCMethodExecutor final
   [[nodiscard]] runtime::simir::ProcessResumeResult resume(
       runtime::simir::ProcessExecutionContext& context,
       runtime::simir::InstructionIndex) override {
-    hierarchy_->invoke_method(process_, context);
-    return {0, 1};
+    const auto suspension =
+        hierarchy_->invoke_method(process_, context);
+    runtime::simir::ProcessResumeResult result{0, 1};
+    switch (suspension.kind) {
+    case systemc::MethodSuspendKind::halt:
+      result.external.kind =
+          runtime::simir::ExternalSuspendKind::halt;
+      break;
+    case systemc::MethodSuspendKind::static_sensitivity:
+      result.external.kind =
+          runtime::simir::ExternalSuspendKind::wait_sensitivity;
+      break;
+    case systemc::MethodSuspendKind::wait_for:
+      result.external.kind =
+          suspension.delay_ticks == 0
+              ? runtime::simir::ExternalSuspendKind::yield
+              : runtime::simir::ExternalSuspendKind::wait_for;
+      result.external.delay = suspension.delay_ticks;
+      break;
+    case systemc::MethodSuspendKind::wait_event:
+      result.external.kind =
+          runtime::simir::ExternalSuspendKind::wait_on;
+      result.external.sensitivity.push_back(
+          {suspension.event_signal,
+           runtime::simir::EdgeKind::any});
+      break;
+    }
+    return result;
   }
 
  private:
@@ -828,6 +854,10 @@ elaboration::SystemCInstanceDescription systemc_description(
           {sensitivity.object, sensitivity.edge});
     }
     result.processes.push_back(std::move(converted));
+  }
+  result.events.reserve(module.events.size());
+  for (const auto& event : module.events) {
+    result.events.push_back({event.handle, event.name});
   }
   return result;
 }
@@ -2874,6 +2904,25 @@ std::optional<BuiltProject> build_project(
     systemc_plugins.push_back(std::move(compiled.library_path));
   }
   const auto resolution = effective_resolution(config, checked->parsed);
+  if (systemc_hierarchy) {
+    const auto parsed_resolution = magnitude_and_unit(resolution);
+    const auto factor =
+        parsed_resolution
+            ? unit_femtoseconds(parsed_resolution->unit)
+            : std::nullopt;
+    if (!parsed_resolution || !factor
+        || parsed_resolution->magnitude == 0
+        || parsed_resolution->magnitude
+            > std::numeric_limits<std::uint64_t>::max() / *factor) {
+      diagnostics.error(
+          "FSIM-SC-A007",
+          "cannot configure SystemC with project time resolution '"
+              + resolution + "'");
+      return std::nullopt;
+    }
+    systemc_hierarchy->set_time_resolution(
+        parsed_resolution->magnitude * *factor);
+  }
   if (!validate_declared_time_precisions(
           checked->parsed, resolution, diagnostics)
       || !normalize_delays(
@@ -2912,6 +2961,10 @@ std::optional<BuiltProject> build_project(
         for (const auto& port : instance.ports) {
           systemc_hierarchy->bind_runtime_object(
               port.native_handle, port.signal);
+        }
+        for (const auto& event : instance.events) {
+          systemc_hierarchy->bind_runtime_object(
+              event.native_handle, event.signal);
         }
       }
     } catch (const std::exception& error) {

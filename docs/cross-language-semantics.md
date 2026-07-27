@@ -38,11 +38,14 @@ systemc:plugin.factory
 ```
 
 The schema-1 loader validates these prefixes. The current elaborator resolves
-VHDL and SV targets, recursively constructs their instance hierarchy, and
-applies named or positional whole-signal port connections. A binding whose
-instance path is absent is an error; cross-language targets are never inferred
-from the source unit name. Generic/parameter specialization and executable
-`systemc:` factory targets are forthcoming.
+VHDL and SV targets and constructs typed `systemc:` factories, recursively
+building a common hierarchy with named or positional whole-signal port
+connections. SystemC factories may declare typed foreign-child placeholders
+whose full paths bind back to VHDL or SV. Thus every VHDL/SV/SystemC
+parent→child language direction is explicit and supported by the same
+elaborator. A binding whose instance path is absent is an error;
+cross-language targets are never inferred from the source unit name.
+Generic/parameter specialization remains forthcoming.
 
 ## Boundary types
 

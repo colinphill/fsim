@@ -13,9 +13,10 @@ cache, and typed factory construction integrated into common hierarchy
 elaboration. A project build collects the configured SystemC sources into one
 shared library, loads it, constructs the requested factory instances, and
 retains their native objects for the design lifetime. Common-kernel SystemC
-execution now covers statically sensitive `SC_METHOD` callbacks and port
-updates. Dynamic sensitivity/events and fiber-backed thread execution are
-still work in progress.
+execution now covers statically sensitive `SC_METHOD` callbacks, dynamic
+time/event `next_trigger`, named-event notification, and port updates.
+Event cancellation, internal primitive channels, and fiber-backed thread
+execution are still work in progress.
 
 ## Source inclusion
 
@@ -66,6 +67,9 @@ common elaborator assigns hierarchy/object/process IDs, checks every port and
 conversion, detects recursive instantiation, and applies the same explicit
 resolver policy. A SystemC parent may therefore contain an HDL child which
 contains another bound SystemC child. Any language may be the project top.
+This covers VHDL→SystemC, SV→SystemC, SystemC→VHDL, and SystemC→SV alongside
+the ordinary VHDL↔SV directions; SystemC is a peer hierarchy language rather
+than a leaf-only foreign model.
 
 The SystemC-facing ABI exposes this through an elaboration factory plus
 append-only host callbacks for registered ports and typed foreign-child
@@ -169,13 +173,20 @@ factory.
 
 The current common-kernel path executes `SC_METHOD` callbacks to completion
 with default time-zero initialization or `dont_initialize()`, static
-any-change sensitivity, and scalar positive/negative edge sensitivity.
-Reads observe committed common-runtime values; writes enter the common update
-phase and awaken dependent HDL or SystemC processes in the next delta.
-Callback exceptions are contained at the native boundary and poison only the
-affected simulation session.
+any-change/scalar-edge sensitivity, and dynamic `next_trigger(sc_time)` or
+`next_trigger(sc_event)` selection. Reads observe committed common-runtime
+values; writes enter the common update phase and awaken dependent HDL or
+SystemC processes in the next delta. Callback exceptions are contained at the
+native boundary and poison only the affected simulation session.
 
-Dynamic `next_trigger` and named-event notification remain pending.
+Named `sc_event` objects receive opaque elaboration handles. `notify()` is
+immediate, `notify(SC_ZERO_TIME)` enters the next delta, and a non-zero timed
+notification enters the future timestamp heap. SystemC time values cross the
+native ABI in femtoseconds and must divide exactly by the elaborated global
+tick. The common kernel owns the resulting wait lists and event scheduling, so
+the interpreter and hybrid LLVM execution paths use identical semantics.
+Multiple pending-notification replacement/cancellation and event
+lists/expressions are not implemented yet.
 `SC_THREAD` and `SC_CTHREAD` declarations are retained and diagnosed as
 non-executable until suspension is implemented with Boost.Context 1.91.0
 fibers on x86-64 ELF and Windows PE. A fiber is a suspension mechanism only:
@@ -189,11 +200,10 @@ SystemC work participates in fsim's common phase policy:
 - channel writes become visible in the common update phase; and
 - changed channels awaken dependents in the next delta.
 
-The current header routes timed/event waits and notifications through host
-callbacks when a host is bound, but those callbacks still report unsupported.
-Static method registration, port reads, and update-phase port writes are
-active. The facade does not yet provide dynamic sensitivity, internal
-primitive-channel registration, or fiber suspension.
+The facade and native host callbacks implement dynamic method sensitivity,
+port reads, update-phase port writes, and named-event notification. It does
+not yet provide event cancellation, internal primitive-channel registration,
+or fiber suspension.
 
 ## Deliberately outside v1
 

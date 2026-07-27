@@ -117,6 +117,8 @@ namespace detail {
 
 inline thread_local const fsim_sc_host_v1* current_host = nullptr;
 inline thread_local fsim_sc_handle_v1 current_module = 0;
+inline thread_local fsim_sc_process_kind_v1 current_process_kind =
+    FSIM_SC_THREAD;
 
 inline void bind_host(const fsim_sc_host_v1* host) noexcept {
     current_host = host;
@@ -166,33 +168,59 @@ template <typename T>
 template <typename T>
 void write_object(fsim_sc_handle_v1 object, const T& value);
 
+[[nodiscard]] fsim_sc_handle_v1 register_event(const char* name);
+
 } // namespace detail
 
 class sc_event {
 public:
-    sc_event() = default;
+    sc_event() : handle_(detail::register_event(nullptr)) {}
+    explicit sc_event(const char* name)
+        : handle_(detail::register_event(name)) {}
     explicit sc_event(const fsim_sc_handle_v1 handle) noexcept : handle_(handle) {}
 
-    void notify(const sc_time delay = SC_ZERO_TIME) const {
-        if (detail::current_host == nullptr || detail::current_host->notify_event == nullptr) {
-            throw std::logic_error{
-                "sc_event::notify requires an active fsim SystemC process"};
-        }
-        detail::check_status(
-            detail::current_host->notify_event(
-                detail::current_host->context, handle_, delay.value()),
-            "notify event");
+    void notify() const {
+        notify_impl(SC_ZERO_TIME, FSIM_SC_NOTIFY_IMMEDIATE);
+    }
+
+    void notify(const sc_time delay) const {
+        notify_impl(
+            delay,
+            delay.is_zero()
+                ? FSIM_SC_NOTIFY_DELTA
+                : FSIM_SC_NOTIFY_TIMED);
     }
 
     [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept { return handle_; }
 
 private:
+    void notify_impl(
+        const sc_time delay,
+        const fsim_sc_notification_kind_v1 kind) const {
+        if (detail::current_host == nullptr
+            || detail::current_host->notify_event_mode == nullptr) {
+            throw std::logic_error{
+                "sc_event::notify requires an active fsim SystemC process"};
+        }
+        detail::check_status(
+            detail::current_host->notify_event_mode(
+                detail::current_host->context,
+                handle_,
+                delay.value(),
+                kind),
+            "notify event");
+    }
+
     fsim_sc_handle_v1 handle_{};
 };
 
 inline void wait(const sc_time delay) {
     if (detail::current_host == nullptr || detail::current_host->wait_time == nullptr) {
         throw std::logic_error{"sc_core::wait requires an active fsim SystemC process"};
+    }
+    if (detail::current_process_kind == FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "SC_METHOD cannot call wait; use next_trigger"};
     }
     detail::check_status(
         detail::current_host->wait_time(detail::current_host->context, delay.value()),
@@ -202,6 +230,10 @@ inline void wait(const sc_time delay) {
 inline void wait(const sc_event& event) {
     if (detail::current_host == nullptr || detail::current_host->wait_event == nullptr) {
         throw std::logic_error{"sc_core::wait requires an active fsim SystemC process"};
+    }
+    if (detail::current_process_kind == FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "SC_METHOD cannot call wait; use next_trigger"};
     }
     detail::check_status(
         detail::current_host->wait_event(
@@ -214,11 +246,27 @@ inline void wait() {
 }
 
 inline void next_trigger(const sc_time delay) {
-    wait(delay);
+    if (detail::current_host == nullptr
+        || detail::current_host->wait_time == nullptr) {
+        throw std::logic_error{
+            "sc_core::next_trigger requires an active fsim SystemC process"};
+    }
+    detail::check_status(
+        detail::current_host->wait_time(
+            detail::current_host->context, delay.value()),
+        "set next time trigger");
 }
 
 inline void next_trigger(const sc_event& event) {
-    wait(event);
+    if (detail::current_host == nullptr
+        || detail::current_host->wait_event == nullptr) {
+        throw std::logic_error{
+            "sc_core::next_trigger requires an active fsim SystemC process"};
+    }
+    detail::check_status(
+        detail::current_host->wait_event(
+            detail::current_host->context, event.native_handle()),
+        "set next event trigger");
 }
 
 class sc_module_name {
@@ -412,6 +460,8 @@ private:
             return;
         }
         detail::host_scope scope{process->host};
+        const auto previous_kind = detail::current_process_kind;
+        detail::current_process_kind = process->kind;
         try {
             process->entry();
         } catch (const std::exception& exception) {
@@ -427,6 +477,7 @@ private:
                     "SystemC process threw an unknown exception");
             }
         }
+        detail::current_process_kind = previous_kind;
     }
 
     std::string name_;
@@ -960,6 +1011,25 @@ template <typename T>
     return handle;
 }
 
+inline fsim_sc_handle_v1 register_event(const char* name) {
+    if (current_host == nullptr || current_module == 0) {
+        return 0;
+    }
+    if (current_host->register_event == nullptr) {
+        throw std::logic_error{
+            "SystemC event requires an event-capable elaboration host"};
+    }
+    fsim_sc_handle_v1 handle = 0;
+    check_status(
+        current_host->register_event(
+            current_host->context,
+            current_module,
+            name,
+            &handle),
+        "register event");
+    return handle;
+}
+
 [[nodiscard]] inline std::size_t value_plane_size(
     const std::uint32_t width) noexcept {
     return (static_cast<std::size_t>(width) + 7U) / 8U;
@@ -1108,7 +1178,9 @@ template <typename Module>
         || host->read_value == nullptr
         || host->write_value == nullptr
         || host->report == nullptr
-        || host->set_process_initialize == nullptr) {
+        || host->set_process_initialize == nullptr
+        || host->register_event == nullptr
+        || host->notify_event_mode == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     return registrar->register_elaboration_factory(

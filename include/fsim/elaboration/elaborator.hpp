@@ -63,6 +63,11 @@ struct ExternalProcess {
     bool initialize{true};
 };
 
+struct ExternalEvent {
+    std::uint64_t handle{};
+    std::string name;
+};
+
 /// Immutable, ABI-neutral description produced by one constructed SystemC
 /// elaboration factory. `path` is the full DesignIR instance path and `target`
 /// is the canonical `systemc:plugin.factory` manifest spelling.
@@ -74,6 +79,7 @@ struct SystemCInstanceDescription {
     std::vector<ExternalPort> ports;
     std::vector<ForeignChild> foreign_children;
     std::vector<ExternalProcess> processes;
+    std::vector<ExternalEvent> events;
 };
 
 [[nodiscard]] ElaborationResult elaborate(
@@ -133,12 +139,19 @@ struct SystemCPortInfo {
     runtime::simir::SignalId signal{};
 };
 
+struct SystemCEventInfo {
+    std::string name;
+    std::uint64_t native_handle{};
+    runtime::simir::SignalId signal{};
+};
+
 struct SystemCInstanceInfo {
     std::uint32_t id{};
     std::string target;
     std::string instance;
     std::uint64_t native_handle{};
     std::vector<SystemCPortInfo> ports;
+    std::vector<SystemCEventInfo> events;
 };
 
 struct SystemCProcessInfo {

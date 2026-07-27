@@ -682,6 +682,43 @@ SC_MODULE(ThrowingMethod) {
   }
 };
 
+SC_MODULE(DynamicEvents) {
+  sc_core::sc_out<sc_dt::sc_uint<8>> count{"count"};
+  sc_core::sc_event pulse{"pulse"};
+  sc_dt::sc_uint<8> observed{};
+  unsigned producer_state{};
+
+  SC_CTOR(DynamicEvents) {
+    SC_METHOD(produce);
+    SC_METHOD(consume);
+  }
+
+  void produce() {
+    if (producer_state == 0) {
+      ++producer_state;
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else if (producer_state == 1) {
+      ++producer_state;
+      pulse.notify();
+      next_trigger(sc_core::sc_time{2, sc_core::SC_NS});
+    } else if (producer_state == 2) {
+      ++producer_state;
+      pulse.notify(sc_core::SC_ZERO_TIME);
+      next_trigger(sc_core::sc_time{2, sc_core::SC_NS});
+    } else {
+      pulse.notify(sc_core::sc_time{1, sc_core::SC_NS});
+    }
+  }
+
+  void consume() {
+    if (observed.to_uint64() != 0) {
+      count.write(observed);
+    }
+    observed = observed.to_uint64() + 1;
+    next_trigger(pulse);
+  }
+};
+
 namespace {
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
@@ -809,8 +846,14 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (edge_status != FSIM_SC_OK) {
     return edge_status;
   }
-  return fsim::systemc::register_module_factory<ThrowingMethod>(
+  const auto throwing_status =
+      fsim::systemc::register_module_factory<ThrowingMethod>(
       host, registrar, "throwing_method");
+  if (throwing_status != FSIM_SC_OK) {
+    return throwing_status;
+  }
+  return fsim::systemc::register_module_factory<DynamicEvents>(
+      host, registrar, "dynamic_events");
 }
 )";
   }
@@ -1269,6 +1312,56 @@ end architecture rtl;
   }
   assert(caught_systemc_failure);
   assert(throwing_method_simulation.poisoned());
+
+  auto dynamic_event_config = systemc_method_top_config;
+  dynamic_event_config.project.top =
+      "systemc:models.dynamic_events";
+  fsim::diagnostic::Engine dynamic_event_diagnostics;
+  auto dynamic_event_reference = fsim::app::build_project(
+      dynamic_event_config, dynamic_event_diagnostics);
+  auto dynamic_event_compiled = fsim::app::build_project(
+      dynamic_event_config, dynamic_event_diagnostics);
+  assert(dynamic_event_reference);
+  assert(dynamic_event_compiled);
+  assert(
+      dynamic_event_reference->design.systemc_processes().size()
+      == 2);
+  assert(
+      dynamic_event_reference->design.systemc_instances().size()
+      == 1);
+  assert(
+      dynamic_event_reference->design.systemc_instances().front()
+          .events.size()
+      == 1);
+  const auto run_dynamic_events =
+      [&](fsim::app::BuiltProject project,
+          const fsim::app::SimulationEngine engine) {
+        const auto count =
+            project.design.find_signal("dynamic_events.count");
+        assert(count);
+        fsim::app::Simulation simulation{
+            std::move(project),
+            dynamic_event_config.run.max_deltas,
+            engine};
+        const auto result = simulation.run();
+        return std::pair{
+            result,
+            simulation.read_signal(*count).to_msb_string()};
+      };
+  const auto dynamic_reference = run_dynamic_events(
+      std::move(*dynamic_event_reference),
+      fsim::app::SimulationEngine::interpreter);
+  const auto dynamic_compiled = run_dynamic_events(
+      std::move(*dynamic_event_compiled),
+      fsim::app::SimulationEngine::compiled);
+  assert(
+      dynamic_reference.first.status
+      == fsim::runtime::RunStatus::completed);
+  assert(dynamic_reference.first.time == 6);
+  assert(dynamic_reference.second == "00000011");
+  assert(dynamic_reference.first.status == dynamic_compiled.first.status);
+  assert(dynamic_reference.first.time == dynamic_compiled.first.time);
+  assert(dynamic_reference.second == dynamic_compiled.second);
 
   struct CapturedSimulation {
     fsim::runtime::RunResult result;

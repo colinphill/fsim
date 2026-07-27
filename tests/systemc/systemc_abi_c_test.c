@@ -10,6 +10,14 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, connect_foreign_port),
     "process initialization must remain an append-only host field");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, register_event)
+        > offsetof(fsim_sc_host_v1, set_process_initialize),
+    "event registration must remain an append-only host field");
+_Static_assert(
+    offsetof(fsim_sc_host_v1, notify_event_mode)
+        > offsetof(fsim_sc_host_v1, register_event),
+    "notification modes must remain an append-only host field");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");

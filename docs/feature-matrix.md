@@ -193,13 +193,12 @@ version is development evidence only.
 | SC-008 | `SC_THREAD`/`SC_CTHREAD` suspension through Boost.Context 1.91 fibers | v1 target | — | — | — | — |
 | SC-009 | Common fixed-width signed/unsigned operations and logic-vector semantics needed by signal-level models | v1 target | [facade smoke coverage only](../tests/systemc/systemc_header_test.cpp) | — | — | — |
 | SC-010 | Manifest SystemC source sets compiled, cached, loaded, and retained through application build/simulation lifetime | execute | [application SystemC source test](../tests/app/application_test.cpp) | [legacy untyped factory rejection](../tests/app/application_test.cpp) | [application build and typed construction](../tests/app/application_test.cpp) | [cold/warm build plus executable callbacks](../tests/app/application_test.cpp) |
-| SC-011 | Bidirectional elaboration-time hierarchy: HDL instance to SystemC factory and SystemC typed foreign-child placeholder to VHDL/SV target | execute | [typed sample factory](../tests/systemc/sample_plugin.cpp) | [missing foreign-child binding](../tests/elaboration/elaborator_test.cpp) | [SV and VHDL hierarchy paths](../tests/elaboration/elaborator_test.cpp) | [compiled plug-in in both directions](../tests/app/application_test.cpp) |
-| SC-012 | Dynamic `next_trigger`, named events/notifications, internal primitive-channel registration, and cancellation semantics | v1 target | — | — | — | — |
+| SC-011 | Peer, bidirectional elaboration-time hierarchy: VHDL/SV instance to SystemC factory and SystemC typed foreign-child placeholder to VHDL/SV target, covering all six parent→child language directions | execute | [typed sample factory](../tests/systemc/sample_plugin.cpp) | [missing foreign-child binding](../tests/elaboration/elaborator_test.cpp) | [SV and VHDL hierarchy paths](../tests/elaboration/elaborator_test.cpp) | [compiled plug-in in both directions](../tests/app/application_test.cpp) |
+| SC-012 | Dynamic time/event `next_trigger` plus immediate, delta, and exactly representable timed named-event notification in `SC_METHOD`; cancellation and internal primitive-channel registration remain | execute | [facade dynamic-event module](../tests/app/application_test.cpp) | [unbound-event rejection](../tests/systemc/systemc_header_test.cpp) | [opaque event metadata and common-kernel suspension](../src/elaboration/elaborator.cpp) | [interpreter/hybrid ordering equivalence](../tests/app/application_test.cpp) |
 
-“Execute” in these rows is bounded by the named evidence. SC-007 covers
-run-to-completion methods on registered external ports; it does not imply the
-dynamic event/channel behavior tracked separately by SC-012 or the fibers in
-SC-008.
+“Execute” in these rows is bounded by the named evidence. SC-012 does not yet
+claim event cancellation, event lists/expressions, or internal primitive
+channels, and it does not imply the fibers tracked by SC-008.
 
 ## Mixed-language behavior
 

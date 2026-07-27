@@ -702,6 +702,11 @@ struct Interpreter::Impl {
   void handle_boundary(ProcessState& process,
                        InstructionIndex instruction,
                        InstructionIndex next_instruction);
+  void handle_external_boundary(
+      ProcessState& process,
+      InstructionIndex instruction,
+      InstructionIndex next_instruction,
+      const ExternalSuspension& suspension);
   void execute(ProcessId id);
 
   void queue_at(ProcessId id, SimulationTick time) {
@@ -753,6 +758,38 @@ struct Interpreter::Impl {
           state.queued = false;
           execute(id);
         });
+  }
+
+  void queue_active_current(ProcessId id) {
+    auto& process = get_process(id);
+    if (process.halted || process.queued) {
+      return;
+    }
+    process.queued = true;
+    scheduler.schedule(
+        SchedulerPhase::active, id,
+        [this, id](Scheduler&) {
+          auto& state = get_process(id);
+          state.queued = false;
+          state.waiting_on_static = false;
+          remove_dynamic_wait(state);
+          execute(id);
+        });
+  }
+
+  void trigger_event(const SignalId event) {
+    (void)get_signal(event);
+    for (const auto& sensitivity : static_fanout[event]) {
+      auto& process = get_process(sensitivity.process);
+      if (process.waiting_on_static) {
+        queue_active_current(sensitivity.process);
+      }
+    }
+    // Copy because queue_active_current removes dynamic registrations.
+    const auto dynamic = dynamic_fanout[event];
+    for (const auto& sensitivity : dynamic) {
+      queue_active_current(sensitivity.process);
+    }
   }
 
   void notify_execution_point(
@@ -1080,6 +1117,90 @@ void Interpreter::Impl::handle_boundary(
       "executor returned at an operation that is not a kernel boundary");
 }
 
+void Interpreter::Impl::handle_external_boundary(
+    ProcessState& process,
+    const InstructionIndex instruction,
+    const InstructionIndex next_instruction,
+    const ExternalSuspension& suspension) {
+  if (instruction >= process.program.operations.size()) {
+    process.pc = instruction;
+    fail(process, "executor returned an invalid dynamic boundary instruction");
+  }
+  if (instruction == std::numeric_limits<InstructionIndex>::max()
+      || next_instruction != instruction + 1) {
+    process.pc = instruction;
+    fail(
+        process,
+        "executor returned a non-sequential dynamic boundary resume "
+        "instruction");
+  }
+  process.pc = next_instruction;
+
+  switch (suspension.kind) {
+  case ExternalSuspendKind::simir_boundary:
+    process.pc = instruction;
+    fail(process, "missing dynamic suspension kind");
+  case ExternalSuspendKind::wait_for:
+    if (suspension.delay == 0) {
+      queue_next_delta(process.program.id);
+    } else {
+      if (suspension.delay
+          > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
+        process.pc = instruction;
+        fail(process, "simulation time overflow in dynamic wait");
+      }
+      queue_at(
+          process.program.id, scheduler.now() + suspension.delay);
+    }
+    break;
+  case ExternalSuspendKind::wait_on:
+    if (suspension.sensitivity.empty()) {
+      process.pc = instruction;
+      fail(process, "dynamic wait requires at least one event");
+    }
+    process.waiting_on_signal = true;
+    process.dynamic_sensitivity = suspension.sensitivity;
+    std::sort(
+        process.dynamic_sensitivity.begin(),
+        process.dynamic_sensitivity.end(),
+        [](const Sensitivity& lhs, const Sensitivity& rhs) {
+          return lhs.signal < rhs.signal
+              || (lhs.signal == rhs.signal && lhs.edge < rhs.edge);
+        });
+    process.dynamic_sensitivity.erase(
+        std::unique(
+            process.dynamic_sensitivity.begin(),
+            process.dynamic_sensitivity.end()),
+        process.dynamic_sensitivity.end());
+    for (const auto& sensitivity : process.dynamic_sensitivity) {
+      (void)get_signal(sensitivity.signal);
+      if (sensitivity.edge != EdgeKind::any) {
+        process.pc = instruction;
+        fail(process, "dynamic event wait must use any-change sensitivity");
+      }
+      dynamic_fanout[sensitivity.signal].push_back(
+          {process.program.id, sensitivity.edge});
+    }
+    break;
+  case ExternalSuspendKind::wait_sensitivity:
+    if (process.program.static_sensitivity.empty()) {
+      process.pc = instruction;
+      fail(process, "dynamic static wait has no sensitivity list");
+    }
+    process.waiting_on_static = true;
+    break;
+  case ExternalSuspendKind::yield:
+    queue_next_delta(process.program.id);
+    break;
+  case ExternalSuspendKind::halt:
+    process.halted = true;
+    break;
+  }
+  notify_execution_point(
+      process, instruction, ExecutionPointKind::process_suspend,
+      process.current_source);
+}
+
 void Interpreter::Impl::execute(ProcessId id) {
   auto &process = get_process(id);
   if (process.executor) {
@@ -1226,6 +1347,33 @@ void Interpreter::Impl::execute(ProcessId id) {
             delay);
       }
 
+      void notify_event(
+          const SignalId event,
+          const SimulationTick delay,
+          const bool delta_notification) override {
+        (void)owner.get_signal(event);
+        if (delay == 0 && !delta_notification) {
+          owner.trigger_event(event);
+          return;
+        }
+        if (delay == 0) {
+          owner.scheduler.schedule_next_delta(
+              SchedulerPhase::active,
+              process,
+              [&owner = owner, event](Scheduler&) {
+                owner.trigger_event(event);
+              });
+          return;
+        }
+        owner.scheduler.schedule_after(
+            delay,
+            SchedulerPhase::active,
+            process,
+            [&owner = owner, event](Scheduler&) {
+              owner.trigger_event(event);
+            });
+      }
+
       [[nodiscard]] bool
       execution_points_enabled() const noexcept override {
         return static_cast<bool>(owner.execution_point_hook);
@@ -1235,8 +1383,17 @@ void Interpreter::Impl::execute(ProcessId id) {
     ExecutionContext context{*this, id};
     while (!process.halted) {
       const auto boundary = process.executor->resume(context, process.pc);
-      handle_boundary(
-          process, boundary.instruction, boundary.next_instruction);
+      if (boundary.external.kind
+          == ExternalSuspendKind::simir_boundary) {
+        handle_boundary(
+            process, boundary.instruction, boundary.next_instruction);
+      } else {
+        handle_external_boundary(
+            process,
+            boundary.instruction,
+            boundary.next_instruction,
+            boundary.external);
+      }
       if (!std::holds_alternative<DebugPoint>(
               process.program.operations[boundary.instruction])
           || scheduler.stop_requested()) {

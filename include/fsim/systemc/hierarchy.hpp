@@ -55,6 +55,11 @@ struct ProcessDescription {
     bool initialize{true};
 };
 
+struct EventDescription {
+    fsim_sc_handle_v1 handle{};
+    std::string name;
+};
+
 struct ModuleDescription {
     fsim_sc_handle_v1 handle{};
     fsim_sc_handle_v1 parent{};
@@ -63,6 +68,20 @@ struct ModuleDescription {
     std::vector<PortDescription> ports;
     std::vector<ForeignChildDescription> foreign_children;
     std::vector<ProcessDescription> processes;
+    std::vector<EventDescription> events;
+};
+
+enum class MethodSuspendKind : std::uint8_t {
+    halt,
+    static_sensitivity,
+    wait_for,
+    wait_event,
+};
+
+struct MethodSuspendResult {
+    MethodSuspendKind kind{MethodSuspendKind::halt};
+    std::uint64_t delay_ticks{};
+    std::uint32_t event_signal{};
 };
 
 /// Owns one loaded SystemC plug-in and every module object constructed from
@@ -103,9 +122,13 @@ public:
         fsim_sc_handle_v1 object,
         std::uint32_t signal);
 
+    /// Set the exact number of femtoseconds represented by one common
+    /// simulation tick. Must be called before process execution.
+    void set_time_resolution(std::uint64_t femtoseconds_per_tick);
+
     /// Invoke a registered SC_METHOD with host reads/writes redirected to the
     /// supplied common-kernel execution context.
-    void invoke_method(
+    [[nodiscard]] MethodSuspendResult invoke_method(
         fsim_sc_handle_v1 process,
         runtime::simir::ProcessExecutionContext& context);
 
