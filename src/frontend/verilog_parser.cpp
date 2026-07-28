@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -412,9 +413,14 @@ class VerilogParser final : private detail::ParserBase {
   ParseResult run() {
     ParsedDesign design;
     while (!at_end()) {
-      if (match_keyword("module")) {
+      if (time_declaration_start()) {
+        const auto declaration = advance();
+        parse_time_declaration(nullptr, declaration);
+      } else if (match_keyword("module")) {
+        compilation_unit_has_design_item_ = true;
         design.units.push_back(parse_module(previous()));
       } else if (match_keyword("package")) {
+        compilation_unit_has_design_item_ = true;
         auto package = parse_package(previous());
         auto& exports =
             package_constant_names_[package.name];
@@ -423,6 +429,7 @@ class VerilogParser final : private detail::ParserBase {
         }
         design.units.push_back(std::move(package));
       } else if (match_keyword("import")) {
+        compilation_unit_has_design_item_ = true;
         parse_import_clause(
             compilation_unit_imports_, previous());
       } else if (at(TokenKind::Backtick)) {
@@ -777,6 +784,251 @@ class VerilogParser final : private detail::ParserBase {
     return std::nullopt;
   }
 
+  struct DeclaredTime {
+    std::uint64_t magnitude{1};
+    std::string unit;
+    SourceSpan span;
+    bool valid{};
+
+    [[nodiscard]] std::string spelling() const {
+      return std::to_string(magnitude) + unit;
+    }
+  };
+
+  [[nodiscard]] bool time_declaration_start() const {
+    return at(TokenKind::Identifier)
+        && (current().text == "timeunit"
+            || current().text == "timeprecision")
+        && (language_ == Language::SystemVerilog2017
+            || at(TokenKind::Number, 1));
+  }
+
+  DeclaredTime parse_declared_time_value(
+      const std::string_view description) {
+    const auto magnitude = expect(
+        TokenKind::Number,
+        std::string{description} + " magnitude",
+        "FSIM-SV-PARSE-131");
+    const auto unit = expect(
+        TokenKind::Identifier,
+        std::string{description} + " unit",
+        "FSIM-SV-PARSE-132");
+    DeclaredTime result;
+    result.span = cover(magnitude.span, unit.span);
+    const auto parsed_magnitude = decimal_u64(magnitude.text);
+    const auto factor = time_unit_femtoseconds(unit.text);
+    if (!parsed_magnitude
+        || (*parsed_magnitude != 1 && *parsed_magnitude != 10
+            && *parsed_magnitude != 100)
+        || !factor) {
+      error(
+          magnitude,
+          "FSIM-SV-SEM-045",
+          std::string{description}
+              + " must use magnitude 1, 10, or 100 and unit "
+                "fs, ps, ns, us, ms, or s");
+      return result;
+    }
+    result.magnitude = *parsed_magnitude;
+    result.unit = unit.text;
+    result.valid = true;
+    return result;
+  }
+
+  void validate_effective_time_declaration(
+      const Token& declaration,
+      const std::uint64_t unit_magnitude,
+      const std::string_view unit,
+      const std::string_view precision) {
+    if (unit.empty() || precision.empty()) {
+      return;
+    }
+    const auto unit_factor = time_unit_femtoseconds(unit);
+    const auto parsed_precision =
+        parse_declared_time_spelling(precision);
+    if (!unit_factor || !parsed_precision) {
+      return;
+    }
+    if (unit_magnitude
+            > std::numeric_limits<std::uint64_t>::max() / *unit_factor) {
+      error(
+          declaration,
+          "FSIM-SV-SEM-048",
+          "effective SystemVerilog time unit overflows");
+      return;
+    }
+    const auto unit_fs = unit_magnitude * *unit_factor;
+    if (parsed_precision->first
+            > std::numeric_limits<std::uint64_t>::max()
+                / parsed_precision->second
+        || parsed_precision->first * parsed_precision->second > unit_fs) {
+      error(
+          declaration,
+          "FSIM-SV-SEM-048",
+          "SystemVerilog timeprecision cannot be coarser than timeunit");
+    }
+  }
+
+  static std::optional<std::pair<std::uint64_t, std::uint64_t>>
+  parse_declared_time_spelling(const std::string_view spelling) {
+    const auto split = std::find_if(
+        spelling.begin(),
+        spelling.end(),
+        [](const char character) {
+          return character < '0' || character > '9';
+        });
+    if (split == spelling.begin()) {
+      return std::nullopt;
+    }
+    const auto magnitude = decimal_u64(
+        spelling.substr(
+            0,
+            static_cast<std::size_t>(
+                std::distance(spelling.begin(), split))));
+    const auto factor = time_unit_femtoseconds(
+        spelling.substr(
+            static_cast<std::size_t>(
+                std::distance(spelling.begin(), split))));
+    if (!magnitude || !factor) {
+      return std::nullopt;
+    }
+    return std::pair{*magnitude, *factor};
+  }
+
+  void update_unit_time(DesignUnit& unit) {
+    if (module_time_unit_.empty()) {
+      unit.time_unit.clear();
+    } else {
+      unit.time_unit =
+          std::to_string(module_time_unit_magnitude_)
+          + module_time_unit_;
+    }
+    unit.time_precision = module_time_precision_;
+  }
+
+  void parse_time_declaration(
+      DesignUnit* unit,
+      const Token& declaration) {
+    const bool declares_unit = declaration.text == "timeunit";
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          declaration,
+          "FSIM-SV-SEM-044",
+          "timeunit and timeprecision declarations require "
+          "SystemVerilog-2017");
+    }
+    auto primary = parse_declared_time_value(declaration.text);
+    std::optional<DeclaredTime> combined_precision;
+    if (declares_unit && match(TokenKind::Slash)) {
+      combined_precision =
+          parse_declared_time_value("timeunit precision");
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after time declaration",
+        "FSIM-SV-PARSE-133");
+
+    if (unit == nullptr && compilation_unit_has_design_item_) {
+      error(
+          declaration,
+          "FSIM-SV-SEM-047",
+          "compilation-unit time declarations must precede design items");
+    }
+    if (unit != nullptr && module_has_non_time_item_) {
+      error(
+          declaration,
+          "FSIM-SV-SEM-047",
+          "module time declarations must precede other module items");
+    }
+
+    bool& unit_declared =
+        unit == nullptr
+            ? compilation_time_unit_declared_
+            : module_time_unit_declared_;
+    bool& precision_declared =
+        unit == nullptr
+            ? compilation_time_precision_declared_
+            : module_time_precision_declared_;
+    if (declares_unit) {
+      if (unit_declared) {
+        error(
+            declaration,
+            "FSIM-SV-SEM-046",
+            "duplicate timeunit declaration in the same scope");
+      }
+      unit_declared = true;
+    } else {
+      if (precision_declared) {
+        error(
+            declaration,
+            "FSIM-SV-SEM-046",
+            "duplicate timeprecision declaration in the same scope");
+      }
+      precision_declared = true;
+    }
+    if (combined_precision) {
+      if (precision_declared) {
+        error(
+            declaration,
+            "FSIM-SV-SEM-046",
+            "duplicate timeprecision declaration in the same scope");
+      }
+      precision_declared = true;
+    }
+
+    if (primary.valid) {
+      if (unit == nullptr) {
+        if (declares_unit) {
+          compilation_time_unit_magnitude_ = primary.magnitude;
+          compilation_time_unit_ = primary.unit;
+        } else {
+          compilation_time_precision_ = primary.spelling();
+        }
+      } else if (declares_unit) {
+        module_time_unit_magnitude_ = primary.magnitude;
+        module_time_unit_ = primary.unit;
+      } else {
+        module_time_precision_ = primary.spelling();
+      }
+    }
+    if (combined_precision && combined_precision->valid) {
+      if (unit == nullptr) {
+        compilation_time_precision_ =
+            combined_precision->spelling();
+      } else {
+        module_time_precision_ =
+            combined_precision->spelling();
+      }
+    }
+
+    const auto effective_unit_magnitude =
+        unit == nullptr
+            ? (compilation_time_unit_.empty()
+                   ? current_time_unit_magnitude_
+                   : compilation_time_unit_magnitude_)
+            : module_time_unit_magnitude_;
+    const auto& effective_unit =
+        unit == nullptr
+            ? (compilation_time_unit_.empty()
+                   ? current_time_unit_
+                   : compilation_time_unit_)
+            : module_time_unit_;
+    const auto& effective_precision =
+        unit == nullptr
+            ? (compilation_time_precision_.empty()
+                   ? current_time_precision_
+                   : compilation_time_precision_)
+            : module_time_precision_;
+    validate_effective_time_declaration(
+        declaration,
+        effective_unit_magnitude,
+        effective_unit,
+        effective_precision);
+    if (unit != nullptr) {
+      update_unit_time(*unit);
+    }
+  }
+
   void parse_timescale(const Token& directive) {
     const auto unit_magnitude_token = expect(
         TokenKind::Number,
@@ -927,9 +1179,21 @@ class VerilogParser final : private detail::ParserBase {
     current_loop_names_.clear();
     declared_genvars_.clear();
     external_genvar_uses_.clear();
-    module_time_unit_magnitude_ = current_time_unit_magnitude_;
-    module_time_unit_ = current_time_unit_;
-    module_time_precision_ = current_time_precision_;
+    module_time_unit_magnitude_ =
+        compilation_time_unit_.empty()
+            ? current_time_unit_magnitude_
+            : compilation_time_unit_magnitude_;
+    module_time_unit_ =
+        compilation_time_unit_.empty()
+            ? current_time_unit_
+            : compilation_time_unit_;
+    module_time_precision_ =
+        compilation_time_precision_.empty()
+            ? current_time_precision_
+            : compilation_time_precision_;
+    module_time_unit_declared_ = false;
+    module_time_precision_declared_ = false;
+    module_has_non_time_item_ = false;
     DesignUnit unit;
     unit.kind = UnitKind::VerilogModule;
     unit.language = language_;
@@ -939,12 +1203,7 @@ class VerilogParser final : private detail::ParserBase {
         unit.systemverilog_imports;
     unit.default_nettype = current_default_nettype_;
     unit.is_cell = current_cell_define_;
-    if (!module_time_unit_.empty()) {
-      unit.time_unit =
-          std::to_string(module_time_unit_magnitude_)
-          + module_time_unit_;
-      unit.time_precision = module_time_precision_;
-    }
+    update_unit_time(unit);
     const auto name = expect_identifier("module name");
     unit.name = name.text;
 
@@ -961,32 +1220,45 @@ class VerilogParser final : private detail::ParserBase {
            "FSIM-SV-PARSE-003");
 
     while (!at_end() && !keyword("endmodule")) {
-      if (match_keyword("parameter")) {
+      if (time_declaration_start()) {
+        const auto declaration = advance();
+        parse_time_declaration(&unit, declaration);
+      } else if (match_keyword("parameter")) {
+        module_has_non_time_item_ = true;
         parse_parameter_group(unit, false, false, previous());
       } else if (match_keyword("localparam")) {
+        module_has_non_time_item_ = true;
         parse_parameter_group(unit, true, false, previous());
       } else if (match_keyword("import")) {
+        module_has_non_time_item_ = true;
         parse_import_clause(
             unit.systemverilog_imports, previous());
         active_package_imports_ =
             unit.systemverilog_imports;
       } else if (match_keyword("typedef")) {
+        module_has_non_time_item_ = true;
         parse_typedef(unit, previous());
       } else if (match_keyword("genvar")) {
+        module_has_non_time_item_ = true;
         parse_genvar_declaration(unit);
       } else if (match_keyword("event")) {
+        module_has_non_time_item_ = true;
         parse_event_declaration(unit, previous());
       } else if (
           keyword("final")
           || (language_ == Language::Verilog2005
               && at(TokenKind::Identifier)
               && current().text == "final")) {
+        module_has_non_time_item_ = true;
         unit.processes.push_back(parse_final());
       } else if (is_declaration_start()) {
+        module_has_non_time_item_ = true;
         parse_declaration(unit);
       } else if (is_gate_primitive()) {
+        module_has_non_time_item_ = true;
         parse_gate_primitive(unit.concurrent_statements);
       } else if (match_keyword("assign")) {
+        module_has_non_time_item_ = true;
         if (auto assignment = parse_continuous_assignment(previous())) {
           unit.concurrent_statements.push_back(std::move(*assignment));
         }
@@ -998,18 +1270,24 @@ class VerilogParser final : private detail::ParserBase {
               && (current().text == "always_ff"
                   || current().text == "always_comb"
                   || current().text == "always_latch"))) {
+        module_has_non_time_item_ = true;
         unit.processes.push_back(parse_always());
       } else if (keyword("initial")) {
+        module_has_non_time_item_ = true;
         unit.processes.push_back(parse_initial());
       } else if (match_keyword("generate")) {
+        module_has_non_time_item_ = true;
         parse_generate_region(unit, previous());
       } else if (match_keyword("if")) {
+        module_has_non_time_item_ = true;
         unit.generate_regions.push_back(
             parse_conditional_generate(previous()));
       } else if (match_keyword("for")) {
+        module_has_non_time_item_ = true;
         unit.generate_regions.push_back(
             parse_iterative_generate(previous()));
       } else if (match_keyword("case")) {
+        module_has_non_time_item_ = true;
         unit.generate_regions.push_back(
             parse_selection_generate(previous()));
       } else if (
@@ -1018,10 +1296,12 @@ class VerilogParser final : private detail::ParserBase {
                && at(TokenKind::LeftParen, 2))
               || (at(TokenKind::Hash, 1)
                   && at(TokenKind::LeftParen, 2)))) {
+        module_has_non_time_item_ = true;
         unit.instances.push_back(parse_instance());
       } else if (at(TokenKind::Backtick)) {
         parse_directive();
       } else {
+        module_has_non_time_item_ = true;
         const auto unexpected = advance();
         error(unexpected, "FSIM-SV-UNSUPPORTED-004",
               "unsupported module item starting with '" + unexpected.text +
@@ -4309,31 +4589,167 @@ class VerilogParser final : private detail::ParserBase {
     return std::nullopt;
   }
 
+  struct DecimalRatio {
+    std::uint64_t numerator{};
+    std::uint64_t denominator{1};
+  };
+
+  static std::optional<DecimalRatio> decimal_ratio(
+      const std::string_view spelling) {
+    std::string compact;
+    compact.reserve(spelling.size());
+    for (const char character : spelling) {
+      if (character != '_') {
+        compact.push_back(character);
+      }
+    }
+    const auto exponent_position = compact.find_first_of("eE");
+    if (exponent_position != std::string::npos
+        && compact.find_first_of("eE", exponent_position + 1)
+            != std::string::npos) {
+      return std::nullopt;
+    }
+    const auto mantissa =
+        std::string_view{compact}.substr(0, exponent_position);
+    std::int64_t exponent{};
+    if (exponent_position != std::string::npos) {
+      auto exponent_text =
+          std::string_view{compact}.substr(exponent_position + 1);
+      bool negative = false;
+      if (!exponent_text.empty()
+          && (exponent_text.front() == '+'
+              || exponent_text.front() == '-')) {
+        negative = exponent_text.front() == '-';
+        exponent_text.remove_prefix(1);
+      }
+      const auto parsed_exponent =
+          decimal_i64(exponent_text, negative);
+      if (!parsed_exponent) {
+        return std::nullopt;
+      }
+      exponent = *parsed_exponent;
+    }
+
+    std::string digits;
+    digits.reserve(mantissa.size());
+    bool saw_decimal = false;
+    std::size_t fractional_digits{};
+    for (const char character : mantissa) {
+      if (character == '.') {
+        if (saw_decimal) {
+          return std::nullopt;
+        }
+        saw_decimal = true;
+        continue;
+      }
+      if (character < '0' || character > '9') {
+        return std::nullopt;
+      }
+      digits.push_back(character);
+      if (saw_decimal) {
+        ++fractional_digits;
+      }
+    }
+    if (digits.empty()) {
+      return std::nullopt;
+    }
+    auto numerator = decimal_u64(digits);
+    if (!numerator) {
+      return std::nullopt;
+    }
+    if (*numerator == 0) {
+      return DecimalRatio{};
+    }
+    if (fractional_digits
+        > static_cast<std::size_t>(
+            std::numeric_limits<std::int64_t>::max())) {
+      return std::nullopt;
+    }
+    auto scale =
+        static_cast<std::int64_t>(fractional_digits);
+    if ((exponent > 0
+         && scale < std::numeric_limits<std::int64_t>::min() + exponent)
+        || (exponent < 0
+            && scale > std::numeric_limits<std::int64_t>::max() + exponent)) {
+      return std::nullopt;
+    }
+    scale -= exponent;
+    while (scale > 0 && *numerator % 10 == 0) {
+      *numerator /= 10;
+      --scale;
+    }
+    std::uint64_t denominator = 1;
+    while (scale > 0) {
+      if (denominator
+          > std::numeric_limits<std::uint64_t>::max() / 10) {
+        return std::nullopt;
+      }
+      denominator *= 10;
+      --scale;
+    }
+    while (scale < 0) {
+      if (*numerator
+          > std::numeric_limits<std::uint64_t>::max() / 10) {
+        return std::nullopt;
+      }
+      *numerator *= 10;
+      ++scale;
+    }
+    const auto divisor = std::gcd(*numerator, denominator);
+    return DecimalRatio{
+        *numerator / divisor,
+        denominator / divisor};
+  }
+
   Delay parse_verilog_delay(const Token& start) {
     Delay delay;
     bool parenthesized = match(TokenKind::LeftParen);
     const auto magnitude =
         expect(TokenKind::Number, "delay magnitude", "FSIM-SV-PARSE-023");
-    if (const auto parsed = decimal_u64(magnitude.text)) {
-      if (!module_time_unit_.empty()
-          && *parsed
-              > std::numeric_limits<std::uint64_t>::max()
-                  / module_time_unit_magnitude_) {
+    if (const auto parsed = decimal_ratio(magnitude.text)) {
+      delay.magnitude = parsed->numerator;
+      delay.divisor = parsed->denominator;
+      if (at(TokenKind::Identifier)
+          && time_unit_femtoseconds(current().text)) {
+        const auto explicit_unit = advance();
+        delay.unit = explicit_unit.text;
+        if (language_ != Language::SystemVerilog2017) {
+          error(
+              explicit_unit,
+              "FSIM-SV-SEM-051",
+              "an explicitly unit-suffixed delay literal requires "
+              "SystemVerilog-2017");
+        }
+      } else if (!module_time_unit_.empty()) {
+        if (delay.magnitude
+            > std::numeric_limits<std::uint64_t>::max()
+                / module_time_unit_magnitude_) {
+          error(
+              magnitude,
+              "FSIM-SV-SEM-010",
+              "delay magnitude overflows after applying "
+              "SystemVerilog timeunit");
+        } else {
+          delay.magnitude *= module_time_unit_magnitude_;
+          delay.unit = module_time_unit_;
+        }
+      } else if (delay.divisor != 1) {
         error(
             magnitude,
-            "FSIM-SV-SEM-010",
-            "delay magnitude overflows after applying `timescale");
-      } else {
-        delay.magnitude =
-            *parsed
-            * (module_time_unit_.empty()
-                   ? std::uint64_t{1}
-                   : module_time_unit_magnitude_);
-        delay.unit = module_time_unit_;
+            "FSIM-SV-SEM-050",
+            "a fractional delay requires an explicit time unit or an "
+            "active `timescale/timeunit");
       }
     } else {
-      error(magnitude, "FSIM-SV-SEM-002",
-            "delay magnitude must be a decimal integer literal");
+      const bool nondecimal =
+          magnitude.text.find('\'') != std::string::npos;
+      error(
+          magnitude,
+          nondecimal ? "FSIM-SV-SEM-002" : "FSIM-SV-SEM-049",
+          nondecimal
+              ? "delay magnitude must be a decimal literal"
+              : "delay magnitude must be a representable nonnegative "
+                "decimal literal");
     }
     if (parenthesized) {
       expect(TokenKind::RightParen, "')' after delay",
@@ -4688,9 +5104,18 @@ class VerilogParser final : private detail::ParserBase {
   std::uint64_t current_time_unit_magnitude_{1};
   std::string current_time_unit_;
   std::string current_time_precision_;
+  std::uint64_t compilation_time_unit_magnitude_{1};
+  std::string compilation_time_unit_;
+  std::string compilation_time_precision_;
+  bool compilation_time_unit_declared_{};
+  bool compilation_time_precision_declared_{};
+  bool compilation_unit_has_design_item_{};
   std::uint64_t module_time_unit_magnitude_{1};
   std::string module_time_unit_;
   std::string module_time_precision_;
+  bool module_time_unit_declared_{};
+  bool module_time_precision_declared_{};
+  bool module_has_non_time_item_{};
 };
 
 }  // namespace

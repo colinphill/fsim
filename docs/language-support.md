@@ -24,6 +24,17 @@ silently discarded.
 | Preprocessing/directives | Quoted and angle includes, manifest/CLI definitions, object/function macros with default arguments, multiline replacement, argument substitution, token concatenation/stringification, `__FILE__`/`__LINE__`, `undef`, nested conditional compilation, logical `` `line`` source remapping, legal `` `timescale``, `` `default_nettype``, reset/cell/keyword-version/unconnected-drive state, and ordered `file`/`source-set`/`combined` policies | Included units and macro-selected executable source enter the normal frontend; active `` `line`` mappings reach parser diagnostics, macro ancestry, DesignIR/SimIR debug points, report callbacks, and LLVM objects while physical ownership remains in analysis/native cache provenance; mappings reset for includes and compilation-unit roots; source-set/combined roots otherwise share macro, conditional, and parser directive state while retaining library ownership; scalar implicit nets and default port net types honor `` `default_nettype``; cell metadata and omitted-input pulls reach DesignIR/runtime; integer delays are scaled and `auto` selects the finest attached precision; ordered snapshots participate in cache identity | Standardized pragma behavior, fractional delays, `timeunit`/`timeprecision`, multi-driver wired-net resolution, and complete trireg charge semantics remain incomplete; unsupported directives receive targeted errors |
 | SystemC | C++ compatibility header, versioned plug-in entry point, typed factories, and peer mixed-language hierarchy | Common signals/ports/exports/events/channels, native and foreign children, lifecycle callbacks, `SC_METHOD`, and Boost.Context-backed `SC_THREAD`/`SC_CTHREAD` timed/event/static waits execute on the deterministic common kernel | Arbitrary custom-interface metadata, dynamic processes, thread reset/kill, TLM/AMS/CCI, and Accellera ABI compatibility remain unsupported |
 
+SystemVerilog time status update: compilation-unit and leading module-local
+`timeunit`/`timeprecision` declarations, including the combined
+`timeunit value / value` form, now override inherited `` `timescale`` context.
+Decimal/scientific delays retain exact bounded rational HIR, and explicit
+`fs`/`ps`/`ns`/`us`/`ms`/`s` suffixes override the module unit. Delays round
+to timeprecision before exact global-tick conversion, with half steps rounded
+upward; `auto` considers declarations and explicit units. Delay triplets and
+parameterized/nonconstant delay expressions remain incomplete. This update
+supersedes the compact table's older fractional-delay and declaration-based
+time limitations.
+
 Named-event status update: Verilog-2005/SystemVerilog module-level `event`
 declarations, comma groups, immediate `->` triggers, static `@event`, dynamic
 `@(event)`, and repeated wakeups now execute. SystemVerilog `->>` publishes

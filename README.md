@@ -56,8 +56,10 @@ The current tree contains:
   replacements, token concatenation/stringification, conditional compilation,
   source ancestry, `file`/`source-set`/`combined` state-sharing policies, and
   compilation-unit-wide cache provenance;
-- bounded Verilog/SystemVerilog `` `timescale`` context, integer-delay scaling,
-  and automatic selection of the finest declared directive precision;
+- bounded Verilog/SystemVerilog `` `timescale`` context plus SystemVerilog
+  compilation/module `timeunit`/`timeprecision`, exact fractional/scientific
+  and explicit-unit delays, precision-first half-up rounding, and automatic
+  selection of the finest declared precision;
 - executable scalar `` `default_nettype`` implicit nets plus
   reset/cell/keyword-version/unconnected-drive compiler state, including
   cell specialization metadata and pull initialization for omitted inputs;
@@ -297,9 +299,10 @@ particular, complete semantic analysis, general mixed-boundary conversions and
 multi-driver resolution, complete VHDL generic typing and SystemVerilog
 parameter typing, complete scoped/local type coverage and call
 safe points, broader interpreter/JIT differential coverage, remaining SystemC
-kernel behavior, fractional-delay and declaration-based time semantics,
-general VHDL package declarations/bodies and IEEE packages, complete HDL event
-controls, and most testbench features remain work in progress. Unsupported
+  kernel behavior, delay triplets and parameterized/nonconstant delay
+  expressions, general VHDL package declarations/bodies and IEEE packages,
+  complete HDL event controls, and most testbench features remain work in
+  progress. Unsupported
 syntax is diagnosed rather than silently accepted.
 
 ## Requirements

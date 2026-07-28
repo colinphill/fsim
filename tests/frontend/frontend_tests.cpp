@@ -2391,6 +2391,185 @@ endmodule
 
 }
 
+void test_systemverilog_time_declarations() {
+  const auto parsed = parse_text(
+      "time-declarations.sv",
+      R"(timeunit 10ns;
+timeprecision 1ps;
+module inherited_time;
+  logic marker;
+  initial begin
+    #1.25 marker = 1'b1;
+    #(2.5ps) marker = 1'b0;
+  end
+endmodule
+module local_time;
+  timeunit 1us / 10ns;
+  logic marker;
+  initial begin
+    #1.25e-1 marker = 1'b1;
+  end
+endmodule
+module local_precision;
+  timeprecision 100ps;
+  initial #1 $finish;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "SystemVerilog time declarations must parse");
+  require(
+      parsed.design.units.size() == 3,
+      "time declaration module count");
+  const auto& inherited = parsed.design.units[0];
+  require(
+      inherited.time_unit == "10ns"
+          && inherited.time_precision == "1ps",
+      "compilation-unit time declarations attach to a module");
+  const auto& inherited_delays =
+      inherited.processes.front().statements;
+  require(
+      inherited_delays.size() == 2
+          && inherited_delays[0].delay
+          && inherited_delays[0].delay->magnitude == 50
+          && inherited_delays[0].delay->divisor == 4
+          && inherited_delays[0].delay->unit == "ns",
+      "fractional delay retains an exact rational under inherited timeunit");
+  require(
+      inherited_delays[1].delay
+          && inherited_delays[1].delay->magnitude == 5
+          && inherited_delays[1].delay->divisor == 2
+          && inherited_delays[1].delay->unit == "ps",
+      "an explicit time-literal suffix overrides the module timeunit");
+
+  const auto& local = parsed.design.units[1];
+  require(
+      local.time_unit == "1us"
+          && local.time_precision == "10ns",
+      "combined module-local timeunit/timeprecision overrides inheritance");
+  const auto& local_delay =
+      *local.processes.front().statements.front().delay;
+  require(
+      local_delay.magnitude == 1
+          && local_delay.divisor == 8
+          && local_delay.unit == "us",
+      "scientific fractional delays remain exact in typed HIR");
+  const auto& local_precision = parsed.design.units[2];
+  require(
+      local_precision.time_unit == "10ns"
+          && local_precision.time_precision == "100ps",
+      "a module-local timeprecision overrides inherited precision only");
+
+  const auto directive_precedence = parse_text(
+      "time-directive-precedence.sv",
+      R"(`timescale 100ns/10ns
+timeunit 1ns / 1ps;
+`resetall
+module declared_time_wins;
+  initial #1 $finish;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      directive_precedence.ok()
+          && directive_precedence.design.units.front().time_unit == "1ns"
+          && directive_precedence.design.units.front().time_precision
+              == "1ps"
+          && directive_precedence.design.units.front()
+                 .processes.front().statements.front().delay->magnitude
+              == 1
+          && directive_precedence.design.units.front()
+                 .processes.front().statements.front().delay->unit
+              == "ns",
+      "declarations override directive context and survive `resetall");
+
+  const auto malformed = parse_text(
+      "bad-time-declarations.sv",
+      R"(timeunit 2ns;
+timeunit 1ns;
+timeunit 10ns;
+module bad;
+  timeprecision 100ns;
+  timeprecision 1ps;
+  logic marker;
+  timeunit 1ns;
+  initial #0.00000000000000000001 marker = 1'b1;
+endmodule
+timeprecision 1ps;
+)",
+      Language::SystemVerilog2017);
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            malformed.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !malformed.ok()
+          && has_code("FSIM-SV-SEM-045")
+          && has_code("FSIM-SV-SEM-046")
+          && has_code("FSIM-SV-SEM-047")
+          && has_code("FSIM-SV-SEM-048")
+          && has_code("FSIM-SV-SEM-049"),
+      "invalid, duplicate, late, coarse, and overflowing "
+      "fractional time forms receive targeted diagnostics");
+
+  const auto unitless = parse_text(
+      "unitless-fractional.sv",
+      "module bad; initial #1.5 $finish; endmodule\n",
+      Language::SystemVerilog2017);
+  require(
+      !unitless.ok()
+          && std::ranges::any_of(
+              unitless.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-050";
+              }),
+      "a unitless fractional delay without time context is rejected");
+
+  const auto verilog = parse_text(
+      "verilog-timeunit.v",
+      "timeunit 1ns; module bad; endmodule\n",
+      Language::Verilog2005);
+  require(
+      !verilog.ok()
+          && std::ranges::any_of(
+              verilog.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-044";
+              }),
+      "time declarations are rejected in Verilog-2005");
+
+  const auto verilog_suffix = parse_text(
+      "verilog-time-suffix.v",
+      "module bad; initial #1ns $finish; endmodule\n",
+      Language::Verilog2005);
+  require(
+      !verilog_suffix.ok()
+          && std::ranges::any_of(
+              verilog_suffix.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-051";
+              }),
+      "explicit delay-unit suffixes are rejected in Verilog-2005");
+
+  const auto verilog_identifier = parse_text(
+      "verilog-timeunit-identifier.v",
+      R"(module timeunit;
+endmodule
+module top;
+  timeunit child();
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      verilog_identifier.ok()
+          && verilog_identifier.design.units[1].instances.size() == 1,
+      "timeunit remains an ordinary Verilog-2005 identifier when its "
+      "syntax is not a declaration");
+}
+
 void test_systemverilog_compiler_directives() {
   const auto directives = parse_text(
       "directives.sv",
@@ -6310,6 +6489,7 @@ int main() {
     test_ignored_initializers_are_rejected();
     test_duplicate_declarations_are_rejected();
     test_systemverilog_timescale_context();
+    test_systemverilog_time_declarations();
     test_systemverilog_compiler_directives();
     test_systemverilog_parameters();
     test_systemverilog_packages();

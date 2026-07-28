@@ -427,6 +427,9 @@ therefore excluded.
 | `FSIM-SV-PARSE-128` | error | Expected `;` after a Verilog/SystemVerilog `$monitoron` or `$monitoroff` task. |
 | `FSIM-SV-PARSE-129` | error | Expected `)` after SystemVerilog `$info`, `$warning`, or `$error` arguments. |
 | `FSIM-SV-PARSE-130` | error | Expected `;` after a SystemVerilog `$info`, `$warning`, or `$error` task. |
+| `FSIM-SV-PARSE-131` | error | Expected a numeric magnitude in a SystemVerilog time declaration. |
+| `FSIM-SV-PARSE-132` | error | Expected a physical unit in a SystemVerilog time declaration. |
+| `FSIM-SV-PARSE-133` | error | Expected `;` after a SystemVerilog time declaration. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -446,7 +449,7 @@ therefore excluded.
 | `FSIM-VERILOG-SEM-007` | error | `$fatal` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-008` | error | A nonblocking named-event trigger (`->>`) was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-009` | error | `$info`, `$warning`, or `$error` was used in Verilog-2005 rather than SystemVerilog. |
-| `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal integer literal. |
+| `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |
 | `FSIM-SV-SEM-005` | error | Duplicate declaration or type refinement of a non-ANSI port. |
@@ -488,6 +491,14 @@ therefore excluded.
 | `FSIM-SV-SEM-041` | error | A `$monitor` format string has more value-consuming conversions than value arguments. |
 | `FSIM-SV-SEM-042` | error | An output format string uses an unsupported conversion/modifier, an invalid or overflowing field width, or a malformed percent escape. |
 | `FSIM-SV-SEM-043` | error | A bounded `$info`, `$warning`, or `$error` call has a nonliteral or additional message argument. |
+| `FSIM-SV-SEM-044` | error | A `timeunit` or `timeprecision` declaration appears in Verilog-2005 input. |
+| `FSIM-SV-SEM-045` | error | A time declaration has an illegal magnitude or physical unit. |
+| `FSIM-SV-SEM-046` | error | A scope repeats a `timeunit` or `timeprecision` declaration. |
+| `FSIM-SV-SEM-047` | error | A compilation-unit or module time declaration appears after another item. |
+| `FSIM-SV-SEM-048` | error | An effective SystemVerilog timeprecision is coarser than its timeunit or overflows. |
+| `FSIM-SV-SEM-049` | error | A decimal delay literal cannot be represented by the exact bounded rational HIR form. |
+| `FSIM-SV-SEM-050` | error | A fractional delay has neither an explicit unit nor an active timeunit/timescale. |
+| `FSIM-SV-SEM-051` | error | A Verilog-2005 delay uses a SystemVerilog explicit physical-unit suffix. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

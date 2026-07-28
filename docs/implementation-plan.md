@@ -1072,6 +1072,35 @@ and installed Tcl 9.0.4. The fetched-Tcl relocation companion also passed.
 The batch ends at feature commit `f8717ce`; GitHub Actions state was not
 queried for this local gate.
 
+### Twenty-fifth feature batch — SystemVerilog time declarations and rounding
+
+The planned ten implementation features are:
+
+1. Parse compilation-unit `timeunit` and `timeprecision` declarations.
+2. Parse module-local `timeunit` declarations and override inherited
+   directive/compilation-unit state.
+3. Parse module-local `timeprecision` plus combined
+   `timeunit value / value` declarations.
+4. Diagnose illegal magnitudes/units, duplicates, late declarations, and
+   precision coarser than the effective unit.
+5. Preserve fractional decimal delay literals exactly through typed HIR.
+6. Support explicitly unit-suffixed SystemVerilog delay literals independent
+   of the containing module time unit.
+7. Apply SystemVerilog timeprecision rounding before conversion to global
+   ticks, including deterministic half-step behavior.
+8. Include declared precision and explicit delay units in `auto` global
+   resolution selection.
+9. Diagnose decimal overflow and values not representable after required
+   precision normalization.
+10. Require matching interpreter, LLVM O0/O2, callback/time, VCD, and
+    cold/warm native-cache behavior for the new source forms.
+
+All ten implementation features are complete. Focused frontend,
+diagnostic-catalog, interpreter, LLVM O0/O2, timestamp-callback, normalized
+VCD, coarse-resolution/overflow rejection, and cold/warm native-cache tests
+pass. The full local regression, feature commit, checkpoint commit, and push
+remain pending. GitHub Actions will not be queried.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

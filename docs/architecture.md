@@ -252,11 +252,15 @@ directives whose unit and precision magnitudes are `1`, `10`, or `100` and
 whose units are `fs`, `ps`, `ns`, `us`, `ms`, or `s`. The directive is attached
 to subsequent modules, integer `#` delays are scaled by its time unit, and
 `auto` considers the finest attached precision as well as explicit HDL delay
-units. Bounded integer delays are then converted exactly to global ticks;
-inexact, overflowing, malformed, or coarser-than-unit precisions are rejected.
-Fractional SV delays and `timeunit`/`timeprecision` declarations, rounding at a
-declared precision, and SystemC participation in automatic resolution
-selection are not complete.
+units. SystemVerilog compilation-unit and module-local
+`timeunit`/`timeprecision` declarations override inherited directive context.
+Decimal/scientific delays retain an exact bounded rational representation,
+optional explicit physical-unit suffixes override the module unit, and
+conversion rounds to the declared precision before converting exactly to
+global ticks. Half steps round upward. Inexact, overflowing, malformed,
+late/duplicate, or coarser-than-unit declarations are rejected. Delay
+triplets, parameterized/nonconstant delay expressions, and SystemC
+participation in automatic resolution selection are not complete.
 
 The same ordered token stream carries Verilog compiler state across shared
 roots. `` `default_nettype`` selects scalar implicit-net and untyped-port net

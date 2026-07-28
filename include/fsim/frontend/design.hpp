@@ -225,6 +225,9 @@ enum class AssignmentKind {
 
 struct Delay {
   std::uint64_t magnitude{};
+  // Exact decimal denominator retained until project time normalization.
+  // Integer/VHDL delays use one.
+  std::uint64_t divisor{1};
   // Empty when the source supplies no physical unit or active `timescale.
   std::string unit;
   SourceSpan span;

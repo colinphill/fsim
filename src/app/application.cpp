@@ -16,6 +16,7 @@
 #include "fsim/version.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <csignal>
@@ -32,6 +33,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <set>
@@ -3711,22 +3713,155 @@ bool normalize_delays(
     frontend::ParsedDesign& parsed,
     const std::string_view resolution,
     diagnostic::Engine& diagnostics) {
+  const auto femtoseconds =
+      [](const std::string_view spelling)
+          -> std::optional<std::uint64_t> {
+        const auto parsed_time = magnitude_and_unit(spelling);
+        if (!parsed_time || parsed_time->unit.empty()) {
+          return std::nullopt;
+        }
+        const auto factor = unit_femtoseconds(parsed_time->unit);
+        if (!factor
+            || parsed_time->magnitude
+                > std::numeric_limits<std::uint64_t>::max() / *factor) {
+          return std::nullopt;
+        }
+        return parsed_time->magnitude * *factor;
+      };
+  const auto effective_resolution =
+      resolution == "auto" ? std::string_view{"1ns"} : resolution;
+  const auto tick_femtoseconds = femtoseconds(effective_resolution);
   bool valid = true;
   for (auto& unit : parsed.units) {
     auto normalize = [&](frontend::Delay& delay) {
       if (delay.unit.empty()) {
+        if (delay.divisor != 1) {
+          diagnostics.error(
+              "FSIM-TIME-0003",
+              "a unitless HDL delay cannot retain a fractional tick",
+              span(delay.span));
+          valid = false;
+        }
         return;
       }
-      std::string error;
-      const auto ticks = parse_time(
-          std::to_string(delay.magnitude) + delay.unit, resolution, error);
-      if (!ticks) {
+      const auto unit_factor = unit_femtoseconds(delay.unit);
+      const auto precision_femtoseconds =
+          unit.time_precision.empty()
+              ? std::optional<std::uint64_t>{}
+              : femtoseconds(unit.time_precision);
+      if (!unit_factor || !tick_femtoseconds
+          || (!unit.time_precision.empty()
+              && !precision_femtoseconds)
+          || delay.divisor == 0) {
         diagnostics.error(
-            "FSIM-TIME-0003", error, span(delay.span));
+            "FSIM-TIME-0003",
+            "invalid HDL delay unit, precision, or project resolution",
+            span(delay.span));
         valid = false;
         return;
       }
-      delay.magnitude = *ticks;
+
+      std::array<std::uint64_t, 2> numerator{
+          delay.magnitude, *unit_factor};
+      std::array<std::uint64_t, 2> denominator{
+          delay.divisor,
+          precision_femtoseconds.value_or(*tick_femtoseconds)};
+      for (auto& numerator_factor : numerator) {
+        for (auto& denominator_factor : denominator) {
+          const auto common =
+              std::gcd(numerator_factor, denominator_factor);
+          numerator_factor /= common;
+          denominator_factor /= common;
+        }
+      }
+      if (numerator[0] != 0
+          && numerator[1]
+              > std::numeric_limits<std::uint64_t>::max()
+                  / numerator[0]) {
+        diagnostics.error(
+            "FSIM-TIME-0003",
+            "HDL delay overflows the 64-bit simulation time range",
+            span(delay.span));
+        valid = false;
+        return;
+      }
+      if (denominator[0] != 0
+          && denominator[1]
+              > std::numeric_limits<std::uint64_t>::max()
+                  / denominator[0]) {
+        diagnostics.error(
+            "FSIM-TIME-0003",
+            "HDL delay precision exceeds the exact decimal range",
+            span(delay.span));
+        valid = false;
+        return;
+      }
+      const auto numerator_value = numerator[0] * numerator[1];
+      const auto denominator_value =
+          denominator[0] * denominator[1];
+      if (denominator_value == 0) {
+        diagnostics.error(
+            "FSIM-TIME-0003",
+            "HDL delay has a zero normalization denominator",
+            span(delay.span));
+        valid = false;
+        return;
+      }
+      auto quanta = numerator_value / denominator_value;
+      const auto remainder = numerator_value % denominator_value;
+      if (precision_femtoseconds) {
+        const auto half =
+            denominator_value / 2
+            + static_cast<std::uint64_t>(
+                denominator_value % 2 != 0);
+        if (remainder >= half) {
+          if (quanta == std::numeric_limits<std::uint64_t>::max()) {
+            diagnostics.error(
+                "FSIM-TIME-0003",
+                "rounded HDL delay overflows 64-bit simulation time",
+                span(delay.span));
+            valid = false;
+            return;
+          }
+          ++quanta;
+        }
+      } else if (remainder != 0) {
+        diagnostics.error(
+            "FSIM-TIME-0003",
+            "time is not exactly representable at resolution '"
+                + std::string{effective_resolution} + "'",
+            span(delay.span));
+        valid = false;
+        return;
+      }
+
+      std::uint64_t ticks_per_quantum = 1;
+      if (precision_femtoseconds) {
+        if (*precision_femtoseconds % *tick_femtoseconds != 0) {
+          diagnostics.error(
+              "FSIM-TIME-0003",
+              "rounded SystemVerilog delay is not representable at "
+              "project resolution '" + std::string{effective_resolution}
+                  + "'",
+              span(delay.span));
+          valid = false;
+          return;
+        }
+        ticks_per_quantum =
+            *precision_femtoseconds / *tick_femtoseconds;
+      }
+      if (quanta != 0
+          && ticks_per_quantum
+              > std::numeric_limits<std::uint64_t>::max() / quanta) {
+        diagnostics.error(
+            "FSIM-TIME-0003",
+            "normalized HDL delay overflows 64-bit simulation ticks",
+            span(delay.span));
+        valid = false;
+        return;
+      }
+      delay.magnitude = quanta * ticks_per_quantum;
+      delay.divisor = 1;
       delay.unit.clear();
     };
     visit_delays(unit.concurrent_statements, normalize);
