@@ -5088,6 +5088,10 @@ end architecture rtl;
                << "    IDLE = 0,\n"
                << "    ACTIVE = BASE + 1\n"
                << "  } state_t;\n"
+               << "  typedef struct packed {\n"
+               << "    logic [WIDTH-1:0] payload;\n"
+               << "    bit valid;\n"
+               << "  } packet_t;\n"
                << "endpackage : base_values\n";
       };
   write_systemverilog_base_package(5, 4);
@@ -5117,11 +5121,16 @@ endpackage : derived_values
         systemverilog_package_user_source);
     output << R"(
 import derived_values::NEXT, derived_values::result_t;
-import base_values::ACTIVE;
+import base_values::ACTIVE, base_values::packet_t;
 module systemverilog_package_user(
   output result_t observed
 );
-  assign observed = ACTIVE;
+  packet_t packet;
+  initial begin
+    packet.payload = ACTIVE;
+    packet.valid = 1'b1;
+  end
+  assign observed = packet.payload;
 endmodule
 )";
   }
@@ -5201,13 +5210,13 @@ endmodule
       systemverilog_package_cold.simulation);
   assert((
       systemverilog_package_cold.simulation.final_values
-      == std::vector<std::string>{"0110"}));
+      == std::vector<std::string>{"0110", "01101"}));
   assert(
-      systemverilog_package_cold.simulation.process_count == 1);
+      systemverilog_package_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
   assert(
       systemverilog_package_cold.simulation.compiled_processes
-      == 1);
+      == 2);
   assert(
       systemverilog_package_cold.simulation.compiled_modules
       == 1);
@@ -5257,7 +5266,7 @@ endmodule
       != systemverilog_package_cold.specialization_key);
   assert((
       systemverilog_package_changed.simulation.final_values
-      == std::vector<std::string>{"01010"}));
+      == std::vector<std::string>{"01010", "010101"}));
 #if defined(FSIM_HAS_LLVM)
   assert(
       systemverilog_package_changed.simulation.native_cache.misses

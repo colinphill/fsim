@@ -85,6 +85,21 @@ struct PackedRangeExpression {
   std::optional<bool> descending;
 };
 
+struct PackedMember {
+  std::string name;
+  ValueDomain domain{ValueDomain::Unknown};
+  std::string spelling;
+  std::optional<PackedRange> packed_range;
+  bool is_signed{};
+  std::optional<PackedRangeExpression> packed_range_expression;
+  // Normalized offset from the least-significant bit of the containing
+  // packed aggregate. Filled once every member width is concrete.
+  std::uint64_t lsb_offset{};
+  SourceSpan span;
+
+  [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
+};
+
 struct Type {
   ValueDomain domain{ValueDomain::Unknown};
   std::string spelling;
@@ -98,6 +113,9 @@ struct Type {
   // elaboration resolves the alias in the owning specialization.
   std::string named_type;
   SourceSpan named_type_span;
+  // Non-empty for a bounded SystemVerilog packed struct. Nested aggregates
+  // are intentionally excluded from the current member representation.
+  std::vector<PackedMember> packed_members;
 
   Type() = default;
   Type(

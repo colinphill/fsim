@@ -367,6 +367,10 @@ package base_values;
     ZERO,
     HIGH
   } signed_state_t;
+  typedef struct packed {
+    logic [WIDTH-1:0] payload;
+    bit valid;
+  } packet_t;
 endpackage : base_values
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -386,20 +390,37 @@ endpackage : derived_values
             "systemverilog_package_user.sv",
             R"(
 import derived_values::NEXT, derived_values::result_t;
-import base_values::ACTIVE;
+import base_values::ACTIVE, base_values::packet_t;
 module systemverilog_package_user #(
   parameter result_t INITIAL = ACTIVE
 )(
   output result_t observed
 );
   typedef result_t local_result_t;
+  packet_t packet;
   generate
     if (1) begin : typed
       local_result_t staged;
       assign staged = INITIAL;
     end
   endgenerate
-  assign observed = typed.staged;
+  initial begin
+    packet_t local_packet;
+    local_packet.payload = INITIAL;
+    local_packet.valid = 1'b1;
+    packet = local_packet;
+  end
+  packet_passthrough u_passthrough(
+    .packet(packet),
+    .payload(observed)
+  );
+endmodule
+
+module packet_passthrough(
+  input packet_t packet,
+  output result_t payload
+);
+  assign payload = packet.payload;
 endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -444,6 +465,24 @@ endmodule
         systemverilog_package_elaborated.design->signals()
             .at(*systemverilog_package_staged).width
         == 4);
+    const auto systemverilog_package_packet =
+        systemverilog_package_elaborated.design->find_signal(
+            "systemverilog_package_user.packet");
+    assert(systemverilog_package_packet);
+    const auto& systemverilog_packet_info =
+        systemverilog_package_elaborated.design->signals().at(
+            *systemverilog_package_packet);
+    assert(systemverilog_packet_info.width == 5);
+    assert(systemverilog_packet_info.packed_members.size() == 2);
+    assert(
+        systemverilog_packet_info.packed_members[0].name
+            == "payload"
+        && systemverilog_packet_info.packed_members[0].lsb_offset
+            == 1
+        && systemverilog_packet_info.packed_members[1].name
+            == "valid"
+        && systemverilog_packet_info.packed_members[1].lsb_offset
+            == 0);
     const auto& systemverilog_package_dependencies =
         systemverilog_package_elaborated.design
             ->specializations()
@@ -470,6 +509,11 @@ endmodule
             ->signal_value(*systemverilog_package_observed)
             .to_msb_string()
         == "0110");
+    assert(
+        systemverilog_package_interpreter
+            ->signal_value(*systemverilog_package_packet)
+            .to_msb_string()
+        == "01101");
 
     const auto invalid_systemverilog_packages =
         fsim::frontend::parse_text(
@@ -504,12 +548,18 @@ package invalid_enum_values;
     TOO_LARGE = 4
   } invalid_t;
 endpackage
+package invalid_struct_layout;
+  typedef struct packed {
+    logic [MISSING-1:0] payload;
+  } invalid_packet_t;
+endpackage
 import duplicate_values::MISSING;
 import missing_values::*;
 import first_values::*;
 import alpha_values::*, beta_values::*;
 import broken_values::*;
 import invalid_enum_values::*;
+import invalid_struct_layout::invalid_packet_t;
 module invalid_systemverilog_package_user;
   logic value;
   missing_t missing_value;
@@ -517,7 +567,9 @@ module invalid_systemverilog_package_user;
   typedef cycle_b cycle_a;
   typedef cycle_a cycle_b;
   cycle_a cyclic_value;
+  invalid_packet_t invalid_packet;
   assign value = first_values::second_values::VALUE;
+  assign value = invalid_packet.payload;
 endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -538,7 +590,9 @@ endmodule
              "FSIM-ELAB-SVTYPE-002",
              "FSIM-ELAB-SVTYPE-003",
              "FSIM-ELAB-SVENUM-001",
-             "FSIM-ELAB-SVENUM-002"}) {
+             "FSIM-ELAB-SVENUM-002",
+             "FSIM-ELAB-SVSTRUCT-001",
+             "FSIM-ELAB-SVSTRUCT-002"}) {
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));
     }
@@ -2729,6 +2783,54 @@ end architecture rtl;
     assert(
         mixed_interpreter->signal_value(*mixed_inverted).to_msb_string()
         == "11111110");
+
+    const auto struct_boundary_sv =
+        fsim::frontend::parse_text(
+            "struct_boundary.sv",
+            R"(
+module struct_boundary;
+  typedef struct packed {
+    logic [3:0] payload;
+    bit valid;
+  } packet_t;
+  packet_t packet;
+  struct_sink u_sink(.packet(packet));
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    const auto struct_boundary_vhdl =
+        fsim::frontend::parse_text(
+            "struct_sink.vhd",
+            R"(
+entity struct_sink is
+  port (packet : in std_logic_vector(4 downto 0));
+end entity;
+architecture rtl of struct_sink is
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(struct_boundary_sv.ok());
+    assert(struct_boundary_vhdl.ok());
+    auto struct_boundary_design = struct_boundary_sv.design;
+    struct_boundary_design.units.insert(
+        struct_boundary_design.units.end(),
+        struct_boundary_vhdl.design.units.begin(),
+        struct_boundary_vhdl.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        struct_boundary_binding{
+            {"struct_boundary.u_sink",
+             "vhdl:work.struct_sink(rtl)",
+             std::nullopt},
+        };
+    const auto rejected_struct_boundary =
+        fsim::elaboration::elaborate(
+            struct_boundary_design,
+            "sv:work.struct_boundary",
+            struct_boundary_binding);
+    assert(!rejected_struct_boundary.ok());
+    assert(has_diagnostic(
+        rejected_struct_boundary, "FSIM-ELAB-BIND-049"));
 
     constexpr std::string_view vhdl_parent = R"(
 entity vhdl_top is

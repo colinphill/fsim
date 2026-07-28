@@ -1562,6 +1562,10 @@ package base_values;
     ZERO,
     HIGH
   } signed_state_t;
+  typedef struct packed {
+    logic [WIDTH-1:0] payload;
+    bit valid;
+  } packet_t;
 endpackage : base_values
 
 import base_values::*;
@@ -1570,13 +1574,14 @@ package derived_values;
   typedef base_values::word_t derived_word_t;
 endpackage : derived_values
 
-import base_values::WIDTH, derived_values::NEXT;
+import base_values::WIDTH, base_values::packet_t, derived_values::NEXT;
 import derived_values::derived_word_t;
 module package_user #(
   parameter derived_word_t INITIAL = NEXT
 )(output derived_word_t observed);
   typedef derived_word_t local_word_t;
   local_word_t staged;
+  base_values::packet_t packet;
   generate
     if (WIDTH) begin : typed
       base_values::word_t generated;
@@ -1585,6 +1590,8 @@ module package_user #(
   initial begin
     derived_word_t local_value = NEXT;
     staged = local_value;
+    packet.payload = local_value;
+    packet.valid = 1'b1;
   end
   assign observed = staged;
 endmodule
@@ -1608,7 +1615,7 @@ endmodule
               == "BASE",
       "package parameters are immutable declaration-ordered constants");
   require(
-      parsed.design.units[0].type_aliases.size() == 3
+      parsed.design.units[0].type_aliases.size() == 4
           && parsed.design.units[0].type_aliases.front()
                  .name
               == "word_t"
@@ -1637,6 +1644,16 @@ endmodule
                  .enum_literals.size()
               == 4,
       "signed packed enum bases and literal sequences survive parsing");
+  const auto& packet_type =
+      parsed.design.units[0].type_aliases[3].type;
+  require(
+      packet_type.packed_members.size() == 2
+          && packet_type.packed_members[0].name == "payload"
+          && packet_type.packed_members[0]
+                 .packed_range_expression
+          && packet_type.packed_members[1].name == "valid"
+          && packet_type.domain == ValueDomain::Logic4,
+      "parameterized packed struct members survive typed HIR parsing");
   require(
       parsed.design.units[1].systemverilog_imports.size() == 1
           && parsed.design.units[1]
@@ -1644,7 +1661,7 @@ endmodule
                  .name.empty()
           && parsed.design.units[2]
                  .systemverilog_imports.size()
-              == 4,
+              == 5,
       "compilation-unit wildcard and selected imports reach later units");
   require(
       parsed.design.units[2].ports.front().type.named_type
@@ -1658,6 +1675,9 @@ endmodule
           && parsed.design.units[2].signals.front()
                  .type.named_type
               == "local_word_t"
+          && parsed.design.units[2].signals[1]
+                 .type.named_type
+              == "base_values::packet_t"
           && parsed.design.units[2].generate_regions.front()
                  .then_body.signals.front().type.named_type
               == "base_values::word_t"
@@ -1675,7 +1695,7 @@ endmodule
       R"(
 package invalid_values;
   logic unsupported;
-  typedef struct packed { logic value; } unsupported_t;
+  typedef string unsupported_t;
   typedef logic duplicate_t;
   typedef bit duplicate_t;
   typedef logic unpacked_t [2];
@@ -1683,6 +1703,19 @@ package invalid_values;
   typedef enum logic [1:0] {} empty_enum_t;
   typedef enum logic [1:0] A, B } missing_open_t;
   typedef enum logic [1:0] { C missing_close_t;
+  typedef struct invalid_unpacked_t;
+  typedef struct packed {
+    int unsupported;
+  } unsupported_member_t;
+  typedef struct packed {
+    logic duplicate;
+    bit duplicate;
+    logic unpacked [2];
+    logic initialized = 1'b0;
+  } invalid_members_t;
+  typedef struct packed {} empty_struct_t;
+  typedef struct packed logic open_member; } missing_struct_open_t;
+  typedef struct packed { logic missing_semicolon } missing_member_semicolon_t;
 endpackage : wrong_name
 import invalid_values;
 module recovered;
@@ -1703,13 +1736,39 @@ endmodule
           && has_code("FSIM-SV-UNSUPPORTED-024")
           && has_code("FSIM-SV-UNSUPPORTED-025")
           && has_code("FSIM-SV-UNSUPPORTED-026")
+          && has_code("FSIM-SV-UNSUPPORTED-027")
+          && has_code("FSIM-SV-UNSUPPORTED-028")
+          && has_code("FSIM-SV-UNSUPPORTED-029")
           && has_code("FSIM-SV-PARSE-083")
           && has_code("FSIM-SV-PARSE-084")
           && has_code("FSIM-SV-PARSE-085")
+          && has_code("FSIM-SV-PARSE-086")
+          && has_code("FSIM-SV-PARSE-088")
+          && has_code("FSIM-SV-PARSE-089")
           && has_code("FSIM-SV-SEM-023")
           && has_code("FSIM-SV-SEM-024")
+          && has_code("FSIM-SV-SEM-025")
           && has_code("FSIM-SV-PARSE-078"),
       "invalid package items, end names, and imports are targeted");
+
+  const auto missing_struct_close = parse_text(
+      "missing_struct_close.sv",
+      R"(
+package incomplete_struct;
+  typedef struct packed {
+    logic member;
+)",
+      Language::SystemVerilog2017);
+  require(
+      !missing_struct_close.ok()
+          && std::any_of(
+              missing_struct_close.diagnostics.begin(),
+              missing_struct_close.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-087";
+              }),
+      "unterminated packed structs have a targeted closing-brace diagnostic");
 }
 
 void test_immediate_assertions() {

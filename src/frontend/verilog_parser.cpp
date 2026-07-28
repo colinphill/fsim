@@ -1972,7 +1972,131 @@ class VerilogParser final : private detail::ParserBase {
         ParameterDeclaration,
         Token>> enum_parameters;
     std::vector<EnumLiteralDeclaration> enum_literals;
-    if (match_keyword("enum")) {
+    if (match_keyword("struct")) {
+      if (!match_keyword("packed")) {
+        error(
+            current(),
+            "FSIM-SV-UNSUPPORTED-027",
+            "bounded struct typedefs require the packed qualifier");
+        skip_to_semicolon();
+        return;
+      }
+      type.spelling = "struct packed";
+      type.domain = ValueDomain::Bit2;
+      parse_optional_signedness(type);
+      expect(
+          TokenKind::LeftBrace,
+          "'{' before packed struct members",
+          "FSIM-SV-PARSE-086");
+      if (at(TokenKind::RightBrace)) {
+        error(
+            current(),
+            "FSIM-SV-PARSE-089",
+            "bounded packed structs require at least one member");
+      }
+      std::unordered_set<std::string> member_names;
+      while (!at_end() && !at(TokenKind::RightBrace)) {
+        const auto member_start = current();
+        Type member_type;
+        if (keyword("logic") || keyword("reg")
+            || keyword("bit")) {
+          const auto type_token = advance();
+          member_type.spelling = type_token.text;
+          member_type.domain =
+              type_token.text == "bit"
+                  ? ValueDomain::Bit2
+                  : ValueDomain::Logic4;
+          parse_optional_signedness(member_type);
+          parse_optional_range(member_type);
+        } else {
+          error(
+              current(),
+              "FSIM-SV-UNSUPPORTED-028",
+              "packed struct members require a non-aggregate bit, logic, "
+              "or reg type");
+          skip_to_semicolon();
+          continue;
+        }
+        for (;;) {
+          const auto member =
+              expect_identifier("packed struct member name");
+          if (at(TokenKind::LeftBracket)) {
+            error(
+                current(),
+                "FSIM-SV-UNSUPPORTED-029",
+                "unpacked struct member dimensions are not implemented");
+            skip_balanced(
+                TokenKind::LeftBracket,
+                TokenKind::RightBracket);
+          }
+          if (match(TokenKind::Assign)) {
+            (void)parse_expression();
+            error(
+                member,
+                "FSIM-SV-UNSUPPORTED-029",
+                "packed struct member initializers are not implemented");
+          }
+          if (!member_names.insert(member.text).second) {
+            error(
+                member,
+                "FSIM-SV-SEM-025",
+                "duplicate packed struct member '"
+                    + member.text + "'");
+          } else {
+            type.packed_members.push_back(PackedMember{
+                member.text,
+                member_type.domain,
+                member_type.spelling,
+                member_type.packed_range,
+                member_type.is_signed,
+                member_type.packed_range_expression,
+                0,
+                cover(member_start.span, previous().span)});
+            if (member_type.domain == ValueDomain::Logic4) {
+              type.domain = ValueDomain::Logic4;
+            }
+          }
+          if (!match(TokenKind::Comma)) {
+            break;
+          }
+        }
+        expect(
+            TokenKind::Semicolon,
+            "';' after packed struct member declaration",
+            "FSIM-SV-PARSE-088");
+      }
+      expect(
+          TokenKind::RightBrace,
+          "'}' after packed struct members",
+          "FSIM-SV-PARSE-087");
+      std::uint64_t total_width = 0;
+      bool concrete = !type.packed_members.empty();
+      for (const auto& member : type.packed_members) {
+        const auto width = member.width();
+        if (!width || *width == 0
+            || *width
+                > std::numeric_limits<std::uint64_t>::max()
+                    - total_width) {
+          concrete = false;
+          break;
+        }
+        total_width += *width;
+      }
+      if (concrete
+          && total_width - 1U
+              <= static_cast<std::uint64_t>(
+                  std::numeric_limits<std::int64_t>::max())) {
+        auto offset = total_width;
+        for (auto& member : type.packed_members) {
+          offset -= *member.width();
+          member.lsb_offset = offset;
+        }
+        type.packed_range = PackedRange{
+            static_cast<std::int64_t>(total_width - 1U),
+            0,
+            true};
+      }
+    } else if (match_keyword("enum")) {
       if (keyword("logic") || keyword("reg")
           || keyword("bit")) {
         const auto type_token = advance();

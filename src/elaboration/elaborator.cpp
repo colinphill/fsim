@@ -672,6 +672,75 @@ void substitute_parameters(
     const ConstantEnvironment& environment,
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
+    if (!type.packed_members.empty()) {
+        std::uint64_t total_width = 0;
+        bool valid = true;
+        for (auto& member : type.packed_members) {
+            if (member.packed_range_expression) {
+                std::string error;
+                const auto left = evaluate_constant_expression(
+                    member.packed_range_expression->left,
+                    environment,
+                    error);
+                const auto right = left
+                    ? evaluate_constant_expression(
+                          member.packed_range_expression->right,
+                          environment,
+                          error)
+                    : std::nullopt;
+                if (!left || !right) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-SVSTRUCT-001",
+                        "cannot evaluate packed struct member range: "
+                            + error,
+                        member.packed_range_expression->span});
+                    valid = false;
+                    continue;
+                }
+                member.packed_range = frontend::PackedRange{
+                    *left, *right, *left >= *right};
+                member.packed_range_expression.reset();
+            }
+            const auto width = member.width();
+            if (!width || *width == 0
+                || *width
+                    > std::numeric_limits<std::uint64_t>::max()
+                        - total_width) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SVSTRUCT-001",
+                    "packed struct member '" + member.name
+                        + "' has an invalid or overflowing width",
+                    member.span});
+                valid = false;
+                continue;
+            }
+            total_width += *width;
+        }
+        if (!valid || total_width == 0
+            || total_width - 1U
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max())) {
+            if (valid) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SVSTRUCT-001",
+                    "packed struct total width exceeds the supported range",
+                    type.packed_members.front().span});
+            }
+            type.packed_range.reset();
+            return;
+        }
+        auto offset = total_width;
+        for (auto& member : type.packed_members) {
+            offset -= *member.width();
+            member.lsb_offset = offset;
+        }
+        type.packed_range = frontend::PackedRange{
+            static_cast<std::int64_t>(total_width - 1U),
+            0,
+            true};
+        type.packed_range_expression.reset();
+        return;
+    }
     if (!type.packed_range_expression) {
         return;
     }
@@ -946,6 +1015,17 @@ void collect_qualified_identifiers(
         && type.named_type.find("::") != std::string::npos) {
         identifiers.try_emplace(
             type.named_type, type.named_type_span);
+    }
+    for (const auto& member : type.packed_members) {
+        if (!member.packed_range_expression) {
+            continue;
+        }
+        collect_qualified_identifiers(
+            member.packed_range_expression->left,
+            identifiers);
+        collect_qualified_identifiers(
+            member.packed_range_expression->right,
+            identifiers);
     }
     if (!type.packed_range_expression) {
         return;
@@ -2246,6 +2326,7 @@ public:
         locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
+        local_members_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = std::string(hierarchy) + "."
             + (source.name.empty()
@@ -2359,6 +2440,7 @@ public:
         locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
+        local_members_.clear();
         return std::move(process_);
     }
 
@@ -2375,6 +2457,7 @@ public:
         locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
+        local_members_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = name + ".concurrent_" + std::to_string(order);
         emit_debug_point(DebugPointKind::process_entry, statement.span);
@@ -2400,6 +2483,7 @@ public:
         locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
+        local_members_.clear();
         return std::move(process_);
     }
 
@@ -2460,6 +2544,8 @@ private:
                 variable.name, variable.type.is_signed);
             local_ranges_.emplace(
                 variable.name, variable.type.packed_range);
+            local_members_.emplace(
+                variable.name, variable.type.packed_members);
             process_.debug_locals.push_back(DebugLocal{
                 variable.name,
                 variable.type.spelling,
@@ -2767,6 +2853,7 @@ private:
         const Expression* base = &statement.target;
         std::optional<std::uint32_t> selected_offset;
         std::optional<std::size_t> selected_width;
+        std::optional<frontend::ValueDomain> selected_domain;
         if (statement.target.kind == ExpressionKind::Index
             && statement.target.operands.size() == 2) {
             base = &statement.target.operands[0];
@@ -2791,7 +2878,32 @@ private:
             return;
         }
 
-        const auto target_name = base->text;
+        auto target_name = base->text;
+        if (statement.target.kind == ExpressionKind::Identifier
+            && !locals_.contains(target_name)
+            && !signals_.contains(target_name)) {
+            if (const auto selected =
+                    packed_member_reference(target_name)) {
+                const auto width = selected->member->width();
+                if (!width || *width == 0
+                    || *width
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || selected->member->lsb_offset
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    report(
+                        "FSIM-ELAB-SVSTRUCT-002",
+                        "packed struct member '" + target_name
+                            + "' has no executable layout",
+                        statement.target.span);
+                    return;
+                }
+                target_name = selected->base;
+                selected_offset = static_cast<std::uint32_t>(
+                    selected->member->lsb_offset);
+                selected_width = static_cast<std::size_t>(*width);
+                selected_domain = selected->member->domain;
+            }
+        }
         const auto local = locals_.find(target_name);
         const auto signal = signals_.find(target_name);
         if (local == locals_.end() && signal == signals_.end()) {
@@ -2897,7 +3009,8 @@ private:
                 return;
             }
             const auto target_domain =
-                register_domain(local->second);
+                selected_domain.value_or(
+                    register_domain(local->second));
             if ((target_domain == frontend::ValueDomain::Bit2
                  || target_domain == frontend::ValueDomain::Boolean)
                 && register_domain(*value)
@@ -2940,7 +3053,8 @@ private:
             return;
         }
         const auto target_domain =
-            design_.signal_info_[signal->second].source_domain;
+            selected_domain.value_or(
+                design_.signal_info_[signal->second].source_domain);
         if ((target_domain == frontend::ValueDomain::Bit2
              || target_domain == frontend::ValueDomain::Boolean)
             && register_domain(*value) != frontend::ValueDomain::Bit2
@@ -3119,6 +3233,45 @@ private:
         }
     }
 
+    struct PackedMemberReference {
+        std::string base;
+        const frontend::PackedMember* member{};
+    };
+
+    std::optional<PackedMemberReference> packed_member_reference(
+        const std::string_view name) const {
+        const auto separator = name.rfind('.');
+        if (separator == std::string_view::npos
+            || separator == 0
+            || separator + 1 >= name.size()) {
+            return std::nullopt;
+        }
+        const auto base = std::string{name.substr(0, separator)};
+        const auto member_name = name.substr(separator + 1);
+        const std::vector<frontend::PackedMember>* members = nullptr;
+        if (const auto local = local_members_.find(base);
+            local != local_members_.end()) {
+            members = &local->second;
+        } else if (const auto signal = signals_.find(base);
+                   signal != signals_.end()) {
+            members =
+                &design_.signal_info_[signal->second].packed_members;
+        }
+        if (members == nullptr) {
+            return std::nullopt;
+        }
+        const auto member = std::find_if(
+            members->begin(),
+            members->end(),
+            [&](const frontend::PackedMember& candidate) {
+                return candidate.name == member_name;
+            });
+        if (member == members->end()) {
+            return std::nullopt;
+        }
+        return PackedMemberReference{base, &*member};
+    }
+
     std::optional<RegisterId> lower_expression(
         const Expression& expression, const std::size_t expected_width) {
         if (expression.kind == ExpressionKind::Identifier) {
@@ -3127,18 +3280,66 @@ private:
                 return local->second;
             }
             const auto found = signals_.find(expression.text);
-            if (found == signals_.end()) {
+            if (found != signals_.end()) {
+                const auto& signal =
+                    design_.signal_info_[found->second];
+                const auto destination = allocate_register(
+                    signal.width, signal.source_domain);
+                process_.operations.emplace_back(
+                    ReadSignal{destination, found->second});
+                return destination;
+            }
+            if (const auto selected =
+                    packed_member_reference(expression.text)) {
+                const auto base_width =
+                    infer_width(Expression{
+                        ExpressionKind::Identifier,
+                        selected->base,
+                        {},
+                        expression.span});
+                const auto member_width =
+                    selected->member->width();
+                if (!base_width || !member_width
+                    || *member_width == 0
+                    || selected->member->lsb_offset
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || *member_width
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    report(
+                        "FSIM-ELAB-SVSTRUCT-002",
+                        "packed struct member '" + expression.text
+                            + "' has no executable layout",
+                        expression.span);
+                    return std::nullopt;
+                }
+                const auto source = lower_expression(
+                    Expression{
+                        ExpressionKind::Identifier,
+                        selected->base,
+                        {},
+                        expression.span},
+                    *base_width);
+                if (!source) {
+                    return std::nullopt;
+                }
+                const auto destination = allocate_register(
+                    *member_width,
+                    selected->member->domain);
+                process_.operations.emplace_back(Extract{
+                    destination,
+                    *source,
+                    static_cast<std::uint32_t>(
+                        selected->member->lsb_offset),
+                    static_cast<std::uint32_t>(*member_width)});
+                return destination;
+            }
+            {
                 report(
                     "FSIM-ELAB-040",
                     "unknown identifier '" + expression.text + "'",
                     expression.span);
                 return std::nullopt;
             }
-            const auto& signal = design_.signal_info_[found->second];
-            const auto destination =
-                allocate_register(signal.width, signal.source_domain);
-            process_.operations.emplace_back(ReadSignal{destination, found->second});
-            return destination;
         }
         if (expression.kind == ExpressionKind::IntegerLiteral
             || expression.kind == ExpressionKind::BooleanLiteral
@@ -3971,6 +4172,15 @@ private:
             if (const auto found = signals_.find(expression.text); found != signals_.end()) {
                 return design_.signal_info_[found->second].width;
             }
+            if (const auto selected =
+                    packed_member_reference(expression.text)) {
+                const auto width = selected->member->width();
+                if (width
+                    && *width
+                        <= std::numeric_limits<std::size_t>::max()) {
+                    return static_cast<std::size_t>(*width);
+                }
+            }
         }
         for (const auto& operand : expression.operands) {
             if (const auto width = infer_width(operand)) {
@@ -3997,6 +4207,12 @@ private:
                 return *design_
                             .signal_info_[signal->second]
                             .packed_range;
+            }
+            if (const auto selected =
+                    packed_member_reference(expression.text);
+                selected
+                && selected->member->packed_range) {
+                return *selected->member->packed_range;
             }
         }
         if (width == 0
@@ -4043,6 +4259,10 @@ private:
             if (const auto signal = signals_.find(expression.text);
                     signal != signals_.end()) {
                 return design_.signal_info_[signal->second].is_signed;
+            }
+            if (const auto selected =
+                    packed_member_reference(expression.text)) {
+                return selected->member->is_signed;
             }
             return false;
         case ExpressionKind::IntegerLiteral:
@@ -4115,7 +4335,12 @@ private:
         const Expression& expression,
         std::set<std::string>& output) const {
         if (expression.kind == ExpressionKind::Identifier) {
-            output.insert(expression.text);
+            if (const auto selected =
+                    packed_member_reference(expression.text)) {
+                output.insert(selected->base);
+            } else {
+                output.insert(expression.text);
+            }
         } else if (
             language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
@@ -4203,6 +4428,9 @@ private:
     std::unordered_map<
         std::string, std::optional<frontend::PackedRange>>
         local_ranges_;
+    std::unordered_map<
+        std::string, std::vector<frontend::PackedMember>>
+        local_members_;
     frontend::Language language_{frontend::Language::Vhdl2008};
 };
 
@@ -5621,6 +5849,7 @@ private:
             declaration.type.domain,
             declaration.type.is_signed,
             declaration.type.packed_range,
+            declaration.type.packed_members,
             declaration.is_port,
             declaration.direction});
         auto initial = Logic4::x;
@@ -5715,7 +5944,8 @@ private:
         const frontend::SignalDeclaration& port,
         const SignalInfo& actual,
         const std::string& path,
-        const frontend::SourceSpan& source) {
+        const frontend::SourceSpan& source,
+        const bool cross_language) {
         const auto unsupported_domain =
             [](const frontend::ValueDomain domain) {
                 return domain == frontend::ValueDomain::Unknown
@@ -5727,6 +5957,17 @@ private:
                 "FSIM-ELAB-BIND-019",
                 "unsupported value domain on boundary '"
                     + path + "." + port.name + "'",
+                source);
+            return;
+        }
+        if (cross_language
+            && (!port.type.packed_members.empty()
+                || !actual.packed_members.empty())) {
+            report(
+                "FSIM-ELAB-BIND-049",
+                "packed struct boundary '" + path + "."
+                    + port.name
+                    + "' requires a same-language scalar/vector wrapper",
                 source);
             return;
         }
@@ -5870,7 +6111,12 @@ private:
             }
             const auto& port = ports[port_index];
             const auto& actual_info = design_.signal_info_.at(actual->second);
-            validate_boundary_type(port, actual_info, path, connection.span);
+            validate_boundary_type(
+                port,
+                actual_info,
+                path,
+                connection.span,
+                cross_language);
             if (cross_language
                 && port.direction == frontend::PortDirection::Inout) {
                 if (binding == nullptr || !binding->resolver) {
@@ -6051,9 +6297,9 @@ private:
             const auto& actual_info =
                 design_.signal_info_.at(actual->second);
             validate_boundary_type(
-                placeholder, actual_info, path, {});
+                placeholder, actual_info, path, {}, true);
             validate_boundary_type(
-                *formal, actual_info, path, {});
+                *formal, actual_info, path, {}, true);
             if (placeholder.direction != formal->direction) {
                 report(
                     "FSIM-ELAB-BIND-037",

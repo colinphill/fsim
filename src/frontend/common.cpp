@@ -61,11 +61,34 @@ std::uint64_t PackedRange::width() const noexcept {
   return distance + 1;
 }
 
+std::optional<std::uint64_t> PackedMember::width() const noexcept {
+  if (packed_range) {
+    return packed_range->width();
+  }
+  if (packed_range_expression) {
+    return std::nullopt;
+  }
+  switch (domain) {
+    case ValueDomain::Bit2:
+    case ValueDomain::Logic4:
+    case ValueDomain::Logic9:
+    case ValueDomain::Boolean:
+      return 1;
+    case ValueDomain::Integer:
+    case ValueDomain::Unknown:
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 std::optional<std::uint64_t> Type::width() const noexcept {
   if (packed_range) {
     return packed_range->width();
   }
   if (packed_range_expression) {
+    return std::nullopt;
+  }
+  if (!packed_members.empty()) {
     return std::nullopt;
   }
   switch (domain) {

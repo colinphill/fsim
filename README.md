@@ -39,7 +39,8 @@ The current tree contains:
   cache provenance;
 - bounded SystemVerilog packages with immutable integral
   parameters/localparams, packed integral typedef aliases, and packed enum
-  types/enumerators; wildcard or selected imports; direct
+  types/enumerators plus non-nested packed struct types with executable member
+  reads/writes; wildcard or selected imports; direct
   `package::constant`/`package::type` references; recursive dependency
   diagnostics; and precise specialization provenance;
 - Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
