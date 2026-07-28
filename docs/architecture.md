@@ -377,6 +377,15 @@ stop remains distinguishable after finals complete. The frontend rejects
 timing controls, waits, `$finish`, and NBAs in a final body, preventing a final
 procedure from suspending or scheduling future time.
 
+Verilog/SystemVerilog `$stop` lowers to a distinct SimIR `Pause` boundary.
+Both engines preserve the process frame at the following instruction and
+return a non-design stop to the application. Clearing the scheduler stop and
+running again resumes that process without replaying earlier statements.
+Unlike terminal `$finish`, a pause does not execute final procedures; finals
+run only after the resumed design reaches quiescence or `$finish`. LLVM exposes
+this boundary through append-only native resume status `10`, while leaving the
+frame in the ready state.
+
 SystemVerilog logical negation reduces a packed operand using four-state truth
 semantics: any known `1` makes `!` false, an otherwise unknown-containing
 operand produces `X`, and an all-zero operand produces true. Unsigned

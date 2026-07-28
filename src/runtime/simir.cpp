@@ -1872,6 +1872,15 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
+  if (std::holds_alternative<Pause>(operation)) {
+    clear_wait_timeout(process);
+    scheduler.request_stop();
+    queue_current(process.program.id);
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
+    return;
+  }
   if (std::holds_alternative<Stop>(operation)) {
     clear_wait_timeout(process);
     process.halted = true;
@@ -2249,6 +2258,9 @@ void Interpreter::Impl::execute(ProcessId id) {
                     op.source);
               }
               ++process.pc;
+            },
+            [&](const Pause &) {
+              boundary = true;
             },
             [&](const Stop &) {
               boundary = true;

@@ -1206,6 +1206,65 @@ void test_simir_design_stop_identity() {
       "external stop must not masquerade as language-level completion");
 }
 
+void test_simir_pause_resume_lifecycle() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto before = interpreter.add_signal(
+      {"top.before", PackedLogic4::from_msb_string("0")});
+  const auto after = interpreter.add_signal(
+      {"top.after", PackedLogic4::from_msb_string("0")});
+  const auto final_hit = interpreter.add_signal(
+      {"top.final_hit", PackedLogic4::from_msb_string("0")});
+
+  Process initial;
+  initial.id = 0;
+  initial.name = "initial";
+  initial.register_count = 1;
+  initial.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteBlocking{before, 0},
+      Pause{},
+      WriteBlocking{after, 0},
+      Halt{}};
+  (void)interpreter.add_process(std::move(initial));
+
+  Process final;
+  final.id = 1;
+  final.name = "final";
+  final.register_count = 1;
+  final.initialize = false;
+  final.final = true;
+  final.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteBlocking{final_hit, 0},
+      Halt{}};
+  (void)interpreter.add_process(std::move(final));
+
+  const auto paused = interpreter.run();
+  require(
+      paused.status == RunStatus::stopped
+          && !interpreter.stopped_by_design()
+          && interpreter.signal_value(before).to_msb_string() == "1"
+          && interpreter.signal_value(after).to_msb_string() == "0"
+          && interpreter.signal_value(final_hit).to_msb_string() == "0",
+      "Pause must stop externally before its continuation or finals run");
+
+  interpreter.scheduler().clear_stop();
+  const auto resumed = interpreter.run();
+  require(
+      resumed.status == RunStatus::completed
+          && !interpreter.stopped_by_design()
+          && interpreter.signal_value(after).to_msb_string() == "1"
+          && interpreter.signal_value(final_hit).to_msb_string() == "1",
+      "clearing the pause must resume at the next operation and run finals");
+  require(
+      interpreter.run().status == RunStatus::completed
+          && interpreter.signal_value(final_hit).to_msb_string() == "1",
+      "resume completion must not rerun final processes");
+}
+
 void test_simir_final_process_lifecycle() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2800,6 +2859,7 @@ int main() {
     test_simir_insert_and_partial_writes();
     test_simir_force_release();
     test_simir_design_stop_identity();
+    test_simir_pause_resume_lifecycle();
     test_simir_final_process_lifecycle();
     test_simir_alternate_executor_context_and_boundaries();
     test_simir_alternate_executor_dynamic_wait();

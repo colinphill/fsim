@@ -65,6 +65,7 @@ using runtime::simir::LogicalBinary;
 using runtime::simir::LogicalBinaryOperator;
 using runtime::simir::LogicalNot;
 using runtime::simir::Operation;
+using runtime::simir::Pause;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
 using runtime::simir::Reduction;
@@ -876,6 +877,7 @@ validate_process(const Process &process,
             },
             [&](const WaitForever &) {},
             [&](const Yield &) {},
+            [&](const Pause &) {},
             [&](const Stop &) {}},
         process.operations[index]);
   }
@@ -1013,7 +1015,8 @@ validate_process(const Process &process,
            std::holds_alternative<WaitOn>(operation) ||
            std::holds_alternative<WaitSensitivity>(operation) ||
            std::holds_alternative<WaitForever>(operation) ||
-           std::holds_alternative<Yield>(operation);
+           std::holds_alternative<Yield>(operation) ||
+           std::holds_alternative<Pause>(operation);
   };
   const auto is_cycle_safe_point =
       [&](const Operation& operation) {
@@ -1489,6 +1492,9 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
             },
             [&](const Yield &) {
               builder.add("operation", "Yield");
+            },
+            [&](const Pause &) {
+              builder.add("operation", "Pause");
             },
             [&](const Stop &) {
               builder.add("operation", "Stop");
@@ -3080,6 +3086,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   FSIM_JIT_RESUME_STATUS_YIELDED, instruction, 0,
                   FSIM_JIT_FRAME_STATE_READY, next_instruction);
             },
+            [&](const Pause &) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_PAUSED, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            },
             [&](const Stop &) {
               return_result(
                   FSIM_JIT_RESUME_STATUS_STOPPED, instruction, 0,
@@ -3609,6 +3620,11 @@ LlvmJit::resume(const JitProcessHandle process,
       throw LlvmJitError("generated process returned an invalid frame state");
     }
     return JitResumeStatus::yielded;
+  case FSIM_JIT_RESUME_STATUS_PAUSED:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::paused;
   case FSIM_JIT_RESUME_STATUS_STOPPED:
     if (frame.state != FSIM_JIT_FRAME_STATE_STOPPED) {
       throw LlvmJitError("generated process returned an invalid frame state");
@@ -3667,6 +3683,7 @@ LlvmJit::execute(const JitProcessHandle process,
   case JitResumeStatus::wait_forever:
   case JitResumeStatus::yielded:
   case JitResumeStatus::debug_point:
+  case JitResumeStatus::paused:
     throw LlvmJitError(
         "compiled process suspended during one-shot execution");
   default:

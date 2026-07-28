@@ -2868,6 +2868,7 @@ class VerilogParser final : private detail::ParserBase {
             || statement.kind == StatementKind::Delay
             || statement.kind == StatementKind::WaitOn
             || statement.kind == StatementKind::WaitUntil
+            || statement.kind == StatementKind::Pause
             || statement.kind == StatementKind::Finish;
         has_nonblocking =
             has_nonblocking
@@ -3489,6 +3490,26 @@ class VerilogParser final : private detail::ParserBase {
              "FSIM-SV-PARSE-021");
       Statement statement;
       statement.kind = StatementKind::Finish;
+      statement.span = span_from(start, previous());
+      return statement;
+    }
+    if (keyword("$stop")) {
+      const auto start = advance();
+      if (match(TokenKind::LeftParen)) {
+        if (!at(TokenKind::RightParen)) {
+          (void)parse_expression();
+        }
+        expect(
+            TokenKind::RightParen,
+            "')' after $stop",
+            "FSIM-SV-PARSE-112");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after $stop",
+          "FSIM-SV-PARSE-113");
+      Statement statement;
+      statement.kind = StatementKind::Pause;
       statement.span = span_from(start, previous());
       return statement;
     }

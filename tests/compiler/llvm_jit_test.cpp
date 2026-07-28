@@ -761,6 +761,7 @@ void test_control_flow_at_level(const JitOptimizationLevel optimization,
       UnaryNot{1, 0},
       WriteBlocking{1, 1},
       Yield{},
+      Pause{},
       LoadConstant{0, PackedLogic4::from_msb_string("00111100")},
       WriteBlocking{0, 0},
       Stop{},
@@ -908,9 +909,17 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   assert(register_bval[1] == 0);
 
   assert(jit.resume(handle, descriptor, frame, result) ==
+         JitResumeStatus::paused);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_PAUSED);
+  assert(result.instruction == 6);
+  assert(result.delay == 0);
+  assert(frame.program_counter == 7);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+
+  assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::stopped);
   assert(result.status == FSIM_JIT_RESUME_STATUS_STOPPED);
-  assert(result.instruction == 8);
+  assert(result.instruction == 9);
   assert(frame.program_counter == process.operations.size());
   assert(frame.state == FSIM_JIT_FRAME_STATE_STOPPED);
   const auto writes_before_terminal_resume = runtime.writes.size();
@@ -930,9 +939,13 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
         reference_writes.emplace_back(signal, encode(value));
       });
   (void)interpreter.add_process(process);
+  const auto paused_result = interpreter.run();
+  assert(paused_result.status == fsim::runtime::RunStatus::stopped);
+  assert(paused_result.time == 5);
+  assert(!interpreter.stopped_by_design());
+  interpreter.scheduler().clear_stop();
   const auto reference_result = interpreter.run();
   assert(reference_result.status == fsim::runtime::RunStatus::stopped);
-  assert(reference_result.time == 5);
   assert(interpreter.stopped_by_design());
   assert(runtime.writes == reference_writes);
   assert(encode(interpreter.signal_value(0)) == runtime.signals[0]);

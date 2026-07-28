@@ -25,6 +25,8 @@ _Static_assert(FSIM_JIT_RESUME_STATUS_DEBUG_POINT == UINT32_C(8),
                "debug-point resume status was not appended");
 _Static_assert(FSIM_JIT_RESUME_STATUS_WAIT_FOREVER == UINT32_C(9),
                "permanent-wait resume status was not appended");
+_Static_assert(FSIM_JIT_RESUME_STATUS_PAUSED == UINT32_C(10),
+               "language pause resume status was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, abi_version) == 0,
                "runtime ABI version offset changed");
 _Static_assert(offsetof(fsim_jit_runtime_v1, struct_size) == 4,

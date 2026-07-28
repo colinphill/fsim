@@ -61,6 +61,7 @@ enum class JitResumeStatus : std::uint32_t {
   wait_sensitivity = FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY,
   debug_point = FSIM_JIT_RESUME_STATUS_DEBUG_POINT,
   wait_forever = FSIM_JIT_RESUME_STATUS_WAIT_FOREVER,
+  paused = FSIM_JIT_RESUME_STATUS_PAUSED,
 };
 
 struct JitProcessFrameLayout {

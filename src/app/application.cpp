@@ -261,6 +261,10 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
         require_boundary<runtime::simir::DebugPoint>(
             result.instruction, "debug point");
         break;
+      case compiler::JitResumeStatus::paused:
+        require_boundary<runtime::simir::Pause>(
+            result.instruction, "pause");
+        break;
       case compiler::JitResumeStatus::stopped:
         require_boundary<runtime::simir::Stop>(
             result.instruction, "stop");

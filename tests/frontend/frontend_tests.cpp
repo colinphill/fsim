@@ -1189,6 +1189,7 @@ module invalid_final;
   final begin
     #1;
     value <= 1'b1;
+    $stop;
   end
 endmodule
 )",
@@ -1225,6 +1226,63 @@ endmodule
                     == "FSIM-VERILOG-SEM-006";
               }),
       "final procedures must remain SystemVerilog-only");
+}
+
+void test_verilog_stop_task() {
+  for (const auto language :
+       {Language::Verilog2005, Language::SystemVerilog2017}) {
+    const auto result = parse_text(
+        language == Language::Verilog2005
+            ? "stop_task.v"
+            : "stop_task.sv",
+        R"(
+module stop_task;
+  initial begin
+    $stop;
+    $stop(1);
+  end
+endmodule
+)",
+        language);
+    require(
+        result.ok(),
+        "Verilog/SystemVerilog $stop tasks must parse");
+    const auto& statements =
+        result.design.units.front().processes.front().statements;
+    require(
+        statements.size() == 2
+            && statements[0].kind == StatementKind::Pause
+            && statements[1].kind == StatementKind::Pause,
+        "$stop and $stop(argument) must retain resumable pause HIR");
+  }
+
+  const auto missing_close = parse_text(
+      "invalid_stop_close.sv",
+      "module invalid_stop_close; initial $stop(1; endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !missing_close.ok()
+          && std::ranges::any_of(
+              missing_close.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-112";
+              }),
+      "a missing $stop closing parenthesis must be targeted");
+
+  const auto missing_semicolon = parse_text(
+      "invalid_stop_semicolon.v",
+      "module invalid_stop_semicolon; initial $stop endmodule",
+      Language::Verilog2005);
+  require(
+      !missing_semicolon.ok()
+          && std::ranges::any_of(
+              missing_semicolon.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-113";
+              }),
+      "a missing $stop semicolon must be targeted");
 }
 
 void test_vhdl_conditional_assignments() {
@@ -5018,6 +5076,7 @@ int main() {
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
     test_systemverilog_final_procedures();
+    test_verilog_stop_task();
     test_vhdl_conditional_assignments();
     test_vhdl_selected_assignments();
     test_vhdl_case_statements();

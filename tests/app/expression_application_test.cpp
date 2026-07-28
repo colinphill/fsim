@@ -32,6 +32,15 @@ struct Capture {
   std::size_t compiled_modules{};
 };
 
+struct StopCapture {
+  fsim::runtime::RunResult paused;
+  fsim::runtime::RunResult resumed;
+  std::vector<std::string> paused_values;
+  std::vector<std::string> resumed_values;
+  std::size_t compiled_processes{};
+  std::size_t compiled_modules{};
+};
+
 void print_diagnostics(const fsim::diagnostic::Engine& diagnostics) {
   for (const auto& diagnostic : diagnostics.diagnostics()) {
     std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
@@ -64,6 +73,42 @@ template <std::size_t SignalCount>
   capture.values.reserve(signals.size());
   for (const auto signal : signals) {
     capture.values.push_back(
+        simulation.read_signal(signal).to_msb_string());
+  }
+  return capture;
+}
+
+[[nodiscard]] StopCapture run_stop(
+    fsim::app::BuiltProject project,
+    const fsim::app::SimulationEngine engine) {
+  const std::array<std::string, 3> signal_paths{
+      "stop_app.before_stop",
+      "stop_app.after_stop",
+      "stop_app.final_hit"};
+  std::array<fsim::runtime::simir::SignalId, 3> signals{};
+  for (std::size_t index = 0; index < signal_paths.size(); ++index) {
+    const auto signal = project.design.find_signal(signal_paths[index]);
+    assert(signal);
+    signals[index] = *signal;
+  }
+
+  fsim::app::Simulation simulation(
+      std::move(project), 1000, engine);
+  StopCapture capture;
+  capture.compiled_processes = simulation.compiled_process_count();
+  capture.compiled_modules = simulation.compiled_module_count();
+  capture.paused = simulation.run();
+  assert(!simulation.finished());
+  for (const auto signal : signals) {
+    capture.paused_values.push_back(
+        simulation.read_signal(signal).to_msb_string());
+  }
+
+  simulation.clear_stop();
+  capture.resumed = simulation.run();
+  assert(simulation.finished());
+  for (const auto signal : signals) {
+    capture.resumed_values.push_back(
         simulation.read_signal(signal).to_msb_string());
   }
   return capture;
@@ -717,6 +762,72 @@ void test_vhdl_falling_edge(
 #endif
 }
 
+void test_verilog_stop(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "verilog-stop-test";
+  config.project.top = "sv:work.stop_app";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "stop-cache-o0"
+             : "stop-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::system_verilog;
+  sources.standard = "2017";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    print_diagnostics(diagnostics);
+  }
+  assert(reference_project);
+  assert(compiled_project);
+
+  const auto reference = run_stop(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto compiled = run_stop(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled);
+  assert(reference.paused.status == fsim::runtime::RunStatus::stopped);
+  assert(reference.paused.status == compiled.paused.status);
+  assert(reference.paused.time == compiled.paused.time);
+  assert(reference.paused.delta == compiled.paused.delta);
+  assert(reference.paused_values == compiled.paused_values);
+  assert((
+      compiled.paused_values
+      == std::vector<std::string>{"1", "X", "X"}));
+  assert(reference.resumed.status == fsim::runtime::RunStatus::stopped);
+  assert(reference.resumed.status == compiled.resumed.status);
+  assert(reference.resumed.time == compiled.resumed.time);
+  assert(reference.resumed.delta == compiled.resumed.delta);
+  assert(reference.resumed_values == compiled.resumed_values);
+  assert((
+      compiled.resumed_values
+      == std::vector<std::string>{"1", "1", "1"}));
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes == 2);
+  assert(compiled.compiled_modules == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -1086,6 +1197,24 @@ begin
 end architecture;
 )";
   }
+  const auto stop_source = directory.path / "stop.sv";
+  {
+    std::ofstream output(stop_source);
+    output << R"(
+module stop_app;
+  logic before_stop;
+  logic after_stop;
+  logic final_hit;
+  initial begin
+    before_stop = 1'b1;
+    $stop;
+    after_stop = 1'b1;
+    $finish;
+  end
+  final final_hit = 1'b1;
+endmodule
+)";
+  }
 
   test_wildcard_equality(
       directory.path, source, fsim::project::Optimization::o0);
@@ -1138,5 +1267,13 @@ end architecture;
   test_vhdl_falling_edge(
       directory.path,
       falling_edge_source,
+      fsim::project::Optimization::o2);
+  test_verilog_stop(
+      directory.path,
+      stop_source,
+      fsim::project::Optimization::o0);
+  test_verilog_stop(
+      directory.path,
+      stop_source,
       fsim::project::Optimization::o2);
 }

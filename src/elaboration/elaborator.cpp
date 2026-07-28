@@ -2916,6 +2916,9 @@ private:
         case StatementKind::WaitUntil:
             lower_wait_until(statement);
             break;
+        case StatementKind::Pause:
+            process_.operations.emplace_back(Pause{});
+            break;
         case StatementKind::Finish:
             process_.operations.emplace_back(Stop{});
             break;
@@ -6011,6 +6014,7 @@ private:
             case StatementKind::Continue:
             case StatementKind::Delay:
             case StatementKind::WaitOn:
+            case StatementKind::Pause:
             case StatementKind::Finish:
             case StatementKind::Block:
             case StatementKind::Null:

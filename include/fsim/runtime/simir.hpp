@@ -332,6 +332,9 @@ struct Assert {
 /// language construct.
 struct Stop {};
 
+/// Pause simulation at a resumable boundary, as requested by `$stop`.
+struct Pause {};
+
 struct Halt {};
 
 using Operation =
@@ -341,7 +344,7 @@ using Operation =
                  WriteBlocking, WriteUpdate, WriteAfter, WriteBlockingSlice,
                  WriteUpdateSlice, WriteAfterSlice, WaitFor, WaitOn,
                  WaitSensitivity, WaitForever, Yield, Jump, Branch,
-                 DebugPoint, Assert, Stop, Halt>;
+                 DebugPoint, Assert, Pause, Stop, Halt>;
 
 struct Signal {
   std::string name;
