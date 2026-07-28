@@ -3,7 +3,9 @@
 
 #include "fsim/support/sha256.hpp"
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -13,6 +15,30 @@
 #include <vector>
 
 namespace fsim::compiler {
+
+struct ObjectCachePruneOptions {
+    std::optional<std::uintmax_t> maximum_bytes;
+    std::optional<std::size_t> maximum_entries;
+    std::optional<std::chrono::seconds> maximum_age;
+    bool remove_stale_temporary_files{true};
+    std::chrono::seconds temporary_file_grace{std::chrono::hours{1}};
+};
+
+struct ObjectCachePruneResult {
+    std::uint64_t scanned_entries{};
+    std::uint64_t removed_entries{};
+    std::uint64_t skipped_locked_entries{};
+    std::uint64_t removed_temporary_files{};
+    std::uint64_t failed_removals{};
+    std::uintmax_t bytes_before{};
+    std::uintmax_t bytes_removed{};
+    std::uint64_t remaining_entries{};
+    std::uintmax_t remaining_bytes{};
+
+    friend bool operator==(
+        const ObjectCachePruneResult&,
+        const ObjectCachePruneResult&) = default;
+};
 
 class CacheKeyBuilder final {
 public:
@@ -41,6 +67,10 @@ public:
     bool store(
         std::string_view key, std::span<const std::byte> payload, std::error_code& error) const;
     bool erase(std::string_view key, std::error_code& error) const;
+    bool prune(
+        const ObjectCachePruneOptions& options,
+        ObjectCachePruneResult& result,
+        std::error_code& error) const;
 
 private:
     std::filesystem::path root_;

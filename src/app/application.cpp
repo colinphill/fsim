@@ -2007,7 +2007,8 @@ void report_native_cache_failures(
     const Simulation& simulation,
     diagnostic::Engine& diagnostics) {
   const auto cache = simulation.native_cache_statistics();
-  if (cache.load_failures == 0 && cache.store_failures == 0) {
+  if (cache.load_failures == 0 && cache.store_failures == 0
+      && cache.prune_failures == 0) {
     return;
   }
   diagnostics.warning(
@@ -2016,8 +2017,10 @@ void report_native_cache_failures(
           + std::to_string(cache.load_failures)
           + " load failure(s) and "
           + std::to_string(cache.store_failures)
-          + " store failure(s); simulation remains valid, but cache reuse "
-            "may be incomplete");
+          + " store failure(s), and "
+          + std::to_string(cache.prune_failures)
+          + " prune failure(s); simulation remains valid, but cache reuse "
+            "or eviction may be incomplete");
 }
 
 int handle_check(
@@ -4168,6 +4171,9 @@ NativeCacheStatistics Simulation::native_cache_statistics() const noexcept {
         statistics.rejected_entries,
         statistics.load_failures,
         statistics.store_failures,
+        statistics.pruned_entries,
+        statistics.pruned_bytes,
+        statistics.prune_failures,
     };
   }
 #endif

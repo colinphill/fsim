@@ -692,7 +692,7 @@ therefore excluded.
 | `FSIM-CACHE-0001` | error | A parsed source could not be hashed or associated with its cache provenance. |
 | `FSIM-CACHE-0002` | warning | An unreadable or incompatible design-cache entry was discarded. |
 | `FSIM-CACHE-0003` | error | A design-cache entry could not be populated. |
-| `FSIM-CACHE-0004` | warning | Native-object cache load or store failures prevented complete cache reuse. |
+| `FSIM-CACHE-0004` | warning | Native-object cache load, store, or prune failures prevented complete cache reuse or eviction. |
 
 ## SystemC source compiler and plug-in validation
 

@@ -4,9 +4,11 @@
 #include "fsim/compiler/jit_runtime.h"
 #include "fsim/runtime/simir.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -23,6 +25,13 @@ struct LlvmJitOptions {
   JitOptimizationLevel optimization = JitOptimizationLevel::o2;
   /// Empty disables persistent native-object caching.
   std::filesystem::path cache_directory;
+  /// Automatic native-object pruning is best-effort and never blocks JIT
+  /// construction. Null limits disable the corresponding policy.
+  std::optional<std::uintmax_t> cache_maximum_bytes{
+      std::uintmax_t{10} * 1024U * 1024U * 1024U};
+  std::optional<std::size_t> cache_maximum_entries{10'000};
+  std::optional<std::chrono::seconds> cache_maximum_age{
+      std::chrono::hours{24 * 30}};
 };
 
 struct LlvmJitCacheStatistics {
@@ -32,6 +41,9 @@ struct LlvmJitCacheStatistics {
   std::uint64_t rejected_entries{};
   std::uint64_t load_failures{};
   std::uint64_t store_failures{};
+  std::uint64_t pruned_entries{};
+  std::uintmax_t pruned_bytes{};
+  std::uint64_t prune_failures{};
 
   friend bool operator==(LlvmJitCacheStatistics,
                          LlvmJitCacheStatistics) = default;
@@ -139,8 +151,9 @@ private:
 ///
 /// Persistent caching is opt-in through LlvmJitOptions::cache_directory.
 /// Cached native objects are checksummed and keyed to the complete supported
-/// SimIR module plus the native compilation environment. The adapter does not
-/// currently evict entries by age or total cache size.
+/// SimIR module plus the native compilation environment. Construction performs
+/// best-effort deterministic LRU pruning using configurable age, entry-count,
+/// and encoded-byte limits.
 class LlvmJit final {
 public:
   explicit LlvmJit(LlvmJitOptions options = {});

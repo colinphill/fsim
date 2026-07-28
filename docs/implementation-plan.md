@@ -461,6 +461,10 @@ Completed:
   incompatible-object tests, including scheduled-write kind and delay cache
   identity plus wait kind, operands, referenced widths, and dynamic/static
   edge data;
+- deterministic cache enumeration and hit-refreshed LRU pruning by age,
+  entry count, and encoded bytes, with live-lock avoidance, stale-temporary
+  cleanup, malformed-file preservation, empty-shard reclamation, and
+  best-effort LLVM startup telemetry;
 - O0/O2 grouped-module cache tests proving two functions share one native
   object, a changed group member invalidates that object, and the unchanged
   member retains its per-process frame identity;
@@ -673,7 +677,7 @@ Remaining before v1 release:
 - keep Linux and Windows continuously green with LLVM enabled where required;
 - run and grow sanitizer/fuzzer corpora until the full frontends and serialized
   SimIR are covered;
-- complete cache size/age eviction and every compiler/environment fingerprint;
+- complete every remaining compiler/environment cache fingerprint;
 - finish Windows Unicode path, Ctrl-C, DLL, plug-in compiler, and cache tests;
 - add benchmark runners and track cold build, warm startup, events/second,
   memory, wide values, resolved nets, crossings, trace overhead, and debug
@@ -725,29 +729,27 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The fifth post-gate batch is implementation-complete:
+The sixth post-gate batch is implementation-complete:
 
-1. composable scheduler safe-point observers;
-2. preservation of Tcl safe-point callbacks while debugger/interrupt primary
-   hooks change;
-3. runtime `fsim::project load` from the interactive or batch shell;
-4. transactional failed-load behavior that preserves the current project;
-5. deterministic reset of built, live, terminal, or poisoned sessions on
-   successful project replacement while callback registrations persist;
-6. runtime trace-file configuration and disable before simulation;
-7. trace-status dictionaries and ordered filter configuration;
-8. rejection of late trace reconfiguration after simulation starts;
-9. synchronous assertion callbacks with retained command-prefix arguments,
-   process, severity, message, path, line, and column; and
-10. assertion diagnostics plus started/stopped lifecycle and poisoned-session
-    state.
+1. canonical native-object entry enumeration across cache shards;
+2. deterministic maximum-entry-count eviction;
+3. encoded on-disk maximum-byte eviction;
+4. maximum-age eviction;
+5. successful-load recency refresh for oldest-first LRU ordering;
+6. nonblocking skip of entries protected by a live per-key writer lock;
+7. stale publisher-temporary cleanup under the destination lock;
+8. preservation of malformed/unrelated files plus empty canonical-shard
+   reclamation;
+9. prune result and LLVM cache telemetry for entries, bytes, skips, and
+   failures; and
+10. best-effort LLVM startup pruning with 10 GiB, 10,000-entry, and 30-day
+    defaults that never prevent JIT construction.
 
-Every item has focused application evidence. A debugger safe callback stops at
-tick 1 and resumes to terminal tick 2; failed and successful project
-replacement are both exercised; a real configured trace is opened with its
-filter; and a source assertion is checked through callback, diagnostic, CLI
-rendering, and poisoned lifecycle state. The interval LLVM 22 Debug regression
-passed all 16 tests in 154.61 seconds. This batch is ready to commit and push.
+Focused cache and LLVM tests cover combined limits, touched-entry survival,
+active-lock retry, temporary grace periods, invalid policies, absent roots,
+malformed files, adapter pruning, and an unusable cache root. The interval
+LLVM 22 Debug regression passed all 16 tests in 165.74 seconds. This batch is
+ready to commit and push.
 
 ## v1 release condition
 

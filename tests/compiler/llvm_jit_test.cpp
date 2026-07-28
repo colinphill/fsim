@@ -2241,6 +2241,7 @@ void expect_cache_statistics(const LlvmJit &jit, const std::uint64_t hits,
   assert(statistics.rejected_entries == rejected_entries);
   assert(statistics.load_failures == 0);
   assert(statistics.store_failures == 0);
+  assert(statistics.prune_failures == 0);
 }
 
 void run_cached_process(LlvmJit &jit, const std::string_view symbol,
@@ -2981,6 +2982,46 @@ void test_optimization_cache_invalidation(
   }
 }
 
+void test_cache_pruning_integration(
+    const std::filesystem::path& cache_directory) {
+  fsim::compiler::ObjectCache storage{
+      cache_directory / "llvm" / "objects"};
+  fsim::compiler::CacheKeyBuilder builder;
+  const auto key = builder.add("seed", "prune-me").finish();
+  const std::array payload{
+      std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef}};
+  std::error_code error;
+  assert(storage.store(key, payload, error));
+  const auto encoded_size =
+      std::filesystem::file_size(storage.path_for(key), error);
+  assert(!error);
+
+  LlvmJitOptions options{JitOptimizationLevel::o2, cache_directory};
+  options.cache_maximum_bytes.reset();
+  options.cache_maximum_entries = 0;
+  options.cache_maximum_age.reset();
+  LlvmJit pruned{options};
+  const auto statistics = pruned.cache_statistics();
+  assert(statistics.pruned_entries == 1);
+  assert(statistics.pruned_bytes == encoded_size);
+  assert(statistics.prune_failures == 0);
+  assert(!std::filesystem::exists(storage.path_for(key)));
+
+  // Cache maintenance is best-effort: an unusable cache root is reflected in
+  // telemetry but never prevents construction of a valid JIT.
+  const auto broken_directory = cache_directory.parent_path() / "broken";
+  std::filesystem::create_directories(broken_directory / "llvm", error);
+  assert(!error);
+  {
+    std::ofstream file{
+        broken_directory / "llvm" / "objects", std::ios::binary};
+    file << "not a directory";
+  }
+  LlvmJit broken{
+      LlvmJitOptions{JitOptimizationLevel::o2, broken_directory}};
+  assert(broken.cache_statistics().prune_failures == 1);
+}
+
 void test_persistent_object_cache() {
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -2997,6 +3038,7 @@ void test_persistent_object_cache() {
       JitOptimizationLevel::o0, root / "group-o0");
   test_process_module_grouping_at_level(
       JitOptimizationLevel::o2, root / "group-o2");
+  test_cache_pruning_integration(root / "pruning");
 
   std::filesystem::remove_all(root, error);
   assert(!error);

@@ -188,9 +188,10 @@ The current tree contains:
   one bounded elaborated specialization are lowered and optimized together in
   one LLVM module while capability misses retain per-process fallback;
 - a checksummed persistent object-cache primitive with process-aware per-key
-  locking, atomic replacement, stale-lock recovery, and LLVM native-object
-  reuse plus cold/warm activity telemetry beneath the configured application
-  cache;
+  locking, atomic replacement, stale-lock recovery, hit-refreshed LRU metadata,
+  active-lock-safe age/count/encoded-byte pruning, stale-temporary cleanup, and
+  LLVM native-object reuse plus cold/warm/prune telemetry beneath the
+  configured application cache;
 - buffered VCD output;
 - a schema-1 project-manifest loader and command-line driver;
 - an executable versioned C session API for build, hierarchy/value access,
@@ -448,7 +449,11 @@ ABI retains its v1 prefix and appends `write_update` and `write_after` fields;
 generated code size-gates those fields per process before use. The configured
 cache stores one native object per compiled specialization module under
 `llvm-native`; `fsim build` reports compiled process/module counts and native
-cache hits, misses, stores, and rejected entries. LLVM O0/O2 object identity
+cache hits, misses, stores, rejected entries, and maintenance failures. The
+LLVM adapter performs best-effort startup pruning with defaults of 10 GiB,
+10,000 entries, and 30 days; successful hits refresh entry recency, live
+per-key locks are never stolen, and stale publisher temporaries are removed
+after a one-hour grace period. LLVM O0/O2 object identity
 includes the specialization-module identity and ordered process keys. Each
 module identity includes a provenance key for the exact owning-root and
 ordered Verilog/SystemVerilog transitive-include bytes supplied to the

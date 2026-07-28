@@ -2,6 +2,7 @@
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/cache_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -65,6 +66,53 @@ std::optional<std::vector<std::byte>> read_all(
         return std::nullopt;
     }
     return result;
+}
+
+[[nodiscard]] bool cache_entry_filename(
+    const std::filesystem::path& path,
+    std::string& key) {
+    const auto filename = path.filename().string();
+    constexpr std::string_view suffix = ".fobj";
+    if (!filename.ends_with(suffix)) {
+        return false;
+    }
+    key = filename.substr(0, filename.size() - suffix.size());
+    return valid_cache_key(key)
+        && path.parent_path().filename().string() == key.substr(0, 2);
+}
+
+[[nodiscard]] bool cache_temporary_filename(
+    const std::filesystem::path& path,
+    std::string& key) {
+    const auto filename = path.filename().string();
+    constexpr std::string_view marker = ".fobj.tmp.";
+    if (filename.size() <= 64 + marker.size()
+        || std::string_view{filename}.substr(64, marker.size()) != marker) {
+        return false;
+    }
+    key = filename.substr(0, 64);
+    return valid_cache_key(key)
+        && path.parent_path().filename().string() == key.substr(0, 2);
+}
+
+[[nodiscard]] bool elapsed_at_least(
+    const std::filesystem::file_time_type stamp,
+    const std::chrono::seconds age) {
+    if (age <= std::chrono::seconds::zero()) {
+        return true;
+    }
+    const auto now = std::filesystem::file_time_type::clock::now();
+    return stamp <= now && now - stamp >= age;
+}
+
+void add_saturating(
+    std::uintmax_t& total,
+    const std::uintmax_t value) noexcept {
+    if (value > std::numeric_limits<std::uintmax_t>::max() - total) {
+        total = std::numeric_limits<std::uintmax_t>::max();
+    } else {
+        total += value;
+    }
 }
 
 } // namespace
@@ -420,6 +468,11 @@ std::optional<std::vector<std::byte>> ObjectCache::load(
         error = std::make_error_code(std::errc::illegal_byte_sequence);
         return std::nullopt;
     }
+    // Successful reads refresh LRU recency. Failure to update metadata must
+    // never turn a valid cache hit into a compilation failure.
+    std::error_code ignored;
+    std::filesystem::last_write_time(
+        path, std::filesystem::file_time_type::clock::now(), ignored);
     return std::vector<std::byte>{payload.begin(), payload.end()};
 }
 
@@ -485,6 +538,237 @@ bool ObjectCache::erase(const std::string_view key, std::error_code& error) cons
         return false;
     }
     return std::filesystem::remove(path, error);
+}
+
+bool ObjectCache::prune(
+    const ObjectCachePruneOptions& options,
+    ObjectCachePruneResult& result,
+    std::error_code& error) const {
+    result = {};
+    error.clear();
+    if ((options.maximum_age
+         && *options.maximum_age < std::chrono::seconds::zero())
+        || options.temporary_file_grace < std::chrono::seconds::zero()) {
+        error = std::make_error_code(std::errc::invalid_argument);
+        return false;
+    }
+    if (!std::filesystem::exists(root_, error)) {
+        if (!error) {
+            return true;
+        }
+        return false;
+    }
+    if (!std::filesystem::is_directory(root_, error)) {
+        if (!error) {
+            error = std::make_error_code(std::errc::not_a_directory);
+        }
+        return false;
+    }
+
+    struct Entry {
+        std::filesystem::path path;
+        std::filesystem::file_time_type stamp;
+        std::uintmax_t size{};
+        bool removed{};
+        bool attempted{};
+    };
+    std::vector<Entry> entries;
+    std::vector<std::filesystem::path> shards;
+
+    std::filesystem::directory_iterator shard_iterator{
+        root_, std::filesystem::directory_options::skip_permission_denied, error};
+    if (error) {
+        return false;
+    }
+    const std::filesystem::directory_iterator end;
+    for (; shard_iterator != end; shard_iterator.increment(error)) {
+        if (error) {
+            return false;
+        }
+        std::error_code status_error;
+        const auto status = shard_iterator->symlink_status(status_error);
+        if (status_error || !std::filesystem::is_directory(status)
+            || std::filesystem::is_symlink(status)) {
+            continue;
+        }
+        const auto shard = shard_iterator->path();
+        const auto shard_name = shard.filename().string();
+        if (shard_name.size() != 2
+            || !std::all_of(
+                shard_name.begin(), shard_name.end(), [](const char value) {
+                    return (value >= '0' && value <= '9')
+                        || (value >= 'a' && value <= 'f');
+                })) {
+            continue;
+        }
+        shards.push_back(shard);
+
+        std::filesystem::directory_iterator file_iterator{
+            shard, std::filesystem::directory_options::skip_permission_denied, error};
+        if (error) {
+            return false;
+        }
+        for (; file_iterator != end; file_iterator.increment(error)) {
+            if (error) {
+                return false;
+            }
+            const auto path = file_iterator->path();
+            const auto file_status = file_iterator->symlink_status(status_error);
+            if (status_error || !std::filesystem::is_regular_file(file_status)) {
+                continue;
+            }
+            std::string key;
+            if (cache_entry_filename(path, key)) {
+                const auto size = file_iterator->file_size(status_error);
+                if (status_error) {
+                    ++result.failed_removals;
+                    continue;
+                }
+                const auto stamp = file_iterator->last_write_time(status_error);
+                if (status_error) {
+                    ++result.failed_removals;
+                    continue;
+                }
+                entries.push_back({path, stamp, size, false, false});
+                ++result.scanned_entries;
+                add_saturating(result.bytes_before, size);
+                continue;
+            }
+            if (!options.remove_stale_temporary_files
+                || !cache_temporary_filename(path, key)) {
+                continue;
+            }
+            const auto stamp = file_iterator->last_write_time(status_error);
+            if (status_error
+                || !elapsed_at_least(stamp, options.temporary_file_grace)) {
+                if (status_error) {
+                    ++result.failed_removals;
+                }
+                continue;
+            }
+            const auto destination = path_for(key);
+            std::error_code lock_error;
+            detail::CacheDirectoryLock lock{
+                destination.string() + ".lock",
+                lock_error,
+                std::chrono::milliseconds{0}};
+            if (!lock.held()) {
+                if (lock_error == std::errc::timed_out) {
+                    ++result.skipped_locked_entries;
+                } else {
+                    ++result.failed_removals;
+                }
+                continue;
+            }
+            std::error_code remove_error;
+            if (std::filesystem::remove(path, remove_error)) {
+                ++result.removed_temporary_files;
+            } else if (remove_error) {
+                ++result.failed_removals;
+            }
+        }
+        if (error) {
+            return false;
+        }
+    }
+    if (error) {
+        return false;
+    }
+
+    std::sort(entries.begin(), entries.end(), [](const Entry& left, const Entry& right) {
+        if (left.stamp != right.stamp) {
+            return left.stamp < right.stamp;
+        }
+        return left.path.generic_string() < right.path.generic_string();
+    });
+
+    std::uint64_t remaining_entries = result.scanned_entries;
+    std::uintmax_t remaining_bytes = result.bytes_before;
+    const auto remove_entry = [&](Entry& entry) {
+        entry.attempted = true;
+        std::error_code lock_error;
+        detail::CacheDirectoryLock lock{
+            entry.path.string() + ".lock",
+            lock_error,
+            std::chrono::milliseconds{0}};
+        if (!lock.held()) {
+            if (lock_error == std::errc::timed_out) {
+                ++result.skipped_locked_entries;
+            } else {
+                ++result.failed_removals;
+            }
+            return false;
+        }
+        std::error_code size_error;
+        const auto current_size =
+            std::filesystem::file_size(entry.path, size_error);
+        if (size_error == std::errc::no_such_file_or_directory) {
+            entry.removed = true;
+            if (remaining_entries != 0) {
+                --remaining_entries;
+            }
+            if (entry.size <= remaining_bytes) {
+                remaining_bytes -= entry.size;
+            } else {
+                remaining_bytes = 0;
+            }
+            return true;
+        }
+        if (size_error) {
+            ++result.failed_removals;
+            return false;
+        }
+        std::error_code remove_error;
+        if (!std::filesystem::remove(entry.path, remove_error)) {
+            if (remove_error) {
+                ++result.failed_removals;
+            }
+            return false;
+        }
+        entry.removed = true;
+        ++result.removed_entries;
+        add_saturating(result.bytes_removed, current_size);
+        if (remaining_entries != 0) {
+            --remaining_entries;
+        }
+        if (current_size <= remaining_bytes) {
+            remaining_bytes -= current_size;
+        } else {
+            remaining_bytes = 0;
+        }
+        return true;
+    };
+
+    if (options.maximum_age) {
+        for (auto& entry : entries) {
+            if (elapsed_at_least(entry.stamp, *options.maximum_age)) {
+                (void)remove_entry(entry);
+            }
+        }
+    }
+    const auto over_limit = [&] {
+        return (options.maximum_entries
+                && remaining_entries > *options.maximum_entries)
+            || (options.maximum_bytes
+                && remaining_bytes > *options.maximum_bytes);
+    };
+    for (auto& entry : entries) {
+        if (!over_limit()) {
+            break;
+        }
+        if (!entry.removed && !entry.attempted) {
+            (void)remove_entry(entry);
+        }
+    }
+
+    result.remaining_entries = remaining_entries;
+    result.remaining_bytes = remaining_bytes;
+    for (const auto& shard : shards) {
+        std::error_code remove_error;
+        (void)std::filesystem::remove(shard, remove_error);
+    }
+    error.clear();
+    return true;
 }
 
 bool valid_cache_key(const std::string_view key) noexcept {

@@ -682,7 +682,13 @@ instance, including construction actuals transferred through an explicit
 VHDL/SystemVerilog boundary binding. A separated VHDL entity source is also an
 explicit specialization provenance dependency of its architecture. Complete
 generic/parameter typing and SystemC construction schemas remain pending. The
-cache has no age/size eviction policy. O0
+LLVM object cache uses deterministic oldest-first eviction with simultaneous
+age, entry-count, and encoded-byte limits. Successful loads refresh filesystem
+recency; per-entry writer locks exclude active publications; stale temporary
+files are removed under the same destination lock; malformed or unrelated
+files are preserved; and empty canonical shards are reclaimed. Adapter
+defaults are 30 days, 10,000 entries, and 10 GiB, with best-effort prune
+telemetry that cannot prevent JIT construction. O0
 exposes source-bearing statement, wait, assertion, process-entry, and
 process-suspension points plus addressable ≤64-bit packed process locals. Call
 points, complete local scopes/types, and complete source metadata remain open.

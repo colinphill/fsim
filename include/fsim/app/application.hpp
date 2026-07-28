@@ -94,6 +94,9 @@ struct NativeCacheStatistics {
   std::uint64_t rejected_entries{};
   std::uint64_t load_failures{};
   std::uint64_t store_failures{};
+  std::uint64_t pruned_entries{};
+  std::uintmax_t pruned_bytes{};
+  std::uint64_t prune_failures{};
 
   friend bool operator==(
       NativeCacheStatistics,

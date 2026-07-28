@@ -132,8 +132,28 @@ constexpr auto kJitRuntimeV1PrefixSize =
 class PersistentLlvmObjectCache final : public llvm::ObjectCache {
 public:
   PersistentLlvmObjectCache(std::filesystem::path root,
-                            llvm::Triple target_triple)
-      : storage_(std::move(root)), target_triple_(std::move(target_triple)) {}
+                            llvm::Triple target_triple,
+                            const LlvmJitOptions& options)
+      : storage_(std::move(root)), target_triple_(std::move(target_triple)) {
+    ObjectCachePruneOptions prune_options;
+    prune_options.maximum_bytes = options.cache_maximum_bytes;
+    prune_options.maximum_entries = options.cache_maximum_entries;
+    prune_options.maximum_age = options.cache_maximum_age;
+    ObjectCachePruneResult result;
+    std::error_code error;
+    if (storage_.prune(prune_options, result, error)) {
+      pruned_entries_.store(
+          result.removed_entries, std::memory_order_relaxed);
+      pruned_bytes_.store(
+          result.bytes_removed, std::memory_order_relaxed);
+      if (result.failed_removals != 0) {
+        prune_failures_.store(
+            result.failed_removals, std::memory_order_relaxed);
+      }
+    } else {
+      prune_failures_.store(1, std::memory_order_relaxed);
+    }
+  }
 
   void notifyObjectCompiled(const llvm::Module *module,
                             const llvm::MemoryBufferRef object) override {
@@ -204,6 +224,9 @@ public:
         rejected_entries_.load(std::memory_order_relaxed),
         load_failures_.load(std::memory_order_relaxed),
         store_failures_.load(std::memory_order_relaxed),
+        pruned_entries_.load(std::memory_order_relaxed),
+        pruned_bytes_.load(std::memory_order_relaxed),
+        prune_failures_.load(std::memory_order_relaxed),
     };
   }
 
@@ -234,6 +257,9 @@ private:
   std::atomic_uint64_t rejected_entries_{};
   std::atomic_uint64_t load_failures_{};
   std::atomic_uint64_t store_failures_{};
+  std::atomic_uint64_t pruned_entries_{};
+  std::atomic<std::uintmax_t> pruned_bytes_{};
+  std::atomic_uint64_t prune_failures_{};
 };
 
 template <class... Ts> struct Overloaded : Ts... {
@@ -3365,7 +3391,8 @@ LlvmJit::LlvmJit(const LlvmJitOptions options)
   if (!options.cache_directory.empty()) {
     impl_->object_cache = std::make_unique<PersistentLlvmObjectCache>(
         options.cache_directory / "llvm" / "objects",
-        target_builder.getTargetTriple());
+        target_builder.getTargetTriple(),
+        options);
     auto *const object_cache = impl_->object_cache.get();
     builder.setCompileFunctionCreator(
         [object_cache](llvm::orc::JITTargetMachineBuilder machine_builder)
