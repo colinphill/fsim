@@ -5938,6 +5938,116 @@ end architecture;
             == "1");
     }
 
+    const auto vhdl_sequential_loops =
+        fsim::frontend::parse_text(
+            "sequential_loops.vhd",
+            R"(
+entity sequential_loops is
+  port (
+    kick : in std_logic;
+    observed : out std_logic_vector(3 downto 0);
+    null_range_observed : out std_logic_vector(1 downto 0)
+  );
+end entity;
+architecture rtl of sequential_loops is
+begin
+  populate: process(kick)
+    variable assembled : std_logic_vector(3 downto 0) := "0000";
+    variable untouched : std_logic_vector(1 downto 0) := "00";
+  begin
+    for lane in 0 to 3 loop
+      assembled(lane) := '1';
+    end loop;
+    for lane in 3 downto 2 loop
+      assembled(lane) := '0';
+    end loop;
+    for lane in 2 to 1 loop
+      untouched(0) := '1';
+    end loop;
+    observed <= assembled;
+    null_range_observed <= untouched;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_sequential_loops.ok());
+    const auto elaborated_vhdl_sequential_loops =
+        fsim::elaboration::elaborate(
+            vhdl_sequential_loops.design,
+            "vhdl:work.sequential_loops(rtl)");
+    if (!elaborated_vhdl_sequential_loops.ok()) {
+        for (const auto& diagnostic :
+             elaborated_vhdl_sequential_loops.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_vhdl_sequential_loops.ok());
+    auto vhdl_loop_interpreter =
+        elaborated_vhdl_sequential_loops.design
+            ->create_interpreter();
+    const auto vhdl_loop_result =
+        vhdl_loop_interpreter->run();
+    assert(
+        vhdl_loop_result.status
+        == fsim::runtime::RunStatus::completed);
+    const auto loop_observed =
+        elaborated_vhdl_sequential_loops.design
+            ->find_signal("observed");
+    const auto null_range_observed =
+        elaborated_vhdl_sequential_loops.design
+            ->find_signal("null_range_observed");
+    assert(loop_observed && null_range_observed);
+    assert(
+        vhdl_loop_interpreter
+            ->signal_value(*loop_observed)
+            .to_msb_string()
+        == "0011");
+    assert(
+        vhdl_loop_interpreter
+            ->signal_value(*null_range_observed)
+            .to_msb_string()
+        == "00");
+
+    const auto invalid_vhdl_loops =
+        fsim::frontend::parse_text(
+            "invalid_sequential_loops.vhd",
+            R"(
+entity invalid_sequential_loops is
+  port (dynamic_bound : in std_logic);
+end entity;
+architecture rtl of invalid_sequential_loops is
+begin
+  invalid: process(dynamic_bound)
+  begin
+    for lane in dynamic_bound to 1 loop
+      null;
+    end loop;
+    for lane in 0 to dynamic_bound loop
+      null;
+    end loop;
+    for lane in 0 to 1000000 loop
+      null;
+    end loop;
+    for lane in 0 to 1 loop
+      lane := lane + 1;
+    end loop;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_loops.ok());
+    const auto rejected_vhdl_loops =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_loops.design,
+            "vhdl:work.invalid_sequential_loops(rtl)");
+    assert(!rejected_vhdl_loops.ok());
+    for (const auto code :
+         {"FSIM-ELAB-071", "FSIM-ELAB-072",
+          "FSIM-ELAB-073", "FSIM-ELAB-074"}) {
+        assert(has_diagnostic(rejected_vhdl_loops, code));
+    }
+
     const auto invalid_vhdl_condition =
         fsim::frontend::parse_text(
             "invalid_condition.vhd",

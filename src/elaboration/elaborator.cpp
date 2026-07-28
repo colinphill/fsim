@@ -871,6 +871,10 @@ void substitute_parameters(
             statement.value, environment, domains, language);
         substitute_parameters(
             statement.condition, environment, domains, language);
+        substitute_parameters(
+            statement.loop_initial, environment, domains, language);
+        substitute_parameters(
+            statement.loop_limit, environment, domains, language);
         for (auto& declaration : statement.declarations) {
             substitute_parameters(
                 declaration,
@@ -891,10 +895,16 @@ void substitute_parameters(
                 diagnostics,
                 language);
         }
+        auto statement_environment = environment;
+        auto statement_domains = domains;
+        if (statement.kind == StatementKind::Loop) {
+            statement_environment.erase(statement.loop_variable);
+            statement_domains.erase(statement.loop_variable);
+        }
         substitute_parameters(
             statement.statements,
-            environment,
-            domains,
+            statement_environment,
+            statement_domains,
             diagnostics,
             language);
         substitute_parameters(
@@ -2738,6 +2748,9 @@ private:
         case StatementKind::Case:
             lower_case(statement);
             break;
+        case StatementKind::Loop:
+            lower_loop(statement);
+            break;
         case StatementKind::Assert:
             lower_assert(statement);
             break;
@@ -3370,6 +3383,114 @@ private:
             static_cast<InstructionIndex>(process_.operations.size());
         for (const auto jump : exit_jumps) {
             process_.operations[jump] = Jump{end};
+        }
+    }
+
+    void lower_loop(const Statement& statement) {
+        const auto assigns_loop_parameter =
+            [&](const auto& self,
+                const std::vector<Statement>& statements) -> bool {
+            for (const auto& child : statements) {
+                if (child.kind == StatementKind::Assignment) {
+                    const Expression* target = &child.target;
+                    while ((target->kind == ExpressionKind::Index
+                            || target->kind
+                                == ExpressionKind::Slice)
+                           && !target->operands.empty()) {
+                        target = &target->operands.front();
+                    }
+                    if (target->kind == ExpressionKind::Identifier
+                        && target->text
+                            == statement.loop_variable) {
+                        return true;
+                    }
+                }
+                if (self(self, child.statements)
+                    || self(self, child.else_statements)) {
+                    return true;
+                }
+                for (const auto& alternative :
+                     child.case_alternatives) {
+                    if (self(self, alternative.statements)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        if (assigns_loop_parameter(
+                assigns_loop_parameter,
+                statement.statements)) {
+            report(
+                "FSIM-ELAB-074",
+                "sequential for-loop parameter '"
+                    + statement.loop_variable
+                    + "' is an implicit constant and cannot be assigned",
+                statement.span);
+            return;
+        }
+
+        std::string error;
+        const auto initial = evaluate_constant_expression(
+            statement.loop_initial, {}, error);
+        if (!initial) {
+            report(
+                "FSIM-ELAB-071",
+                "cannot evaluate sequential for-loop initial bound: "
+                    + error,
+                statement.loop_initial.span);
+            return;
+        }
+        error.clear();
+        const auto limit = evaluate_constant_expression(
+            statement.loop_limit, {}, error);
+        if (!limit) {
+            report(
+                "FSIM-ELAB-072",
+                "cannot evaluate sequential for-loop final bound: "
+                    + error,
+                statement.loop_limit.span);
+            return;
+        }
+
+        const bool null_range =
+            statement.loop_descending
+                ? *initial < *limit
+                : *initial > *limit;
+        if (null_range) {
+            return;
+        }
+        const auto distance = index_distance(*initial, *limit);
+        constexpr std::uint64_t maximum_iterations = 1'000'000;
+        if (distance >= maximum_iterations) {
+            report(
+                "FSIM-ELAB-073",
+                "sequential for loop exceeds the bounded "
+                "1,000,000-iteration elaboration limit",
+                statement.span);
+            return;
+        }
+
+        ConstantDomainEnvironment domains;
+        domains.emplace(
+            statement.loop_variable,
+            frontend::ValueDomain::Integer);
+        auto value = *initial;
+        while (true) {
+            auto body = statement.statements;
+            ConstantEnvironment environment;
+            environment.emplace(statement.loop_variable, value);
+            substitute_parameters(
+                body,
+                environment,
+                domains,
+                diagnostics_,
+                language_);
+            lower_statements(body);
+            if (value == *limit) {
+                break;
+            }
+            value += statement.loop_descending ? -1 : 1;
         }
     }
 
@@ -4728,6 +4849,10 @@ private:
                         collect_identifiers(choice, output);
                     }
                 }
+                break;
+            case StatementKind::Loop:
+                collect_identifiers(statement.loop_initial, output);
+                collect_identifiers(statement.loop_limit, output);
                 break;
             case StatementKind::Delay:
             case StatementKind::WaitOn:

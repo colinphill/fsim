@@ -104,6 +104,9 @@ The current tree contains:
 - constant bit/part assignment targets for SystemVerilog and VHDL packed
   signals and procedural locals, including blocking, common-update, and
   delayed partial writes with stable source-order merging;
+- locally static VHDL sequential `for` loops in either `to` or `downto`
+  direction, including null ranges and loop-indexed packed selections,
+  elaborated into deterministic source-order SimIR;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

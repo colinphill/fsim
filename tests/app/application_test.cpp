@@ -548,8 +548,12 @@ architecture rtl of vhdl_conditional_statement_app is
   signal nested_case : boolean;
   signal boolean_expression_case : boolean;
   signal sequential_case_result : std_logic_vector(1 downto 0);
+  signal sequential_loop_result : std_logic_vector(3 downto 0);
+  signal null_loop_result : std_logic_vector(1 downto 0);
 begin
   choose: process(trigger)
+    variable assembled : std_logic_vector(3 downto 0) := "0000";
+    variable untouched : std_logic_vector(1 downto 0) := "00";
   begin
     if true then
       true_case <= true;
@@ -587,6 +591,17 @@ begin
       when others =>
         sequential_case_result <= "11";
     end case;
+    for lane in 0 to 3 loop
+      assembled(lane) := '1';
+    end loop;
+    for lane in 3 downto 2 loop
+      assembled(lane) := '0';
+    end loop;
+    for lane in 2 to 1 loop
+      untouched(0) := '1';
+    end loop;
+    sequential_loop_result <= assembled;
+    null_loop_result <= untouched;
   end process;
 end architecture;
 )";
@@ -4329,7 +4344,8 @@ end architecture rtl;
     assert((
         vhdl_conditional_statement_hybrid.final_values
         == std::vector<std::string>{
-            "X", "1", "1", "1", "1", "01"}));
+            "X", "1", "1", "1", "1", "01",
+            "0011", "00"}));
   }
 
   auto partial_group_config = config;

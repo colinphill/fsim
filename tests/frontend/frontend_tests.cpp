@@ -881,6 +881,80 @@ end architecture;
       "duplicate and nonfinal VHDL case others alternatives are targeted");
 }
 
+void test_vhdl_sequential_for_loops() {
+  const auto result = parse_text(
+      "sequential_for.vhd",
+      R"(
+entity sequential_for is
+end entity;
+architecture rtl of sequential_for is
+  signal ascending : std_logic_vector(2 downto 0);
+  signal descending : std_logic_vector(3 downto 1);
+begin
+  populate: process
+  begin
+    for lane in 0 to 2 loop
+      ascending(lane) <= '1';
+    end loop;
+    for lane in 3 downto 1 loop
+      descending(lane) <= '0';
+    end loop;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "VHDL sequential for loops must parse");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->processes.front().statements.size() == 3,
+      "VHDL sequential for-loop process");
+  const auto& ascending =
+      architecture->processes.front().statements[0];
+  const auto& descending =
+      architecture->processes.front().statements[1];
+  require(
+      ascending.kind == StatementKind::Loop
+          && ascending.loop_variable == "lane"
+          && !ascending.loop_descending
+          && ascending.loop_initial.text == "0"
+          && ascending.loop_limit.text == "2"
+          && ascending.statements.size() == 1
+          && descending.kind == StatementKind::Loop
+          && descending.loop_descending
+          && descending.loop_initial.text == "3"
+          && descending.loop_limit.text == "1",
+      "VHDL sequential for-loop ranges and bodies are retained");
+
+  const auto labeled_end = parse_text(
+      "labeled_sequential_for.vhd",
+      R"(
+architecture rtl of labeled_sequential_for is
+begin
+  populate: process
+  begin
+    for lane in 0 to 1 loop
+      null;
+    end loop populate;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !labeled_end.ok()
+          && std::ranges::any_of(
+              labeled_end.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-025";
+              }),
+      "labeled VHDL sequential loops receive a targeted diagnostic");
+}
+
 void test_systemverilog_vertical_slice() {
   constexpr std::string_view source = R"(
 module counter(
@@ -3633,6 +3707,7 @@ int main() {
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
     test_vhdl_case_statements();
+    test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();
     test_systemverilog_preprocessor();
     test_non_ansi_verilog_ports();

@@ -163,6 +163,12 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-097` | error | Expected `end` for a sequential VHDL case statement. |
 | `FSIM-VHDL-PARSE-098` | error | Expected `case` after the sequential statement's `end`. |
 | `FSIM-VHDL-PARSE-099` | error | Expected `;` after a sequential VHDL case statement. |
+| `FSIM-VHDL-PARSE-100` | error | Expected `in` after a sequential VHDL for-loop parameter. |
+| `FSIM-VHDL-PARSE-101` | error | Expected `to` or `downto` in a sequential VHDL for-loop range. |
+| `FSIM-VHDL-PARSE-102` | error | Expected `loop` after a sequential VHDL for-loop range. |
+| `FSIM-VHDL-PARSE-103` | error | Expected `end` for a sequential VHDL for loop. |
+| `FSIM-VHDL-PARSE-104` | error | Expected `loop` after the sequential for-loop body. |
+| `FSIM-VHDL-PARSE-105` | error | Expected `;` after a sequential VHDL for loop. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -205,6 +211,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package body or package declaration outside the bounded constant-only subset is not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
+| `FSIM-VHDL-UNSUPPORTED-025` | error | A sequential for loop uses an end label, which the bounded loop slice does not yet retain. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -463,6 +470,10 @@ therefore excluded.
 | `FSIM-ELAB-068` | error | A bit/part select does not have constant in-range bounds, a positive indexed width, or a direction compatible with its declared packed range. |
 | `FSIM-ELAB-069` | error | A concatenation is empty or has an operand/result width that cannot be inferred or represented. |
 | `FSIM-ELAB-070` | error | A VHDL packed shift count is negative or not locally static in the current executable slice. |
+| `FSIM-ELAB-071` | error | A sequential VHDL for-loop initial bound is not locally static. |
+| `FSIM-ELAB-072` | error | A sequential VHDL for-loop final bound is not locally static. |
+| `FSIM-ELAB-073` | error | A sequential VHDL for loop exceeds the bounded one-million-iteration elaboration limit. |
+| `FSIM-ELAB-074` | error | A sequential VHDL for-loop body attempts to assign its implicit constant parameter. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

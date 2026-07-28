@@ -1658,6 +1658,45 @@ class VhdlParser final : private detail::ParserBase {
       statement.span = span_from(start, previous());
       return statement;
     }
+    if (match_keyword("for", true)) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::Loop;
+      const auto variable =
+          expect_identifier("for-loop parameter");
+      statement.loop_variable = vhdl_name(variable.text);
+      expect_keyword("in", true, "FSIM-VHDL-PARSE-100");
+      statement.loop_initial = parse_expression();
+      if (match_keyword("to", true)) {
+        statement.loop_descending = false;
+      } else if (match_keyword("downto", true)) {
+        statement.loop_descending = true;
+      } else {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-101",
+            "expected 'to' or 'downto' in sequential for-loop range");
+      }
+      statement.loop_limit = parse_expression();
+      expect_keyword("loop", true, "FSIM-VHDL-PARSE-102");
+      statement.statements = parse_statement_list({"end"});
+      expect_keyword("end", true, "FSIM-VHDL-PARSE-103");
+      expect_keyword("loop", true, "FSIM-VHDL-PARSE-104");
+      if (at(TokenKind::Identifier)) {
+        const auto end_label = advance();
+        error(
+            end_label,
+            "FSIM-VHDL-UNSUPPORTED-025",
+            "labeled sequential loops are not implemented in this "
+            "frontend slice");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after sequential for loop",
+          "FSIM-VHDL-PARSE-105");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     if (match_keyword("null", true)) {
       const auto start = previous();
       expect(TokenKind::Semicolon, "';' after null",

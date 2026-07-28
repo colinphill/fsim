@@ -200,6 +200,9 @@ The following foundation is implemented:
   the common four-state interpreter and LLVM shift kernels;
 - ordered VHDL sequential packed `case` statements with exact multi-choice
   matching, nested statement bodies, and `others`;
+- locally static VHDL sequential `for` loops with ascending, descending, and
+  null-range semantics, read-only implicit loop constants, bounded
+  elaboration-time unrolling, and indexed packed writes;
 - nested VHDL `if`/`elsif`/`else` with Boolean literals and typed Boolean
   operators, plus nested SystemVerilog `if`/`else` and immediate assertions
   using packed four-state truth conversion, with O0/O2 differential evidence;
@@ -253,7 +256,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 541 unique current production diagnostic codes.
+- a stable catalog covering 552 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -479,6 +482,8 @@ Completed groundwork:
   `always_latch`, and dynamic `@*`;
 - bounded exact Verilog/SystemVerilog `case` statements with ordered,
   four-state alternatives and default fallback;
+- bounded VHDL sequential `for` loops with locally static `to`/`downto`
+  ranges and deterministic common-SimIR unrolling;
 - bounded nested VHDL and SystemVerilog conditional statements, including
   language-specific Boolean/four-state condition rules;
 - deterministic project seed handling;

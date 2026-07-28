@@ -234,6 +234,7 @@ enum class StatementKind {
   Assignment,
   If,
   Case,
+  Loop,
   Assert,
   Delay,
   WaitOn,
@@ -271,6 +272,12 @@ struct Statement {
   Expression target;
   Expression value;
   Expression condition;
+  // A VHDL sequential for-loop retains its implicit constant name and
+  // locally-static discrete range until elaboration unrolls the body.
+  std::string loop_variable;
+  Expression loop_initial;
+  Expression loop_limit;
+  bool loop_descending{};
   std::optional<Delay> delay;
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;
