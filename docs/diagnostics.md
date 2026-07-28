@@ -26,6 +26,7 @@ therefore excluded.
 | `FSIM-TCL-0003` | error | A batch Tcl command or script failed during evaluation. |
 | `FSIM-TCL-0004` | error | Interactive input ended with an incomplete Tcl command. |
 | `FSIM-TCL-ASSERT-0001` | note/warning/error/fatal | An HDL assertion failed while a Tcl-controlled simulation was running. |
+| `FSIM-TCL-REPORT-0001` | note/warning/error/fatal | A VHDL report or SystemVerilog severity task was delivered to Tcl diagnostics and callbacks. |
 | `FSIM-API-0002` | error | A C API check or build was requested before loading a project. |
 | `FSIM-API-0003` | error | A C API operation requires a successfully built design. |
 | `FSIM-API-0004` | error | A built design contains more debug-visible local variables than the version-1 object-handle encoding can represent. |
@@ -331,10 +332,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-038` | error | Expected `;` after a module instance. |
 | `FSIM-SV-PARSE-039` | error | Expected `(` after `assert`. |
 | `FSIM-SV-PARSE-040` | error | Expected `)` after an assertion condition. |
-| `FSIM-SV-PARSE-041` | error | Expected `$error` after an assertion `else`. |
-| `FSIM-SV-PARSE-042` | error | Expected a string literal argument to `$error`. |
-| `FSIM-SV-PARSE-043` | error | Expected `)` after an assertion `$error` message. |
-| `FSIM-SV-PARSE-044` | error | Expected `;` after an assertion. |
+| `FSIM-SV-PARSE-041` | error | Legacy assertion-action recovery expected `$error` after `else`. |
+| `FSIM-SV-PARSE-042` | error | Legacy assertion-action recovery expected a literal `$error` message. |
+| `FSIM-SV-PARSE-043` | error | Legacy assertion-action recovery expected `)` after a `$error` message. |
+| `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
 | `FSIM-SV-PARSE-047` | error | Expected `)` after a `case` selector expression. |
@@ -419,6 +420,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-126` | error | Expected `;` after a Verilog/SystemVerilog `$monitor` task. |
 | `FSIM-SV-PARSE-127` | error | Expected `)` after a Verilog/SystemVerilog `$monitoron` or `$monitoroff` task. |
 | `FSIM-SV-PARSE-128` | error | Expected `;` after a Verilog/SystemVerilog `$monitoron` or `$monitoroff` task. |
+| `FSIM-SV-PARSE-129` | error | Expected `)` after SystemVerilog `$info`, `$warning`, or `$error` arguments. |
+| `FSIM-SV-PARSE-130` | error | Expected `;` after a SystemVerilog `$info`, `$warning`, or `$error` task. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -437,6 +440,7 @@ therefore excluded.
 | `FSIM-VERILOG-SEM-006` | error | A `final` procedure was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-007` | error | `$fatal` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-008` | error | A nonblocking named-event trigger (`->>`) was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-009` | error | `$info`, `$warning`, or `$error` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal integer literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |
@@ -478,6 +482,7 @@ therefore excluded.
 | `FSIM-SV-SEM-040` | error | A Verilog/SystemVerilog output string uses an unsupported, incomplete, or out-of-byte-range escape. |
 | `FSIM-SV-SEM-041` | error | A `$monitor` format string has more value-consuming conversions than value arguments. |
 | `FSIM-SV-SEM-042` | error | An output format string uses an unsupported conversion/modifier, an invalid or overflowing field width, or a malformed percent escape. |
+| `FSIM-SV-SEM-043` | error | A bounded `$info`, `$warning`, or `$error` call has a nonliteral or additional message argument. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -715,7 +720,7 @@ therefore excluded.
 | `FSIM-RUN-0001` | error | The SimIR interpreter failed during a CLI run. |
 | `FSIM-RUN-0002` | error | Another exception terminated a CLI run. |
 | `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
-| `FSIM-VHDL-REPORT` | report severity | A nonfatal VHDL report was emitted through a command or Tcl output stream. |
+| `FSIM-HDL-REPORT` | report severity | A VHDL report or SystemVerilog severity task was emitted through a command or Tcl output stream. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |
 | `FSIM-VCD-0001` | error | The trace output directory could not be created. |
 | `FSIM-VCD-0002` | error | The VCD trace file could not be opened. |

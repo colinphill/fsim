@@ -813,7 +813,7 @@ class AssertionError final : public InterpreterError {
 public:
   AssertionError(ProcessId process, InstructionIndex instruction,
                  std::string message, AssertionSeverity severity,
-                 SourceLocation source);
+                 SourceLocation source, bool reported = false);
 
   [[nodiscard]] AssertionSeverity severity() const noexcept {
     return severity_;
@@ -821,10 +821,14 @@ public:
   [[nodiscard]] const SourceLocation& source() const noexcept {
     return source_;
   }
+  [[nodiscard]] bool reported() const noexcept {
+    return reported_;
+  }
 
 private:
   AssertionSeverity severity_{AssertionSeverity::error};
   SourceLocation source_;
+  bool reported_{};
 };
 
 /// Small reference interpreter for differential testing of generated code.

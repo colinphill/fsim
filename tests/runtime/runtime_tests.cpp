@@ -2721,6 +2721,44 @@ void test_simir_assertion_metadata() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
 
+  Interpreter nonfatal_interpreter;
+  std::vector<std::string> nonfatal_reports;
+  nonfatal_interpreter.set_report_hook(
+      [&nonfatal_reports](
+          const ProcessId,
+          const std::string_view message,
+          const AssertionSeverity severity,
+          const SourceLocation& source,
+          const SimulationTick,
+          const std::uint64_t) {
+        require(
+            severity == AssertionSeverity::error
+                && source.path == "nonfatal.sv",
+            "nonfatal assertion severity and source");
+        nonfatal_reports.emplace_back(message);
+      });
+  Process nonfatal_process;
+  nonfatal_process.id = 0;
+  nonfatal_process.name = "nonfatal-assertion";
+  nonfatal_process.register_count = 1;
+  nonfatal_process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("0")},
+      Assert{
+          0,
+          "continued",
+          AssertionSeverity::error,
+          SourceLocation{"nonfatal.sv", 4, 3}},
+      Halt{},
+  };
+  (void)nonfatal_interpreter.add_process(
+      std::move(nonfatal_process));
+  const auto nonfatal_result = nonfatal_interpreter.run();
+  require(
+      nonfatal_result.status == RunStatus::completed
+          && nonfatal_reports
+              == std::vector<std::string>{"continued"},
+      "a nonfatal SimIR assertion must report once and continue");
+
   Interpreter interpreter;
   Process process;
   process.id = 0;
@@ -2744,6 +2782,9 @@ void test_simir_assertion_metadata() {
             "assertion process and instruction");
     require(error.severity() == AssertionSeverity::failure,
             "assertion severity");
+    require(
+        !error.reported(),
+        "a raw fatal assertion is reported by its boundary handler");
     require(
         error.source().path == "assertions.sv"
             && error.source().line == 17

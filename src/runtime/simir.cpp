@@ -1046,11 +1046,13 @@ AssertionError::AssertionError(ProcessId process,
                                InstructionIndex instruction,
                                std::string message,
                                AssertionSeverity severity,
-                               SourceLocation source)
+                               SourceLocation source,
+                               const bool reported)
     : InterpreterError(
           process, instruction,
           message.empty() ? "assertion failed" : std::move(message)),
-      severity_(severity), source_(std::move(source)) {}
+      severity_(severity), source_(std::move(source)),
+      reported_(reported) {}
 
 struct Interpreter::Impl {
   struct ExecutionContext;
@@ -2935,9 +2937,28 @@ void Interpreter::Impl::execute(ProcessId id) {
               const auto &condition = get_register(process, op.condition);
               if (condition.width() != 1 ||
                   condition.get(0) != Logic4::one) {
-                throw AssertionError(
-                    process.program.id, process.pc, op.message, op.severity,
-                    op.source);
+                const auto message =
+                    op.message.empty()
+                        ? std::string_view{"assertion failed"}
+                        : std::string_view{op.message};
+                if (op.severity != AssertionSeverity::failure
+                    && report_hook) {
+                  report_hook(
+                      process.program.id,
+                      message,
+                      op.severity,
+                      op.source,
+                      scheduler.now(),
+                      scheduler.delta());
+                }
+                if (op.severity == AssertionSeverity::failure) {
+                  throw AssertionError(
+                      process.program.id,
+                      process.pc,
+                      std::string{message},
+                      op.severity,
+                      op.source);
+                }
               }
               ++process.pc;
             },
@@ -3085,7 +3106,8 @@ void Interpreter::Impl::execute(ProcessId id) {
                     process.pc,
                     op.message.empty() ? "report failure" : op.message,
                     op.severity,
-                    op.source);
+                    op.source,
+                    true);
               }
               ++process.pc;
             },

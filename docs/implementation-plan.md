@@ -327,7 +327,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 630 unique current production diagnostic codes.
+- a stable catalog covering 671 unique current production diagnostic codes.
 
 Current and most recent aggregate regression snapshots:
 
@@ -1005,6 +1005,38 @@ catalogs, cache, elaboration, SystemC header/ABI/plugin/compiler, strict JIT C
 ABI, LLVM, interpreter/O0/O2 application differentials, Tcl 9 selection and
 relocation, native API/C header, and runtime suites. The batch ends at feature
 commit `4d078a5`; no GitHub Actions state was queried for this local gate.
+
+### Twenty-third feature batch — immediate assertions and severity tasks
+
+All ten implementation features are complete:
+
+1. Parse and execute standalone SystemVerilog `$info` with bare, empty, and
+   literal-message forms.
+2. Parse and execute standalone SystemVerilog `$warning` with the same bounded
+   forms.
+3. Parse and execute standalone SystemVerilog `$error` without terminating an
+   otherwise runnable simulation.
+4. Route standalone SystemVerilog `$fatal` through the common severity/source
+   report path before terminating.
+5. Give `assert (condition);` the standard implicit nonfatal error action when
+   the condition is false.
+6. Execute a simple immediate-assertion pass action only when its condition is
+   true.
+7. Execute a simple immediate-assertion `else` action only when its condition
+   is false.
+8. Execute `begin`/`end` pass and failure action blocks through the existing
+   lexical-block lowering.
+9. Permit `$info`, `$warning`, `$error`, and `$fatal` as immediate-assertion
+   actions while retaining their distinct severities and source locations.
+10. Make interpreter, LLVM O0/O2, CLI, and native callback behavior agree:
+    note/warning/error actions continue, failure publishes once and stops.
+
+Focused frontend, diagnostics, elaboration, runtime, LLVM O0/O2,
+application, CLI, Tcl, and native API tests pass. The generated-code semantic
+change advances the persistent native-object schema to v12 so older cached
+assertion code cannot be reused. The scheduled full local regression and gate
+record follow in a separate checkpoint commit. GitHub Actions state remains
+unqueried unless explicitly requested.
 
 ## v1 release condition
 

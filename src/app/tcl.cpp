@@ -92,6 +92,8 @@ struct TclContext {
 
 std::string_view assertion_severity_name(
     runtime::simir::AssertionSeverity severity);
+diagnostic::Severity assertion_diagnostic_severity(
+    runtime::simir::AssertionSeverity severity);
 
 struct TclChannelState {
   std::istream* input{};
@@ -643,7 +645,7 @@ bool ensure_simulation(
       });
   context.simulation->set_report_hook(
       [&context](
-          const runtime::simir::ProcessId,
+          const runtime::simir::ProcessId process_id,
           const std::string_view message,
           const runtime::simir::AssertionSeverity severity,
           const runtime::simir::SourceLocation& source,
@@ -652,7 +654,38 @@ bool ensure_simulation(
         context.output << source.path << ':' << source.line << ':'
                        << source.column << ": "
                        << assertion_severity_name(severity)
-                       << "[FSIM-VHDL-REPORT]: " << message << '\n';
+                       << "[FSIM-HDL-REPORT]: " << message << '\n';
+        diagnostic::SourceSpan span;
+        span.path = source.path;
+        span.begin.line = source.line;
+        span.begin.column = source.column;
+        span.end = span.begin;
+        context.diagnostics.report(diagnostic::Diagnostic{
+            assertion_diagnostic_severity(severity),
+            "FSIM-TCL-REPORT-0001",
+            std::string{message},
+            std::move(span),
+            {}});
+        std::string process = std::to_string(process_id);
+        if (process_id
+            < context.simulation->design().processes().size()) {
+          process =
+              context.simulation->design()
+                  .processes()
+                  .at(process_id)
+                  .name;
+        }
+        (void)invoke_callback(
+            context,
+            TclCallback::assertion,
+            {
+                std::move(process),
+                std::string{assertion_severity_name(severity)},
+                std::string{message},
+                source.path,
+                std::to_string(source.line),
+                std::to_string(source.column),
+            });
       });
   context.built.reset();
   context.simulation_engine = engine;
@@ -1120,33 +1153,40 @@ int report_assertion(
     Tcl_Interp* interpreter,
     const runtime::simir::AssertionError& error) {
   const auto& source = error.source();
-  diagnostic::SourceSpan span;
-  span.path = source.path;
-  span.begin.line = source.line;
-  span.begin.column = source.column;
-  span.end = span.begin;
-  context.diagnostics.report(diagnostic::Diagnostic{
-      assertion_diagnostic_severity(error.severity()),
-      "FSIM-TCL-ASSERT-0001",
-      error.what(),
-      std::move(span),
-      {}});
-  std::string process = std::to_string(error.process());
-  if (error.process() < context.simulation->design().processes().size()) {
-    process =
-        context.simulation->design().processes().at(error.process()).name;
+  if (!error.reported()) {
+    diagnostic::SourceSpan span;
+    span.path = source.path;
+    span.begin.line = source.line;
+    span.begin.column = source.column;
+    span.end = span.begin;
+    context.diagnostics.report(diagnostic::Diagnostic{
+        assertion_diagnostic_severity(error.severity()),
+        "FSIM-TCL-ASSERT-0001",
+        error.what(),
+        std::move(span),
+        {}});
+    std::string process = std::to_string(error.process());
+    if (error.process()
+        < context.simulation->design().processes().size()) {
+      process =
+          context.simulation->design()
+              .processes()
+              .at(error.process())
+              .name;
+    }
+    (void)invoke_callback(
+        context,
+        TclCallback::assertion,
+        {
+            std::move(process),
+            std::string{
+                assertion_severity_name(error.severity())},
+            error.what(),
+            source.path,
+            std::to_string(source.line),
+            std::to_string(source.column),
+        });
   }
-  (void)invoke_callback(
-      context,
-      TclCallback::assertion,
-      {
-          std::move(process),
-          std::string{assertion_severity_name(error.severity())},
-          error.what(),
-          source.path,
-          std::to_string(source.line),
-          std::to_string(source.column),
-      });
   (void)invoke_callback(
       context, TclCallback::lifecycle, {"stopped"});
   if (context.callback_error) {

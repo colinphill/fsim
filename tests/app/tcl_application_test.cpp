@@ -266,7 +266,7 @@ puts "diagnostics-ok"
     file
         << "module assertion_tb;\n"
         << "  initial begin\n"
-        << "    assert (1'b0) else $error(\"tcl assertion\");\n"
+        << "    assert (1'b0) else $fatal(\"tcl assertion\");\n"
         << "  end\n"
         << "endmodule\n";
   }
@@ -681,7 +681,7 @@ if {[string first "tcl assertion" $assertion_error] < 0} {
 }
 if {[llength $::assertion_event] != 7 ||
     [lindex $::assertion_event 0] ne "tagged" ||
-    [lindex $::assertion_event 2] ne "error" ||
+    [lindex $::assertion_event 2] ne "failure" ||
     [string first "tcl assertion" [lindex $::assertion_event 3]] < 0 ||
     [lindex $::assertion_event 5] != 3} {
   error "bad assertion callback metadata: $::assertion_event"
@@ -692,9 +692,9 @@ if {[lsearch -exact $::assertion_lifecycle "started"] < 0 ||
 }
 set diagnostics [fsim::diagnostics]
 set last [lindex $diagnostics end]
-if {[dict get $last code] ne "FSIM-TCL-ASSERT-0001" ||
+if {[dict get $last code] ne "FSIM-TCL-REPORT-0001" ||
     [dict get $last line] != 3 ||
-    [dict get $last severity] ne "error"} {
+    [dict get $last severity] ne "fatal"} {
   error "bad assertion diagnostic: $last"
 }
 if {[dict get [fsim::status] state] ne "poisoned"} {
@@ -719,7 +719,7 @@ puts "assertion-callback-ok"
         output.str().find("assertion-callback-ok")
         != std::string::npos);
     assert(
-        error.str().find("error[FSIM-TCL-ASSERT-0001]")
+        error.str().find("fatal[FSIM-TCL-REPORT-0001]")
         != std::string::npos);
     assert(error.str().find("tcl assertion") != std::string::npos);
   }

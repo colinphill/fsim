@@ -885,6 +885,10 @@ fsim_status_t assertion_failure(
     Session& session,
     const fsim::runtime::simir::AssertionError& error) {
   session.finished = true;
+  if (error.reported()) {
+    lifecycle(session, FSIM_LIFECYCLE_SIMULATION_STOPPED);
+    return FSIM_STATUS_RUNTIME_ERROR;
+  }
   const auto& location = error.source();
   fsim::diagnostic::SourceSpan span;
   span.path = location.path;

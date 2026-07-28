@@ -3646,6 +3646,56 @@ private:
         if (!condition) {
             return;
         }
+        if (language_
+            == frontend::Language::SystemVerilog2017) {
+            const auto branch_index =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            process_.operations.emplace_back(
+                Branch{
+                    *condition,
+                    0,
+                    0,
+                    UnknownBranchPolicy::when_false});
+            const auto pass_start =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            lower_statements(statement.statements);
+            const auto jump_index =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            process_.operations.emplace_back(Jump{0});
+            const auto failure_start =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            if (statement.assertion_has_failure_action) {
+                lower_statements(statement.else_statements);
+            } else {
+                process_.operations.emplace_back(
+                    runtime::simir::Report{
+                        statement.assertion_message.empty()
+                            ? "assertion failed"
+                            : statement.assertion_message,
+                        AssertionSeverity::error,
+                        SourceLocation{
+                            statement.span.source_name,
+                            static_cast<std::uint32_t>(
+                                statement.span.begin.line),
+                            static_cast<std::uint32_t>(
+                                statement.span.begin.column)}});
+            }
+            const auto end =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            process_.operations[branch_index] =
+                Branch{
+                    *condition,
+                    pass_start,
+                    failure_start,
+                    UnknownBranchPolicy::when_false};
+            process_.operations[jump_index] = Jump{end};
+            return;
+        }
         AssertionSeverity severity = AssertionSeverity::error;
         switch (statement.assertion_severity) {
         case frontend::AssertionSeverity::Note:

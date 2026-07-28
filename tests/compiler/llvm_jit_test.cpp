@@ -404,7 +404,7 @@ extern "C" std::uint64_t random_value(
       Assert{
           9,
           "unexpected sum",
-          AssertionSeverity::error,
+          AssertionSeverity::failure,
           SourceLocation{}},
       Halt{},
   };
@@ -683,7 +683,7 @@ void test_scheduled_callbacks_at_level(
   Process process;
   process.id = 0;
   process.name = "scheduled_differential";
-  process.register_count = 2;
+  process.register_count = 3;
   process.operations = {
       LoadConstant{0, PackedLogic4::from_msb_string("10XZ0101")},
       WriteUpdate{0, 0},
@@ -3699,7 +3699,7 @@ void test_display_at_level(
   Process process;
   process.id = 13;
   process.name = std::string{symbol};
-  process.register_count = 2;
+  process.register_count = 3;
   process.operations = {
       Display{"hello", true},
       Display{"tail", false},
@@ -3728,6 +3728,12 @@ void test_display_at_level(
           "",
           true},
       MonitorControl{false},
+      LoadConstant{2, PackedLogic4::from_msb_string("0")},
+      Assert{
+          2,
+          "nonfatal assertion",
+          AssertionSeverity::error,
+          SourceLocation{"assertion.sv", 9, 3}},
       RandomValue{
           1,
           RandomKind::urandom,
@@ -3755,7 +3761,7 @@ void test_display_at_level(
       == std::vector<std::string>({"postponed"}));
   assert(
       runtime.report_instructions
-      == std::vector<std::uint32_t>({3}));
+      == std::vector<std::uint32_t>({3, 10}));
   assert(
       runtime.formatted_instructions
       == std::vector<std::uint32_t>({5}));
@@ -3771,7 +3777,7 @@ void test_display_at_level(
       == std::vector<std::uint32_t>({8}));
   assert(
       runtime.random_instructions
-      == std::vector<std::uint32_t>({9}));
+      == std::vector<std::uint32_t>({11}));
 
   TestRuntime short_runtime;
   auto short_descriptor = abi(short_runtime);

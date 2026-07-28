@@ -103,7 +103,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v11";
+    "fsim-llvm-native-object-v12";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -820,6 +820,10 @@ validate_process(const Process &process,
             [&](const Assert &operation) {
               record_use(operation.condition, index);
               constrain_width(operation.condition, 1U, index);
+              if (operation.severity
+                  != runtime::simir::AssertionSeverity::failure) {
+                result.uses_report = true;
+              }
             },
             [&](const DebugPoint&) {
               result.uses_debug_points = true;
@@ -3512,20 +3516,43 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   passed, instruction_blocks[index + 1], failed_block);
 
               builder.SetInsertPoint(failed_block);
-              const auto &message =
-                  operation.message.empty()
-                      ? std::string{"assertion failed"}
-                      : operation.message;
-              auto *message_pointer = builder.CreateGlobalString(
-                  message, symbol + ".assert." + std::to_string(index));
-              builder.CreateCall(
-                  assert_type, assert_callback,
-                  {context_pointer, llvm::ConstantInt::get(i32, process.id),
-                   llvm::ConstantInt::get(i32, instruction), message_pointer,
-                   constant_i64(context, message.size())});
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_ASSERTION_FAILED, instruction);
+              if (operation.severity
+                  == runtime::simir::AssertionSeverity::failure) {
+                const auto &message =
+                    operation.message.empty()
+                        ? std::string{"assertion failed"}
+                        : operation.message;
+                auto *message_pointer = builder.CreateGlobalString(
+                    message,
+                    symbol + ".assert." + std::to_string(index));
+                builder.CreateCall(
+                    assert_type,
+                    assert_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(i32, process.id),
+                        llvm::ConstantInt::get(i32, instruction),
+                        message_pointer,
+                        constant_i64(context, message.size()),
+                    });
+                return_result(
+                    FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED,
+                    instruction,
+                    0,
+                    FSIM_JIT_FRAME_STATE_ASSERTION_FAILED,
+                    instruction);
+              } else {
+                builder.CreateCall(
+                    report_type,
+                    report_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(i32, process.id),
+                        llvm::ConstantInt::get(i32, instruction),
+                    });
+                builder.CreateBr(
+                    instruction_blocks[index + 1]);
+              }
             },
             [&](const DebugPoint&) {
               if (debug_instrumentation) {

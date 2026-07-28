@@ -336,6 +336,11 @@ struct Statement {
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;
   AssertionSeverity assertion_severity{AssertionSeverity::Error};
+  // SystemVerilog immediate assertions retain explicit action-block
+  // presence separately from their statement vectors because a null action
+  // is semantically different from an omitted failure action.
+  bool assertion_has_pass_action{};
+  bool assertion_has_failure_action{};
   // Bounded literal language output used by Verilog/SystemVerilog output
   // tasks and VHDL report statements. Formatting operands are added
   // separately.

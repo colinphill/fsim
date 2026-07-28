@@ -321,6 +321,43 @@ max_deltas = 1000
 )TOML";
   }
   {
+    std::ofstream source(directory / "severity_actions.sv");
+    source << R"(
+module severity_actions;
+  initial begin
+    $info("api info");
+    $warning("api warning");
+    $error("api error");
+    assert (1'b0);
+    $fatal("api fatal");
+  end
+endmodule
+)";
+  }
+  const auto severity_manifest_path = directory / "severity.toml";
+  {
+    std::ofstream manifest(severity_manifest_path);
+    manifest << R"TOML(
+schema = 1
+[project]
+name = "api-severity-test"
+top = "sv:work.severity_actions"
+time_resolution = "1ns"
+
+[[source_set]]
+language = "systemverilog"
+standard = "2017"
+library = "work"
+files = ["severity_actions.sv"]
+
+[build]
+cache_path = "severity-cache"
+
+[run]
+max_deltas = 1000
+)TOML";
+  }
+  {
     std::ofstream source(directory / "api_random.sv");
     source << R"(
 module api_random;
@@ -1466,6 +1503,68 @@ max_deltas = 1000
       == UINT64_C(0x0123456789abcdef));
 
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
+
+  CallbackCounts severity_counts;
+  severity_counts.manifest = severity_manifest_path.string();
+  fsim_session_options_t severity_options{};
+  severity_options.struct_size = sizeof(severity_options);
+  severity_options.api_version = FSIM_API_VERSION;
+  severity_options.max_deltas = 1000;
+  fsim_session_t severity_session = FSIM_INVALID_SESSION;
+  assert(
+      fsim_session_create(
+          &severity_options, &severity_session)
+      == FSIM_STATUS_OK);
+  auto severity_callbacks = callbacks;
+  severity_callbacks.user_data = &severity_counts;
+  assert(
+      fsim_session_set_callbacks(
+          severity_session, &severity_callbacks)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_load_project(
+          severity_session,
+          severity_manifest_path.string().c_str())
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_check(severity_session)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_build(severity_session)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_run(severity_session, 10)
+      == FSIM_STATUS_RUNTIME_ERROR);
+  assert(severity_counts.assertions == 5);
+  assert(
+      severity_counts.first_assertion_code
+      == "FSIM-API-REPORT-0001");
+  assert(
+      severity_counts.first_assertion_severity
+      == FSIM_SEVERITY_NOTE);
+  assert(
+      severity_counts.assertion_code
+      == "FSIM-API-REPORT-0001");
+  assert(
+      severity_counts.assertion_severity
+      == FSIM_SEVERITY_FATAL);
+  assert(
+      severity_counts.assertion_message
+      == "api fatal");
+  assert(
+      std::filesystem::path{
+          severity_counts.assertion_path}.filename()
+      == "severity_actions.sv");
+  size_t severity_diagnostic_count{};
+  assert(
+      fsim_session_diagnostic_count(
+          severity_session,
+          &severity_diagnostic_count)
+      == FSIM_STATUS_OK);
+  assert(severity_diagnostic_count == 5);
+  assert(
+      fsim_session_destroy(severity_session)
+      == FSIM_STATUS_OK);
 
   const auto api_random_value =
       [&](const std::uint64_t seed) {

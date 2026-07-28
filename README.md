@@ -98,8 +98,8 @@ The current tree contains:
   and `%t` current-tick substitutions;
 - formatted `$strobe` captures its evaluated value in the active phase and
   publishes the resulting text in the postponed phase;
-- decoded Verilog/SystemVerilog literal escapes in `$fatal` and immediate
-  assertion `$error` diagnostics;
+- decoded Verilog/SystemVerilog literal escapes in `$info`, `$warning`,
+  `$error`, and `$fatal` diagnostics;
 - VHDL-2008 literal `report` statements at all standard severities with
   retained source metadata, interpreter/LLVM equivalence, native API
   assertion-callback visibility, and callback-before-stop `failure`;
@@ -156,8 +156,9 @@ The current tree contains:
   `$finish`, with interpreter/LLVM lifecycle equivalence;
 - resumable Verilog-2005/SystemVerilog `$stop`, preserving the next statement
   and deferring final procedures until resumed completion;
-- SystemVerilog `$fatal` as a standalone task or immediate-assertion failure
-  action, retaining failure severity and a bounded literal message;
+- SystemVerilog `$info`, `$warning`, `$error`, and `$fatal` as standalone
+  tasks or immediate-assertion actions, including simple and lexical-block
+  pass/failure actions with severity/source retention;
 - vector-aware SystemVerilog logical negation and unsigned
   equality/relational comparisons with four-state unknown propagation, plus
   exact known-result `===`/`!==` comparison of `0`/`1`/`X`/`Z`;

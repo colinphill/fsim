@@ -149,12 +149,15 @@ module also_inactive_bad(;
           == ExpressionKind::IntegerLiteral,
       "`__LINE__ expands to an integer literal");
   require(
-      unit.processes.front().statements[4].assertion_message
-          == "preprocessed",
+      unit.processes.front().statements[4].else_statements.size() == 1
+          && unit.processes.front().statements[4]
+                 .else_statements.front().output_text
+              == "preprocessed",
       "SystemVerilog macro stringification");
   require(
       std::filesystem::path{
-          unit.processes.front().statements[5].assertion_message}
+          unit.processes.front().statements[5]
+              .else_statements.front().output_text}
               .filename()
           == "root.sv",
       "`__FILE__ expands to the normalized source name");
@@ -2828,20 +2831,49 @@ end architecture;
       "assertions.sv",
       R"(
 module assertions;
-  initial assert (1'b0) else $error("sv\nmismatch");
+  initial begin
+    assert (1'b1) $info("pass"); else $fatal("unexpected");
+    assert (1'b0) begin
+      $info("unreached");
+    end else begin
+      $warning;
+      $error("sv\nmismatch");
+    end
+    assert (1'b0);
+  end
 endmodule
 )",
       Language::SystemVerilog2017);
-  require(system_verilog.ok(), "bounded SystemVerilog assertion syntax");
-  const auto& sv_assertion =
-      system_verilog.design.units.front().processes.front().statements.front();
   require(
-      sv_assertion.kind == StatementKind::Assert
-          && sv_assertion.assertion_message == "sv\nmismatch"
-          && sv_assertion.assertion_severity == AssertionSeverity::Error
-          && sv_assertion.span.source_name == "assertions.sv"
-          && sv_assertion.span.begin.line == 3,
-      "SystemVerilog assertion metadata");
+      system_verilog.ok(),
+      "SystemVerilog immediate-assertion action blocks must parse");
+  const auto& sv_assertions =
+      system_verilog.design.units.front().processes.front().statements;
+  require(
+      sv_assertions.size() == 3
+          && sv_assertions[0].kind == StatementKind::Assert
+          && sv_assertions[0].assertion_has_pass_action
+          && sv_assertions[0].assertion_has_failure_action
+          && sv_assertions[0].statements.size() == 1
+          && sv_assertions[0].statements.front().kind
+              == StatementKind::Report
+          && sv_assertions[0].statements.front().assertion_severity
+              == AssertionSeverity::Note
+          && sv_assertions[0].else_statements.size() == 1
+          && sv_assertions[0].else_statements.front().assertion_severity
+              == AssertionSeverity::Failure
+          && sv_assertions[1].statements.size() == 1
+          && sv_assertions[1].statements.front().kind
+              == StatementKind::Block
+          && sv_assertions[1].else_statements.size() == 1
+          && sv_assertions[1].else_statements.front().kind
+              == StatementKind::Block
+          && sv_assertions[1].else_statements.front().statements.size()
+              == 2
+          && sv_assertions[2].assertion_has_pass_action
+          && !sv_assertions[2].assertion_has_failure_action
+          && sv_assertions[2].span.source_name == "assertions.sv",
+      "SystemVerilog pass/failure action metadata");
 
   const auto invalid_vhdl_severity = parse_text(
       "bad_assertion.vhd",
@@ -2864,23 +2896,40 @@ end architecture;
               }),
       "invalid VHDL assertion severity diagnostic");
 
-  const auto invalid_sv_action = parse_text(
-      "bad_assertion.sv",
+  const auto invalid_sv_report = parse_text(
+      "bad_report.sv",
       R"(
-module bad_assertion;
-  initial assert (1'b0) else $warning;
+module bad_report;
+  initial $warning(1'b1, "extra");
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      !invalid_sv_action.ok()
+      !invalid_sv_report.ok()
           && std::any_of(
-              invalid_sv_action.diagnostics.begin(),
-              invalid_sv_action.diagnostics.end(),
+              invalid_sv_report.diagnostics.begin(),
+              invalid_sv_report.diagnostics.end(),
               [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-PARSE-041";
+                return diagnostic.code == "FSIM-SV-SEM-043";
               }),
-      "unsupported SystemVerilog assertion action diagnostic");
+      "nonliteral severity-task arguments need a targeted diagnostic");
+
+  const auto missing_assertion_action = parse_text(
+      "missing_assertion_action.sv",
+      R"(
+module missing_assertion_action;
+  initial assert (1'b1)
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !missing_assertion_action.ok()
+          && std::ranges::any_of(
+              missing_assertion_action.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-044";
+              }),
+      "missing immediate-assertion actions need a targeted diagnostic");
 
   const auto fatal = parse_text(
       "fatal.sv",
@@ -2900,19 +2949,60 @@ endmodule
       fatal.design.units.front().processes.front().statements;
   require(
       fatal_statements.size() == 4
-          && std::ranges::all_of(
-              fatal_statements,
-              [](const auto& statement) {
-                return statement.kind == StatementKind::Assert
-                    && statement.assertion_severity
-                        == AssertionSeverity::Failure;
-              })
-          && fatal_statements[0].assertion_message == "$fatal"
-          && fatal_statements[1].assertion_message == "standalone\nfatal"
-          && fatal_statements[2].assertion_message == "controlled\tfatal"
-          && fatal_statements[3].assertion_message
+          && fatal_statements[0].kind == StatementKind::Report
+          && fatal_statements[1].kind == StatementKind::Report
+          && fatal_statements[2].kind == StatementKind::Report
+          && fatal_statements[0].output_text == "$fatal"
+          && fatal_statements[1].output_text == "standalone\nfatal"
+          && fatal_statements[2].output_text == "controlled\tfatal"
+          && fatal_statements[3].kind == StatementKind::Assert
+          && fatal_statements[3].assertion_has_failure_action
+          && fatal_statements[3].else_statements.size() == 1
+          && fatal_statements[3].else_statements.front().kind
+              == StatementKind::Report
+          && fatal_statements[3].else_statements.front().output_text
               == "assertion \"fatal\"",
       "standalone and assertion-action $fatal metadata");
+
+  const auto severity_tasks = parse_text(
+      "severity_tasks.sv",
+      R"(
+module severity_tasks;
+  initial begin
+    $info;
+    $info();
+    $info("note");
+    $warning;
+    $warning();
+    $warning("warning");
+    $error;
+    $error();
+    $error("error");
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      severity_tasks.ok(),
+      "bounded standalone severity tasks must parse");
+  const auto& reports =
+      severity_tasks.design.units.front().processes.front().statements;
+  require(
+      reports.size() == 9
+          && std::ranges::all_of(
+              reports,
+              [](const auto& statement) {
+                return statement.kind == StatementKind::Report;
+              })
+          && reports[0].assertion_severity == AssertionSeverity::Note
+          && reports[2].output_text == "note"
+          && reports[3].assertion_severity
+              == AssertionSeverity::Warning
+          && reports[5].output_text == "warning"
+          && reports[6].assertion_severity
+              == AssertionSeverity::Error
+          && reports[8].output_text == "error",
+      "standalone severity task forms and metadata");
 
   const auto verilog_fatal = parse_text(
       "fatal.v",
@@ -2927,6 +3017,20 @@ endmodule
                     == "FSIM-VERILOG-SEM-007";
               }),
       "$fatal must remain SystemVerilog-only");
+
+  const auto verilog_report = parse_text(
+      "report.v",
+      "module report_v; initial $error; endmodule",
+      Language::Verilog2005);
+  require(
+      !verilog_report.ok()
+          && std::ranges::any_of(
+              verilog_report.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-009";
+              }),
+      "severity report tasks must remain SystemVerilog-only");
 }
 
 void test_vhdl_literal_report() {

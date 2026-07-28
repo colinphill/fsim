@@ -8265,16 +8265,28 @@ endmodule
     assert(elaborated_vector_assertion.ok());
     auto vector_assertion_interpreter =
         elaborated_vector_assertion.design->create_interpreter();
-    bool saw_vector_assertion = false;
-    try {
-        (void)vector_assertion_interpreter->run();
-    } catch (const fsim::runtime::simir::AssertionError& error) {
-        saw_vector_assertion =
-            std::string_view{error.what()}.find(
-                "vector condition failed")
-            != std::string_view::npos;
-    }
-    assert(saw_vector_assertion);
+    std::vector<std::string> vector_assertion_reports;
+    vector_assertion_interpreter->set_report_hook(
+        [&vector_assertion_reports](
+            const fsim::runtime::simir::ProcessId,
+            const std::string_view message,
+            const fsim::runtime::simir::AssertionSeverity severity,
+            const fsim::runtime::simir::SourceLocation&,
+            const fsim::runtime::SimulationTick,
+            const std::uint64_t) {
+          assert(
+              severity
+              == fsim::runtime::simir::AssertionSeverity::error);
+          vector_assertion_reports.emplace_back(message);
+        });
+    const auto vector_assertion_result =
+        vector_assertion_interpreter->run();
+    assert(
+        vector_assertion_result.status
+            == fsim::runtime::RunStatus::completed
+        && vector_assertion_reports
+            == std::vector<std::string>{
+                "vector condition failed"});
 
     const auto conflicting_systemc_alias_source =
         fsim::frontend::parse_text(

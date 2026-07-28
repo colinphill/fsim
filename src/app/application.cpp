@@ -266,7 +266,8 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
                   ? "report failure"
                   : report->message,
               report->severity,
-              report->source);
+              report->source,
+              true);
         }
         throw compiler::LlvmJitError(
             "compiled process reported an assertion at an incompatible "
@@ -761,15 +762,29 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       const auto* report =
           std::get_if<runtime::simir::Report>(
               &state.process->operations[instruction]);
-      if (report == nullptr) {
+      if (report != nullptr) {
+        state.context->report(
+            report->message,
+            report->severity,
+            report->source);
+        return;
+      }
+      const auto* assertion =
+          std::get_if<runtime::simir::Assert>(
+              &state.process->operations[instruction]);
+      if (assertion == nullptr
+          || assertion->severity
+              == runtime::simir::AssertionSeverity::failure) {
         throw std::logic_error{
-            "generated report callback references a non-report "
+            "generated report callback references an incompatible "
             "instruction"};
       }
       state.context->report(
-          report->message,
-          report->severity,
-          report->source);
+          assertion->message.empty()
+              ? std::string_view{"assertion failed"}
+              : std::string_view{assertion->message},
+          assertion->severity,
+          assertion->source);
     } catch (...) {
       capture_failure(state);
     }
@@ -2484,7 +2499,7 @@ int handle_run(
         output << source.path << ':' << source.line << ':'
                << source.column << ": "
                << report_severity_name(severity)
-               << "[FSIM-VHDL-REPORT]: " << message << '\n';
+               << "[FSIM-HDL-REPORT]: " << message << '\n';
       });
   report_native_cache_failures(simulation, diagnostics);
   auto trace = attach_trace(simulation, config, diagnostics);
@@ -3548,7 +3563,7 @@ int handle_debug(
         output << source.path << ':' << source.line << ':'
                << source.column << ": "
                << report_severity_name(severity)
-               << "[FSIM-VHDL-REPORT]: " << message << '\n';
+               << "[FSIM-HDL-REPORT]: " << message << '\n';
       });
   report_native_cache_failures(simulation, diagnostics);
   auto trace = attach_trace(simulation, config, diagnostics, true);
