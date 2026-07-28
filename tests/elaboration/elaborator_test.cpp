@@ -8454,5 +8454,38 @@ endmodule
     assert(has_diagnostic(invalid_event_design, "FSIM-ELAB-100"));
     assert(has_diagnostic(invalid_event_design, "FSIM-ELAB-101"));
 
+    const auto display_source = fsim::frontend::parse_text(
+        "display.sv",
+        R"(
+module display;
+  initial begin
+    $display("first");
+    #1 $display;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(display_source.ok());
+    const auto display_design =
+        fsim::elaboration::elaborate(
+            display_source.design, "sv:work.display");
+    assert(display_design.ok());
+    const auto& display_operations =
+        display_design.design->processes().front().operations;
+    std::vector<fsim::runtime::simir::Display> displays;
+    for (const auto& operation : display_operations) {
+        if (const auto* display =
+                std::get_if<fsim::runtime::simir::Display>(
+                    &operation)) {
+            displays.push_back(*display);
+        }
+    }
+    assert(
+        displays.size() == 2
+        && displays[0].text == "first"
+        && displays[0].newline
+        && displays[1].text.empty()
+        && displays[1].newline);
+
     std::cout << "elaborator tests passed\n";
 }

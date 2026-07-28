@@ -126,6 +126,17 @@ typedef struct fsim_jit_runtime_v1 {
 
   /* Append-only delta-scoped signal transaction query. Returns zero or one. */
   uint32_t (*signal_active)(void* context, uint32_t signal);
+
+  /*
+   * Append-only synchronous language-output callback. text is valid only for
+   * the duration of the call; newline is zero or one.
+   */
+  void (*write_output)(
+      void* context,
+      uint32_t process,
+      const char* text,
+      uint64_t text_size,
+      uint32_t newline);
 } fsim_jit_runtime_v1;
 
 /*

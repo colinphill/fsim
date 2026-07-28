@@ -80,6 +80,9 @@ struct TestRuntime {
   std::vector<std::pair<std::uint32_t, EncodedSignal>> writes;
   std::uint64_t current_time{};
   std::vector<ScheduledWrite> scheduled_writes;
+  std::vector<std::string> output;
+  std::vector<std::uint32_t> output_processes;
+  std::vector<bool> output_newlines;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -231,6 +234,26 @@ extern "C" std::uint32_t signal_active(
   return 0;
 }
 
+extern "C" void write_output(
+    void* opaque,
+    const std::uint32_t process,
+    const char* text,
+    const std::uint64_t text_size,
+    const std::uint32_t newline) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(text != nullptr || text_size == 0);
+  assert(
+      text_size
+      <= static_cast<std::uint64_t>(
+          std::numeric_limits<std::size_t>::max()));
+  assert(newline <= 1);
+  runtime.output.emplace_back(
+      text == nullptr ? "" : text,
+      static_cast<std::size_t>(text_size));
+  runtime.output_processes.push_back(process);
+  runtime.output_newlines.push_back(newline != 0);
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -250,6 +273,7 @@ extern "C" std::uint32_t signal_active(
       &signal_last_value,
       &signal_last_event,
       &signal_active,
+      &write_output,
   };
 }
 
@@ -3574,6 +3598,48 @@ void test_rejections() {
       "C identifier");
 }
 
+void test_display_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJitOptions options;
+  options.optimization = level;
+  LlvmJit jit(options);
+  Process process;
+  process.id = 13;
+  process.name = std::string{symbol};
+  process.operations = {
+      Display{"hello", true},
+      Display{"tail", false},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 0> no_signals{};
+  jit.add_process(symbol, process, no_signals);
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(jit.lookup(symbol), descriptor)
+      == JitExecutionStatus::completed);
+  assert(
+      runtime.output == std::vector<std::string>({"hello", "tail"}));
+  assert(
+      runtime.output_processes
+      == std::vector<std::uint32_t>({13, 13}));
+  assert(
+      runtime.output_newlines == std::vector<bool>({true, false}));
+
+  TestRuntime short_runtime;
+  auto short_descriptor = abi(short_runtime);
+  short_descriptor.struct_size = static_cast<std::uint32_t>(
+      offsetof(fsim_jit_runtime_v1, write_output));
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            jit.lookup(symbol), short_descriptor);
+      },
+      "write_output");
+}
+
 } // namespace
 
 int main() {
@@ -3636,6 +3702,10 @@ int main() {
       JitOptimizationLevel::o0, "signal_wait_o0");
   test_signal_waits_at_level(
       JitOptimizationLevel::o2, "signal_wait_o2");
+  test_display_at_level(
+      JitOptimizationLevel::o0, "display_o0");
+  test_display_at_level(
+      JitOptimizationLevel::o2, "display_o2");
   test_persistent_object_cache();
   test_rejections();
   std::cout << "LLVM JIT tests passed with LLVM " << LlvmJit::llvm_version()

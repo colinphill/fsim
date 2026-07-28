@@ -772,11 +772,16 @@ The nineteenth post-gate batch is in progress:
    when development files are absent, installs its standard-library scripts
    and license, locates the scripts relative to the actual fsim executable,
    and supports `FSIM_TCL_LIBRARY` for custom package layouts.
+2. Verilog-2005/SystemVerilog literal and empty `$display` now lower to a
+   typed synchronous output operation with process/time/delta metadata, route
+   through CLI and Tcl-owned streams, and execute directly through the
+   append-only LLVM O0/O2 runtime callback.
 
 The forced no-system-Tcl dependency build and its isolated staged relocation
 probe pass; the ordinary installed-Tcl application regression also passes.
-This is feature 1 of 10, so the interval full regression and remote push are
-not due yet.
+Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and display
+application tests pass for the display slice. This is feature 2 of 10, so the
+interval full regression and remote push are not due yet.
 
 ## v1 release condition
 

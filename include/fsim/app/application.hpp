@@ -112,6 +112,7 @@ class Simulation final {
       std::uint64_t)>;
   using ExecutionPointHook =
       runtime::simir::Interpreter::ExecutionPointHook;
+  using OutputHook = runtime::simir::Interpreter::OutputHook;
   using SafePointHook = runtime::Scheduler::SafePointHook;
 
   Simulation(
@@ -175,6 +176,7 @@ class Simulation final {
   [[nodiscard]] std::uint64_t add_safe_point_hook(SafePointHook hook);
   void remove_safe_point_hook(std::uint64_t token) noexcept;
   void set_execution_point_hook(ExecutionPointHook hook);
+  void set_output_hook(OutputHook hook);
 
  private:
   struct Impl;

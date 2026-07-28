@@ -61,7 +61,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, signal_last_event) == 104,
                "runtime signal-last-event callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, signal_active) == 112,
                "runtime signal-active callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 120,
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_output) == 120,
+               "runtime language-output callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 128,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -81,6 +83,10 @@ typedef struct callback_state {
   uint64_t slice_aval;
   uint64_t slice_bval;
   uint64_t slice_delay;
+  uint32_t output_count;
+  uint32_t output_process;
+  uint32_t output_newline;
+  uint64_t output_size;
 } callback_state;
 
 static uint64_t read_signal(
@@ -191,6 +197,25 @@ static uint32_t signal_active(void* context, uint32_t signal) {
   return signal == UINT32_C(11);
 }
 
+static void write_output(
+    void* context,
+    uint32_t process,
+    const char* text,
+    uint64_t text_size,
+    uint32_t newline) {
+  callback_state* state = (callback_state*)context;
+  ++state->output_count;
+  state->output_process = process;
+  state->output_newline = newline;
+  state->output_size = text_size;
+  if (text_size != UINT64_C(5)
+      || text == NULL
+      || text[0] != 'h'
+      || text[4] != 'o') {
+    state->output_size = 0;
+  }
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -210,7 +235,8 @@ int main(void) {
       signal_event,
       signal_last_value,
       signal_last_event,
-      signal_active};
+      signal_active,
+      write_output};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -238,6 +264,8 @@ int main(void) {
       runtime.context, UINT32_C(7));
   const uint32_t active = runtime.signal_active(
       runtime.context, UINT32_C(11));
+  runtime.write_output(
+      runtime.context, UINT32_C(12), "hello", UINT64_C(5), UINT32_C(1));
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -274,7 +302,11 @@ int main(void) {
       state.slice_width != UINT32_C(12) ||
       state.slice_aval != UINT64_C(0xabc) ||
       state.slice_bval != UINT64_C(0x400) ||
-      state.slice_delay != UINT64_C(13)) {
+      state.slice_delay != UINT64_C(13) ||
+      state.output_count != UINT32_C(1) ||
+      state.output_process != UINT32_C(12) ||
+      state.output_newline != UINT32_C(1) ||
+      state.output_size != UINT64_C(5)) {
     return 3;
   }
   return 0;

@@ -2840,6 +2840,58 @@ void test_simir_execution_point_ordering() {
       "call execution-point kind and source ordering");
 }
 
+void test_simir_display_output() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  Process process;
+  process.name = "display";
+  process.operations = {
+      Display{"first", true},
+      WaitFor{2},
+      Display{"tail", false},
+      Halt{},
+  };
+  const auto process_id = interpreter.add_process(std::move(process));
+  struct Event {
+    ProcessId process{};
+    std::string text;
+    bool newline{};
+    SimulationTick time{};
+    std::uint64_t delta{};
+  };
+  std::vector<Event> events;
+  interpreter.set_output_hook(
+      [&events](
+          const ProcessId process_value,
+          const std::string_view text,
+          const bool newline,
+          const SimulationTick time,
+          const std::uint64_t delta) {
+        events.push_back(
+            {process_value, std::string{text}, newline, time, delta});
+      });
+  interpreter.start();
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "display process must complete");
+  require(
+      events.size() == 2
+          && events[0].process == process_id
+          && events[0].text == "first"
+          && events[0].newline
+          && events[0].time == 0
+          && events[0].delta == 0
+          && events[1].process == process_id
+          && events[1].text == "tail"
+          && !events[1].newline
+          && events[1].time == 2
+          && events[1].delta == 0,
+      "display hook ordering and metadata");
+}
+
 void test_vcd() {
   using namespace fsim::runtime;
 
@@ -2909,6 +2961,7 @@ int main() {
     test_simir_alternate_executor_event_lists();
     test_simir_assertion_metadata();
     test_simir_execution_point_ordering();
+    test_simir_display_output();
     test_vcd();
   } catch (const std::exception &error) {
     std::cerr << "runtime test failure: " << error.what() << '\n';

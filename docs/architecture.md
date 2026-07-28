@@ -313,7 +313,7 @@ SimIR processes are explicit state machines. The current operation set includes:
   waits;
 - next-delta yields;
 - jumps and branches;
-- assertions; and
+- assertions and synchronous already-formatted language output; and
 - process halt and simulation stop.
 
 Bounded frontend lowering reaches these suspension operations from VHDL bare,
@@ -328,6 +328,14 @@ wakeups rearm the sensitivity set; an internal scalar frame register records
 whether the eventual wake was the timeout. A VHDL process containing explicit
 waits jumps back to its post-initializer entry when its body completes,
 preserving implicit process repetition without reinitializing locals.
+
+The initial output slice lowers literal or empty Verilog/SystemVerilog
+`$display` calls to a typed `Display` operation. The interpreter invokes an
+embedding-owned output hook synchronously with process, time, and delta
+metadata. Compiled O0/O2 code calls the same hook through an append-only
+plain-C runtime-table tail, so output ordering remains part of the common
+single-thread simulation semantics. Formatting operands, `$write`, and
+postponed `$strobe`/`$monitor` remain subsequent slices.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

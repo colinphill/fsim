@@ -60,6 +60,59 @@ int main() {
   const auto directory = std::filesystem::temp_directory_path()
       / ("fsim-tcl-test-" + std::to_string(suffix));
   std::filesystem::create_directories(directory);
+  const auto display_source = directory / "display.sv";
+  const auto display_manifest = directory / "display.toml";
+  {
+    std::ofstream file(display_source);
+    file
+        << "module display;\n"
+        << "  initial begin\n"
+        << "    $display(\"tcl-hdl-output\");\n"
+        << "    $finish;\n"
+        << "  end\n"
+        << "endmodule\n";
+  }
+  {
+    std::ofstream file(display_manifest);
+    file
+        << "schema = 1\n"
+        << "[project]\n"
+        << "name = \"tcl-display\"\n"
+        << "top = \"sv:work.display\"\n"
+        << "time_resolution = \"1ns\"\n"
+        << "[[source_set]]\n"
+        << "language = \"systemverilog\"\n"
+        << "standard = \"2017\"\n"
+        << "library = \"work\"\n"
+        << "files = [\"display.sv\"]\n"
+        << "[build]\n"
+        << "optimization = \"O2\"\n"
+        << "cache_path = \"display-cache\"\n"
+        << "[run]\n"
+        << "max_deltas = 1000\n";
+  }
+  {
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {
+            "fsim",
+            "tcl",
+            "-p",
+            display_manifest.string(),
+            "-c",
+            "fsim::run",
+        },
+        input,
+        output,
+        error);
+    assert(result == 0);
+    assert(
+        output.str().find("tcl-hdl-output\n")
+        != std::string::npos);
+    assert(error.str().empty());
+  }
   const auto script = directory / "arguments.tcl";
   {
     std::ofstream file(script);

@@ -608,6 +608,18 @@ bool ensure_simulation(
       std::move(*context.built),
       context.config.run.max_deltas,
       engine);
+  context.simulation->set_output_hook(
+      [&context](
+          const runtime::simir::ProcessId,
+          const std::string_view text,
+          const bool newline,
+          const runtime::SimulationTick,
+          const std::uint64_t) {
+        context.output << text;
+        if (newline) {
+          context.output << '\n';
+        }
+      });
   context.built.reset();
   context.simulation_engine = engine;
   attach_callbacks(context);

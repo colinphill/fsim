@@ -202,6 +202,24 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;named-events"
   )
 
+  add_executable(
+    fsim_display_application_tests
+    app/display_application_test.cpp
+  )
+  fsim_configure_test(fsim_display_application_tests)
+  target_link_libraries(
+    fsim_display_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.display
+    COMMAND fsim_display_application_tests
+  )
+  set_tests_properties(
+    fsim.application.display
+    PROPERTIES LABELS "fast;display"
+  )
+
   add_executable(fsim_application_tests app/application_test.cpp)
   fsim_configure_test(fsim_application_tests)
   target_compile_definitions(

@@ -5398,6 +5398,55 @@ endmodule
       "duplicate named event diagnostic");
 }
 
+void test_verilog_literal_display() {
+  const auto parsed = parse_text(
+      "display.v",
+      R"(
+module display;
+  initial begin
+    $display("hello");
+    $display();
+    $display;
+  end
+endmodule
+)",
+      Language::Verilog2005);
+  require(parsed.ok(), "literal $display tasks must parse");
+  const auto& statements =
+      parsed.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 3
+          && std::all_of(
+              statements.begin(),
+              statements.end(),
+              [](const Statement& statement) {
+                return statement.kind == StatementKind::Display
+                    && statement.output_newline;
+              })
+          && statements.front().output_text == "hello"
+          && statements[1].output_text.empty()
+          && statements[2].output_text.empty(),
+      "literal and empty $display HIR");
+
+  const auto unsupported = parse_text(
+      "formatted_display.sv",
+      R"(
+module formatted_display;
+  logic q;
+  initial $display("%b", q);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::any_of(
+          unsupported.diagnostics.begin(),
+          unsupported.diagnostics.end(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-037";
+          }),
+      "formatted $display arguments need a targeted diagnostic");
+}
+
 int main() {
   try {
     require(
@@ -5454,6 +5503,7 @@ int main() {
     test_conditional_statement_trees();
     test_conditional_generate_hierarchy();
     test_systemverilog_named_events();
+    test_verilog_literal_display();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

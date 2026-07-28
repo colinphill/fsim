@@ -54,6 +54,7 @@ using runtime::simir::CountOnes;
 using runtime::simir::CountBits;
 using runtime::simir::CopyRegister;
 using runtime::simir::DebugPoint;
+using runtime::simir::Display;
 using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
 using runtime::simir::Halt;
@@ -95,7 +96,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v3";
+    "fsim-llvm-native-object-v4";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -119,7 +120,8 @@ static_assert(offsetof(fsim_jit_runtime_v1, signal_event) == 88);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_last_value) == 96);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_last_event) == 104);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_active) == 112);
-static_assert(sizeof(fsim_jit_runtime_v1) == 120);
+static_assert(offsetof(fsim_jit_runtime_v1, write_output) == 120);
+static_assert(sizeof(fsim_jit_runtime_v1) == 128);
 static_assert(sizeof(fsim_jit_frame_v1) == 64);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -351,6 +353,7 @@ struct ValidatedProcess {
   bool uses_signal_last_value{};
   bool uses_signal_last_event{};
   bool uses_signal_active{};
+  bool uses_output{};
 };
 
 [[nodiscard]] ValidatedProcess
@@ -800,6 +803,9 @@ validate_process(const Process &process,
             },
             [&](const DebugPoint&) {
               result.uses_debug_points = true;
+            },
+            [&](const Display&) {
+              result.uses_output = true;
             },
             [&](const Jump &operation) {
               validate_target(operation.target, index, "jump");
@@ -1485,6 +1491,11 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               builder.add("source-path", value.source.path);
               add_key_u64(builder, "source-line", value.source.line);
               add_key_u64(builder, "source-column", value.source.column);
+            },
+            [&](const Display& value) {
+              builder.add("operation", "Display");
+              builder.add("text", value.text);
+              add_key_u64(builder, "newline", value.newline ? 1U : 0U);
             },
             [&](const Jump &value) {
               builder.add("operation", "Jump");
@@ -2214,7 +2225,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       context,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer},
+       pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -2324,6 +2335,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 16),
         "signal_active");
   }
+  llvm::Value* output_callback = nullptr;
+  if (validated.uses_output) {
+    output_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 17),
+        "write_output");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -2354,6 +2373,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(i64, {pointer, i32}, false);
   auto* signal_active_type =
       llvm::FunctionType::get(i32, {pointer, i32}, false);
+  auto* output_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, pointer, i64, i32},
+          false);
 
   auto *register_aval = builder.CreateLoad(
       pointer, builder.CreateStructGEP(frame_type, frame_argument, 8),
@@ -3235,6 +3259,23 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                     FSIM_JIT_FRAME_STATE_READY, next_instruction);
               }
             },
+            [&](const Display& operation) {
+              auto* text = builder.CreateGlobalString(
+                  operation.text,
+                  symbol + ".display." + std::to_string(index));
+              builder.CreateCall(
+                  output_type,
+                  output_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      text,
+                      constant_i64(context, operation.text.size()),
+                      llvm::ConstantInt::get(
+                          i32, operation.newline ? 1U : 0U),
+                  });
+              branch_to_next();
+            },
             [&](const Jump &operation) {
               builder.CreateBr(instruction_blocks[operation.target]);
             },
@@ -3365,6 +3406,7 @@ struct LlvmJit::Impl {
     bool uses_signal_last_value{};
     bool uses_signal_last_event{};
     bool uses_signal_active{};
+    bool uses_output{};
   };
 
   struct NativeEntry {
@@ -3507,6 +3549,7 @@ void LlvmJit::add_process_module(
         validated.uses_signal_last_value,
         validated.uses_signal_last_event,
         validated.uses_signal_active,
+        validated.uses_output,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -3792,6 +3835,16 @@ LlvmJit::resume(const JitProcessHandle process,
     if (runtime.signal_active == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires signal_active for this process");
+    }
+  }
+  if (entry.info.uses_output) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include write_output");
+    }
+    if (runtime.write_output == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_output for this process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {

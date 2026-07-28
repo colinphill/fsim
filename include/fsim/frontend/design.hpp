@@ -242,6 +242,7 @@ enum class StatementKind {
   WaitOn,
   WaitUntil,
   EventTrigger,
+  Display,
   Pause,
   Finish,
   Block,
@@ -312,6 +313,10 @@ struct Statement {
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;
   AssertionSeverity assertion_severity{AssertionSeverity::Error};
+  // Bounded literal output used by the initial Verilog/SystemVerilog display
+  // task slice. Formatting operands are added separately.
+  std::string output_text;
+  bool output_newline{true};
 
   // Block contents or the true branch/delayed statement.
   std::vector<Statement> statements;

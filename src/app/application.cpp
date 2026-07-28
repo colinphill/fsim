@@ -168,6 +168,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.signal_last_value = signal_last_value;
     runtime.signal_last_event = signal_last_event;
     runtime.signal_active = signal_active;
+    runtime.write_output = write_output;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -633,6 +634,36 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     } catch (...) {
       capture_failure(state);
       return 0;
+    }
+  }
+
+  static void write_output(
+      void* context,
+      const std::uint32_t,
+      const char* text,
+      const std::uint64_t text_size,
+      const std::uint32_t newline) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (state.context == nullptr
+          || (text == nullptr && text_size != 0)
+          || newline > 1
+          || text_size
+              > static_cast<std::uint64_t>(
+                  std::numeric_limits<std::size_t>::max())) {
+        throw std::logic_error(
+            "invalid generated language-output callback");
+      }
+      state.context->display(
+          std::string_view{
+              text == nullptr ? "" : text,
+              static_cast<std::size_t>(text_size)},
+          newline != 0);
+    } catch (...) {
+      capture_failure(state);
     }
   }
 
@@ -2115,6 +2146,18 @@ int handle_run(
       std::move(*built),
       config.run.max_deltas,
       SimulationEngine::compiled);
+  simulation.set_output_hook(
+      [&output](
+          const runtime::simir::ProcessId,
+          const std::string_view text,
+          const bool newline,
+          const SimulationTick,
+          const std::uint64_t) {
+        output << text;
+        if (newline) {
+          output << '\n';
+        }
+      });
   report_native_cache_failures(simulation, diagnostics);
   auto trace = attach_trace(simulation, config, diagnostics);
   if (config.run.trace_file && !trace) {
@@ -3151,6 +3194,18 @@ int handle_debug(
       std::move(*built),
       config.run.max_deltas,
       SimulationEngine::debug);
+  simulation.set_output_hook(
+      [&output](
+          const runtime::simir::ProcessId,
+          const std::string_view text,
+          const bool newline,
+          const SimulationTick,
+          const std::uint64_t) {
+        output << text;
+        if (newline) {
+          output << '\n';
+        }
+      });
   report_native_cache_failures(simulation, diagnostics);
   auto trace = attach_trace(simulation, config, diagnostics, true);
   if (config.run.trace_file && !trace) {
@@ -3936,6 +3991,17 @@ struct Simulation::Impl {
             }
           }
         });
+    interpreter->set_output_hook(
+        [this](
+            const runtime::simir::ProcessId process,
+            const std::string_view text,
+            const bool newline,
+            const SimulationTick time,
+            const std::uint64_t delta) {
+          if (output_hook) {
+            output_hook(process, text, newline, time, delta);
+          }
+        });
     interpreter->scheduler().set_safe_point_hook(
         [this](
             runtime::Scheduler& scheduler,
@@ -4033,6 +4099,7 @@ struct Simulation::Impl {
   SafePointHook safe_point_hook;
   std::map<std::uint64_t, SafePointHook> safe_point_observers;
   std::uint64_t next_safe_point_observer{1};
+  OutputHook output_hook;
   Lifecycle lifecycle{Lifecycle::ready};
   bool systemc_start_attempted{};
   bool systemc_ended{};
@@ -4234,6 +4301,10 @@ void Simulation::remove_safe_point_hook(const std::uint64_t token) noexcept {
 
 void Simulation::set_execution_point_hook(ExecutionPointHook hook) {
   impl_->interpreter->set_execution_point_hook(std::move(hook));
+}
+
+void Simulation::set_output_hook(OutputHook hook) {
+  impl_->output_hook = std::move(hook);
 }
 
 int run_debug_repl(

@@ -875,6 +875,7 @@ struct Interpreter::Impl {
   std::unordered_set<std::uint64_t> pending_channel_updates;
   SignalChangeHook signal_change_hook;
   ExecutionPointHook execution_point_hook;
+  OutputHook output_hook;
   bool update_commit_scheduled{};
   bool started{};
   bool stopped_by_design{};
@@ -1647,6 +1648,19 @@ struct Interpreter::Impl::ExecutionContext final
     owner.request_channel_update(process, channel);
   }
 
+  void display(
+      const std::string_view text,
+      const bool newline) override {
+    if (owner.output_hook) {
+      owner.output_hook(
+          process,
+          text,
+          newline,
+          owner.scheduler.now(),
+          owner.scheduler.delta());
+    }
+  }
+
   [[nodiscard]] bool
   execution_points_enabled() const noexcept override {
     return static_cast<bool>(owner.execution_point_hook);
@@ -2333,6 +2347,17 @@ void Interpreter::Impl::execute(ProcessId id) {
               }
               ++process.pc;
             },
+            [&](const Display& op) {
+              if (output_hook) {
+                output_hook(
+                    process.program.id,
+                    op.text,
+                    op.newline,
+                    scheduler.now(),
+                    scheduler.delta());
+              }
+              ++process.pc;
+            },
             [&](const Pause &) {
               boundary = true;
             },
@@ -2587,6 +2612,10 @@ void Interpreter::set_signal_change_hook(SignalChangeHook hook) {
 
 void Interpreter::set_execution_point_hook(ExecutionPointHook hook) {
   impl_->execution_point_hook = std::move(hook);
+}
+
+void Interpreter::set_output_hook(OutputHook hook) {
+  impl_->output_hook = std::move(hook);
 }
 
 } // namespace fsim::runtime::simir

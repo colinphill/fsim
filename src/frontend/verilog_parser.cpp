@@ -3626,6 +3626,50 @@ class VerilogParser final : private detail::ParserBase {
       return statement;
     }
 
+    if (keyword("$display")) {
+      const auto start = advance();
+      Statement statement;
+      statement.kind = StatementKind::Display;
+      if (match(TokenKind::LeftParen)) {
+        if (!at(TokenKind::RightParen)) {
+          if (at(TokenKind::StringLiteral)) {
+            statement.output_text =
+                string_literal_text(advance());
+          } else {
+            error(
+                current(),
+                "FSIM-SV-SEM-037",
+                "the current $display slice requires a literal string "
+                "argument");
+            while (!at_end() && !at(TokenKind::RightParen)
+                   && !at(TokenKind::Semicolon)) {
+              advance();
+            }
+          }
+          if (match(TokenKind::Comma)) {
+            error(
+                previous(),
+                "FSIM-SV-SEM-037",
+                "$display format arguments are not implemented");
+            while (!at_end() && !at(TokenKind::RightParen)
+                   && !at(TokenKind::Semicolon)) {
+              advance();
+            }
+          }
+        }
+        expect(
+            TokenKind::RightParen,
+            "')' after $display arguments",
+            "FSIM-SV-PARSE-119");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after $display",
+          "FSIM-SV-PARSE-120");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
+
     if (keyword("$finish")) {
       const auto start = advance();
       if (match(TokenKind::LeftParen)) {

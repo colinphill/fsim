@@ -79,6 +79,9 @@ The current tree contains:
 - Verilog/SystemVerilog named-event declarations, immediate `->` triggers,
   SystemVerilog update-phase or delayed `->>` triggers, and repeated
   static/dynamic event-control wakeups;
+- Verilog-2005/SystemVerilog literal and empty `$display` routed
+  synchronously through CLI/Tcl output with interpreter and LLVM O0/O2
+  equivalence;
 - deterministic simple-expression sensitivity inference for `always @*`,
   time-zero `always_comb`/`always_latch`, and dynamic `@*`;
 - ordered Verilog/SystemVerilog `case`/`casez`/`casex`/`default` lowering

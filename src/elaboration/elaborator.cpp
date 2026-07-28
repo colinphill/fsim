@@ -2982,6 +2982,8 @@ private:
             auto kind = DebugPointKind::statement;
             if (statement.kind == StatementKind::Assert) {
                 kind = DebugPointKind::assertion;
+            } else if (statement.kind == StatementKind::Display) {
+                kind = DebugPointKind::call;
             } else if (
                 statement.kind == StatementKind::Delay
                 || statement.kind == StatementKind::WaitOn
@@ -3039,6 +3041,12 @@ private:
             break;
         case StatementKind::EventTrigger:
             lower_event_trigger(statement);
+            break;
+        case StatementKind::Display:
+            process_.operations.emplace_back(
+                Display{
+                    statement.output_text,
+                    statement.output_newline});
             break;
         case StatementKind::Pause:
             process_.operations.emplace_back(Pause{});
@@ -6446,6 +6454,7 @@ private:
             case StatementKind::Delay:
             case StatementKind::WaitOn:
             case StatementKind::EventTrigger:
+            case StatementKind::Display:
             case StatementKind::Pause:
             case StatementKind::Finish:
             case StatementKind::Block:
