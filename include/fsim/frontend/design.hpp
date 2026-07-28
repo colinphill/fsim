@@ -281,6 +281,9 @@ struct Statement {
   // SystemVerilog `<`/`>` loop conditions exclude the retained limit;
   // VHDL discrete ranges and SV `<=`/`>=` include it.
   bool loop_limit_exclusive{};
+  // Verilog/SystemVerilog repeat statements use an anonymous ascending loop
+  // from zero to the exclusive, locally-static repeat count.
+  bool loop_repeat{};
   std::optional<Delay> delay;
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;

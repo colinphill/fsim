@@ -360,6 +360,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-097` | error | Expected `;` after a procedural loop initializer. |
 | `FSIM-SV-PARSE-098` | error | Expected `;` after a procedural loop condition. |
 | `FSIM-SV-PARSE-099` | error | Expected `)` after a procedural loop header. |
+| `FSIM-SV-PARSE-100` | error | Expected `(` after a procedural `repeat`. |
+| `FSIM-SV-PARSE-101` | error | Expected `)` after a procedural repeat count. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -483,6 +485,8 @@ therefore excluded.
 | `FSIM-ELAB-072` | error | A sequential VHDL for-loop final bound is not locally static. |
 | `FSIM-ELAB-073` | error | A sequential VHDL for loop exceeds the bounded one-million-iteration elaboration limit. |
 | `FSIM-ELAB-074` | error | A sequential for-loop body assigns its VHDL implicit constant or statically substituted SystemVerilog index. |
+| `FSIM-ELAB-075` | error | A Verilog/SystemVerilog repeat count is not locally static. |
+| `FSIM-ELAB-076` | error | A Verilog/SystemVerilog repeat count is negative. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

@@ -2539,6 +2539,86 @@ endmodule
   }
 }
 
+void test_verilog_repeat_statements() {
+  const auto systemverilog = parse_text(
+      "repeat_statement.sv",
+      R"(
+module repeat_statement;
+  logic [1:0] result;
+  initial begin
+    result = 2'b00;
+    repeat (3) result = result + 1;
+    repeat (0) result = 2'b11;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "SystemVerilog repeat statements must parse");
+  const auto& statements =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements;
+  require(
+      statements.size() == 3
+          && statements[1].kind == StatementKind::Loop
+          && statements[1].loop_repeat
+          && statements[1].loop_limit_exclusive
+          && statements[1].loop_initial.text == "0"
+          && statements[1].loop_limit.text == "3"
+          && statements[1].loop_variable.empty()
+          && statements[1].statements.size() == 1
+          && statements[2].kind == StatementKind::Loop
+          && statements[2].loop_repeat
+          && statements[2].loop_limit.text == "0",
+      "repeat count and body HIR");
+
+  const auto verilog = parse_text(
+      "repeat_statement.v",
+      R"(
+module repeat_statement;
+  reg result;
+  initial begin
+    result = 1'b0;
+    repeat (2) result = ~result;
+  end
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      verilog.ok()
+          && verilog.design.units.front()
+                 .processes.front()
+                 .statements[1]
+                 .loop_repeat,
+      "Verilog-2005 repeat statements share the loop HIR");
+
+  const auto malformed = parse_text(
+      "bad_repeat.sv",
+      R"(
+module bad_repeat;
+  initial repeat 2;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !malformed.ok()
+          && std::ranges::any_of(
+              malformed.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-100";
+              })
+          && std::ranges::any_of(
+              malformed.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-101";
+              }),
+      "malformed repeat delimiters receive stable diagnostics");
+}
+
 void test_systemverilog_conditional_expression() {
   const auto result = parse_text(
       "conditional.sv",
@@ -3808,6 +3888,7 @@ int main() {
     test_wildcard_and_always_comb_processes();
     test_systemverilog_case_statements();
     test_systemverilog_procedural_for_loops();
+    test_verilog_repeat_statements();
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
     test_systemverilog_arithmetic_expressions();

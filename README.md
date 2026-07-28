@@ -110,6 +110,8 @@ The current tree contains:
 - bounded SystemVerilog procedural `for` loops with inline `int`/`integer`
   indices, canonical unit-step conditions/updates, exclusive or inclusive
   bounds, and the same deterministic common-loop lowering;
+- locally static Verilog/SystemVerilog `repeat (COUNT)` statements with
+  explicit zero-count behavior and bounded common-loop lowering;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

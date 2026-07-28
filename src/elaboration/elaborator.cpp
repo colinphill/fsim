@@ -3450,9 +3450,20 @@ private:
             statement.loop_limit, {}, error);
         if (!limit) {
             report(
-                "FSIM-ELAB-072",
-                "cannot evaluate sequential for-loop final bound: "
+                statement.loop_repeat
+                    ? "FSIM-ELAB-075"
+                    : "FSIM-ELAB-072",
+                (statement.loop_repeat
+                     ? "cannot evaluate repeat count: "
+                     : "cannot evaluate sequential for-loop final bound: ")
                     + error,
+                statement.loop_limit.span);
+            return;
+        }
+        if (statement.loop_repeat && *limit < 0) {
+            report(
+                "FSIM-ELAB-076",
+                "repeat count must be nonnegative",
                 statement.loop_limit.span);
             return;
         }
@@ -3485,9 +3496,11 @@ private:
         }
 
         ConstantDomainEnvironment domains;
-        domains.emplace(
-            statement.loop_variable,
-            frontend::ValueDomain::Integer);
+        if (!statement.loop_variable.empty()) {
+            domains.emplace(
+                statement.loop_variable,
+                frontend::ValueDomain::Integer);
+        }
         auto value = *initial;
         std::size_t count = 0;
         const auto in_range = [&]() {
@@ -3511,7 +3524,10 @@ private:
             }
             auto body = statement.statements;
             ConstantEnvironment environment;
-            environment.emplace(statement.loop_variable, value);
+            if (!statement.loop_variable.empty()) {
+                environment.emplace(
+                    statement.loop_variable, value);
+            }
             substitute_parameters(
                 body,
                 environment,

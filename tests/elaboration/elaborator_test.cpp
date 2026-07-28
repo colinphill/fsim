@@ -6138,6 +6138,71 @@ endmodule
                 rejected_systemverilog_loops, code));
     }
 
+    const auto repeat_statements =
+        fsim::frontend::parse_text(
+            "repeat_statements.sv",
+            R"(
+module repeat_statements;
+  logic [2:0] observed;
+  initial begin
+    observed = 3'b000;
+    repeat (3) observed = observed + 1;
+    repeat (0) observed = 3'b111;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(repeat_statements.ok());
+    const auto elaborated_repeat_statements =
+        fsim::elaboration::elaborate(
+            repeat_statements.design,
+            "sv:work.repeat_statements");
+    assert(elaborated_repeat_statements.ok());
+    auto repeat_interpreter =
+        elaborated_repeat_statements.design
+            ->create_interpreter();
+    const auto repeat_result = repeat_interpreter->run();
+    assert(
+        repeat_result.status
+        == fsim::runtime::RunStatus::completed);
+    const auto repeat_observed =
+        elaborated_repeat_statements.design
+            ->find_signal("observed");
+    assert(repeat_observed);
+    assert(
+        repeat_interpreter
+            ->signal_value(*repeat_observed)
+            .to_msb_string()
+        == "011");
+
+    const auto invalid_repeat_statements =
+        fsim::frontend::parse_text(
+            "invalid_repeat_statements.sv",
+            R"(
+module invalid_repeat_statements;
+  logic dynamic_count;
+  initial begin
+    repeat (dynamic_count);
+    repeat (-1);
+    repeat (1000001);
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_repeat_statements.ok());
+    const auto rejected_repeat_statements =
+        fsim::elaboration::elaborate(
+            invalid_repeat_statements.design,
+            "sv:work.invalid_repeat_statements");
+    assert(!rejected_repeat_statements.ok());
+    for (const auto code :
+         {"FSIM-ELAB-073", "FSIM-ELAB-075",
+          "FSIM-ELAB-076"}) {
+        assert(
+            has_diagnostic(
+                rejected_repeat_statements, code));
+    }
+
     const auto invalid_vhdl_condition =
         fsim::frontend::parse_text(
             "invalid_condition.vhd",

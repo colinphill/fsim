@@ -504,6 +504,7 @@ module conditional_statement_app;
   logic [3:0] nested_case;
   logic [3:0] sequential_loop_result;
   logic [1:0] null_loop_result;
+  logic [2:0] repeat_result;
   always_comb begin
     if (selector) begin
       if (selector[3])
@@ -523,6 +524,9 @@ module conditional_statement_app;
       sequential_loop_result[lane] = 1'b0;
     for (int lane = 2; lane < 1; lane += 1)
       null_loop_result[0] = 1'b1;
+    repeat_result = 3'b000;
+    repeat (3) repeat_result = repeat_result + 1;
+    repeat (0) repeat_result = 3'b111;
     if (4'b0000)
       zero_case = 1'b1;
     else
@@ -4292,7 +4296,7 @@ end architecture rtl;
         conditional_statement_hybrid.final_values
         == std::vector<std::string>{
             "1000", "0", "1", "0", "0001",
-            "0011", "00"}));
+            "0011", "00", "011"}));
   }
 
   auto vhdl_conditional_statement_config = config;
