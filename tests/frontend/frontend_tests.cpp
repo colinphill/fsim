@@ -5689,6 +5689,8 @@ module numeric_output;
     $display(42);
     $write(8'h2a);
     $strobe(6'b10_1010);
+    $display(8'shff);
+    $write(4'sb0111);
   end
 endmodule
 )",
@@ -5697,14 +5699,18 @@ endmodule
   const auto& numeric_statements =
       numeric.design.units.front().processes.front().statements;
   require(
-      numeric_statements.size() == 3
+      numeric_statements.size() == 5
           && numeric_statements[0].output_text == "42"
           && numeric_statements[0].output_newline
           && numeric_statements[1].output_text == "42"
           && !numeric_statements[1].output_newline
           && numeric_statements[2].output_text == "42"
-          && numeric_statements[2].output_postponed,
-      "unsigned numeric output literal folding");
+          && numeric_statements[2].output_postponed
+          && numeric_statements[3].output_text == "-1"
+          && numeric_statements[3].output_newline
+          && numeric_statements[4].output_text == "7"
+          && !numeric_statements[4].output_newline,
+      "unsigned and signed numeric output literal folding");
 
   const auto unknown_numeric = parse_text(
       "unknown_numeric_output.sv",

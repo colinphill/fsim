@@ -355,7 +355,9 @@ trigger; monitor-list replacement and value-sensitive re-publication remain
 part of the formatting slice.
 Known unsigned numeric literals used as the sole output-task argument are
 normalized to their width-truncated decimal value in typed HIR. Unknown-state,
-signed, dynamic, and additional operands remain targeted.
+dynamic, and additional operands remain targeted. Based literals marked
+signed are interpreted as two's-complement at their declared width before
+decimal formatting.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

@@ -55,8 +55,9 @@ postponed phase. Value operands, formatting substitutions, monitor-list
 replacement, `$monitoron`, and `$monitoroff` remain deferred.
 
 A sole constant unsigned decimal, binary, octal, or hexadecimal output
-argument is width-truncated and emitted in default decimal form. Signed,
-unknown-state, dynamic, and additional operands remain deferred.
+argument is width-truncated and emitted in default decimal form. A based
+literal marked signed is interpreted as two's-complement at its declared
+width. Unknown-state, dynamic, and additional operands remain deferred.
 
 Literal `$fatal` and immediate-assertion `$error` messages use the same
 Verilog/SystemVerilog escape decoding as output tasks, including byte-exact

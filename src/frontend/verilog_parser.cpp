@@ -26,20 +26,25 @@ struct VerilogTypeSpec {
   PortDirection direction{PortDirection::Unknown};
 };
 
-[[nodiscard]] std::optional<std::uint64_t>
+[[nodiscard]] std::optional<std::string>
 constant_output_number(const std::string_view spelling) {
   const auto quote = spelling.find('\'');
   if (quote == std::string_view::npos) {
-    return decimal_u64(spelling);
+    const auto value = decimal_u64(spelling);
+    return value
+        ? std::optional{std::to_string(*value)}
+        : std::nullopt;
   }
   const auto width = decimal_u64(spelling.substr(0, quote));
   if (!width || *width == 0) {
     return std::nullopt;
   }
   auto digits = spelling.substr(quote + 1);
+  bool is_signed = false;
   if (!digits.empty()
       && (digits.front() == 's' || digits.front() == 'S')) {
-    return std::nullopt;
+    is_signed = true;
+    digits.remove_prefix(1);
   }
   if (digits.size() < 2) {
     return std::nullopt;
@@ -83,7 +88,19 @@ constant_output_number(const std::string_view spelling) {
   if (*width < 64) {
     value &= (std::uint64_t{1} << *width) - 1U;
   }
-  return value;
+  if (!is_signed
+      || *width > 64
+      || (value & (std::uint64_t{1} << (*width - 1U))) == 0) {
+    return std::to_string(value);
+  }
+  const auto magnitude =
+      *width == 64
+          ? (~value) + 1U
+          : (std::uint64_t{1} << *width) - value;
+  if (magnitude == (std::uint64_t{1} << 63U)) {
+    return std::to_string(std::numeric_limits<std::int64_t>::min());
+  }
+  return "-" + std::to_string(magnitude);
 }
 
 [[nodiscard]] std::optional<std::int64_t> simple_integer_constant(
@@ -3799,7 +3816,7 @@ class VerilogParser final : private detail::ParserBase {
                       + " slice requires a known unsigned numeric "
                         "literal");
             } else {
-              statement.output_text = std::to_string(*value);
+              statement.output_text = *value;
             }
           } else {
             error(

@@ -797,12 +797,15 @@ The nineteenth post-gate batch is in progress:
 9. Verilog-2005/SystemVerilog output tasks now accept one known unsigned
    numeric literal in decimal, binary, octal, or hexadecimal syntax, apply
    declared-width truncation, and emit its default decimal representation.
+10. Based output literals marked signed now use declared-width two's-complement
+    interpretation and emit the corresponding signed decimal representation.
 
 The forced no-system-Tcl dependency build and its isolated staged relocation
 probe pass; the ordinary installed-Tcl application regression also passes.
 Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and output
-application tests pass for the cross-language output slices. This is feature 9
-of 10, so the interval full regression and remote push are not due yet.
+application tests pass for the cross-language output slices. This is feature
+10 of 10, so the interval full regression and remote push are due after the
+targeted signed-output checks pass.
 
 ## v1 release condition
 
