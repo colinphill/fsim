@@ -359,7 +359,7 @@ void test_systemverilog_signedness_casts(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 35> signal_paths{
+  const std::array<std::string, 37> signal_paths{
       "signedness_cast_app.signed_less",
       "signedness_cast_app.unsigned_less",
       "signedness_cast_app.signed_shift",
@@ -380,6 +380,8 @@ void test_systemverilog_signedness_casts(
       "signedness_cast_app.ascending_high",
       "signedness_cast_app.ascending_size",
       "signedness_cast_app.ascending_increment",
+      "signedness_cast_app.dimensions",
+      "signedness_cast_app.unpacked_dimensions",
       "signedness_cast_app.onehot_zero",
       "signedness_cast_app.onehot_single",
       "signedness_cast_app.onehot_multiple",
@@ -432,6 +434,8 @@ void test_systemverilog_signedness_casts(
           "00000000000000000000000000000101",
           "00000000000000000000000000000100",
           "11111111111111111111111111111111",
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000000",
           "0",
           "1",
           "0",
@@ -493,6 +497,67 @@ void test_vhdl_concurrent_assertion(
 
   const std::array<std::string, 1> signal_paths{
       "concurrent_assertion_app.passed"};
+  const auto reference = run(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter,
+      signal_paths);
+  const auto compiled = run(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled,
+      signal_paths);
+
+  assert(reference.result.status == fsim::runtime::RunStatus::completed);
+  assert(reference.result.status == compiled.result.status);
+  assert(reference.result.time == compiled.result.time);
+  assert(reference.result.delta == compiled.result.delta);
+  assert(reference.values == compiled.values);
+  assert(compiled.values == std::vector<std::string>{"1"});
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes == 2);
+  assert(compiled.compiled_modules == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
+#endif
+}
+
+void test_vhdl_falling_edge(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "vhdl-falling-edge-test";
+  config.project.top = "vhdl:work.falling_edge_app(rtl)";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "falling-edge-cache-o0"
+             : "falling-edge-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    print_diagnostics(diagnostics);
+  }
+  assert(reference_project);
+  assert(compiled_project);
+
+  const std::array<std::string, 1> signal_paths{
+      "falling_edge_app.hit"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -640,6 +705,8 @@ module signedness_cast_app;
   logic signed [31:0] ascending_high;
   logic signed [31:0] ascending_size;
   logic signed [31:0] ascending_increment;
+  logic signed [31:0] dimensions;
+  logic signed [31:0] unpacked_dimensions;
   logic onehot_zero;
   logic onehot_single;
   logic onehot_multiple;
@@ -666,7 +733,7 @@ module signedness_cast_app;
     xz_is_unknown = $isunknown(4'b10xz);
     object_bits = $bits(unsigned_value);
     concatenation_bits = $bits({unsigned_value, signed_value});
-    descending_left = $left(descending);
+    descending_left = $left(descending, 1);
     descending_right = $right(descending);
     descending_low = $low(descending);
     descending_high = $high(descending);
@@ -676,8 +743,10 @@ module signedness_cast_app;
     ascending_right = $right(ascending);
     ascending_low = $low(ascending);
     ascending_high = $high(ascending);
-    ascending_size = $size(ascending);
+    ascending_size = $size(ascending, 1);
     ascending_increment = $increment(ascending);
+    dimensions = $dimensions(descending);
+    unpacked_dimensions = $unpacked_dimensions(ascending);
     onehot_zero = $onehot(4'b0000);
     onehot_single = $onehot(4'b0010);
     onehot_multiple = $onehot(4'b1010);
@@ -712,6 +781,36 @@ begin
   passed <= true;
   constant_check: assert true
     report "unreachable concurrent assertion" severity failure;
+end architecture;
+)";
+  }
+  const auto falling_edge_source =
+      directory.path / "falling_edge.vhd";
+  {
+    std::ofstream output(falling_edge_source);
+    output << R"(
+entity falling_edge_app is
+end entity;
+
+architecture rtl of falling_edge_app is
+  signal clk : std_logic;
+  signal hit : std_logic;
+begin
+  stimulus: process
+  begin
+    clk <= '1';
+    wait for 1 ns;
+    clk <= '0';
+    wait for 1 ns;
+    wait;
+  end process;
+
+  capture: process(clk)
+  begin
+    if falling_edge(clk) then
+      hit <= '1';
+    end if;
+  end process;
 end architecture;
 )";
   }
@@ -751,5 +850,13 @@ end architecture;
   test_vhdl_concurrent_assertion(
       directory.path,
       concurrent_assertion_source,
+      fsim::project::Optimization::o2);
+  test_vhdl_falling_edge(
+      directory.path,
+      falling_edge_source,
+      fsim::project::Optimization::o0);
+  test_vhdl_falling_edge(
+      directory.path,
+      falling_edge_source,
       fsim::project::Optimization::o2);
 }

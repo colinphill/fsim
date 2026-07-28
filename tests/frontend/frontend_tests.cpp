@@ -450,6 +450,40 @@ end architecture RTL;
           "VHDL sequential signal assignment");
 }
 
+void test_vhdl_falling_edge_guard() {
+  const auto result = parse_text(
+      "falling_edge.vhd",
+      R"(
+entity falling_edge is
+  port (clk : in std_logic; hit : out std_logic);
+end entity;
+
+architecture rtl of falling_edge is
+begin
+  capture: process(clk)
+  begin
+    if falling_edge(clk) then
+      hit <= '1';
+    end if;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "VHDL falling_edge guard must parse");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture && architecture->processes.size() == 1,
+      "VHDL falling_edge process");
+  const auto& process = architecture->processes.front();
+  require(
+      process.sensitivities.size() == 1
+          && process.sensitivities.front().signal == "clk"
+          && process.sensitivities.front().edge
+              == EdgeKind::Negative,
+      "sole VHDL falling_edge guard must refine static sensitivity");
+}
+
 void test_vhdl_instance_diagnostics() {
   constexpr std::string_view source = R"(
 entity top is
@@ -808,6 +842,8 @@ module signed_ops;
   logic signed [31:0] high_bound;
   logic signed [31:0] packed_size;
   logic signed [31:0] packed_increment;
+  logic signed [31:0] dimensions;
+  logic signed [31:0] unpacked_dimensions;
   logic one_hot;
   logic one_hot_or_zero;
   logic signed [31:0] one_count;
@@ -823,8 +859,10 @@ module signed_ops;
     right_bound = $right(mixed);
     low_bound = $low(mixed);
     high_bound = $high(mixed);
-    packed_size = $size(mixed);
+    packed_size = $size(mixed, 1);
     packed_increment = $increment(mixed);
+    dimensions = $dimensions(mixed);
+    unpacked_dimensions = $unpacked_dimensions(mixed);
     one_hot = $onehot(mixed);
     one_hot_or_zero = $onehot0(mixed);
     one_count = $countones(mixed);
@@ -838,14 +876,14 @@ endmodule
       "SystemVerilog signed arithmetic source must parse");
   const auto& unit = systemverilog.design.units.front();
   require(
-      unit.signals.size() == 19
+      unit.signals.size() == 21
           && unit.signals[0].type.is_signed
           && unit.signals[1].type.is_signed
           && !unit.signals[2].type.is_signed,
       "SystemVerilog explicit signedness metadata");
   require(
       unit.processes.size() == 1
-          && unit.processes.front().statements.size() == 16
+          && unit.processes.front().statements.size() == 18
           && unit.processes.front().statements[0].value.text == "/"
           && unit.processes.front().statements[1].value.text == "<"
           && unit.processes.front().statements[2].value.text == "<"
@@ -875,15 +913,22 @@ endmodule
           && unit.processes.front().statements[8].value.text == "$low"
           && unit.processes.front().statements[9].value.text == "$high"
           && unit.processes.front().statements[10].value.text == "$size"
+          && unit.processes.front().statements[10]
+                 .value.operands.size()
+              == 2
           && unit.processes.front().statements[11].value.text
               == "$increment"
-          && unit.processes.front().statements[12].value.text == "$onehot"
-          && unit.processes.front().statements[13].value.text == "$onehot0"
-          && unit.processes.front().statements[14].value.text
+          && unit.processes.front().statements[12].value.text
+              == "$dimensions"
+          && unit.processes.front().statements[13].value.text
+              == "$unpacked_dimensions"
+          && unit.processes.front().statements[14].value.text == "$onehot"
+          && unit.processes.front().statements[15].value.text == "$onehot0"
+          && unit.processes.front().statements[16].value.text
               == "$countones"
-          && unit.processes.front().statements[15].value.text
+          && unit.processes.front().statements[17].value.text
               == "$countbits"
-          && unit.processes.front().statements[15]
+          && unit.processes.front().statements[17]
                  .value.operands.size()
               == 3,
       "SystemVerilog signed arithmetic, casts, and system-function nodes");
@@ -4493,6 +4538,7 @@ int main() {
             == 0,
         "unrepresentable 2^64-element range must not overflow");
     test_vhdl_vertical_slice();
+    test_vhdl_falling_edge_guard();
     test_vhdl_instance_diagnostics();
     test_vhdl_generics();
     test_vhdl_select_and_concatenation_expressions();

@@ -4765,14 +4765,29 @@ private:
                 || expression.text == "$increment")) {
             if (language_
                     != frontend::Language::SystemVerilog2017
-                || expression.operands.size() != 1) {
+                || expression.operands.empty()
+                || expression.operands.size() > 2) {
                 report(
                     "FSIM-ELAB-086",
                     expression.text
-                        + " requires SystemVerilog and exactly one "
-                          "one-dimensional packed argument",
+                        + " requires SystemVerilog, one "
+                          "one-dimensional packed argument, and at "
+                          "most one dimension argument",
                     expression.span);
                 return std::nullopt;
+            }
+            if (expression.operands.size() == 2) {
+                const auto dimension =
+                    constant_index(expression.operands[1]);
+                if (!dimension || *dimension != 1) {
+                    report(
+                        "FSIM-ELAB-086",
+                        expression.text
+                            + " supports only the constant packed "
+                              "dimension 1",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
             }
             const auto operand_width =
                 infer_width(expression.operands.front());
@@ -4826,6 +4841,46 @@ private:
                 destination,
                 unsigned_value(
                     static_cast<std::uint32_t>(result), 32)});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && (expression.text == "$dimensions"
+                || expression.text == "$unpacked_dimensions")) {
+            if (language_
+                    != frontend::Language::SystemVerilog2017
+                || expression.operands.size() != 1) {
+                report(
+                    "FSIM-ELAB-090",
+                    expression.text
+                        + " requires SystemVerilog and exactly one "
+                          "statically sized packed argument",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto operand_width =
+                infer_width(expression.operands.front());
+            const auto range =
+                operand_width
+                    ? expression_range(
+                          expression.operands.front(),
+                          *operand_width)
+                    : std::nullopt;
+            if (!operand_width || !range || *operand_width == 0) {
+                report(
+                    "FSIM-ELAB-090",
+                    expression.text
+                        + " cannot infer a static packed dimension "
+                          "for its argument",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                32, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant{
+                destination,
+                unsigned_value(
+                    expression.text == "$dimensions" ? 1 : 0,
+                    32)});
             return destination;
         }
         if (expression.kind == ExpressionKind::Call
@@ -5559,7 +5614,9 @@ private:
                 || expression.text == "$low"
                 || expression.text == "$high"
                 || expression.text == "$size"
-                || expression.text == "$increment")) {
+                || expression.text == "$increment"
+                || expression.text == "$dimensions"
+                || expression.text == "$unpacked_dimensions")) {
             return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call
@@ -5721,6 +5778,19 @@ private:
             if (language_
                     == frontend::Language::SystemVerilog2017
                 && expression.operands.size() == 1
+                && (expression.text == "$left"
+                    || expression.text == "$right"
+                    || expression.text == "$low"
+                    || expression.text == "$high"
+                    || expression.text == "$size"
+                    || expression.text == "$increment"
+                    || expression.text == "$dimensions"
+                    || expression.text == "$unpacked_dimensions")) {
+                return true;
+            }
+            if (language_
+                    == frontend::Language::SystemVerilog2017
+                && expression.operands.size() == 2
                 && (expression.text == "$left"
                     || expression.text == "$right"
                     || expression.text == "$low"

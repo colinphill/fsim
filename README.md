@@ -88,7 +88,9 @@ The current tree contains:
 - SystemVerilog `$bits` queries for statically sized packed expressions;
 - SystemVerilog `$left`/`$right`/`$low`/`$high`/`$size`/`$increment`
   queries for one-dimensional packed objects with ascending or descending
-  ranges;
+  ranges and an optional constant dimension `1`;
+- SystemVerilog `$dimensions`/`$unpacked_dimensions` queries for bounded
+  packed objects;
 - SystemVerilog `$onehot`/`$onehot0` packed bit-stream queries with exact
   known-bit results across `X`/`Z` elements;
 - SystemVerilog `$countones` with a compact arbitrary-width SimIR operation;

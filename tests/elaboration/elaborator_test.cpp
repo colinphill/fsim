@@ -5442,8 +5442,10 @@ module packed_array_queries;
   logic signed [31:0] ascending_high;
   logic signed [31:0] ascending_size;
   logic signed [31:0] ascending_increment;
+  logic signed [31:0] dimensions;
+  logic signed [31:0] unpacked_dimensions;
   always_comb begin
-    descending_left = $left(descending);
+    descending_left = $left(descending, 1);
     descending_right = $right(descending);
     descending_low = $low(descending);
     descending_high = $high(descending);
@@ -5453,8 +5455,10 @@ module packed_array_queries;
     ascending_right = $right(ascending);
     ascending_low = $low(ascending);
     ascending_high = $high(ascending);
-    ascending_size = $size(ascending);
+    ascending_size = $size(ascending, 1);
     ascending_increment = $increment(ascending);
+    dimensions = $dimensions(descending);
+    unpacked_dimensions = $unpacked_dimensions(ascending);
   end
 endmodule
 )",
@@ -5477,10 +5481,12 @@ endmodule
         "ascending_low",
         "ascending_high",
         "ascending_size",
-        "ascending_increment"};
+        "ascending_increment",
+        "dimensions",
+        "unpacked_dimensions"};
     std::array<
         std::optional<fsim::runtime::simir::SignalId>,
-        12>
+        14>
         packed_query_outputs;
     for (std::size_t index = 0;
          index < packed_query_names.size();
@@ -5494,7 +5500,7 @@ endmodule
         elaborated_packed_array_queries.design
             ->create_interpreter();
     (void)packed_query_interpreter->run();
-    const std::array<std::uint32_t, 12> expected_packed_queries{
+    const std::array<std::uint32_t, 14> expected_packed_queries{
         7,
         4,
         4,
@@ -5506,7 +5512,9 @@ endmodule
         2,
         5,
         4,
-        std::numeric_limits<std::uint32_t>::max()};
+        std::numeric_limits<std::uint32_t>::max(),
+        1,
+        0};
     for (std::size_t index = 0;
          index < packed_query_outputs.size();
          ++index) {
@@ -5525,7 +5533,7 @@ endmodule
 module invalid_packed_query;
   logic [3:0] value;
   logic signed [31:0] result;
-  always_comb result = $left(value, 1);
+  always_comb result = $left(value, 2);
 endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -5537,6 +5545,25 @@ endmodule
     assert(!rejected_packed_query.ok());
     assert(has_diagnostic(
         rejected_packed_query, "FSIM-ELAB-086"));
+
+    const auto invalid_dimensions =
+        fsim::frontend::parse_text(
+            "invalid_dimensions.sv",
+            R"(
+module invalid_dimensions;
+  logic signed [31:0] result;
+  always_comb result = $dimensions();
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_dimensions.ok());
+    const auto rejected_dimensions =
+        fsim::elaboration::elaborate(
+            invalid_dimensions.design,
+            "sv:work.invalid_dimensions");
+    assert(!rejected_dimensions.ok());
+    assert(has_diagnostic(
+        rejected_dimensions, "FSIM-ELAB-090"));
 
     const auto invalid_onehot = fsim::frontend::parse_text(
         "invalid_onehot.sv",

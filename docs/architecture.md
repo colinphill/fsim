@@ -434,8 +434,11 @@ The bounded one-dimensional `$left`, `$right`, `$low`, `$high`, `$size`, and
 `$increment` queries additionally read the declared packed range retained in
 DesignIR. They preserve ascending versus descending source bounds and
 materialize a known signed 32-bit result; `$increment` returns `1` for a
-descending range and `-1` for an ascending range. Explicit dimension
-arguments and unpacked or multidimensional arrays remain pending.
+descending range and `-1` for an ascending range. The optional dimension
+argument is accepted when it is the locally static value `1`.
+`$dimensions` and `$unpacked_dimensions` use the same retained metadata and
+return `1` and `0`, respectively, for the currently supported packed-only
+objects. Unpacked or multidimensional arrays remain pending.
 `$onehot` and `$onehot0` lower to dedicated common reduction operators. They
 count exact `1` elements of the packed operand, ignore `X` and `Z` elements,
 and return a two-state bit indicating exactly one or at most one set element.

@@ -521,6 +521,7 @@ therefore excluded.
 | `FSIM-ELAB-087` | error | `$onehot` or `$onehot0` is used outside SystemVerilog or without exactly one packed argument. |
 | `FSIM-ELAB-088` | error | `$countones` is used outside SystemVerilog or without one statically sized packed argument. |
 | `FSIM-ELAB-089` | error | `$countbits` lacks a packed expression or at least one constant one-bit `0`, `1`, `X`, or `Z` control. |
+| `FSIM-ELAB-090` | error | `$dimensions` or `$unpacked_dimensions` is used outside SystemVerilog or without one statically sized packed argument. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
