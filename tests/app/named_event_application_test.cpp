@@ -143,7 +143,11 @@ void test_named_events(
         > capture->event_changes[1].delta);
   }
   assert(reference.compiled_processes == 0);
+#if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 2);
+#else
+  assert(compiled.compiled_processes == 0);
+#endif
 }
 
 }  // namespace

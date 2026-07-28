@@ -282,7 +282,12 @@ add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)
 target_link_libraries(fsim_elaboration PUBLIC fsim_frontend fsim_runtime)
 
-add_library(fsim_support STATIC src/support/sha256.cpp)
+add_library(
+  fsim_support
+  STATIC
+    src/support/environment.cpp
+    src/support/sha256.cpp
+)
 add_library(fsim::support ALIAS fsim_support)
 fsim_configure_library(fsim_support)
 

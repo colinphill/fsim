@@ -1481,20 +1481,22 @@ fsim_status_t fsim_session_get_object_info(
       out_info->source_column = 0;
     }
     const auto set_source =
-        [&](const fsim::runtime::simir::SourceLocation& source) {
-          if (source.path.empty()
+        [&](const std::string_view path,
+            const std::uint32_t line,
+            const std::uint32_t column) {
+          if (path.empty()
               || (!write_source_path && !write_source_line
                   && !write_source_column)) {
             return;
           }
           if (write_source_path) {
-            out_info->source_path = view(source.path);
+            out_info->source_path = view(path);
           }
           if (write_source_line) {
-            out_info->source_line = source.line;
+            out_info->source_line = line;
           }
           if (write_source_column) {
-            out_info->source_column = source.column;
+            out_info->source_column = column;
           }
           out_info->flags |= FSIM_OBJECT_FLAG_HAS_SOURCE;
         };
@@ -1524,12 +1526,12 @@ fsim_status_t fsim_session_get_object_info(
           ? FSIM_OBJECT_FLAG_FORCED
           : 0U;
       if (!info.declaration_span.source_name.empty()) {
-        set_source(fsim::runtime::simir::SourceLocation{
+        set_source(
             info.declaration_span.source_name,
             static_cast<std::uint32_t>(
                 info.declaration_span.begin.line),
             static_cast<std::uint32_t>(
-                info.declaration_span.begin.column)});
+                info.declaration_span.begin.column));
       }
       return FSIM_STATUS_OK;
     }
@@ -1545,7 +1547,7 @@ fsim_status_t fsim_session_get_object_info(
       out_info->full_name = view(public_name);
       out_info->type_name = view("process");
       if (const auto* source = process_source(info)) {
-        set_source(*source);
+        set_source(source->path, source->line, source->column);
       }
       return FSIM_STATUS_OK;
     }
@@ -1565,7 +1567,8 @@ fsim_status_t fsim_session_get_object_info(
       if (scope_entered(value, info)) {
         out_info->flags |= FSIM_OBJECT_FLAG_ENTERED;
       }
-      set_source(info.source);
+      set_source(
+          info.source.path, info.source.line, info.source.column);
       return FSIM_STATUS_OK;
     }
     if (const auto variable = object_variable(value, object)) {
@@ -1587,7 +1590,8 @@ fsim_status_t fsim_session_get_object_info(
       if (variable_initialized(value, reference)) {
         out_info->flags |= FSIM_OBJECT_FLAG_INITIALIZED;
       }
-      set_source(info.source);
+      set_source(
+          info.source.path, info.source.line, info.source.column);
       return FSIM_STATUS_OK;
     }
     if (const auto driver = object_driver(value, object)) {
@@ -1603,7 +1607,7 @@ fsim_status_t fsim_session_get_object_info(
       out_info->full_name = view(reference.full_name);
       out_info->type_name = view("driver");
       if (const auto* source = process_source(process)) {
-        set_source(*source);
+        set_source(source->path, source->line, source->column);
       }
       return FSIM_STATUS_OK;
     }

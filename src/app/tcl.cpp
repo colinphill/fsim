@@ -3,6 +3,7 @@
 
 #include "fsim/api.h"
 #include "fsim/app/application.hpp"
+#include "fsim/support/environment.hpp"
 
 #include <array>
 #include <cerrno>
@@ -280,12 +281,13 @@ std::string path_utf8(const std::filesystem::path& path) {
 }
 
 void configure_tcl_library(Tcl_Interp* interpreter) {
-  if (const char* override_path = std::getenv("FSIM_TCL_LIBRARY");
-      override_path != nullptr && override_path[0] != '\0') {
+  const auto override_path =
+      fsim::support::environment_variable("FSIM_TCL_LIBRARY");
+  if (override_path && !override_path->empty()) {
     (void)Tcl_SetVar(
         interpreter,
         "tcl_library",
-        override_path,
+        override_path->c_str(),
         TCL_GLOBAL_ONLY);
     return;
   }

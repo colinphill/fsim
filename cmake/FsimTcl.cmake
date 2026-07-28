@@ -47,7 +47,7 @@ function(fsim_add_fetched_tcl)
         install-binaries install-libraries
         "OPTS=static,msvcrt" "INSTALLDIR=<INSTALL_DIR>"
       SOURCE_SUBDIR win
-      BINARY_DIR "<SOURCE_DIR>/win"
+      BINARY_DIR "${tcl_source}/win"
       INSTALL_DIR "${tcl_install}"
       INSTALL_BYPRODUCTS "${tcl_library}"
     )

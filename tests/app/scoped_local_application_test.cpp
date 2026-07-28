@@ -154,7 +154,11 @@ void test_scoped_locals(
   assert(compiled.locals == reference.locals);
   assert(reference.inactive_local_unavailable);
   assert(compiled.inactive_local_unavailable);
+#if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+#endif
   assert((
       reference.signals
       == std::array<std::string, 3>{
@@ -177,7 +181,11 @@ void test_scoped_locals(
       fsim::app::SimulationEngine::compiled);
   assert(warm.signals == reference.signals);
   assert(warm.locals == reference.locals);
+#if defined(FSIM_HAS_LLVM)
   assert(warm.cache.hits >= 1);
+#else
+  assert(warm.cache.hits == 0);
+#endif
 }
 
 }  // namespace

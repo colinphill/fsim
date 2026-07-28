@@ -267,7 +267,11 @@ void test_display(
   assert(reference.output[18].newline);
   assert(reference.output[18].time == 2);
   assert(reference.compiled_processes == 0);
+#if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+#endif
 }
 
 void test_vhdl_report(
@@ -328,7 +332,11 @@ void test_vhdl_report(
       reference.reports[2].severity
       == fsim::runtime::simir::AssertionSeverity::error);
   assert(reference.compiled_processes == 0);
+#if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+#endif
 }
 
 void test_vhdl_failure_report(
@@ -380,7 +388,11 @@ void test_vhdl_failure_report(
   assert(reference.source.path == source.string());
   assert(reference.message == compiled.message);
   assert(reference.compiled_processes == 0);
+#if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+#endif
 }
 
 }  // namespace

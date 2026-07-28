@@ -133,7 +133,11 @@ void test_call_safe_points(
     assert(calls[1]->source.column == 25);
   }
   assert(reference.compiled_processes == 0);
+#if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+#endif
 }
 
 }  // namespace

@@ -3,6 +3,7 @@
 
 #include "fsim/compiler/cache_support.hpp"
 #include "fsim/compiler/object_cache.hpp"
+#include "fsim/support/environment.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc_abi.h"
 #include "fsim/version.hpp"
@@ -128,8 +129,9 @@ void report_error(
         return result;
     }
 
-    const char* raw_path = std::getenv("PATH");
-    if (raw_path == nullptr) {
+    const auto raw_path =
+        fsim::support::environment_variable("PATH");
+    if (!raw_path) {
         return result;
     }
 #if defined(_WIN32)
@@ -137,7 +139,7 @@ void report_error(
 #else
     constexpr char separator = ':';
 #endif
-    std::string_view search_path{raw_path};
+    std::string_view search_path{*raw_path};
     std::size_t begin = 0;
     while (begin <= search_path.size()) {
         const auto end = search_path.find(separator, begin);

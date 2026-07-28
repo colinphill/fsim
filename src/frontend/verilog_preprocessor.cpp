@@ -540,8 +540,10 @@ class VerilogPreprocessor {
         || name == "nounconnected_drive") {
       output_.push_back(tokens[begin]);
       output_.push_back(tokens[begin + 1]);
+      using Difference = std::vector<Token>::difference_type;
       const std::vector<Token> directive_arguments{
-          tokens.begin() + arguments, tokens.begin() + end};
+          tokens.begin() + static_cast<Difference>(arguments),
+          tokens.begin() + static_cast<Difference>(end)};
       auto expanded =
           expand_sequence(directive_arguments, 0, {});
       output_.insert(
@@ -788,7 +790,10 @@ class VerilogPreprocessor {
         return;
       }
     } else {
-      replacement.assign(tokens.begin() + begin, tokens.begin() + end);
+      using Difference = std::vector<Token>::difference_type;
+      replacement.assign(
+          tokens.begin() + static_cast<Difference>(begin),
+          tokens.begin() + static_cast<Difference>(end));
       cursor = end;
     }
 
