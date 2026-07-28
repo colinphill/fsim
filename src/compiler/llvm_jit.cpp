@@ -74,6 +74,7 @@ using runtime::simir::RegisterId;
 using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
 using runtime::simir::SignalEvent;
+using runtime::simir::SignalLastEvent;
 using runtime::simir::SignalLastValue;
 using runtime::simir::Stop;
 using runtime::simir::UnaryNot;
@@ -115,7 +116,8 @@ static_assert(offsetof(fsim_jit_runtime_v1, write_update_slice) == 72);
 static_assert(offsetof(fsim_jit_runtime_v1, write_after_slice) == 80);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_event) == 88);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_last_value) == 96);
-static_assert(sizeof(fsim_jit_runtime_v1) == 104);
+static_assert(offsetof(fsim_jit_runtime_v1, signal_last_event) == 104);
+static_assert(sizeof(fsim_jit_runtime_v1) == 112);
 static_assert(sizeof(fsim_jit_frame_v1) == 56);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -318,6 +320,7 @@ struct ValidatedProcess {
   bool uses_debug_points{};
   bool uses_signal_event{};
   bool uses_signal_last_value{};
+  bool uses_signal_last_event{};
 };
 
 [[nodiscard]] ValidatedProcess
@@ -542,6 +545,12 @@ validate_process(const Process &process,
                   operation.destination,
                   signal_width(operation.signal, index),
                   index);
+            },
+            [&](const SignalLastEvent& operation) {
+              result.uses_signal_last_event = true;
+              (void)signal_width(operation.signal, index);
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 64U, index);
             },
             [&](const CopyRegister& operation) {
               record_definition(operation.destination, index);
@@ -1262,6 +1271,11 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "signal", value.signal);
               add_key_u64(
                   builder, "signal-width", signal_widths[value.signal]);
+            },
+            [&](const SignalLastEvent& value) {
+              builder.add("operation", "SignalLastEvent");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "signal", value.signal);
             },
             [&](const CopyRegister& value) {
               builder.add("operation", "CopyRegister");
@@ -2153,7 +2167,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
   auto *runtime_type = llvm::StructType::create(
       context,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       i32, i32, pointer, pointer, pointer, pointer, pointer},
+       i32, i32, pointer, pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -2246,6 +2260,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 14),
         "signal_last_value");
   }
+  llvm::Value* signal_last_event_callback = nullptr;
+  if (validated.uses_signal_last_event) {
+    signal_last_event_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 15),
+        "signal_last_event");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -2272,6 +2294,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(i32, {pointer, i32}, false);
   auto* signal_last_value_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
+  auto* signal_last_event_type =
+      llvm::FunctionType::get(i64, {pointer, i32}, false);
 
   auto *register_aval = builder.CreateLoad(
       pointer, builder.CreateStructGEP(frame_type, frame_argument, 8),
@@ -2425,6 +2449,22 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       builder.CreateAnd(aval, mask),
                       builder.CreateAnd(bval, mask),
                       width});
+              branch_to_next();
+            },
+            [&](const SignalLastEvent& operation) {
+              auto* elapsed = builder.CreateCall(
+                  signal_last_event_type,
+                  signal_last_event_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, operation.signal)},
+                  "signal.last_event");
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      elapsed,
+                      constant_i64(context, 0),
+                      64});
               branch_to_next();
             },
             [&](const CopyRegister& operation) {
@@ -3242,6 +3282,7 @@ struct LlvmJit::Impl {
     bool uses_debug_points{};
     bool uses_signal_event{};
     bool uses_signal_last_value{};
+    bool uses_signal_last_event{};
   };
 
   struct NativeEntry {
@@ -3381,6 +3422,7 @@ void LlvmJit::add_process_module(
         validated.uses_debug_points,
         validated.uses_signal_event,
         validated.uses_signal_last_value,
+        validated.uses_signal_last_event,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -3632,13 +3674,24 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_signal_last_value) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, signal_last_event)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include signal_last_value");
     }
     if (runtime.signal_last_value == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires signal_last_value for this process");
+    }
+  }
+  if (entry.info.uses_signal_last_event) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include signal_last_event");
+    }
+    if (runtime.signal_last_event == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires signal_last_event for this process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {

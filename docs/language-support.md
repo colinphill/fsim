@@ -31,7 +31,8 @@ direction is preserved. A visible signal may use the dynamic `'event`
 attribute; its Boolean result is true only in the delta cycle containing that
 signal's committed effective-value change. The same signal may use
 `'last_value` to read its packed effective value immediately before the latest
-value-changing event.
+value-changing event. `'last_event` returns elapsed global-resolution ticks
+since that event, or `TIME'HIGH` if the signal has never changed.
 
 VHDL identifiers are canonicalized case-insensitively. Verilog and
 SystemVerilog identifiers remain case-sensitive. VHDL nine-state scalar and

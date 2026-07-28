@@ -1620,6 +1620,15 @@ struct Interpreter::Impl::ExecutionContext final
     return owner.signal_last_values[signal].low_word();
   }
 
+  [[nodiscard]] SimulationTick
+  signal_last_event(const SignalId signal) const override {
+    (void)owner.get_signal(signal);
+    const auto& event = owner.signal_events[signal];
+    return event
+        ? owner.scheduler.now() - event->first
+        : std::numeric_limits<SimulationTick>::max();
+  }
+
   void request_channel_update(
       const std::uint64_t channel) override {
     owner.request_channel_update(process, channel);
@@ -2063,6 +2072,17 @@ void Interpreter::Impl::execute(ProcessId id) {
               (void)get_signal(op.signal);
               get_register(process, op.destination) =
                   signal_last_values[op.signal];
+              ++process.pc;
+            },
+            [&](const SignalLastEvent& op) {
+              (void)get_signal(op.signal);
+              const auto& event = signal_events[op.signal];
+              const auto elapsed =
+                  event
+                      ? scheduler.now() - event->first
+                      : std::numeric_limits<SimulationTick>::max();
+              get_register(process, op.destination) =
+                  PackedLogic4::from_aval_bval(64, elapsed, 0);
               ++process.pc;
             },
             [&](const CopyRegister& op) {

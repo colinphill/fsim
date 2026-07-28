@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -40,6 +41,12 @@ struct SignalEvent {
 
 /// The effective value immediately before the signal's most recent event.
 struct SignalLastValue {
+  RegisterId destination{};
+  SignalId signal{};
+};
+
+/// Elapsed ticks since the signal's latest event, or TIME'HIGH if none.
+struct SignalLastEvent {
   RegisterId destination{};
   SignalId signal{};
 };
@@ -351,8 +358,9 @@ struct Halt {};
 
 using Operation =
     std::variant<LoadConstant, ReadSignal, SignalEvent, SignalLastValue,
-                 CopyRegister, UnaryNot, LogicalNot, LogicalBinary, Reduction,
-                 CountOnes, CountBits, Shift, Extract, Concatenate, Binary, Insert,
+                 SignalLastEvent, CopyRegister, UnaryNot, LogicalNot,
+                 LogicalBinary, Reduction, CountOnes, CountBits, Shift,
+                 Extract, Concatenate, Binary, Insert,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
@@ -522,6 +530,12 @@ public:
   [[nodiscard]] virtual Logic4Word signal_last_value_word(SignalId) const {
     throw std::logic_error{
         "alternate process executor does not support signal last-value reads"};
+  }
+
+  /// Elapsed global-resolution ticks since the latest effective-value event,
+  /// or the maximum tick value if the signal has never changed.
+  [[nodiscard]] virtual SimulationTick signal_last_event(SignalId) const {
+    return std::numeric_limits<SimulationTick>::max();
   }
 
   /// Request one alternate-language primitive-channel update. `channel` is a

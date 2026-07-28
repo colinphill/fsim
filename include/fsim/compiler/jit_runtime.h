@@ -120,6 +120,9 @@ typedef struct fsim_jit_runtime_v1 {
    */
   uint64_t (*signal_last_value)(
       void* context, uint32_t signal, uint64_t* bval);
+
+  /* Append-only elapsed global-resolution ticks since the latest event. */
+  uint64_t (*signal_last_event)(void* context, uint32_t signal);
 } fsim_jit_runtime_v1;
 
 /*

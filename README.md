@@ -114,6 +114,8 @@ The current tree contains:
   the classic `clk'event and clk = '1'` clock idiom;
 - VHDL signal `'last_value`, preserving the packed effective value immediately
   before the latest value-changing event;
+- VHDL signal `'last_event` as elapsed global-resolution ticks, with
+  `TIME'HIGH` before the first event;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and

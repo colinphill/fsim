@@ -57,7 +57,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, signal_event) == 88,
                "runtime signal-event callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, signal_last_value) == 96,
                "runtime signal-last-value callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 104,
+_Static_assert(offsetof(fsim_jit_runtime_v1, signal_last_event) == 104,
+               "runtime signal-last-event callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 112,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -177,6 +179,11 @@ static uint64_t signal_last_value(
   return UINT64_C(0xa5) + signal;
 }
 
+static uint64_t signal_last_event(void* context, uint32_t signal) {
+  (void)context;
+  return UINT64_C(1000) + signal;
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -194,7 +201,8 @@ int main(void) {
       write_slice,
       write_after_slice,
       signal_event,
-      signal_last_value};
+      signal_last_value,
+      signal_last_event};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -218,6 +226,8 @@ int main(void) {
   uint64_t last_bval = 0;
   const uint64_t last_aval = runtime.signal_last_value(
       runtime.context, UINT32_C(2), &last_bval);
+  const uint64_t last_event = runtime.signal_last_event(
+      runtime.context, UINT32_C(7));
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -232,6 +242,9 @@ int main(void) {
   if (last_aval != UINT64_C(0xa7)
       || last_bval != UINT64_C(0x80)) {
     return 6;
+  }
+  if (last_event != UINT64_C(1007)) {
+    return 7;
   }
   if (state.update_count != UINT32_C(1) ||
       state.after_count != UINT32_C(1) ||

@@ -221,6 +221,11 @@ extern "C" std::uint64_t signal_last_value(
   return read_signal(opaque, signal, bval);
 }
 
+extern "C" std::uint64_t signal_last_event(
+    void*, const std::uint32_t) {
+  return 0;
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -238,6 +243,7 @@ extern "C" std::uint64_t signal_last_value(
       &write_after_slice,
       &signal_event,
       &signal_last_value,
+      &signal_last_event,
   };
 }
 

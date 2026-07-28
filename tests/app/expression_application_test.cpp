@@ -766,10 +766,11 @@ void test_vhdl_falling_edge(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 3> signal_paths{
+  const std::array<std::string, 4> signal_paths{
       "falling_edge_app.hit",
       "falling_edge_app.legacy_hit",
-      "falling_edge_app.falling_previous"};
+      "falling_edge_app.falling_previous",
+      "falling_edge_app.elapsed"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -786,9 +787,13 @@ void test_vhdl_falling_edge(
   assert(reference.values == compiled.values);
   assert((
       compiled.values
-      == std::vector<std::string>{"1", "1", "1"}));
+      == std::vector<std::string>{
+          "1",
+          "1",
+          "1",
+          "0000000000000000000000000000000000000000000000000000000000000001"}));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 3);
+  assert(compiled.compiled_processes == 4);
   assert(compiled.compiled_modules == 1);
 #else
   assert(compiled.compiled_processes == 0);
@@ -1355,6 +1360,7 @@ architecture rtl of falling_edge_app is
   signal hit : std_logic;
   signal legacy_hit : std_logic;
   signal falling_previous : std_logic;
+  signal elapsed : signed(63 downto 0);
 begin
   stimulus: process
   begin
@@ -1378,6 +1384,13 @@ begin
     if clk'event and clk = '1' then
       legacy_hit <= '1';
     end if;
+  end process;
+
+  observe_elapsed: process
+  begin
+    wait for 2 ns;
+    elapsed <= clk'last_event;
+    wait;
   end process;
 end architecture;
 )";
