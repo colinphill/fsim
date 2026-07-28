@@ -81,7 +81,8 @@ The current tree contains:
   static/dynamic event-control wakeups;
 - Verilog-2005/SystemVerilog literal and empty `$display`, `$write`, and
   postponed `$strobe` routed through CLI/Tcl output with newline/no-newline
-  semantics and interpreter/LLVM O0/O2 equivalence;
+  semantics, decoded control/quote/backslash/octal escapes, and
+  interpreter/LLVM O0/O2 equivalence;
 - deterministic simple-expression sensitivity inference for `always @*`,
   time-zero `always_comb`/`always_latch`, and dynamic `@*`;
 - ordered Verilog/SystemVerilog `case`/`casez`/`casex`/`default` lowering

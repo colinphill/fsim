@@ -39,6 +39,9 @@ append a newline through the CLI or Tcl-owned output stream; literal/empty
 Interpreter, LLVM O0, and LLVM O2 preserve process/time/delta ordering. Format
 substitutions, additional arguments, and `$monitor` remain deferred. This
 update supersedes the compact table's broader display-task limitation.
+Output string literals decode `\n`, `\t`, `\"`, `\\`, and one-to-three-digit
+octal byte escapes. Unsupported or out-of-range escapes are diagnosed instead
+of being silently rewritten.
 
 The VHDL expression slice also executes one-dimensional packed-object
 `'left`, `'right`, `'low`, `'high`, `'length`, and `'ascending` attributes.

@@ -339,6 +339,9 @@ plain-C runtime-table tail, so output ordering remains part of the common
 single-thread simulation semantics. `$strobe` publication is scheduled into
 the current timestamp's postponed phase through a second append-only callback.
 Formatting operands and `$monitor` remain subsequent slices.
+Output-task literal spelling is decoded once in the frontend for newline, tab,
+quote, backslash, and one-byte octal escapes; SimIR and generated code retain
+the exact byte string, including embedded NUL bytes.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

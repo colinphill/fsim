@@ -129,11 +129,11 @@ void test_display(
   assert(reference.output == compiled.output);
   assert(reference.output.size() == 6);
   assert(reference.output[0].process == 0);
-  assert(reference.output[0].text == "first");
+  assert(reference.output[0].text == "first\t");
   assert(!reference.output[0].newline);
   assert(reference.output[0].time == 0);
   assert(reference.output[0].delta == 0);
-  assert(reference.output[1].text == "+line");
+  assert(reference.output[1].text == "+line\nembedded \"quote\" \\ A");
   assert(reference.output[1].newline);
   assert(reference.output[1].time == 0);
   assert(reference.output[2].text == "postponed");
@@ -168,8 +168,8 @@ int main() {
     output << R"(
 module display_test;
   initial begin
-    $write("first");
-    $display("+line");
+    $write("first\t");
+    $display("+line\nembedded \"quote\" \\ \101");
     $strobe("postponed");
     #2 $write("second");
     $write;
@@ -213,7 +213,8 @@ endmodule
     assert(error.str().empty());
     assert(
         output.str().find(
-            "first+line\npostponed\nsecond\nsimulation stopped at tick 2")
+            "first\t+line\nembedded \"quote\" \\ A\n"
+            "postponed\nsecond\nsimulation stopped at tick 2")
         != std::string::npos);
   }
 

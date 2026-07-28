@@ -5404,7 +5404,7 @@ void test_verilog_literal_display() {
       R"(
 module display;
   initial begin
-    $display("hello");
+    $display("hello\nworld\t\"quote\"\\slash\101");
     $display();
     $display;
   end
@@ -5423,7 +5423,8 @@ endmodule
                 return statement.kind == StatementKind::Display
                     && statement.output_newline;
               })
-          && statements.front().output_text == "hello"
+          && statements.front().output_text
+              == "hello\nworld\t\"quote\"\\slashA"
           && statements[1].output_text.empty()
           && statements[2].output_text.empty(),
       "literal and empty $display HIR");
@@ -5445,6 +5446,40 @@ endmodule
             return diagnostic.code == "FSIM-SV-SEM-037";
           }),
       "formatted $display arguments need a targeted diagnostic");
+
+  const auto bad_escape = parse_text(
+      "bad_escape.sv",
+      R"(
+module bad_escape;
+  initial $display("bad\q");
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::any_of(
+          bad_escape.diagnostics.begin(),
+          bad_escape.diagnostics.end(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-040";
+          }),
+      "unsupported output-string escapes need a targeted diagnostic");
+
+  const auto wide_octal_escape = parse_text(
+      "wide_octal_escape.sv",
+      R"(
+module wide_octal_escape;
+  initial $display("\777");
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::any_of(
+          wide_octal_escape.diagnostics.begin(),
+          wide_octal_escape.diagnostics.end(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-040";
+          }),
+      "out-of-byte-range octal escapes need a targeted diagnostic");
 
   const auto write = parse_text(
       "write.sv",

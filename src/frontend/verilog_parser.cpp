@@ -312,6 +312,71 @@ class VerilogParser final : private detail::ParserBase {
     return token.text;
   }
 
+  std::string decoded_string_literal_text(const Token& token) {
+    const auto spelling = string_literal_text(token);
+    std::string result;
+    result.reserve(spelling.size());
+    for (std::size_t index = 0; index < spelling.size(); ++index) {
+      const char current = spelling[index];
+      if (current != '\\') {
+        result.push_back(current);
+        continue;
+      }
+      if (++index >= spelling.size()) {
+        error(
+            token,
+            "FSIM-SV-SEM-040",
+            "a Verilog string literal ends with an incomplete escape");
+        break;
+      }
+      const char escaped = spelling[index];
+      switch (escaped) {
+      case 'n':
+        result.push_back('\n');
+        break;
+      case 't':
+        result.push_back('\t');
+        break;
+      case '\\':
+        result.push_back('\\');
+        break;
+      case '"':
+        result.push_back('"');
+        break;
+      default:
+        if (escaped >= '0' && escaped <= '7') {
+          unsigned value = static_cast<unsigned>(escaped - '0');
+          std::size_t digits = 1;
+          while (digits < 3 && index + 1 < spelling.size()
+                 && spelling[index + 1] >= '0'
+                 && spelling[index + 1] <= '7') {
+            value = value * 8U
+                + static_cast<unsigned>(
+                    spelling[++index] - '0');
+            ++digits;
+          }
+          if (value > 255U) {
+            error(
+                token,
+                "FSIM-SV-SEM-040",
+                "a Verilog string octal escape exceeds one byte");
+          } else {
+            result.push_back(static_cast<char>(value));
+          }
+        } else {
+          error(
+              token,
+              "FSIM-SV-SEM-040",
+              "unsupported Verilog string escape '\\"
+                  + std::string(1, escaped) + "'");
+          result.push_back(escaped);
+        }
+        break;
+      }
+    }
+    return result;
+  }
+
   Token expect_identifier(std::string_view description) {
     if (at(TokenKind::Identifier)
         && !keyword_reserved(keyword_set_, current().text)) {
@@ -3655,7 +3720,7 @@ class VerilogParser final : private detail::ParserBase {
         if (!at(TokenKind::RightParen)) {
           if (at(TokenKind::StringLiteral)) {
             statement.output_text =
-                string_literal_text(advance());
+                decoded_string_literal_text(advance());
           } else {
             error(
                 current(),
