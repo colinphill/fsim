@@ -62,6 +62,10 @@ The following foundation is implemented:
 
 - C++20 project structure for Linux and Windows x86-64, with CMake 3.28
   presets, warning policy, Apache-2.0 licensing, and dependency-version policy;
+- a green 12-job GitHub Actions matrix covering Linux GCC Debug/Release,
+  exact LLVM 22.1.8 Debug/Release, ASan/UBSan, and Clang frontend fuzzing,
+  plus Windows MSVC Debug/Release and both MSVC and clang-cl with exact
+  LLVM 22.1.8 in Debug/Release;
 - embedded Tcl command/script/interactive execution with fsim-owned standard
   streams, an installed-or-SHA-256-pinned-source CMake dependency path,
   relocatable bundled standard-library discovery, and a stateful adapter over
@@ -320,10 +324,11 @@ The following foundation is implemented:
   signal aliases; and
 - a stable catalog covering 630 unique current production diagnostic codes.
 
-Current and most recent aggregate Linux regression snapshots:
+Current and most recent aggregate regression snapshots:
 
 | Gate | Result |
 |---|---|
+| GitHub Actions cross-platform matrix | All 12 jobs pass in [run 30398251973](https://github.com/colinphill/fsim/actions/runs/30398251973) on 2026-07-28: Linux GCC Debug/Release, exact LLVM 22.1.8 Debug/Release, ASan/UBSan, Clang frontend fuzz smoke, Windows MSVC Debug/Release, and Windows MSVC/clang-cl exact LLVM 22.1.8 Debug/Release |
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | LLVM 22.1.8 Debug, warnings-as-errors | 20/20 tests pass after the eighteenth post-gate batch, including exact delayed named-event timestamps and next-delta wakeups across interpreter and LLVM O0/O2 (141.16 seconds wall time with four-way CTest parallelism) |
@@ -390,10 +395,41 @@ seconds without weakening the periodic regression gate. Expression work can
 select its application gate with
 `ctest --test-dir <build> -L expressions --output-on-failure`.
 
-Windows Debug/Release CI and an exact LLVM 22.1.8 Windows ORC matrix are
-configured, but Windows execution has not been validated from this Linux
-development host. The Clang/libFuzzer job is configured, but was not run
-locally because the host lacks Clang/compiler-rt executables.
+The Windows LLVM jobs install the exact full LLVM 22.1.8 development archive
+through `KyleMayes/install-llvm-action`, pinned by commit SHA, and then
+independently verify both `llvm-config` and
+`LLVMConfig.cmake`. This avoids accepting a compiler-only package when the ORC
+development libraries are required.
+
+### Cross-platform implementation and test rules
+
+The Windows CI repair established rules that apply to every future feature
+and test:
+
+- compare existing paths by filesystem identity where possible. Assertions
+  over diagnostics or debugger transcripts must check stable semantic
+  components such as filename, line, and column rather than an exact absolute
+  spelling; separators, drive-letter case, and Windows short/canonical path
+  aliases are not semantic differences;
+- use the shared environment helper instead of calling `getenv` directly.
+  Its Windows implementation owns `_dupenv_s` storage, avoiding deprecated
+  insecure-CRT APIs while preserving the same optional-value contract;
+- keep CRT boundaries explicit. Ordinary Windows builds use the dynamic CRT,
+  while jobs consuming the official LLVM archive use the archive-compatible
+  static CRT; fetched Tcl and other native dependencies must use the matching
+  mode, and required DLLs must be staged beside test executables;
+- do not assume GCC/Clang dependency-file behavior from MSVC. Conservative
+  MSVC dependency scanning may mark SDK-backed SystemC plug-ins uncacheable,
+  which tests must distinguish from an incorrect cache hit;
+- determine cached native-object format from the parsed object file, not from
+  a reconstructed target triple whose missing OS may incorrectly default a
+  valid Windows COFF object to ELF;
+- keep MSVC command and source limits in mind: split oversized generated raw
+  string fixtures and avoid relying on shell expansion or platform-specific
+  command quoting; and
+- run the smallest affected Windows-sensitive test during development, then
+  require the full Linux/Windows matrix at the ten-feature regression boundary
+  and for CI/workflow changes.
 
 ## Milestone progress
 
@@ -413,7 +449,9 @@ Completed:
   handling, and a diagnostic catalog consistency test;
 - versioned C API and SystemC plug-in ABI skeletons;
 - Linux GCC and Windows MSVC Debug/Release workflow definitions;
-- exact LLVM 22.1.8 Linux and Windows Debug/Release workflow definitions; and
+- exact LLVM 22.1.8 Linux and Windows Debug/Release workflow definitions,
+  including Windows MSVC and clang-cl builds using the pinned full development
+  archive; and
 - sanitizer and VHDL-parser/Verilog-SV-preprocessor-parser fuzzer workflow
   definitions.
 
@@ -425,11 +463,9 @@ Remaining before completion:
   source archive, bundled standard-library relocation, and Linux/Windows
   interactive/batch regression evidence; an installed legacy Tcl 8.6 package
   must not silently prevent the selected Tcl 9 fallback from being used;
-- exercise LLVM 22.1.8 in Windows CI;
 - consume the planned support dependencies where their corresponding features
   are implemented, instead of only pinning version policy;
-- complete cross-platform Unicode/path and console-interrupt validation; and
-- obtain green evidence from the actual Windows runners.
+- complete cross-platform Unicode/path and console-interrupt validation.
 
 ### 2. End-to-end internal vertical slice — In progress
 
@@ -668,9 +704,10 @@ Planned implementation sequence:
    `sc_signal`, primitive-channel update dispatch, `notify_delayed`, dynamic
    method sensitivity, OR/AND event expressions, pending-notification rules,
    and cancellation now use the common scheduler.
-4. Complete Windows execution evidence and broader event/list/error tests for
-   the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
-   timed, delta, and static-wait execution is implemented.
+4. Maintain the current Windows execution evidence and complete broader
+   event/list/error tests for the Boost.Context 1.91.0
+   `SC_THREAD`/`SC_CTHREAD` implementation; Linux timed, delta, and static-wait
+   execution is implemented.
 5. Complete source metadata for remaining executable constructs and add
    resolved per-driver storage with multi-driver semantics. Native C instance,
    generate-region, process, lexical-scope, packed-variable, signal, port, and
@@ -693,6 +730,8 @@ Completed groundwork:
 - cache locking, atomic publication, checksums, corruption recovery, and
   dependency invalidation tests;
 - Debug/Release, ASan/UBSan, LLVM 22, and frontend-fuzzer CI definitions;
+- a green 12-job Linux/Windows matrix with exact LLVM 22.1.8 exercised through
+  GCC, MSVC, and clang-cl where applicable;
 - install rules for the supported C/SystemC public surface;
 - strict installed-header/API consumer smoke tests;
 - source-build, architecture, language-support, cross-language, SystemC, and
@@ -741,8 +780,9 @@ The next development iterations should occur in this order:
    is transactional, resets live/poisoned sessions, and retains Tcl callback
    registrations; runtime trace paths and filters may be configured before
    simulation starts.
-7. **Harden for release:** Windows LLVM gates, fuzzing, Unicode/path behavior,
-   cache eviction/fingerprinting, benchmarks, and full feature-matrix closure.
+7. **Harden for release:** preserve the continuous Windows LLVM gates, expand
+   fuzzing, Unicode/path behavior, cache eviction/fingerprinting, benchmarks,
+   and full feature-matrix closure.
 
 After v1 Tcl and native-C control surfaces stabilize, plan an interactive and
 batch Python interface over the same opaque handles and operations. Python
