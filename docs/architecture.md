@@ -266,9 +266,14 @@ following module and that bit is retained on its elaborated specialization.
 omitted input as a `pull0`/`pull1` initialized signal. `` `resetall`` restores
 time, net, cell, and unconnected-drive defaults. `` `begin_keywords`` scopes
 the IEEE 1364/1800 reserved-identifier set until its matching
-`` `end_keywords``. The current runtime executes these net forms with one
-four-state driver; wired resolution, trireg charge storage, `` `line`` source
-remapping, and standardized pragma behavior remain incomplete.
+`` `end_keywords``. Active `` `line`` directives remap the following token
+stream's logical file/line coordinates, built-in macros, expansion ancestry,
+diagnostics, debug points, and report callbacks. The span separately retains
+the physical input identity for library ownership and analysis/native cache
+provenance; mapping state is local to each included file or compilation-unit
+root. The current runtime executes these net forms with one four-state driver;
+wired resolution, trireg charge storage, and standardized pragma behavior
+remain incomplete.
 
 ## Scheduler
 

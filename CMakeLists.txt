@@ -213,6 +213,18 @@ if(NOT FSIM_TCL_MODE_NORMALIZED STREQUAL "OFF")
         IMPORTED_LOCATION "${TCL_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES "${TCL_INCLUDE_PATH}"
     )
+    if(NOT WIN32 AND TCL_LIBRARY MATCHES "\\.a$")
+      find_package(Threads REQUIRED)
+      find_package(ZLIB REQUIRED)
+      target_link_libraries(
+        fsim_tcl_dependency
+        INTERFACE
+          Threads::Threads
+          ZLIB::ZLIB
+          "${CMAKE_DL_LIBS}"
+          m
+      )
+    endif()
     message(
       STATUS
       "fsim Tcl interface: ${TCL_LIBRARY} "

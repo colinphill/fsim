@@ -46,7 +46,9 @@ ParseResult parse_file(const std::filesystem::path& path,
         DiagnosticSeverity::Error,
         "FSIM-FE-IO-001",
         "unable to open source file",
-        SourceSpan{path.string(), SourceLocation{}, SourceLocation{}},
+        SourceSpan{
+            path.string(), SourceLocation{}, SourceLocation{},
+            path.string()},
         {},
     });
     return result;
@@ -60,7 +62,9 @@ ParseResult parse_file(const std::filesystem::path& path,
         DiagnosticSeverity::Error,
         "FSIM-FE-IO-002",
         "failed while reading source file",
-        SourceSpan{path.string(), SourceLocation{}, SourceLocation{}},
+        SourceSpan{
+            path.string(), SourceLocation{}, SourceLocation{},
+            path.string()},
         {},
     });
     return result;
@@ -95,7 +99,9 @@ ParseResult parse_file(const std::filesystem::path& path) {
         DiagnosticSeverity::Error,
         "FSIM-FE-IO-003",
         "cannot infer HDL language from file extension",
-        SourceSpan{path.string(), SourceLocation{}, SourceLocation{}},
+        SourceSpan{
+            path.string(), SourceLocation{}, SourceLocation{},
+            path.string()},
         {},
     });
     return result;

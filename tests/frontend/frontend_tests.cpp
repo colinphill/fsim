@@ -332,6 +332,207 @@ endmodule
   std::filesystem::remove_all(directory, cleanup_error);
 }
 
+void test_systemverilog_line_directive() {
+  const auto remapped = preprocess_verilog(
+      SourceText{
+          "physical.sv",
+          R"(`line 100 "C:\\rtl\\logical.sv" 0
+`define LOGICAL_TOKEN remapped_token
+`line 200 "C:\\rtl\\logical\"name.sv" 2
+`LOGICAL_TOKEN
+`__FILE__
+`__LINE__
+)"},
+      Language::SystemVerilog2017);
+  require(remapped.ok(), "valid `line directives must preprocess");
+  const auto token_named =
+      [&](const std::string_view spelling) -> const Token* {
+    const auto found = std::ranges::find(
+        remapped.lexed.tokens, spelling, &Token::text);
+    return found == remapped.lexed.tokens.end()
+        ? nullptr
+        : &*found;
+  };
+  const auto* macro_token = token_named("remapped_token");
+  const auto* file_token =
+      token_named("\"C:\\\\rtl\\\\logical\\\"name.sv\"");
+  const auto* line_token = token_named("202");
+  require(
+      macro_token != nullptr
+          && macro_token->span.source_name
+              == R"(C:\rtl\logical"name.sv)"
+          && std::filesystem::path{
+                 physical_source(macro_token->span)}
+                 .filename()
+              == "physical.sv"
+          && macro_token->span.begin.line == 200,
+      "macro invocations use the active logical source and line");
+  require(
+      !macro_token->expansion_stack.empty()
+          && macro_token->expansion_stack.front().find(
+                 R"(defined at C:\rtl\logical.sv:100)")
+              != std::string::npos
+          && macro_token->expansion_stack.front().find(
+                 R"(expanded at C:\rtl\logical"name.sv:200)")
+              != std::string::npos,
+      "macro ancestry retains remapped definition and invocation locations");
+  require(
+      file_token != nullptr
+          && file_token->span.source_name
+              == R"(C:\rtl\logical"name.sv)"
+          && file_token->span.begin.line == 201,
+      "`__FILE__ is safely re-escaped from the logical source name");
+  require(
+      line_token != nullptr
+          && line_token->span.source_name
+              == R"(C:\rtl\logical"name.sv)"
+          && line_token->span.begin.line == 202,
+      "`__LINE__ uses the active logical line");
+
+  const auto inactive = preprocess_verilog(
+      SourceText{
+          "inactive-line.sv",
+          R"(`ifdef NEVER
+`line 900 "ignored.sv" 0
+`endif
+physical_token
+)"},
+      Language::SystemVerilog2017);
+  const auto inactive_token = std::ranges::find(
+      inactive.lexed.tokens, "physical_token", &Token::text);
+  require(
+      inactive.ok() && inactive_token != inactive.lexed.tokens.end()
+          && inactive_token->span.source_name.find("inactive-line.sv")
+              != std::string::npos
+          && inactive_token->span.begin.line == 4,
+      "inactive `line directives do not alter source provenance");
+
+  const auto directory = make_test_directory("verilog-line");
+  const auto parent = directory / "parent.sv";
+  const auto child = directory / "child.svh";
+  write_text(
+      child,
+      R"(`line 700 "logical-child.svh" 1
+child_token
+)");
+  write_text(
+      parent,
+      R"(`line 50 "logical-parent.sv" 0
+parent_before
+`include "child.svh"
+parent_after
+)");
+  const auto included = preprocess_verilog_file(
+      parent, Language::SystemVerilog2017);
+  const auto included_token =
+      [&](const std::string_view spelling) -> const Token* {
+    const auto found = std::ranges::find(
+        included.lexed.tokens, spelling, &Token::text);
+    return found == included.lexed.tokens.end()
+        ? nullptr
+        : &*found;
+  };
+  const auto* before = included_token("parent_before");
+  const auto* child_value = included_token("child_token");
+  const auto* after = included_token("parent_after");
+  require(
+      included.ok() && before != nullptr && child_value != nullptr
+          && after != nullptr
+          && before->span.source_name == "logical-parent.sv"
+          && before->span.begin.line == 50
+          && child_value->span.source_name == "logical-child.svh"
+          && child_value->span.begin.line == 700
+          && after->span.source_name == "logical-parent.sv"
+          && after->span.begin.line == 52,
+      "include-local `line state does not leak into its parent");
+
+  const auto second = directory / "second.sv";
+  write_text(second, "second_root_token\n");
+  const auto roots = preprocess_verilog_compilation_unit(
+      {parent, second}, Language::SystemVerilog2017);
+  const auto second_token = std::ranges::find(
+      roots.lexed.tokens, "second_root_token", &Token::text);
+  require(
+      roots.ok() && second_token != roots.lexed.tokens.end()
+          && second_token->span.source_name
+              == std::filesystem::weakly_canonical(second).generic_string()
+          && second_token->span.begin.line == 1,
+      "`line state resets at each compilation-unit root");
+
+  const auto malformed = preprocess_verilog(
+      SourceText{
+          "malformed-line.sv",
+          R"(`ifdef NEVER
+`line 0 broken 9 extra
+`endif
+`line
+`line 0 "zero.sv" 0
+`line 4294967296 "overflow.sv" 0
+`line 1 not_a_string 0
+`line 1 "bad\q.sv" 0
+`line 1 "bad-level.sv" 3
+)"},
+      Language::SystemVerilog2017);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        malformed.lexed.diagnostics,
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !malformed.ok() && has_code("FSIM-SV-PP-039")
+          && has_code("FSIM-SV-PP-040")
+          && has_code("FSIM-SV-PP-041")
+          && has_code("FSIM-SV-PP-042")
+          && has_code("FSIM-SV-PP-043"),
+      "malformed `line fields receive targeted diagnostics");
+  require(
+      std::ranges::none_of(
+          malformed.lexed.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.span.source_name == "ignored.sv";
+          }),
+      "malformed inactive `line directives are ignored");
+
+  auto parser_error = preprocess_verilog(
+      SourceText{
+          "parser-physical.sv",
+          "`line 900 \"parser-logical.sv\" 0\nmodule broken(;\n"},
+      Language::SystemVerilog2017);
+  const auto parsed_error =
+      parse_verilog(std::move(parser_error.lexed), true);
+  require(
+      !parsed_error.ok()
+          && std::ranges::any_of(
+              parsed_error.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.span.source_name
+                        == "parser-logical.sv"
+                    && diagnostic.span.begin.line == 900;
+              }),
+      "parser diagnostics retain logical `line provenance");
+
+  const auto lexical_error = preprocess_verilog(
+      SourceText{
+          "lexer-physical.sv",
+          "`line 300 \"lexer-logical.sv\" 0\n\"unterminated\n"},
+      Language::SystemVerilog2017);
+  require(
+      !lexical_error.ok()
+          && std::ranges::any_of(
+              lexical_error.lexed.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.span.source_name
+                        == "lexer-logical.sv"
+                    && diagnostic.span.begin.line == 300;
+              }),
+      "lexer diagnostics after `line are remapped");
+
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(directory, cleanup_error);
+}
+
 void test_vhdl_vertical_slice() {
   constexpr std::string_view source = R"(
 library ieee;
@@ -6101,6 +6302,7 @@ int main() {
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();
     test_systemverilog_preprocessor();
+    test_systemverilog_line_directive();
     test_non_ansi_verilog_ports();
     test_diagnostics_and_spans();
     test_vhdl_context_diagnostics();

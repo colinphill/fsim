@@ -1042,6 +1042,31 @@ application differentials, Tcl 9 selection/relocation/callbacks, native API/C
 header, and runtime suites. The batch ends at feature commit `eeeea28`; no
 GitHub Actions state was queried for this local gate.
 
+### Twenty-fourth feature batch — Verilog/SystemVerilog `line` provenance
+
+The ten implementation features in this batch are:
+
+1. Accept the exact `` `line <number> "<filename>" <level>`` form.
+2. Validate a positive decimal logical line representable by public debug
+   metadata.
+3. Decode logical filename escapes and safely re-escape `` `__FILE__``.
+4. Validate the standard mapping levels `0`, `1`, and `2`.
+5. Remap subsequent token, parser, and executable-debug source names.
+6. Remap subsequent logical lines while retaining physical offsets/columns.
+7. Make `` `__FILE__`` and `` `__LINE__`` observe the active mapping.
+8. Retain mapped definition/invocation locations in macro expansion ancestry.
+9. Ignore inactive mappings and isolate mapping state across includes and
+   ordered compilation-unit roots.
+10. Preserve physical ownership/cache provenance separately from logical
+    diagnostics, reports, and debug points, with interpreter/LLVM O0/O2 and
+    native-cache differential evidence.
+
+Focused frontend and application tests pass. The preprocessor cache identity
+advances to v4 because logical source mapping now affects parsed and generated
+debug metadata. The full local regression and checkpoint commit/push remain
+pending until the batch gate is run. GitHub Actions state is not part of this
+local gate and is not queried.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

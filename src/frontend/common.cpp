@@ -18,6 +18,12 @@ SourceSpan cover(const SourceSpan& first, const SourceSpan& last) {
   return result;
 }
 
+std::string_view physical_source(const SourceSpan& span) noexcept {
+  return span.physical_source_name.empty()
+      ? std::string_view{span.source_name}
+      : std::string_view{span.physical_source_name};
+}
+
 const char* to_string(DiagnosticSeverity severity) noexcept {
   switch (severity) {
     case DiagnosticSeverity::Note:

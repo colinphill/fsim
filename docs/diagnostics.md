@@ -288,6 +288,11 @@ therefore excluded.
 | `FSIM-SV-PP-036` | error | `` `begin_keywords`` has a missing, unsupported, or trailing IEEE version string. |
 | `FSIM-SV-PP-037` | error | `` `end_keywords`` has no matching `` `begin_keywords``. |
 | `FSIM-SV-PP-038` | error | A `` `begin_keywords`` region is unterminated. |
+| `FSIM-SV-PP-039` | error | A `` `line`` directive does not contain exactly a line number, quoted file name, and level. |
+| `FSIM-SV-PP-040` | error | A `` `line`` line number is not a positive representable decimal integer. |
+| `FSIM-SV-PP-041` | error | A `` `line`` logical file name is not a string literal. |
+| `FSIM-SV-PP-042` | error | A `` `line`` logical file name contains an invalid escape. |
+| `FSIM-SV-PP-043` | error | A `` `line`` level is not `0`, `1`, or `2`. |
 
 ### Verilog/SystemVerilog syntax
 

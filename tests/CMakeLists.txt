@@ -269,6 +269,24 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;assertions"
   )
 
+  add_executable(
+    fsim_line_directive_application_tests
+    app/line_directive_application_test.cpp
+  )
+  fsim_configure_test(fsim_line_directive_application_tests)
+  target_link_libraries(
+    fsim_line_directive_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.line_directives
+    COMMAND fsim_line_directive_application_tests
+  )
+  set_tests_properties(
+    fsim.application.line_directives
+    PROPERTIES LABELS "fast;line-directives"
+  )
+
   add_executable(fsim_application_tests app/application_test.cpp)
   fsim_configure_test(fsim_application_tests)
   target_compile_definitions(

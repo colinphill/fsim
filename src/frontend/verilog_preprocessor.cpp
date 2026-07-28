@@ -2,10 +2,13 @@
 #include "fsim/frontend/preprocessor.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,6 +41,19 @@ struct Conditional {
   SourceSpan opening;
 };
 
+struct SourceMapping {
+  std::string physical_source;
+  std::string logical_source;
+  std::size_t physical_anchor_line{1};
+  std::size_t logical_anchor_line{1};
+  unsigned level{};
+};
+
+struct ProcessedTokens {
+  std::vector<SourceMapping> mappings;
+  Token eof;
+};
+
 [[nodiscard]] bool identifier_spelling(const std::string_view spelling) {
   if (spelling.empty()) {
     return false;
@@ -55,6 +71,129 @@ struct Conditional {
         return std::isalnum(value) != 0 || character == '_'
             || character == '$';
       });
+}
+
+[[nodiscard]] std::string string_literal_spelling(
+    const std::string_view value) {
+  std::string result;
+  result.reserve(value.size() + 2);
+  result.push_back('"');
+  for (const char character : value) {
+    switch (character) {
+      case '\\':
+        result += "\\\\";
+        break;
+      case '"':
+        result += "\\\"";
+        break;
+      case '\n':
+        result += "\\n";
+        break;
+      case '\r':
+        result += "\\r";
+        break;
+      case '\t':
+        result += "\\t";
+        break;
+      default:
+        result.push_back(character);
+        break;
+    }
+  }
+  result.push_back('"');
+  return result;
+}
+
+[[nodiscard]] std::optional<std::string> decode_string_literal(
+    const std::string_view spelling) {
+  if (spelling.size() < 2 || spelling.front() != '"'
+      || spelling.back() != '"') {
+    return std::nullopt;
+  }
+  std::string result;
+  result.reserve(spelling.size() - 2);
+  for (std::size_t index = 1; index + 1 < spelling.size(); ++index) {
+    const char character = spelling[index];
+    if (character != '\\') {
+      if (character == '\n' || character == '\r') {
+        return std::nullopt;
+      }
+      result.push_back(character);
+      continue;
+    }
+    if (++index + 1 > spelling.size()) {
+      return std::nullopt;
+    }
+    switch (spelling[index]) {
+      case '\\':
+        result.push_back('\\');
+        break;
+      case '"':
+        result.push_back('"');
+        break;
+      case 'n':
+        result.push_back('\n');
+        break;
+      case 'r':
+        result.push_back('\r');
+        break;
+      case 't':
+        result.push_back('\t');
+        break;
+      default:
+        return std::nullopt;
+    }
+  }
+  return result;
+}
+
+[[nodiscard]] std::optional<std::size_t> decimal_number(
+    const Token& token,
+    const bool require_positive) {
+  if (token.kind != TokenKind::Number || token.text.empty()) {
+    return std::nullopt;
+  }
+  std::size_t result{};
+  const auto parsed = std::from_chars(
+      token.text.data(), token.text.data() + token.text.size(), result, 10);
+  if (parsed.ec != std::errc{}
+      || parsed.ptr != token.text.data() + token.text.size()
+      || (require_positive && result == 0)) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+[[nodiscard]] SourceLocation remap_location(
+    SourceLocation location,
+    const SourceMapping& mapping) {
+  if (location.line < mapping.physical_anchor_line) {
+    return location;
+  }
+  const auto delta = location.line - mapping.physical_anchor_line;
+  if (delta
+      > std::numeric_limits<std::size_t>::max()
+          - mapping.logical_anchor_line) {
+    location.line = std::numeric_limits<std::size_t>::max();
+  } else {
+    location.line = mapping.logical_anchor_line + delta;
+  }
+  return location;
+}
+
+[[nodiscard]] SourceSpan remap_span(
+    SourceSpan span,
+    const SourceMapping& mapping) {
+  if (physical_source(span) != mapping.physical_source) {
+    return span;
+  }
+  if (span.physical_source_name.empty()) {
+    span.physical_source_name = mapping.physical_source;
+  }
+  span.source_name = mapping.logical_source;
+  span.begin = remap_location(span.begin, mapping);
+  span.end = remap_location(span.end, mapping);
+  return span;
 }
 
 [[nodiscard]] std::string location_text(const SourceSpan& span) {
@@ -103,7 +242,7 @@ class VerilogPreprocessor {
       diagnose(
           "FSIM-SV-PP-031",
           "a Verilog compilation unit requires at least one root file",
-          {fallback.string(), {}, {}});
+          {fallback.string(), {}, {}, fallback.string()});
       return finish_compilation_unit(fallback);
     }
     define_command_line_macros();
@@ -145,7 +284,7 @@ class VerilogPreprocessor {
         "FSIM-SV-PP-001",
         "the Verilog preprocessor requires Verilog-2005 or "
         "SystemVerilog-2017 input",
-        {source_name, {}, {}});
+        {source_name, {}, {}, source_name});
     return false;
   }
 
@@ -179,7 +318,8 @@ class VerilogPreprocessor {
 
   PreprocessCompilationUnitResult finish_compilation_unit(
       const std::filesystem::path& root) {
-    SourceSpan eof_span{normalized_path(root).generic_string(), {}, {}};
+    const auto root_name = normalized_path(root).generic_string();
+    SourceSpan eof_span{root_name, {}, {}, root_name};
     if (root_eof_) {
       eof_span = root_eof_->span;
     }
@@ -231,7 +371,8 @@ class VerilogPreprocessor {
       const SourceSpan span{
           "<command-line:-D" + definition + ">",
           SourceLocation{},
-          SourceLocation{}};
+          SourceLocation{},
+          "<command-line:-D" + definition + ">"};
       if (!identifier_spelling(name)) {
         diagnose(
             "FSIM-SV-PP-003",
@@ -278,7 +419,7 @@ class VerilogPreprocessor {
           "maximum Verilog include depth exceeded while opening '"
               + name + "'",
           include_invocation_.value_or(
-              SourceSpan{name, {}, {}}));
+              SourceSpan{name, {}, {}, name}));
       return;
     }
     if (std::find(include_stack_.begin(), include_stack_.end(), normalized)
@@ -287,7 +428,7 @@ class VerilogPreprocessor {
           "FSIM-SV-PP-005",
           "recursive Verilog include of '" + name + "'",
           include_invocation_.value_or(
-              SourceSpan{name, {}, {}}));
+              SourceSpan{name, {}, {}, name}));
       return;
     }
     auto snapshot = source_snapshots_.find(name);
@@ -298,7 +439,7 @@ class VerilogPreprocessor {
             "FSIM-FE-IO-001",
             "unable to open source file",
             include_invocation_.value_or(
-                SourceSpan{name, {}, {}}));
+                SourceSpan{name, {}, {}, name}));
         return;
       }
       snapshot = source_snapshots_
@@ -314,6 +455,7 @@ class VerilogPreprocessor {
 
     auto lexed = lex(
         SourceText{name, snapshot->second}, language_);
+    const auto lexical_diagnostics_begin = diagnostics_.size();
     for (auto& diagnostic : lexed.diagnostics) {
       diagnostic.expansion_stack.insert(
           diagnostic.expansion_stack.begin(),
@@ -321,6 +463,7 @@ class VerilogPreprocessor {
           include_ancestry_.end());
       diagnostics_.push_back(std::move(diagnostic));
     }
+    const auto lexical_diagnostics_end = diagnostics_.size();
     if (!include_ancestry_.empty()) {
       for (auto& token : lexed.tokens) {
         token.expansion_stack.insert(
@@ -329,13 +472,26 @@ class VerilogPreprocessor {
             include_ancestry_.end());
       }
     }
-    if (depth == 0 && !lexed.tokens.empty()) {
-      root_eof_ = lexed.tokens.back();
-    }
-
     include_stack_.push_back(normalized);
-    process_tokens(lexed.tokens, depth);
+    auto processed = process_tokens(lexed.tokens, depth);
     include_stack_.pop_back();
+    for (auto diagnostic_index = lexical_diagnostics_begin;
+         diagnostic_index < lexical_diagnostics_end; ++diagnostic_index) {
+      auto& diagnostic = diagnostics_[diagnostic_index];
+      for (auto mapping = processed.mappings.rbegin();
+           mapping != processed.mappings.rend(); ++mapping) {
+        if (diagnostic.span.source_name == mapping->physical_source
+            && diagnostic.span.begin.line
+                >= mapping->physical_anchor_line) {
+          diagnostic.span =
+              remap_span(std::move(diagnostic.span), *mapping);
+          break;
+        }
+      }
+    }
+    if (depth == 0) {
+      root_eof_ = std::move(processed.eof);
+    }
   }
 
   [[nodiscard]] static std::size_t line_end(
@@ -364,20 +520,54 @@ class VerilogPreprocessor {
     return end;
   }
 
-  void process_tokens(
+  [[nodiscard]] ProcessedTokens process_tokens(
       const std::vector<Token>& tokens,
       const std::size_t include_depth) {
+    ProcessedTokens processed;
+    if (tokens.empty()) {
+      return processed;
+    }
+    std::vector<Token> mapped_tokens = tokens;
+    SourceMapping mapping{
+        tokens.front().span.source_name,
+        tokens.front().span.source_name,
+        1,
+        1,
+        0};
+    processed.mappings.push_back(mapping);
     std::size_t index = 0;
     while (index < tokens.size()
            && tokens[index].kind != TokenKind::EndOfFile) {
-      if (tokens[index].kind == TokenKind::Backtick
+      for (auto position = index; position < tokens.size(); ++position) {
+        mapped_tokens[position].span =
+            remap_span(tokens[position].span, mapping);
+      }
+      if (mapped_tokens[index].kind == TokenKind::Backtick
           && index + 1 < tokens.size()
-          && tokens[index + 1].kind == TokenKind::Identifier) {
-        const auto directive = tokens[index + 1].text;
+          && mapped_tokens[index + 1].kind == TokenKind::Identifier) {
+        const auto directive = mapped_tokens[index + 1].text;
         if (is_directive(directive)) {
           const auto end = line_end(tokens, index);
+          if (directive == "line" && active()) {
+            const auto next_physical_line =
+                end == index
+                    ? tokens[index].span.end.line + 1
+                    : tokens[end - 1].span.end.line + 1;
+            if (auto next_mapping = line_mapping(
+                    mapped_tokens,
+                    index + 2,
+                    end,
+                    mapped_tokens[index + 1],
+                    mapping.physical_source,
+                    next_physical_line)) {
+              mapping = std::move(*next_mapping);
+              processed.mappings.push_back(mapping);
+            }
+            index = end;
+            continue;
+          }
           handle_directive(
-              tokens, index, end, include_depth);
+              mapped_tokens, index, end, include_depth);
           index = end;
           continue;
         }
@@ -386,7 +576,7 @@ class VerilogPreprocessor {
           continue;
         }
         auto expanded =
-            expand_invocation(tokens, index, 0, {});
+            expand_invocation(mapped_tokens, index, 0, {});
         output_.insert(
             output_.end(),
             std::make_move_iterator(expanded.begin()),
@@ -394,10 +584,78 @@ class VerilogPreprocessor {
         continue;
       }
       if (active()) {
-        output_.push_back(tokens[index]);
+        output_.push_back(mapped_tokens[index]);
       }
       ++index;
     }
+    mapped_tokens.back().span =
+        remap_span(tokens.back().span, mapping);
+    processed.eof = std::move(mapped_tokens.back());
+    return processed;
+  }
+
+  [[nodiscard]] std::optional<SourceMapping> line_mapping(
+      const std::vector<Token>& tokens,
+      const std::size_t begin,
+      const std::size_t end,
+      const Token& directive,
+      std::string physical_source,
+      const std::size_t next_physical_line) {
+    using Difference = std::vector<Token>::difference_type;
+    const std::vector<Token> arguments{
+        tokens.begin() + static_cast<Difference>(begin),
+        tokens.begin() + static_cast<Difference>(end)};
+    auto expanded = expand_sequence(arguments, 0, {});
+    if (expanded.size() != 3) {
+      diagnose(
+          "FSIM-SV-PP-039",
+          "`line requires a line number, quoted file name, and level",
+          directive.span);
+      return std::nullopt;
+    }
+    const auto logical_line = decimal_number(expanded[0], true);
+    if (!logical_line
+        || *logical_line
+            > std::numeric_limits<std::uint32_t>::max()) {
+      diagnose(
+          "FSIM-SV-PP-040",
+          "`line requires a positive decimal line number",
+          expanded[0].span,
+          expanded[0].expansion_stack);
+      return std::nullopt;
+    }
+    if (expanded[1].kind != TokenKind::StringLiteral) {
+      diagnose(
+          "FSIM-SV-PP-041",
+          "`line requires a quoted logical file name",
+          expanded[1].span,
+          expanded[1].expansion_stack);
+      return std::nullopt;
+    }
+    auto logical_source = decode_string_literal(expanded[1].text);
+    if (!logical_source) {
+      diagnose(
+          "FSIM-SV-PP-042",
+          "`line logical file name contains an invalid escape",
+          expanded[1].span,
+          expanded[1].expansion_stack);
+      return std::nullopt;
+    }
+    const auto level = decimal_number(expanded[2], false);
+    if (!level || *level > 2) {
+      diagnose(
+          "FSIM-SV-PP-043",
+          "`line level must be 0, 1, or 2",
+          expanded[2].span,
+          expanded[2].expansion_stack);
+      return std::nullopt;
+    }
+    return SourceMapping{
+        std::move(physical_source),
+        std::move(*logical_source),
+        next_physical_line,
+        *logical_line,
+        static_cast<unsigned>(*level)};
   }
 
   [[nodiscard]] static bool is_directive(
@@ -993,7 +1251,7 @@ class VerilogPreprocessor {
     if (name_token.text == "__FILE__") {
       Token token{
           TokenKind::StringLiteral,
-          '"' + invocation_span.source_name + '"',
+          string_literal_spelling(invocation_span.source_name),
           invocation_span,
           inherited_stack};
       return {std::move(token)};

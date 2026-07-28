@@ -7263,13 +7263,15 @@ private:
                         item.span);
                     continue;
                 }
+                const auto context_source = std::string{
+                    frontend::physical_source(context_unit->span)};
                 if (std::find(
                         unit.source_dependencies.begin(),
                         unit.source_dependencies.end(),
-                        context_unit->span.source_name)
+                        context_source)
                     == unit.source_dependencies.end()) {
                     unit.source_dependencies.push_back(
-                        context_unit->span.source_name);
+                        context_source);
                 }
                 context_stack.push_back(&*context_unit);
                 const auto nested_library =
@@ -7422,10 +7424,11 @@ private:
                             + "'",
                         item.span);
                 }
-                if (dependencies.insert(
-                        package->span.source_name).second) {
+                const auto package_source = std::string{
+                    frontend::physical_source(package->span)};
+                if (dependencies.insert(package_source).second) {
                     unit.source_dependencies.push_back(
-                        package->span.source_name);
+                        package_source);
                 }
                 for (const auto& dependency :
                      specialized.unit.source_dependencies) {
@@ -7606,10 +7609,11 @@ private:
                     frontend::Language::Vhdl2008),
                 true,
                 declaration->span});
-            if (dependencies.insert(
-                    package->span.source_name).second) {
+            const auto package_source = std::string{
+                frontend::physical_source(package->span)};
+            if (dependencies.insert(package_source).second) {
                 unit.source_dependencies.push_back(
-                    package->span.source_name);
+                    package_source);
             }
             for (const auto& dependency :
                  specialized_package->unit.source_dependencies) {
@@ -7709,7 +7713,7 @@ private:
                 unit.source_dependencies.push_back(dependency);
             }
         };
-        append(package.span.source_name);
+        append(std::string{frontend::physical_source(package.span)});
         for (const auto& dependency :
              specialized.unit.source_dependencies) {
             append(dependency);
@@ -9465,14 +9469,16 @@ private:
         specialization.id = specialization_id;
         specialization.unit = identity;
         specialization.instance = path;
-        specialization.source = unit.span.source_name;
+        specialization.source =
+            std::string{frontend::physical_source(unit.span)};
         if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
             if (const auto* entity = find_vhdl_entity(parsed_, unit);
                 entity != nullptr
-                && entity->span.source_name
+                && frontend::physical_source(entity->span)
                     != specialization.source) {
                 specialization.source_dependencies.push_back(
-                    entity->span.source_name);
+                    std::string{
+                        frontend::physical_source(entity->span)});
             }
         }
         for (const auto& dependency : unit.source_dependencies) {

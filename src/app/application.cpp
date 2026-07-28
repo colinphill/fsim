@@ -1193,7 +1193,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group) {
         group.language == frontend::Language::SystemVerilog2017);
     for (auto& unit : snapshot.result.design.units) {
       const auto unit_source =
-          std::filesystem::path{unit.span.source_name};
+          std::filesystem::path{physical_source(unit.span)};
       auto source_order =
           group.inputs.empty()
               ? std::size_t{}
@@ -1234,7 +1234,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group) {
         frontend::DiagnosticSeverity::Error,
         "FSIM-FE-IO-001",
         "unable to open source file",
-        {input.path.string(), {}, {}},
+        {input.path.string(), {}, {}, input.path.string()},
         {},
     });
     return snapshot;
@@ -1247,7 +1247,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group) {
         frontend::DiagnosticSeverity::Error,
         "FSIM-FE-IO-002",
         "failed while reading source file",
-        {input.path.string(), {}, {}},
+        {input.path.string(), {}, {}, input.path.string()},
         {},
     });
     return snapshot;

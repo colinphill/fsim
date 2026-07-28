@@ -21,6 +21,9 @@ struct SourceSpan {
   std::string source_name;
   SourceLocation begin;
   SourceLocation end;
+  // Physical input identity retained when a source-language directive
+  // changes the logical diagnostic/debug name.
+  std::string physical_source_name;
 
   [[nodiscard]] bool empty() const noexcept {
     return begin.offset == end.offset;
@@ -31,6 +34,8 @@ struct SourceSpan {
 
 [[nodiscard]] SourceSpan cover(const SourceSpan& first,
                                const SourceSpan& last);
+[[nodiscard]] std::string_view physical_source(
+    const SourceSpan& span) noexcept;
 
 struct SourceText {
   std::string name;

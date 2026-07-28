@@ -46,7 +46,7 @@ class Lexer {
 
   [[nodiscard]] SourceSpan span(SourceLocation begin,
                                 SourceLocation end) const {
-    return SourceSpan{source_.name, begin, end};
+    return SourceSpan{source_.name, begin, end, source_.name};
   }
 
   char advance() {
