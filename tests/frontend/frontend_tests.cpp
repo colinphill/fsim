@@ -5506,6 +5506,7 @@ module formatted_display;
     $display("%o", q);
     $display("%d", q);
     $display("%c", q);
+    $display("%s", q);
   end
 endmodule
 )",
@@ -5513,7 +5514,7 @@ endmodule
   require(
       formatted.ok()
           && formatted.design.units.front().processes.front()
-                 .statements.size() == 6
+                 .statements.size() == 7
           && formatted.design.units.front().processes.front()
                  .statements[0].output_format
               == OutputFormat::Binary
@@ -5536,15 +5537,18 @@ endmodule
               == OutputFormat::Decimal
           && formatted.design.units.front().processes.front()
                  .statements[5].output_format
-              == OutputFormat::Character,
-      "single-value %b/%h/%o/%d/%c display/write HIR and %% decoding");
+              == OutputFormat::Character
+          && formatted.design.units.front().processes.front()
+                 .statements[6].output_format
+              == OutputFormat::String,
+      "single-value %b/%h/%o/%d/%c/%s display/write HIR and %% decoding");
 
   const auto unsupported = parse_text(
       "unsupported_format.sv",
       R"(
 module unsupported_format;
   logic q;
-  initial $display("%s", q);
+  initial $display("%v", q);
 endmodule
 )",
       Language::SystemVerilog2017);

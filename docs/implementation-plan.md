@@ -837,9 +837,12 @@ The twentieth post-gate batch is in progress:
    known/unknown groups.
 7. Runtime formatting now supports `%c`, consuming the least-significant
    eight bits as one byte and rendering an X/Z-containing byte as `x`.
+8. Runtime formatting now supports packed `%s`, emitting bytes
+   most-significant first, omitting leading zero padding, and substituting
+   `x` for an X/Z-containing byte.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM, application, Tcl,
-native API, and diagnostic-catalog tests pass. This is feature 7 of 10, so the
+native API, and diagnostic-catalog tests pass. This is feature 8 of 10, so the
 interval full regression and remote push are not due yet.
 
 ## v1 release condition

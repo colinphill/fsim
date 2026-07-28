@@ -269,6 +269,7 @@ enum class OutputFormat {
   Octal,
   Decimal,
   Character,
+  String,
 };
 
 enum class EdgeKind {

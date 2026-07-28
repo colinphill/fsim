@@ -164,6 +164,35 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     }
     return std::string(1, static_cast<char>(character));
   }
+  case OutputFormat::string: {
+    const auto byte_count = (value.width() + 7U) / 8U;
+    std::string text;
+    text.reserve(byte_count);
+    bool leading_padding = true;
+    for (std::size_t byte = byte_count; byte-- > 0;) {
+      const auto offset = byte * 8U;
+      const auto bit_count =
+          std::min<std::size_t>(8U, value.width() - offset);
+      unsigned character{};
+      bool unknown = false;
+      for (std::size_t bit = 0; bit < bit_count; ++bit) {
+        const auto state = value.get(offset + bit);
+        unknown =
+            unknown || state == Logic4::x || state == Logic4::z;
+        if (state == Logic4::one) {
+          character |= 1U << bit;
+        }
+      }
+      if (unknown) {
+        text.push_back('x');
+        leading_padding = false;
+      } else if (character != 0U || !leading_padding) {
+        text.push_back(static_cast<char>(character));
+        leading_padding = false;
+      }
+    }
+    return text;
+  }
   }
   throw std::logic_error{"invalid formatted-output conversion"};
 }

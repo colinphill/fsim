@@ -369,6 +369,7 @@ enum class OutputFormat : std::uint8_t {
   octal,
   decimal,
   character,
+  string,
 };
 
 /// Format one runtime value between literal prefix/suffix text.
