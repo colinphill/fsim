@@ -320,7 +320,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the twelfth post-gate batch, including native-C elaborated instance hierarchy and ownership metadata (128.03 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the thirteenth post-gate batch, including native-C nested/indexed generate hierarchy and collision-free process paths (143.03 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -659,8 +659,8 @@ Planned implementation sequence:
 4. Complete Windows execution evidence and broader event/list/error tests for
    the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
    timed, delta, and static-wait execution is implemented.
-5. Complete source metadata for generate-region/driver objects and remaining
-   executable constructs. Native C instance, process, lexical-scope,
+5. Complete source metadata for driver objects and remaining executable
+   constructs. Native C instance, generate-region, process, lexical-scope,
    packed-variable, signal, and port objects now carry retained source
    metadata.
 6. Complete remaining public C API object kinds and richer value metadata.
@@ -743,22 +743,24 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The twelfth post-gate batch is implementation-complete:
+The thirteenth post-gate batch is implementation-complete:
 
-1. each elaborated child specialization becomes an instance-scope object;
-2. the selected top remains the root rather than a redundant child scope;
-3. instance scopes reuse the generation-safe scope-handle encoding;
-4. stable full-path lookup resolves child instances;
-5. instance metadata exposes leaf/full names and bound-unit type identity;
-6. instance metadata retains its owning source file;
-7. root enumeration returns only top-owned objects and direct instances;
-8. instance enumeration returns directly owned signals and processes;
-9. signal/process parent metadata follows the longest owning instance path;
-10. process path lookup round-trips through enumerated instance children, and
-    rebuilds invalidate stale instance handles.
+1. missing hierarchy components between parent and child specializations are
+   synthesized as generate-region scopes;
+2. nested conditional and iterative region paths are retained;
+3. indexed generate names such as `lane[0]` remain stable;
+4. generated regions use the existing generation-safe scope encoding;
+5. region metadata exposes leaf/full names, source, and `generate` type;
+6. generated local signals are parented directly beneath their region;
+7. generated processes are parented directly beneath their region;
+8. child instances are parented beneath the innermost generated region;
+9. a process/scope internal-name collision receives a stable `.$process`
+   public path with successful lookup round-trip; and
+10. direct traversal and rebuild invalidation cover region, indexed-region,
+    instance, generated signal, and generated process objects.
 
 Focused native-C hierarchy tests pass. The interval LLVM 22 Debug regression
-passed all 19 tests in 128.03 seconds. This batch is ready to commit and push.
+passed all 19 tests in 143.03 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 

@@ -339,6 +339,8 @@ Nested procedural blocks are explicit lexical-scope objects, and metadata
 distinguishes never-entered scopes and uninitialized locals.
 Elaborated child specializations are explicit instance scopes whose direct
 signal/process children retain generation-safe hierarchy handles.
+Conditional and iterative generate regions are retained as nested scopes,
+including indexed region names and generated local behavior.
 
 ## Build and test
 

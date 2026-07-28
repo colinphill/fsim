@@ -167,7 +167,15 @@ module tb(output logic observed);
     end : unselected
     #1 $finish;
   end : control
-  child u();
+  generate
+    if (1) begin : selected
+      logic generated_value;
+      initial generated_value = 1'b1;
+      for (genvar i = 0; i < 1; i++) begin : lane
+        child u();
+      end
+    end
+  endgenerate
 endmodule
 
 module child;
@@ -309,17 +317,145 @@ max_deltas = 1000
       == FSIM_STATUS_OK);
   assert(children == 5);
 
+  fsim_object_t generated_scope = FSIM_INVALID_OBJECT;
+  fsim_object_t generated_lane = FSIM_INVALID_OBJECT;
+  fsim_object_t generated_signal = FSIM_INVALID_OBJECT;
   fsim_object_t child_instance = FSIM_INVALID_OBJECT;
   fsim_object_t child_signal = FSIM_INVALID_OBJECT;
   fsim_object_t child_process = FSIM_INVALID_OBJECT;
   assert(
       fsim_session_find_object(
-          session, text("tb.u"), &child_instance)
+          session, text("tb.selected"), &generated_scope)
       == FSIM_STATUS_OK);
   assert(
       fsim_session_find_object(
-          session, text("tb.u.child_value"), &child_signal)
+          session,
+          text("tb.selected.lane[0]"),
+          &generated_lane)
       == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.selected.generated_value"),
+          &generated_signal)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.selected.lane[0].u"),
+          &child_instance)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.selected.lane[0].u.child_value"),
+          &child_signal)
+      == FSIM_STATUS_OK);
+  fsim_object_info_t generated_scope_info{};
+  generated_scope_info.struct_size = sizeof(generated_scope_info);
+  generated_scope_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, generated_scope, &generated_scope_info)
+      == FSIM_STATUS_OK);
+  assert(generated_scope_info.kind == FSIM_OBJECT_SCOPE);
+  assert(generated_scope_info.parent == root);
+  assert(
+      std::string(
+          generated_scope_info.name.data,
+          generated_scope_info.name.size)
+      == "selected");
+  assert(
+      std::string(
+          generated_scope_info.type_name.data,
+          generated_scope_info.type_name.size)
+      == "generate");
+  std::vector<fsim_object_t> generated_children;
+  assert(
+      fsim_session_visit_children(
+          session,
+          generated_scope,
+          collect_object,
+          &generated_children)
+      == FSIM_STATUS_OK);
+  assert(generated_children.size() == 3);
+  assert(
+      std::find(
+          generated_children.begin(),
+          generated_children.end(),
+          generated_lane)
+      != generated_children.end());
+  assert(
+      std::find(
+          generated_children.begin(),
+          generated_children.end(),
+          generated_signal)
+      != generated_children.end());
+  fsim_object_t generated_process = FSIM_INVALID_OBJECT;
+  for (const auto child : generated_children) {
+    fsim_object_info_t child_info{};
+    child_info.struct_size = sizeof(child_info);
+    child_info.api_version = FSIM_API_VERSION;
+    assert(
+        fsim_session_get_object_info(session, child, &child_info)
+        == FSIM_STATUS_OK);
+    if (child_info.kind == FSIM_OBJECT_PROCESS) {
+      generated_process = child;
+    }
+  }
+  assert(generated_process != FSIM_INVALID_OBJECT);
+  fsim_object_info_t generated_signal_info{};
+  generated_signal_info.struct_size = sizeof(generated_signal_info);
+  generated_signal_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, generated_signal, &generated_signal_info)
+      == FSIM_STATUS_OK);
+  assert(generated_signal_info.parent == generated_scope);
+  fsim_object_info_t generated_process_info{};
+  generated_process_info.struct_size = sizeof(generated_process_info);
+  generated_process_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, generated_process, &generated_process_info)
+      == FSIM_STATUS_OK);
+  assert(generated_process_info.parent == generated_scope);
+  assert(
+      std::string(
+          generated_process_info.name.data,
+          generated_process_info.name.size)
+      == "$process");
+  fsim_object_t found_generated_process = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session,
+          generated_process_info.full_name,
+          &found_generated_process)
+      == FSIM_STATUS_OK);
+  assert(found_generated_process == generated_process);
+  fsim_object_info_t generated_lane_info{};
+  generated_lane_info.struct_size = sizeof(generated_lane_info);
+  generated_lane_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, generated_lane, &generated_lane_info)
+      == FSIM_STATUS_OK);
+  assert(generated_lane_info.parent == generated_scope);
+  assert(
+      std::string(
+          generated_lane_info.name.data,
+          generated_lane_info.name.size)
+      == "lane[0]");
+  std::vector<fsim_object_t> lane_children;
+  assert(
+      fsim_session_visit_children(
+          session,
+          generated_lane,
+          collect_object,
+          &lane_children)
+      == FSIM_STATUS_OK);
+  assert(lane_children.size() == 1);
+  assert(lane_children.front() == child_instance);
   fsim_object_info_t child_instance_info{};
   child_instance_info.struct_size = sizeof(child_instance_info);
   child_instance_info.api_version = FSIM_API_VERSION;
@@ -328,7 +464,7 @@ max_deltas = 1000
           session, child_instance, &child_instance_info)
       == FSIM_STATUS_OK);
   assert(child_instance_info.kind == FSIM_OBJECT_SCOPE);
-  assert(child_instance_info.parent == root);
+  assert(child_instance_info.parent == generated_lane);
   assert(
       std::string(
           child_instance_info.name.data,
@@ -338,7 +474,7 @@ max_deltas = 1000
       std::string(
           child_instance_info.full_name.data,
           child_instance_info.full_name.size)
-      == "tb.u");
+      == "tb.selected.lane[0].u");
   assert(
       std::string(
           child_instance_info.type_name.data,
@@ -850,6 +986,7 @@ max_deltas = 1000
   const auto old_q = q;
   const auto old_process = process;
   const auto old_child_instance = child_instance;
+  const auto old_generated_scope = generated_scope;
   const auto old_control_scope = control_scope;
   const auto old_control_state = control_state;
   assert(fsim_session_build(session) == FSIM_STATUS_OK);
@@ -873,6 +1010,10 @@ max_deltas = 1000
   assert(
       fsim_session_visit_children(
           session, old_child_instance, visit, &stale_children)
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_visit_children(
+          session, old_generated_scope, visit, &stale_children)
       == FSIM_STATUS_INVALID_HANDLE);
   assert(
       fsim_session_read_value(

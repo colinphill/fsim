@@ -5,6 +5,7 @@
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -40,6 +41,7 @@ struct VariableObject {
 
 enum class ScopeObjectKind : std::uint8_t {
   instance,
+  generate,
   lexical,
 };
 
@@ -72,6 +74,7 @@ struct Session {
   std::optional<fsim::runtime::simir::ProcessId>
       current_execution_process;
   std::vector<ScopeObject> scopes;
+  std::vector<std::string> process_names;
   std::vector<VariableObject> variables;
   bool finished{};
 };
@@ -363,14 +366,15 @@ bool path_is_within(
       && path[scope.size()] == '.';
 }
 
-std::optional<std::size_t> owning_instance_scope(
+std::optional<std::size_t> owning_design_scope(
     const Session& session, const std::string_view path) {
   std::optional<std::size_t> owner;
   std::size_t owner_length = 0;
   for (std::size_t index = 0; index < session.scopes.size(); ++index) {
     const auto& scope = session.scopes[index];
-    if (scope.kind == ScopeObjectKind::instance
-        && path_is_within(path, scope.full_name)
+    if (scope.kind != ScopeObjectKind::lexical
+        && (path == scope.full_name
+            || path_is_within(path, scope.full_name))
         && scope.full_name.size() > owner_length) {
       owner = index;
       owner_length = scope.full_name.size();
@@ -379,8 +383,37 @@ std::optional<std::size_t> owning_instance_scope(
   return owner;
 }
 
+std::optional<std::size_t> append_design_scope(
+    Session& session,
+    const ScopeObjectKind kind,
+    const std::optional<std::size_t> parent_scope,
+    std::string full_name,
+    std::string type_name,
+    const std::string& source) {
+  for (std::size_t index = 0; index < session.scopes.size(); ++index) {
+    const auto& scope = session.scopes[index];
+    if (scope.kind != ScopeObjectKind::lexical
+        && scope.full_name == full_name) {
+      return index;
+    }
+  }
+  if (session.scopes.size()
+      > kObjectIndexMask - kScopePayloadBase) {
+    return std::nullopt;
+  }
+  session.scopes.push_back(ScopeObject{
+      kind,
+      std::nullopt,
+      parent_scope,
+      std::move(full_name),
+      std::move(type_name),
+      fsim::runtime::simir::SourceLocation{source, 1, 1}});
+  return session.scopes.size() - 1;
+}
+
 bool rebuild_debug_objects(Session& session) {
   session.scopes.clear();
+  session.process_names.clear();
   session.variables.clear();
   if (!session.simulation) {
     return true;
@@ -390,19 +423,52 @@ bool rebuild_debug_objects(Session& session) {
     if (specialization.instance == design.top()) {
       continue;
     }
-    if (session.scopes.size()
-        > kObjectIndexMask - kScopePayloadBase) {
+
+    std::string_view parent_path = design.top();
+    for (const auto& candidate : design.specializations()) {
+      if (candidate.instance != specialization.instance
+          && candidate.instance.size() > parent_path.size()
+          && path_is_within(
+              specialization.instance, candidate.instance)) {
+        parent_path = candidate.instance;
+      }
+    }
+    auto parent_scope =
+        owning_design_scope(session, specialization.instance);
+    const auto relative = std::string_view{specialization.instance}.substr(
+        parent_path.size() + 1);
+    std::size_t segment_begin = 0;
+    while (true) {
+      const auto segment_end = relative.find('.', segment_begin);
+      if (segment_end == std::string_view::npos) {
+        break;
+      }
+      const auto region_name =
+          std::string(parent_path) + "."
+          + std::string(relative.substr(0, segment_end));
+      parent_scope = append_design_scope(
+          session,
+          ScopeObjectKind::generate,
+          parent_scope,
+          region_name,
+          "generate",
+          specialization.source);
+      if (!parent_scope) {
+        session.scopes.clear();
+        return false;
+      }
+      segment_begin = segment_end + 1;
+    }
+    if (!append_design_scope(
+            session,
+            ScopeObjectKind::instance,
+            parent_scope,
+            specialization.instance,
+            specialization.unit,
+            specialization.source)) {
       session.scopes.clear();
       return false;
     }
-    session.scopes.push_back(ScopeObject{
-        ScopeObjectKind::instance,
-        std::nullopt,
-        owning_instance_scope(session, specialization.instance),
-        specialization.instance,
-        specialization.unit,
-        fsim::runtime::simir::SourceLocation{
-            specialization.source, 1, 1}});
   }
 
   const auto& processes = design.processes();
@@ -455,6 +521,21 @@ bool rebuild_debug_objects(Session& session) {
           parent_scope,
           program.name + "." + debug_local.name});
     }
+  }
+  session.process_names.reserve(processes.size());
+  for (const auto& process : processes) {
+    auto name = process.name;
+    const auto collides_with_scope =
+        std::any_of(
+            session.scopes.begin(),
+            session.scopes.end(),
+            [&](const ScopeObject& scope) {
+              return scope.full_name == name;
+            });
+    if (collides_with_scope) {
+      name += ".$process";
+    }
+    session.process_names.push_back(std::move(name));
   }
   return true;
 }
@@ -803,6 +884,7 @@ fsim_status_t fsim_session_load_project(
     value.project.reset();
     value.simulation.reset();
     value.scopes.clear();
+    value.process_names.clear();
     value.variables.clear();
     advance_design_generation(value);
     value.finished = false;
@@ -846,6 +928,7 @@ fsim_status_t fsim_session_build(const fsim_session_t session) {
     value.diagnostics.clear();
     value.simulation.reset();
     value.scopes.clear();
+    value.process_names.clear();
     value.variables.clear();
     advance_design_generation(value);
     value.finished = false;
@@ -928,17 +1011,17 @@ fsim_status_t fsim_session_find_object(
       *out_object = signal_handle(value, *signal);
       return FSIM_STATUS_OK;
     }
-    const auto& processes = value.simulation->design().processes();
-    for (std::size_t index = 0; index < processes.size(); ++index) {
-      if (processes[index].name == requested) {
-        *out_object = process_handle(value, index);
-        return FSIM_STATUS_OK;
-      }
-    }
     for (std::size_t index = 0;
          index < value.scopes.size(); ++index) {
       if (value.scopes[index].full_name == requested) {
         *out_object = scope_handle(value, index);
+        return FSIM_STATUS_OK;
+      }
+    }
+    for (std::size_t index = 0;
+         index < value.process_names.size(); ++index) {
+      if (value.process_names[index] == requested) {
+        *out_object = process_handle(value, index);
         return FSIM_STATUS_OK;
       }
     }
@@ -1021,10 +1104,10 @@ fsim_status_t fsim_session_visit_children(
             return FSIM_STATUS_OK;
           }
         }
-        if (parent_scope.kind == ScopeObjectKind::instance) {
+        if (parent_scope.kind != ScopeObjectKind::lexical) {
           for (const auto& signal :
                value.simulation->design().signals()) {
-            if (owning_instance_scope(value, signal.name)
+            if (owning_design_scope(value, signal.name)
                 != scope_index) {
               continue;
             }
@@ -1041,7 +1124,7 @@ fsim_status_t fsim_session_visit_children(
               value.simulation->design().processes();
           for (std::size_t index = 0;
                index < processes.size(); ++index) {
-            if (owning_instance_scope(value, processes[index].name)
+            if (owning_design_scope(value, processes[index].name)
                 != scope_index) {
               continue;
             }
@@ -1077,7 +1160,7 @@ fsim_status_t fsim_session_visit_children(
     for (std::size_t index = 0;
          index < value.scopes.size(); ++index) {
       const auto& scope = value.scopes[index];
-      if (scope.kind != ScopeObjectKind::instance
+      if (scope.kind == ScopeObjectKind::lexical
           || scope.parent_scope) {
         continue;
       }
@@ -1089,7 +1172,7 @@ fsim_status_t fsim_session_visit_children(
       }
     }
     for (const auto& signal : value.simulation->design().signals()) {
-      if (owning_instance_scope(value, signal.name)) {
+      if (owning_design_scope(value, signal.name)) {
         continue;
       }
       CallbackGuard guard{value};
@@ -1101,7 +1184,7 @@ fsim_status_t fsim_session_visit_children(
     }
     const auto& processes = value.simulation->design().processes();
     for (std::size_t index = 0; index < processes.size(); ++index) {
-      if (owning_instance_scope(value, processes[index].name)) {
+      if (owning_design_scope(value, processes[index].name)) {
         continue;
       }
       CallbackGuard guard{value};
@@ -1180,7 +1263,7 @@ fsim_status_t fsim_session_get_object_info(
     }
     if (const auto signal = object_signal(value, object)) {
       const auto& info = value.simulation->design().signals().at(*signal);
-      const auto owner = owning_instance_scope(value, info.name);
+      const auto owner = owning_design_scope(value, info.name);
       out_info->parent =
           owner ? scope_handle(value, *owner) : root_handle(value);
       out_info->kind = info.is_port ? FSIM_OBJECT_PORT : FSIM_OBJECT_SIGNAL;
@@ -1204,13 +1287,14 @@ fsim_status_t fsim_session_get_object_info(
     }
     if (const auto process = object_process(value, object)) {
       const auto& info = value.simulation->design().processes().at(*process);
-      const auto owner = owning_instance_scope(value, info.name);
+      const auto& public_name = value.process_names.at(*process);
+      const auto owner = owning_design_scope(value, info.name);
       out_info->parent =
           owner ? scope_handle(value, *owner) : root_handle(value);
       out_info->kind = FSIM_OBJECT_PROCESS;
       out_info->width = 0;
-      out_info->name = view(info.name);
-      out_info->full_name = view(info.name);
+      out_info->name = view(leaf_name(public_name));
+      out_info->full_name = view(public_name);
       out_info->type_name = view("process");
       if (const auto* source = process_source(info)) {
         set_source(*source);

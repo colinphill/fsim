@@ -718,8 +718,11 @@ port object metadata also carry retained declaration source locations. Scope
 and local flags distinguish never-entered/uninitialized state from retained
 runtime values. Elaborated child specializations are explicit instance scopes;
 direct enumeration and signal/process parent metadata follow their owning
-instance. Generate-region scopes, driver objects, and source metadata for those
-deferred kinds are not yet wired.
+instance. Missing conditional/iterative hierarchy components are synthesized
+as nested generate-region scopes, including indexed names and generated local
+signal/process ownership. A generated process whose internal name equals its
+scope receives a stable `.$process` public path. Driver objects and source
+metadata for that deferred kind are not yet wired.
 
 Optimized `run` and instrumented `debug` are required to have identical
 simulation semantics. Bounded debug code uses addressable process frames and
@@ -753,7 +756,7 @@ previous handler on every exit path. Tests raise SIGINT through the real handler
 and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
 to terminal completion, and restore a preinstalled handler. The `locals`
 command reads declared packed process variables through an engine-neutral
-interface; richer local types and generate-region scopes remain planned.
+interface; richer local types and driver objects remain planned.
 
 ## Tcl automation
 
