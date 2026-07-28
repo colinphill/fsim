@@ -3001,6 +3001,41 @@ void test_simir_display_output() {
           false,
           false,
           true},
+      FormatDisplay{
+          1,
+          OutputFormat::hexadecimal,
+          "width=",
+          "",
+          true,
+          false,
+          false,
+          false,
+          6},
+      FormatDisplay{
+          1,
+          OutputFormat::hexadecimal,
+          "left=",
+          "!",
+          true,
+          false,
+          false,
+          false,
+          6,
+          true},
+      FormatDisplay{
+          2,
+          OutputFormat::decimal,
+          "zero=",
+          "",
+          true,
+          false,
+          true,
+          false,
+          6,
+          false,
+          true},
+      WaitFor{7},
+      TimeDisplay{"time=", "", true, false, 4, false, true},
       Halt{},
   };
   const auto report_process_id =
@@ -3056,8 +3091,54 @@ void test_simir_display_output() {
           && formatted_output
               == std::vector<std::string>{
                   "v=10xz!", "d=-1", "u=x", "h=a5", "c=\xA5",
-                  "s=test", "z=a5"},
+                  "s=test", "z=a5", "width=    a5",
+                  "left=a5    !", "zero=-00001", "time=0007"},
       "nonfatal report hook severity, source, and ordering");
+
+  Interpreter monitor_replacement_interpreter;
+  const auto monitored_signal =
+      monitor_replacement_interpreter.add_signal(
+          {"watched", PackedLogic4::from_msb_string("0")});
+  Process monitor_replacement_process;
+  monitor_replacement_process.name = "monitor-replacement";
+  monitor_replacement_process.register_count = 1;
+  monitor_replacement_process.operations = {
+      MonitorInstall{
+          {
+              MonitorValue{
+                  MonitorValueKind::signal,
+                  monitored_signal,
+                  OutputFormat::binary,
+                  "value="},
+          },
+          "",
+          true},
+      MonitorInstall{{}, "literal replacement", true},
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteBlocking{monitored_signal, 0},
+      Halt{},
+  };
+  static_cast<void>(
+      monitor_replacement_interpreter.add_process(
+          std::move(monitor_replacement_process)));
+  std::vector<std::string> replacement_output;
+  monitor_replacement_interpreter.set_output_hook(
+      [&replacement_output](
+          const ProcessId,
+          const std::string_view text,
+          const bool,
+          const SimulationTick,
+          const std::uint64_t) {
+        replacement_output.emplace_back(text);
+      });
+  monitor_replacement_interpreter.start();
+  const auto monitor_replacement_result =
+      monitor_replacement_interpreter.run();
+  require(
+      monitor_replacement_result.status == RunStatus::completed
+          && replacement_output
+              == std::vector<std::string>{"literal replacement"},
+      "literal monitor replacement cancels the previous watched list");
 
   Interpreter failure_interpreter;
   Process failure_process;

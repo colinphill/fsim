@@ -187,6 +187,9 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.schedule_output = schedule_output;
     runtime.write_report = write_report;
     runtime.write_formatted = write_formatted;
+    runtime.write_time = write_time;
+    runtime.install_monitor = install_monitor;
+    runtime.control_monitor = control_monitor;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -802,7 +805,107 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           operation->newline,
           operation->postponed,
           operation->signed_decimal,
-          operation->suppress_leading_zero);
+          operation->suppress_leading_zero,
+          operation->minimum_width,
+          operation->left_justify,
+          operation->zero_pad);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_time(
+      void* context,
+      const std::uint32_t process,
+      const std::uint32_t instruction) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (state.context == nullptr
+          || state.process == nullptr
+          || state.process->id != process
+          || instruction >= state.process->operations.size()) {
+        throw std::logic_error{
+            "invalid generated time-output callback"};
+      }
+      const auto* operation =
+          std::get_if<runtime::simir::TimeDisplay>(
+              &state.process->operations[instruction]);
+      if (operation == nullptr) {
+        throw std::logic_error{
+            "generated time-output callback references a "
+            "different operation"};
+      }
+      state.context->display_time(
+          operation->prefix,
+          operation->suffix,
+          operation->newline,
+          operation->postponed,
+          operation->minimum_width,
+          operation->left_justify,
+          operation->zero_pad);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void install_monitor(
+      void* context,
+      const std::uint32_t process,
+      const std::uint32_t instruction) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (state.context == nullptr
+          || state.process == nullptr
+          || state.process->id != process
+          || instruction >= state.process->operations.size()) {
+        throw std::logic_error{
+            "invalid generated monitor-install callback"};
+      }
+      const auto* operation =
+          std::get_if<runtime::simir::MonitorInstall>(
+              &state.process->operations[instruction]);
+      if (operation == nullptr) {
+        throw std::logic_error{
+            "generated monitor-install callback references a "
+            "different operation"};
+      }
+      state.context->install_monitor(*operation);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void control_monitor(
+      void* context,
+      const std::uint32_t process,
+      const std::uint32_t instruction) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (state.context == nullptr
+          || state.process == nullptr
+          || state.process->id != process
+          || instruction >= state.process->operations.size()) {
+        throw std::logic_error{
+            "invalid generated monitor-control callback"};
+      }
+      const auto* operation =
+          std::get_if<runtime::simir::MonitorControl>(
+              &state.process->operations[instruction]);
+      if (operation == nullptr) {
+        throw std::logic_error{
+            "generated monitor-control callback references a "
+            "different operation"};
+      }
+      state.context->set_monitor_enabled(operation->enabled);
     } catch (...) {
       capture_failure(state);
     }

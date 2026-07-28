@@ -199,10 +199,10 @@ void test_display(
       fsim::app::SimulationEngine::compiled);
   assert(reference.result.status == fsim::runtime::RunStatus::stopped);
   assert(compiled.result.status == fsim::runtime::RunStatus::stopped);
-  assert(reference.result.time == 2);
-  assert(compiled.result.time == 2);
+  assert(reference.result.time == 4);
+  assert(compiled.result.time == 4);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 19);
+  assert(reference.output.size() == 33);
   assert(reference.output[0].process == 0);
   assert(reference.output[0].text == "first\t");
   assert(!reference.output[0].newline);
@@ -251,21 +251,46 @@ void test_display(
   assert(reference.output[13].text == "compact=a5");
   assert(reference.output[13].newline);
   assert(reference.output[13].time == 0);
-  assert(reference.output[14].text == "post=10xz");
+  assert(reference.output[14].text == "upper=a5");
   assert(reference.output[14].newline);
   assert(reference.output[14].time == 0);
-  assert(reference.output[15].text == "monitored");
+  assert(reference.output[15].text == "width=    a5");
   assert(reference.output[15].newline);
   assert(reference.output[15].time == 0);
-  assert(reference.output[16].text == "second");
-  assert(!reference.output[16].newline);
-  assert(reference.output[16].time == 2);
-  assert(reference.output[17].text.empty());
-  assert(!reference.output[17].newline);
-  assert(reference.output[17].time == 2);
-  assert(reference.output[18].text.empty());
-  assert(reference.output[18].newline);
-  assert(reference.output[18].time == 2);
+  assert(reference.output[16].text == "left=a5    !");
+  assert(reference.output[17].text == "zero=-00001");
+  assert(reference.output[18].text == "multi=0011");
+  assert(!reference.output[18].newline);
+  assert(reference.output[19].text == "/a5");
+  assert(!reference.output[19].newline);
+  assert(reference.output[20].text == " tail=-1");
+  assert(reference.output[20].newline);
+  assert(reference.output[21].text == "3");
+  assert(!reference.output[21].newline);
+  assert(reference.output[22].text == "165");
+  assert(reference.output[22].newline);
+  assert(reference.output[23].text == "scope=display_test");
+  assert(!reference.output[23].newline);
+  assert(reference.output[24].text == " q=0011");
+  assert(reference.output[24].newline);
+  assert(reference.output[25].text == "post=10xz");
+  assert(reference.output[26].text == "mon=0011 t=0");
+  assert(reference.output[26].time == 0);
+  assert(reference.output[27].text == "mon=0101 t=1");
+  assert(reference.output[27].time == 1);
+  assert(reference.output[28].text == "mon=0111 t=3");
+  assert(reference.output[28].time == 3);
+  assert(reference.output[29].text == "time=0004");
+  assert(reference.output[29].time == 4);
+  assert(reference.output[30].text == "second");
+  assert(!reference.output[30].newline);
+  assert(reference.output[30].time == 4);
+  assert(reference.output[31].text.empty());
+  assert(!reference.output[31].newline);
+  assert(reference.output[31].time == 4);
+  assert(reference.output[32].text.empty());
+  assert(reference.output[32].newline);
+  assert(reference.output[32].time == 4);
   assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
@@ -432,8 +457,21 @@ module display_test;
     $display("compact=%0h", 16'h00a5);
     $strobe("post=%b", q);
     q = 4'b0011;
-    $monitor("monitored");
-    #2 $write("second");
+    $monitor("mon=%b t=%t", q);
+    $display("upper=%X", n);
+    $display("width=%6h", n);
+    $display("left=%-6x!", n);
+    $display("zero=%06D", s);
+    $display("multi=%b/%h tail=", q, n, s);
+    $display(q, n);
+    $display("scope=%m q=%b", q);
+    #1 q = 4'b0101;
+    #1 $monitoroff;
+    q = 4'b0110;
+    #1 $monitoron;
+    q = 4'b0111;
+    #1 $display("time=%04t");
+    $write("second");
     $write;
     $display;
     $finish;
@@ -516,9 +554,12 @@ end architecture;
             "first\t+line\nembedded \"quote\" \\ A\n"
             "42\n-1\nq=%:10xz!\n[10xz]h=x\no=245\n"
             "d=165\ns=-1\nu=x\nc=A\ntext=test\ncompact=a5\n"
-            "post=10xz\n"
-            "monitored\nsecond\n"
-            "simulation stopped at tick 2")
+            "upper=a5\nwidth=    a5\nleft=a5    !\n"
+            "zero=-00001\nmulti=0011/a5 tail=-1\n3165\n"
+            "scope=display_test q=0011\n"
+            "post=10xz\nmon=0011 t=0\nmon=0101 t=1\n"
+            "mon=0111 t=3\ntime=0004\nsecond\n"
+            "simulation stopped at tick 4")
         != std::string::npos);
   }
 

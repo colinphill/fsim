@@ -338,8 +338,9 @@ metadata. Compiled O0/O2 code calls the same hook through an append-only
 plain-C runtime-table tail, so output ordering remains part of the common
 single-thread simulation semantics. `$strobe` publication is scheduled into
 the current timestamp's postponed phase through a second append-only callback.
-Additional conversions/operands and value-sensitive `$monitor` behavior
-remain subsequent slices.
+Multiple conversion/value pairs lower in source order. Additional operands
+use typed default-decimal formatting, while `%m` is folded from the elaborated
+scope and `%t` reads the current global simulation tick.
 Output-task literal spelling is decoded once in the frontend for newline, tab,
 quote, backslash, and one-byte octal escapes; SimIR and generated code retain
 the exact byte string, including embedded NUL bytes.
@@ -355,23 +356,33 @@ publishes through that hook once, then terminates through the common typed
 assertion-failure boundary before any following statement. VHDL doubled
 quotes are decoded in the frontend; a configurable stop threshold remains
 targeted.
-The literal-only `$monitor` base case schedules one initial postponed
-publication. Because it has no value operands, it has no subsequent change
-trigger; monitor-list replacement and value-sensitive re-publication remain
-part of the formatting slice.
+Literal-only `$monitor` retains its one initial postponed publication.
+Value-sensitive `$monitor` installs one runtime-owned global registration.
+The current direct packed-signal slice publishes once after installation,
+coalesces watched committed changes within a time/delta slot, and renders
+their final values in the postponed phase. A later registration replaces the
+earlier one. `$monitoroff` suppresses pending and subsequent publications
+without discarding the registration; `$monitoron` re-enables it and schedules
+one current-value publication. Interpreter and LLVM operations call the same
+registration through append-only plain-C callbacks.
 Known unsigned numeric literals used as the sole output-task argument are
 normalized to their width-truncated decimal value in typed HIR. Unknown-state,
-dynamic, and additional operands remain targeted. Based literals marked
+dynamic and additional operands use runtime formatting. Based literals marked
 signed are interpreted as two's-complement at their declared width before
 decimal formatting.
-The dynamic formatting spine lowers one `$display`/`$write` `%b`, `%h`, `%o`,
-`%d`, `%c`, or `%s`
-conversion to `FormatDisplay`, which retains a typed source register,
+The dynamic formatting spine lowers `$display`/`$write` `%b`, `%h`/`%x`,
+`%o`, `%d`, `%c`, or `%s` conversions to ordered `FormatDisplay` operations,
+which retain typed source registers,
 prefix/suffix text, newline policy, and conversion kind. The interpreter
 formats the full packed value through the common four-state kernel. LLVM code
 passes its evaluated word plus immutable instruction identity through an
 append-only callback and therefore uses the same formatter and embedding
-output hook. `%%` is collapsed in the frontend.
+output hook. Uppercase spellings normalize to the same lowercase-output
+policy, and `%%` is collapsed in the frontend. Decimal minimum widths,
+left justification, and numeric zero padding are typed metadata; negative
+decimal zero padding follows the sign. `%m` emits the elaborated scope without
+consuming a value. `TimeDisplay` captures `%t` from the current global tick
+and shares the field-padding policy in interpreter and compiled execution.
 Hex formatting retains `ceil(width/4)` digits. Uniform X/Z nibbles remain
 `x`/`z`; a nibble mixing known and unknown states conservatively renders `x`.
 Octal applies the same policy to `ceil(width/3)` three-bit groups.

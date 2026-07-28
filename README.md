@@ -83,14 +83,19 @@ The current tree contains:
   postponed `$strobe` routed through CLI/Tcl output with newline/no-newline
   semantics, decoded control/quote/backslash/octal escapes, and
   interpreter/LLVM O0/O2 equivalence;
-- literal-only `$monitor` initial publication in the postponed phase;
+- value-sensitive `$monitor` registration for direct packed signals, with
+  coalesced committed-value publication in the postponed phase and
+  `$monitoron`/`$monitoroff` control;
 - constant unsigned decimal/binary/octal/hex numeric output arguments folded
   to their default decimal text before SimIR lowering;
 - declared-width signed based output literals interpreted as two's-complement
   decimal text;
-- runtime `$display`/`$write` `%b`/`%h`/`%o`/`%d`/`%c`/`%s` formatting for one
-  packed expression, including four-state bits, literal prefix/suffix text,
-  `%%`, and `%0b`/`%0h`/`%0o` leading-zero suppression;
+- runtime `$display`/`$write` `%b`/`%h`/`%x`/`%o`/`%d`/`%c`/`%s` formatting
+  for ordered packed expressions, including uppercase aliases, four-state
+  bits, literal text, `%%`, minimum widths, left/zero padding, and
+  `%0b`/`%0h`/`%0o` leading-zero suppression;
+- default-decimal additional runtime operands plus `%m` elaborated hierarchy
+  and `%t` current-tick substitutions;
 - formatted `$strobe` captures its evaluated value in the active phase and
   publishes the resulting text in the postponed phase;
 - decoded Verilog/SystemVerilog literal escapes in `$fatal` and immediate

@@ -171,6 +171,25 @@ typedef struct fsim_jit_runtime_v1 {
       uint32_t width,
       uint64_t aval,
       uint64_t bval);
+
+  /*
+   * Append-only current-time output callback. instruction identifies
+   * immutable TimeDisplay metadata owned by the embedding process.
+   */
+  void (*write_time)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction);
+
+  /* Append-only monitor registration and on/off callbacks. */
+  void (*install_monitor)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction);
+  void (*control_monitor)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction);
 } fsim_jit_runtime_v1;
 
 /*

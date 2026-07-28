@@ -938,6 +938,35 @@ Windows compile/runtime evidence remains required before this checkpoint is
 fully cross-platform; CI runs are not inspected unless the user explicitly
 requests it.
 
+### Twenty-first feature batch — SystemVerilog procedural output
+
+All ten implementation features are complete:
+
+1. Accept uppercase output-conversion spellings and the conventional `%x`/
+   `%X` hexadecimal aliases without changing lowercase output policy.
+2. Carry a decimal minimum field width through HIR, SimIR, cache identity,
+   interpreter execution, and LLVM execution.
+3. Support `-` left justification for a nonzero field width.
+4. Support leading-zero field padding for numeric conversions, including
+   sign-aware signed-decimal padding.
+5. Support multiple conversions and matching runtime values in one output
+   task while preserving evaluation and stream order.
+6. Support additional unformatted runtime-expression arguments using the
+   language's default decimal rendering.
+7. Expand `%m` to the elaborated hierarchical scope without consuming a
+   value argument.
+8. Expand `%t` from the current global simulation tick at execution or
+   postponed-publication capture time.
+9. Install value-sensitive `$monitor` output and republish it after a watched
+   value changes.
+10. Implement `$monitoron` and `$monitoroff` control over the installed
+    monitor without changing its registration.
+
+Focused frontend, elaboration, runtime, strict C ABI, LLVM O0/O2, application,
+CLI, and diagnostic tests pass. The interval-wide full local regression,
+gate record, checkpoint commit, and remote push are now the remaining batch
+gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

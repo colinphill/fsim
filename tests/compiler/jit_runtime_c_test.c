@@ -69,7 +69,13 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, write_report) == 136,
                "runtime report callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, write_formatted) == 144,
                "runtime formatted-output callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 152,
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_time) == 152,
+               "runtime time-output callback was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, install_monitor) == 160,
+               "runtime monitor-install callback was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, control_monitor) == 168,
+               "runtime monitor-control callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 176,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -100,6 +106,9 @@ typedef struct callback_state {
   uint32_t formatted_width;
   uint64_t formatted_aval;
   uint64_t formatted_bval;
+  uint32_t time_count;
+  uint32_t monitor_install_count;
+  uint32_t monitor_control_count;
 } callback_state;
 
 static uint64_t read_signal(
@@ -266,6 +275,36 @@ static void write_formatted(
   state->formatted_bval = bval;
 }
 
+static void write_time(
+    void* context,
+    uint32_t process,
+    uint32_t instruction) {
+  callback_state* state = (callback_state*)context;
+  ++state->time_count;
+  state->output_process = process;
+  state->report_instruction = instruction;
+}
+
+static void install_monitor(
+    void* context,
+    uint32_t process,
+    uint32_t instruction) {
+  callback_state* state = (callback_state*)context;
+  ++state->monitor_install_count;
+  state->output_process = process;
+  state->report_instruction = instruction;
+}
+
+static void control_monitor(
+    void* context,
+    uint32_t process,
+    uint32_t instruction) {
+  callback_state* state = (callback_state*)context;
+  ++state->monitor_control_count;
+  state->output_process = process;
+  state->report_instruction = instruction;
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -289,7 +328,10 @@ int main(void) {
       write_output,
       schedule_output,
       write_report,
-      write_formatted};
+      write_formatted,
+      write_time,
+      install_monitor,
+      control_monitor};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -330,6 +372,12 @@ int main(void) {
       UINT32_C(8),
       UINT64_C(0xa5),
       UINT64_C(0x81));
+  runtime.write_time(
+      runtime.context, UINT32_C(12), UINT32_C(21));
+  runtime.install_monitor(
+      runtime.context, UINT32_C(12), UINT32_C(22));
+  runtime.control_monitor(
+      runtime.context, UINT32_C(12), UINT32_C(23));
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -370,11 +418,14 @@ int main(void) {
       state.output_count != UINT32_C(2) ||
       state.scheduled_output_count != UINT32_C(1) ||
       state.report_count != UINT32_C(1) ||
-      state.report_instruction != UINT32_C(20) ||
       state.formatted_count != UINT32_C(1) ||
       state.formatted_width != UINT32_C(8) ||
       state.formatted_aval != UINT64_C(0xa5) ||
       state.formatted_bval != UINT64_C(0x81) ||
+      state.time_count != UINT32_C(1) ||
+      state.monitor_install_count != UINT32_C(1) ||
+      state.monitor_control_count != UINT32_C(1) ||
+      state.report_instruction != UINT32_C(23) ||
       state.output_process != UINT32_C(12) ||
       state.output_newline != UINT32_C(1) ||
       state.output_size != UINT64_C(5)) {

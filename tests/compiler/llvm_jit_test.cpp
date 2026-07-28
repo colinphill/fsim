@@ -87,6 +87,9 @@ struct TestRuntime {
   std::vector<std::uint32_t> report_instructions;
   std::vector<std::uint32_t> formatted_instructions;
   std::vector<EncodedSignal> formatted_values;
+  std::vector<std::uint32_t> time_instructions;
+  std::vector<std::uint32_t> monitor_install_instructions;
+  std::vector<std::uint32_t> monitor_control_instructions;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -296,6 +299,30 @@ extern "C" void write_formatted(
   runtime.formatted_values.push_back({aval, bval});
 }
 
+extern "C" void write_time(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t instruction) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.time_instructions.push_back(instruction);
+}
+
+extern "C" void install_monitor(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t instruction) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.monitor_install_instructions.push_back(instruction);
+}
+
+extern "C" void control_monitor(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t instruction) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.monitor_control_instructions.push_back(instruction);
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -319,6 +346,9 @@ extern "C" void write_formatted(
       &schedule_output,
       &write_report,
       &write_formatted,
+      &write_time,
+      &install_monitor,
+      &control_monitor,
   };
 }
 
@@ -3669,10 +3699,22 @@ void test_display_at_level(
           "!",
           true,
           false},
+      TimeDisplay{"time=", "", true, false, 4, false, true},
+      MonitorInstall{
+          {
+              MonitorValue{
+                  MonitorValueKind::signal,
+                  0,
+                  OutputFormat::hexadecimal,
+                  "m="},
+          },
+          "",
+          true},
+      MonitorControl{false},
       Halt{},
   };
-  const std::array<std::uint32_t, 0> no_signals{};
-  jit.add_process(symbol, process, no_signals);
+  const std::array<std::uint32_t, 1> signal_widths{8};
+  jit.add_process(symbol, process, signal_widths);
 
   TestRuntime runtime;
   auto descriptor = abi(runtime);
@@ -3696,6 +3738,15 @@ void test_display_at_level(
       runtime.formatted_instructions
       == std::vector<std::uint32_t>({5}));
   assert(runtime.formatted_values.size() == 1);
+  assert(
+      runtime.time_instructions
+      == std::vector<std::uint32_t>({6}));
+  assert(
+      runtime.monitor_install_instructions
+      == std::vector<std::uint32_t>({7}));
+  assert(
+      runtime.monitor_control_instructions
+      == std::vector<std::uint32_t>({8}));
 
   TestRuntime short_runtime;
   auto short_descriptor = abi(short_runtime);
@@ -3743,6 +3794,44 @@ void test_display_at_level(
             jit.lookup(symbol), short_formatted_descriptor);
       },
       "write_formatted");
+
+  TestRuntime short_time_runtime;
+  auto short_time_descriptor = abi(short_time_runtime);
+  short_time_descriptor.struct_size =
+      static_cast<std::uint32_t>(
+          offsetof(fsim_jit_runtime_v1, write_time));
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            jit.lookup(symbol), short_time_descriptor);
+      },
+      "write_time");
+
+  TestRuntime short_monitor_install_runtime;
+  auto short_monitor_install_descriptor =
+      abi(short_monitor_install_runtime);
+  short_monitor_install_descriptor.struct_size =
+      static_cast<std::uint32_t>(
+          offsetof(fsim_jit_runtime_v1, install_monitor));
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            jit.lookup(symbol), short_monitor_install_descriptor);
+      },
+      "install_monitor");
+
+  TestRuntime short_monitor_control_runtime;
+  auto short_monitor_control_descriptor =
+      abi(short_monitor_control_runtime);
+  short_monitor_control_descriptor.struct_size =
+      static_cast<std::uint32_t>(
+          offsetof(fsim_jit_runtime_v1, control_monitor));
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            jit.lookup(symbol), short_monitor_control_descriptor);
+      },
+      "control_monitor");
 }
 
 } // namespace

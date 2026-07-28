@@ -26,21 +26,28 @@ struct VerilogTypeSpec {
   PortDirection direction{PortDirection::Unknown};
 };
 
+struct ParsedOutputConversion {
+  OutputFormat format{OutputFormat::Decimal};
+  std::string prefix;
+  bool suppress_leading_zero{};
+  std::uint32_t minimum_width{};
+  bool left_justify{};
+  bool zero_pad{};
+};
+
 struct ParsedOutputFormat {
   bool valid{true};
-  std::optional<OutputFormat> format;
-  std::string prefix;
-  std::string suffix;
-  bool suppress_leading_zero{};
+  std::vector<ParsedOutputConversion> conversions;
+  std::string trailing_text;
 };
 
 [[nodiscard]] ParsedOutputFormat
 parse_output_format(const std::string_view text) {
   ParsedOutputFormat result;
-  auto* literal = &result.prefix;
+  std::string literal;
   for (std::size_t index = 0; index < text.size(); ++index) {
     if (text[index] != '%') {
-      literal->push_back(text[index]);
+      literal.push_back(text[index]);
       continue;
     }
     if (++index >= text.size()) {
@@ -48,42 +55,86 @@ parse_output_format(const std::string_view text) {
       return result;
     }
     if (text[index] == '%') {
-      literal->push_back('%');
+      literal.push_back('%');
       continue;
     }
-    if (text[index] == '0') {
-      result.suppress_leading_zero = true;
+    ParsedOutputConversion parsed;
+    parsed.prefix = std::move(literal);
+    literal.clear();
+    const auto conversion_start = index;
+    bool left_justify = false;
+    if (text[index] == '-') {
+      left_justify = true;
       if (++index >= text.size()) {
         result.valid = false;
         return result;
       }
     }
-    if ((text[index] != 'b' && text[index] != 'h'
-         && text[index] != 'o' && text[index] != 'd'
-         && text[index] != 'c' && text[index] != 's')
-        || result.format) {
+    const auto width_start = index;
+    while (index < text.size()
+           && text[index] >= '0' && text[index] <= '9') {
+      ++index;
+    }
+    const auto width_spelling =
+        text.substr(width_start, index - width_start);
+    if (index >= text.size()) {
       result.valid = false;
       return result;
     }
-    if (result.suppress_leading_zero
-        && (text[index] == 'c' || text[index] == 's')) {
+    const auto conversion =
+        detail::ascii_lower(text.substr(index, 1)).front();
+    if (conversion != 'b' && conversion != 'h'
+         && conversion != 'x' && conversion != 'o'
+         && conversion != 'd' && conversion != 'c'
+         && conversion != 's' && conversion != 'm'
+         && conversion != 't') {
       result.valid = false;
       return result;
     }
-    result.format =
-        text[index] == 'b'
+    if (!width_spelling.empty()) {
+      if (width_spelling == "0" && !left_justify) {
+        parsed.suppress_leading_zero = true;
+      } else {
+        const auto width = decimal_u64(width_spelling);
+        if (!width || *width == 0
+            || *width > std::numeric_limits<std::uint32_t>::max()) {
+          result.valid = false;
+          return result;
+        }
+        parsed.minimum_width = static_cast<std::uint32_t>(*width);
+        parsed.left_justify = left_justify;
+        parsed.zero_pad =
+            !left_justify && width_spelling.front() == '0';
+      }
+    } else if (left_justify || conversion_start != width_start) {
+      result.valid = false;
+      return result;
+    }
+    if ((parsed.suppress_leading_zero || parsed.zero_pad)
+        && (conversion == 'c' || conversion == 's'
+            || conversion == 'm')) {
+      result.valid = false;
+      return result;
+    }
+    parsed.format =
+        conversion == 'b'
             ? OutputFormat::Binary
-        : text[index] == 'h'
+        : conversion == 'h' || conversion == 'x'
             ? OutputFormat::Hexadecimal
-        : text[index] == 'o'
+        : conversion == 'o'
             ? OutputFormat::Octal
-        : text[index] == 'd'
+        : conversion == 'd'
             ? OutputFormat::Decimal
-        : text[index] == 'c'
+        : conversion == 'c'
             ? OutputFormat::Character
-            : OutputFormat::String;
-    literal = &result.suffix;
+        : conversion == 's'
+            ? OutputFormat::String
+        : conversion == 'm'
+            ? OutputFormat::Hierarchy
+            : OutputFormat::Time;
+    result.conversions.push_back(std::move(parsed));
   }
+  result.trailing_text = std::move(literal);
   return result;
 }
 
@@ -3830,6 +3881,26 @@ class VerilogParser final : private detail::ParserBase {
       return statement;
     }
 
+    if (keyword("$monitoron") || keyword("$monitoroff")) {
+      const auto start = advance();
+      const bool enabled = start.text == "$monitoron";
+      if (match(TokenKind::LeftParen)) {
+        expect(
+            TokenKind::RightParen,
+            "')' after " + start.text,
+            "FSIM-SV-PARSE-127");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after " + start.text,
+          "FSIM-SV-PARSE-128");
+      Statement statement;
+      statement.kind = StatementKind::MonitorControl;
+      statement.monitor_enabled = enabled;
+      statement.span = span_from(start, previous());
+      return statement;
+    }
+
     if (keyword("$display") || keyword("$write")
         || keyword("$strobe") || keyword("$monitor")) {
       const bool monitor = keyword("$monitor");
@@ -3860,97 +3931,132 @@ class VerilogParser final : private detail::ParserBase {
       statement.kind = StatementKind::Display;
       statement.output_newline = newline;
       statement.output_postponed = postponed;
+      statement.output_monitor = monitor;
       if (match(TokenKind::LeftParen)) {
         if (!at(TokenKind::RightParen)) {
           if (at(TokenKind::StringLiteral)) {
             const auto format_token = advance();
-            const auto parsed_format = parse_output_format(
+            auto parsed_format = parse_output_format(
                 decoded_string_literal_text(format_token));
+            std::vector<Expression> values;
+            while (match(TokenKind::Comma)) {
+              values.push_back(parse_expression());
+            }
+            const auto consumes_value =
+                [](const OutputFormat format) {
+                  return format != OutputFormat::Hierarchy
+                      && format != OutputFormat::Time;
+                };
+            const auto required_values =
+                static_cast<std::size_t>(std::ranges::count_if(
+                    parsed_format.conversions,
+                    [&consumes_value](const auto& conversion) {
+                      return consumes_value(conversion.format);
+                    }));
             if (!parsed_format.valid) {
               error(
                   format_token,
                   "FSIM-SV-SEM-042",
-                  "the current formatted-output slice supports one "
-                  "%b, %h, %o, %d, %c, or %s conversion and %%");
-            } else if (match(TokenKind::Comma)) {
-              if (monitor) {
-                error(
-                    previous(),
-                    semantic_code,
-                    "value-sensitive $monitor is not implemented");
-                statement.value = parse_expression();
-              } else if (!parsed_format.format) {
-                error(
-                    format_token,
-                    semantic_code,
-                    std::string{task_name}
-                        + " has a value argument but no conversion");
-                statement.value = parse_expression();
-              } else {
-                statement.output_format = parsed_format.format;
-                statement.output_prefix = parsed_format.prefix;
-                statement.output_suffix = parsed_format.suffix;
-                statement.output_suppress_leading_zero =
-                    parsed_format.suppress_leading_zero;
-                statement.value = parse_expression();
-              }
-              if (match(TokenKind::Comma)) {
-                error(
-                    previous(),
-                    semantic_code,
-                    std::string{task_name}
-                        + " supports exactly one formatted value");
-                while (!at_end() && !at(TokenKind::RightParen)
-                       && !at(TokenKind::Semicolon)) {
-                  advance();
-                }
-              }
-            } else if (parsed_format.format) {
+                  "the current formatted-output slice supports "
+                  "%b, %h/%x, %o, %d, %c, %s, %m, or %t "
+                  "conversion, field width, left/zero padding, "
+                  "and %%");
+            } else if (values.size() < required_values) {
               error(
                   format_token,
                   semantic_code,
                   std::string{task_name}
-                      + " format conversion requires one value "
-                        "argument");
+                      + " format conversions require matching value "
+                        "arguments");
+            } else if (values.empty()
+                       && parsed_format.conversions.empty()) {
+                statement.output_text =
+                    std::move(parsed_format.trailing_text);
+            } else if (parsed_format.conversions.size() == 1
+                       && values.size() == 1
+                       && consumes_value(
+                           parsed_format.conversions.front().format)) {
+              auto& conversion = parsed_format.conversions.front();
+              statement.output_format = conversion.format;
+              statement.output_prefix = std::move(conversion.prefix);
+              statement.output_suffix =
+                  std::move(parsed_format.trailing_text);
+              statement.output_suppress_leading_zero =
+                  conversion.suppress_leading_zero;
+              statement.output_minimum_width =
+                  conversion.minimum_width;
+              statement.output_left_justify =
+                  conversion.left_justify;
+              statement.output_zero_pad = conversion.zero_pad;
+              statement.value = std::move(values.front());
             } else {
-              statement.output_text = parsed_format.prefix;
-            }
-          } else if (at(TokenKind::Number)) {
-            const auto number = advance();
-            const auto value =
-                constant_output_number(number.text);
-            if (!value) {
-              error(
-                  number,
-                  semantic_code,
-                  "the current " + std::string{task_name}
-                      + " slice requires a known unsigned numeric "
-                        "literal");
-            } else {
-              statement.output_text = *value;
+              statement.output_values.reserve(
+                  parsed_format.conversions.size()
+                  + values.size() - required_values);
+              std::size_t value_index{};
+              for (std::size_t index = 0;
+                   index < parsed_format.conversions.size();
+                   ++index) {
+                auto& conversion = parsed_format.conversions[index];
+                Expression value;
+                if (consumes_value(conversion.format)) {
+                  value = std::move(values[value_index++]);
+                }
+                statement.output_values.push_back(
+                    OutputValue{
+                        std::move(value),
+                        conversion.format,
+                        std::move(conversion.prefix),
+                        conversion.suppress_leading_zero,
+                        conversion.minimum_width,
+                        conversion.left_justify,
+                        conversion.zero_pad});
+              }
+              for (std::size_t index = value_index;
+                   index < values.size(); ++index) {
+                statement.output_values.push_back(
+                    OutputValue{
+                        std::move(values[index]),
+                        OutputFormat::Decimal,
+                        index == value_index
+                            ? std::move(parsed_format.trailing_text)
+                            : std::string{}});
+              }
+              if (value_index == values.size()) {
+                statement.output_trailing_text =
+                    std::move(parsed_format.trailing_text);
+              }
             }
           } else {
-            error(
-                current(),
-                semantic_code,
-                "the current " + std::string{task_name}
-                    + " slice requires a literal string or unsigned "
-                      "numeric argument");
-            while (!at_end() && !at(TokenKind::RightParen)
-                   && !at(TokenKind::Semicolon)) {
-              advance();
-            }
-          }
-          if (!statement.output_format
-              && match(TokenKind::Comma)) {
-            error(
-                previous(),
-                semantic_code,
-                std::string{task_name}
-                    + " format arguments are not implemented");
-            while (!at_end() && !at(TokenKind::RightParen)
-                   && !at(TokenKind::Semicolon)) {
-              advance();
+            std::vector<Expression> values;
+            do {
+              values.push_back(parse_expression());
+            } while (match(TokenKind::Comma));
+            if (values.size() == 1
+                       && (values.front().kind
+                               == ExpressionKind::IntegerLiteral
+                           || values.front().kind
+                               == ExpressionKind::LogicLiteral)) {
+              const auto value =
+                  constant_output_number(values.front().text);
+              if (!value) {
+                error(
+                    start,
+                    semantic_code,
+                    "the current " + std::string{task_name}
+                        + " slice requires a known numeric literal");
+              } else {
+                statement.output_text = *value;
+              }
+            } else {
+              statement.output_values.reserve(values.size());
+              for (auto& value : values) {
+                statement.output_values.push_back(
+                    OutputValue{
+                        std::move(value),
+                        OutputFormat::Decimal,
+                        std::string{}});
+              }
             }
           }
         }

@@ -243,6 +243,7 @@ enum class StatementKind {
   WaitUntil,
   EventTrigger,
   Display,
+  MonitorControl,
   Report,
   Pause,
   Finish,
@@ -270,6 +271,18 @@ enum class OutputFormat {
   Decimal,
   Character,
   String,
+  Hierarchy,
+  Time,
+};
+
+struct OutputValue {
+  Expression value;
+  OutputFormat format{OutputFormat::Decimal};
+  std::string prefix;
+  bool suppress_leading_zero{};
+  std::uint32_t minimum_width{};
+  bool left_justify{};
+  bool zero_pad{};
 };
 
 enum class EdgeKind {
@@ -333,6 +346,16 @@ struct Statement {
   std::string output_prefix;
   std::string output_suffix;
   bool output_suppress_leading_zero{};
+  std::uint32_t output_minimum_width{};
+  bool output_left_justify{};
+  bool output_zero_pad{};
+  bool output_monitor{};
+  bool monitor_enabled{};
+  // Multi-conversion and additional unformatted arguments retain source
+  // order here. The legacy singular fields above remain the compact form for
+  // one conversion and one value.
+  std::vector<OutputValue> output_values;
+  std::string output_trailing_text;
 
   // Block contents or the true branch/delayed statement.
   std::vector<Statement> statements;

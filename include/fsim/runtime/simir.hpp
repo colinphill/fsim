@@ -382,6 +382,51 @@ struct FormatDisplay {
   bool postponed{};
   bool signed_decimal{};
   bool suppress_leading_zero{};
+  std::uint32_t minimum_width{};
+  bool left_justify{};
+  bool zero_pad{};
+};
+
+/// Emit the current global simulation tick between literal prefix/suffix
+/// text. The tick is captured when this operation executes.
+struct TimeDisplay {
+  std::string prefix;
+  std::string suffix;
+  bool newline{true};
+  bool postponed{};
+  std::uint32_t minimum_width{};
+  bool left_justify{};
+  bool zero_pad{};
+};
+
+enum class MonitorValueKind : std::uint8_t {
+  signal,
+  time,
+};
+
+struct MonitorValue {
+  MonitorValueKind kind{MonitorValueKind::signal};
+  SignalId signal{};
+  OutputFormat format{OutputFormat::decimal};
+  std::string prefix;
+  bool signed_decimal{};
+  bool suppress_leading_zero{};
+  std::uint32_t minimum_width{};
+  bool left_justify{};
+  bool zero_pad{};
+};
+
+/// Replace the global Verilog/SystemVerilog monitor registration and publish
+/// its current value once in the postponed phase.
+struct MonitorInstall {
+  std::vector<MonitorValue> values;
+  std::string trailing_text;
+  bool newline{true};
+};
+
+/// Enable or disable the current monitor without discarding its registration.
+struct MonitorControl {
+  bool enabled{};
 };
 
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
@@ -408,8 +453,9 @@ using Operation =
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
-                 Branch, DebugPoint, Assert, Display, FormatDisplay, Report,
-                 Pause, Stop, Halt>;
+                 Branch, DebugPoint, Assert, Display, FormatDisplay,
+                 TimeDisplay, MonitorInstall, MonitorControl, Report, Pause,
+                 Stop, Halt>;
 
 struct Signal {
   std::string name;
@@ -609,7 +655,20 @@ public:
       bool,
       bool,
       bool,
+      bool,
+      std::uint32_t,
+      bool,
       bool) {}
+  virtual void display_time(
+      std::string_view,
+      std::string_view,
+      bool,
+      bool,
+      std::uint32_t,
+      bool,
+      bool) {}
+  virtual void install_monitor(const MonitorInstall&) {}
+  virtual void set_monitor_enabled(bool) {}
   virtual void report(
       std::string_view,
       AssertionSeverity,

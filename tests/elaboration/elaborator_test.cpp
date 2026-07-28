@@ -8458,12 +8458,17 @@ endmodule
         "display.sv",
         R"(
 module display;
+  logic q;
   initial begin
     $display("first");
     $strobe("postponed");
     $write("continued");
     #1 $display;
     $write;
+    $monitor("literal replacement");
+    $monitor("q=%b", q);
+    $monitoroff;
+    $monitoron;
   end
 endmodule
 )",
@@ -8498,6 +8503,56 @@ endmodule
         && displays[3].newline
         && displays[4].text.empty()
         && !displays[4].newline);
+    std::vector<fsim::runtime::simir::MonitorInstall> monitors;
+    for (const auto& operation : display_operations) {
+        if (const auto* monitor =
+                std::get_if<fsim::runtime::simir::MonitorInstall>(
+                    &operation)) {
+            monitors.push_back(*monitor);
+        }
+    }
+    assert(
+        monitors.size() == 2
+        && monitors[0].values.empty()
+        && monitors[0].trailing_text == "literal replacement");
+    const auto& monitor = monitors[1];
+    assert(
+        monitor.values.size() == 1
+        && monitor.values.front().kind
+            == fsim::runtime::simir::MonitorValueKind::signal
+        && monitor.values.front().format
+            == fsim::runtime::simir::OutputFormat::binary
+        && monitor.values.front().prefix == "q=");
+    std::vector<bool> monitor_controls;
+    for (const auto& operation : display_operations) {
+        if (const auto* control =
+                std::get_if<fsim::runtime::simir::MonitorControl>(
+                    &operation)) {
+            monitor_controls.push_back(control->enabled);
+        }
+    }
+    assert(
+        monitor_controls == std::vector<bool>({false, true}));
+
+    const auto invalid_monitor_source =
+        fsim::frontend::parse_text(
+            "invalid_monitor.sv",
+            R"(
+module invalid_monitor;
+  logic q;
+  initial $monitor("%b", q + 1'b1);
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_monitor_source.ok());
+    const auto invalid_monitor_design =
+        fsim::elaboration::elaborate(
+            invalid_monitor_source.design,
+            "sv:work.invalid_monitor");
+    assert(!invalid_monitor_design.ok());
+    assert(
+        has_diagnostic(
+            invalid_monitor_design, "FSIM-ELAB-103"));
 
     std::cout << "elaborator tests passed\n";
 }

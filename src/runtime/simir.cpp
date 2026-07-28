@@ -216,10 +216,51 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     const OutputFormat format,
     const PackedLogic4& value,
     const bool signed_decimal,
-    const bool suppress_leading_zero) {
+    const bool suppress_leading_zero,
+    const std::uint32_t minimum_width,
+    const bool left_justify,
+    const bool zero_pad) {
   auto formatted =
       format_output_value(
           value, format, signed_decimal, suppress_leading_zero);
+  if (formatted.size() < minimum_width) {
+    const auto padding =
+        static_cast<std::size_t>(minimum_width) - formatted.size();
+    if (left_justify) {
+      formatted.append(padding, ' ');
+    } else if (zero_pad && !formatted.empty()
+               && formatted.front() == '-') {
+      formatted.insert(1U, padding, '0');
+    } else {
+      formatted.insert(
+          0U, padding, zero_pad ? '0' : ' ');
+    }
+  }
+  std::string result;
+  result.reserve(prefix.size() + formatted.size() + suffix.size());
+  result.append(prefix);
+  result.append(formatted);
+  result.append(suffix);
+  return result;
+}
+
+[[nodiscard]] std::string make_time_output(
+    const std::string_view prefix,
+    const std::string_view suffix,
+    const SimulationTick tick,
+    const std::uint32_t minimum_width,
+    const bool left_justify,
+    const bool zero_pad) {
+  auto formatted = std::to_string(tick);
+  if (formatted.size() < minimum_width) {
+    const auto padding =
+        static_cast<std::size_t>(minimum_width) - formatted.size();
+    if (left_justify) {
+      formatted.append(padding, ' ');
+    } else {
+      formatted.insert(0U, padding, zero_pad ? '0' : ' ');
+    }
+  }
   std::string result;
   result.reserve(prefix.size() + formatted.size() + suffix.size());
   result.append(prefix);
@@ -1077,6 +1118,12 @@ struct Interpreter::Impl {
   ExecutionPointHook execution_point_hook;
   OutputHook output_hook;
   ReportHook report_hook;
+  std::optional<MonitorInstall> monitor;
+  ProcessId monitor_process{};
+  bool monitor_enabled{true};
+  std::uint64_t monitor_generation{};
+  std::optional<std::pair<SimulationTick, std::uint64_t>>
+      monitor_publication;
   bool update_commit_scheduled{};
   bool started{};
   bool stopped_by_design{};
@@ -1504,6 +1551,108 @@ struct Interpreter::Impl {
     }
   }
 
+  [[nodiscard]] bool monitor_watches(
+      const SignalId signal) const {
+    return monitor
+        && std::ranges::any_of(
+            monitor->values,
+            [signal](const MonitorValue& value) {
+              return value.kind == MonitorValueKind::signal
+                  && value.signal == signal;
+            });
+  }
+
+  [[nodiscard]] std::string render_monitor() const {
+    if (!monitor) {
+      return {};
+    }
+    std::string text;
+    for (const auto& value : monitor->values) {
+      if (value.kind == MonitorValueKind::time) {
+        text += make_time_output(
+            value.prefix,
+            {},
+            scheduler.now(),
+            value.minimum_width,
+            value.left_justify,
+            value.zero_pad);
+      } else {
+        text += make_formatted_output(
+            value.prefix,
+            {},
+            value.format,
+            get_signal(value.signal).initial_value,
+            value.signed_decimal,
+            value.suppress_leading_zero,
+            value.minimum_width,
+            value.left_justify,
+            value.zero_pad);
+      }
+    }
+    text += monitor->trailing_text;
+    return text;
+  }
+
+  void schedule_monitor_publication() {
+    if (!monitor || !monitor_enabled) {
+      return;
+    }
+    const auto publication =
+        std::pair{scheduler.now(), scheduler.delta()};
+    if (monitor_publication == publication) {
+      return;
+    }
+    monitor_publication = publication;
+    const auto generation = monitor_generation;
+    const auto process = monitor_process;
+    scheduler.schedule(
+        SchedulerPhase::postponed,
+        process,
+        [this, generation, process](Scheduler& runtime) {
+          if (generation != monitor_generation
+              || !monitor_enabled || !monitor) {
+            return;
+          }
+          monitor_publication.reset();
+          if (output_hook) {
+            output_hook(
+                process,
+                render_monitor(),
+                monitor->newline,
+                runtime.now(),
+                runtime.delta());
+          }
+        });
+  }
+
+  void install_monitor(
+      const ProcessId process,
+      const MonitorInstall& registration) {
+    if (monitor_generation
+        == std::numeric_limits<std::uint64_t>::max()) {
+      throw std::overflow_error{"monitor generation overflow"};
+    }
+    ++monitor_generation;
+    monitor = registration;
+    monitor_process = process;
+    monitor_enabled = true;
+    monitor_publication.reset();
+    schedule_monitor_publication();
+  }
+
+  void set_monitor_enabled(const bool enabled) {
+    if (monitor_generation
+        == std::numeric_limits<std::uint64_t>::max()) {
+      throw std::overflow_error{"monitor generation overflow"};
+    }
+    ++monitor_generation;
+    monitor_enabled = enabled;
+    monitor_publication.reset();
+    if (enabled) {
+      schedule_monitor_publication();
+    }
+  }
+
   void publish(SignalId signal_id, PackedLogic4 value) {
     auto &signal = get_signal(signal_id);
     if (signal.initial_value.width() != value.width()) {
@@ -1522,6 +1671,9 @@ struct Interpreter::Impl {
     scheduler.note_signal_change(signal_id);
     if (signal_change_hook) {
       signal_change_hook(signal_id, signal.initial_value, scheduler.now());
+    }
+    if (monitor_watches(signal_id)) {
+      schedule_monitor_publication();
     }
 
     for (const auto &sensitivity : static_fanout[signal_id]) {
@@ -1891,7 +2043,10 @@ struct Interpreter::Impl::ExecutionContext final
       const bool newline,
       const bool postponed,
       const bool signed_decimal,
-      const bool suppress_leading_zero) override {
+      const bool suppress_leading_zero,
+      const std::uint32_t minimum_width,
+      const bool left_justify,
+      const bool zero_pad) override {
     auto text =
         make_formatted_output(
             prefix,
@@ -1899,7 +2054,10 @@ struct Interpreter::Impl::ExecutionContext final
             format,
             value,
             signed_decimal,
-            suppress_leading_zero);
+            suppress_leading_zero,
+            minimum_width,
+            left_justify,
+            zero_pad);
     if (postponed) {
       owner.scheduler.schedule(
           SchedulerPhase::postponed,
@@ -1925,6 +2083,57 @@ struct Interpreter::Impl::ExecutionContext final
           owner.scheduler.now(),
           owner.scheduler.delta());
     }
+  }
+
+  void display_time(
+      const std::string_view prefix,
+      const std::string_view suffix,
+      const bool newline,
+      const bool postponed,
+      const std::uint32_t minimum_width,
+      const bool left_justify,
+      const bool zero_pad) override {
+    auto text = make_time_output(
+        prefix,
+        suffix,
+        owner.scheduler.now(),
+        minimum_width,
+        left_justify,
+        zero_pad);
+    if (postponed) {
+      owner.scheduler.schedule(
+          SchedulerPhase::postponed,
+          process,
+          [&owner = owner,
+           process = process,
+           text = std::move(text),
+           newline](Scheduler& scheduler) {
+            if (owner.output_hook) {
+              owner.output_hook(
+                  process,
+                  text,
+                  newline,
+                  scheduler.now(),
+                  scheduler.delta());
+            }
+          });
+    } else if (owner.output_hook) {
+      owner.output_hook(
+          process,
+          text,
+          newline,
+          owner.scheduler.now(),
+          owner.scheduler.delta());
+    }
+  }
+
+  void install_monitor(
+      const MonitorInstall& registration) override {
+    owner.install_monitor(process, registration);
+  }
+
+  void set_monitor_enabled(const bool enabled) override {
+    owner.set_monitor_enabled(enabled);
   }
 
   void report(
@@ -2663,7 +2872,10 @@ void Interpreter::Impl::execute(ProcessId id) {
                   op.format,
                   get_register(process, op.source),
                   op.signed_decimal,
-                  op.suppress_leading_zero);
+                  op.suppress_leading_zero,
+                  op.minimum_width,
+                  op.left_justify,
+                  op.zero_pad);
               if (op.postponed) {
                 scheduler.schedule(
                     SchedulerPhase::postponed,
@@ -2689,6 +2901,49 @@ void Interpreter::Impl::execute(ProcessId id) {
                     scheduler.now(),
                     scheduler.delta());
               }
+              ++process.pc;
+            },
+            [&](const TimeDisplay& op) {
+              auto text = make_time_output(
+                  op.prefix,
+                  op.suffix,
+                  scheduler.now(),
+                  op.minimum_width,
+                  op.left_justify,
+                  op.zero_pad);
+              if (op.postponed) {
+                scheduler.schedule(
+                    SchedulerPhase::postponed,
+                    process.program.id,
+                    [this,
+                     process_id = process.program.id,
+                     text = std::move(text),
+                     newline = op.newline](Scheduler& runtime) {
+                      if (output_hook) {
+                        output_hook(
+                            process_id,
+                            text,
+                            newline,
+                            runtime.now(),
+                            runtime.delta());
+                      }
+                    });
+              } else if (output_hook) {
+                output_hook(
+                    process.program.id,
+                    text,
+                    op.newline,
+                    scheduler.now(),
+                    scheduler.delta());
+              }
+              ++process.pc;
+            },
+            [&](const MonitorInstall& op) {
+              install_monitor(process.program.id, op);
+              ++process.pc;
+            },
+            [&](const MonitorControl& op) {
+              set_monitor_enabled(op.enabled);
               ++process.pc;
             },
             [&](const Report& op) {

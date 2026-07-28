@@ -5509,6 +5509,17 @@ module formatted_display;
     $display("%c", q);
     $display("%s", q);
     $display("%0h", q);
+    $display("%B", q);
+    $display("%X", q);
+    $display("%O", q);
+    $display("%D", q);
+    $display("%C", q);
+    $display("%S", q);
+    $display("%8h", q);
+    $display("%-8x", q);
+    $display("%08d", q);
+    $display("scope=%m q=%B", q);
+    $display("time=%08T");
   end
 endmodule
 )",
@@ -5516,7 +5527,7 @@ endmodule
   require(
       formatted.ok()
           && formatted.design.units.front().processes.front()
-                 .statements.size() == 8
+                 .statements.size() == 19
           && formatted.design.units.front().processes.front()
                  .statements[0].output_format
               == OutputFormat::Binary
@@ -5548,7 +5559,77 @@ endmodule
               == OutputFormat::Hexadecimal
           && formatted.design.units.front().processes.front()
                  .statements[7].output_suppress_leading_zero,
-      "single-value formats, %0 suppression, and %% decoding");
+          "single-value formats, %0 suppression, and %% decoding");
+  const auto& formatted_statements =
+      formatted.design.units.front().processes.front().statements;
+  require(
+      formatted_statements[8].output_format
+              == OutputFormat::Binary
+          && formatted_statements[9].output_format
+              == OutputFormat::Hexadecimal
+          && formatted_statements[10].output_format
+              == OutputFormat::Octal
+          && formatted_statements[11].output_format
+              == OutputFormat::Decimal
+          && formatted_statements[12].output_format
+              == OutputFormat::Character
+          && formatted_statements[13].output_format
+              == OutputFormat::String,
+      "uppercase and %x conversion aliases");
+  require(
+      formatted_statements[14].output_minimum_width == 8
+          && !formatted_statements[14].output_left_justify
+          && !formatted_statements[14].output_zero_pad
+          && formatted_statements[15].output_minimum_width == 8
+          && formatted_statements[15].output_left_justify
+          && !formatted_statements[15].output_zero_pad
+          && formatted_statements[16].output_minimum_width == 8
+          && !formatted_statements[16].output_left_justify
+          && formatted_statements[16].output_zero_pad,
+      "minimum-width, left-justification, and zero-padding metadata");
+  require(
+      formatted_statements[17].output_values.size() == 2
+          && formatted_statements[17].output_values[0].format
+              == OutputFormat::Hierarchy
+          && !formatted_statements[17].output_values[0].value.valid()
+          && formatted_statements[17].output_values[0].prefix
+              == "scope="
+          && formatted_statements[17].output_values[1].format
+              == OutputFormat::Binary
+          && formatted_statements[17].output_values[1].value.text
+              == "q",
+      "%m hierarchy substitution does not consume a runtime value");
+  require(
+      formatted_statements[18].output_values.size() == 1
+          && formatted_statements[18].output_values[0].format
+              == OutputFormat::Time
+          && !formatted_statements[18].output_values[0].value.valid()
+          && formatted_statements[18].output_values[0].minimum_width
+              == 8
+          && formatted_statements[18].output_values[0].zero_pad,
+      "%t current-time substitution and width metadata");
+
+  const auto invalid_format_width = parse_text(
+      "invalid_format_width.sv",
+      R"(
+module invalid_format_width;
+  logic q;
+  initial begin
+    $display("%-h", q);
+    $display("%0s", q);
+    $display("%999999999999999999999h", q);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          invalid_format_width.diagnostics,
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-042";
+          })
+          == 3,
+      "invalid field modifiers need targeted diagnostics");
 
   const auto unsupported = parse_text(
       "unsupported_format.sv",
@@ -5634,19 +5715,53 @@ endmodule
       "multiple_write.sv",
       R"(
 module formatted_write;
+  logic [3:0] a;
+  logic [7:0] b;
+  initial begin
+    $write("a=%b b=%h tail=", a, b, a);
+    $display(a, b);
+    $display("prefix=", a);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& multi_statements =
+      multiple_write.design.units.front().processes.front().statements;
+  require(
+      multiple_write.ok() && multi_statements.size() == 3
+          && multi_statements[0].output_values.size() == 3
+          && multi_statements[0].output_values[0].format
+              == OutputFormat::Binary
+          && multi_statements[0].output_values[0].prefix == "a="
+          && multi_statements[0].output_values[1].format
+              == OutputFormat::Hexadecimal
+          && multi_statements[0].output_values[1].prefix == " b="
+          && multi_statements[0].output_values[2].format
+              == OutputFormat::Decimal
+          && multi_statements[0].output_values[2].prefix == " tail="
+          && multi_statements[1].output_values.size() == 2
+          && multi_statements[1].output_values[0].format
+              == OutputFormat::Decimal
+          && multi_statements[2].output_values.size() == 1
+          && multi_statements[2].output_values[0].prefix == "prefix=",
+      "multiple conversions and default runtime arguments in source order");
+
+  const auto missing_format_value = parse_text(
+      "missing_format_value.sv",
+      R"(
+module missing_format_value;
   logic q;
-  initial $write("%b", q, q);
+  initial $display("%b %h", q);
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      std::any_of(
-          multiple_write.diagnostics.begin(),
-          multiple_write.diagnostics.end(),
+      std::ranges::any_of(
+          missing_format_value.diagnostics,
           [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-SV-SEM-038";
+            return diagnostic.code == "FSIM-SV-SEM-037";
           }),
-      "multiple $write arguments need a targeted diagnostic");
+      "missing formatted values need a task-specific diagnostic");
 
   const auto strobe = parse_text(
       "strobe.sv",
@@ -5726,23 +5841,38 @@ endmodule
           && monitor_statements.front().output_text == "once",
       "literal $monitor initial-publication HIR");
 
-  const auto unsupported_monitor = parse_text(
+  const auto formatted_monitor = parse_text(
       "formatted_monitor.sv",
       R"(
 module formatted_monitor;
   logic q;
-  initial $monitor("%b", q);
+  initial begin
+    $monitor("q=%b t=%t", q);
+    $monitoroff;
+    $monitoron();
+  end
 endmodule
 )",
       Language::SystemVerilog2017);
+  const auto& formatted_monitor_statements =
+      formatted_monitor.design.units.front().processes.front().statements;
   require(
-      std::any_of(
-          unsupported_monitor.diagnostics.begin(),
-          unsupported_monitor.diagnostics.end(),
-          [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-SV-SEM-041";
-          }),
-      "value-sensitive $monitor needs a targeted diagnostic");
+      formatted_monitor.ok()
+          && formatted_monitor_statements.size() == 3
+          && formatted_monitor_statements[0].output_monitor
+          && formatted_monitor_statements[0].output_postponed
+          && formatted_monitor_statements[0].output_values.size() == 2
+          && formatted_monitor_statements[0].output_values[0].format
+              == OutputFormat::Binary
+          && formatted_monitor_statements[0].output_values[1].format
+              == OutputFormat::Time
+          && formatted_monitor_statements[1].kind
+              == StatementKind::MonitorControl
+          && !formatted_monitor_statements[1].monitor_enabled
+          && formatted_monitor_statements[2].kind
+              == StatementKind::MonitorControl
+          && formatted_monitor_statements[2].monitor_enabled,
+      "value-sensitive monitor registration and on/off controls");
 
   const auto numeric = parse_text(
       "numeric_output.sv",

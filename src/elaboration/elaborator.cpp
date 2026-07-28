@@ -2492,6 +2492,7 @@ public:
         const std::string_view hierarchy) {
         process_ = Process{};
         language_ = language;
+        hierarchy_ = std::string{hierarchy};
         next_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
@@ -3044,7 +3045,193 @@ private:
         case StatementKind::EventTrigger:
             lower_event_trigger(statement);
             break;
-        case StatementKind::Display:
+        case StatementKind::MonitorControl:
+            process_.operations.emplace_back(
+                MonitorControl{statement.monitor_enabled});
+            break;
+        case StatementKind::Display: {
+            const auto runtime_output_format =
+                [](const frontend::OutputFormat source) {
+                    switch (source) {
+                    case frontend::OutputFormat::Binary:
+                        return runtime::simir::OutputFormat::binary;
+                    case frontend::OutputFormat::Hexadecimal:
+                        return runtime::simir::OutputFormat::hexadecimal;
+                    case frontend::OutputFormat::Octal:
+                        return runtime::simir::OutputFormat::octal;
+                    case frontend::OutputFormat::Decimal:
+                        return runtime::simir::OutputFormat::decimal;
+                    case frontend::OutputFormat::Character:
+                        return runtime::simir::OutputFormat::character;
+                    case frontend::OutputFormat::String:
+                        return runtime::simir::OutputFormat::string;
+                    case frontend::OutputFormat::Hierarchy:
+                    case frontend::OutputFormat::Time:
+                        break;
+                    }
+                    throw std::logic_error{
+                        "invalid frontend output format"};
+                };
+            if (statement.output_monitor) {
+                if (statement.output_values.empty()
+                    && !statement.output_format) {
+                    process_.operations.emplace_back(
+                        MonitorInstall{
+                            {},
+                            statement.output_text,
+                            statement.output_newline});
+                    break;
+                }
+                MonitorInstall monitor;
+                monitor.newline = statement.output_newline;
+                std::string pending_prefix;
+                const auto append_value =
+                    [&](const frontend::OutputValue& output) {
+                        auto prefix =
+                            std::move(pending_prefix) + output.prefix;
+                        if (output.format
+                            == frontend::OutputFormat::Hierarchy) {
+                            pending_prefix =
+                                std::move(prefix) + hierarchy_;
+                            return;
+                        }
+                        MonitorValue value;
+                        value.prefix = std::move(prefix);
+                        value.minimum_width = output.minimum_width;
+                        value.left_justify = output.left_justify;
+                        value.zero_pad = output.zero_pad;
+                        value.suppress_leading_zero =
+                            output.suppress_leading_zero;
+                        if (output.format
+                            == frontend::OutputFormat::Time) {
+                            value.kind = MonitorValueKind::time;
+                        } else {
+                            if (output.value.kind
+                                != frontend::ExpressionKind::Identifier) {
+                                report(
+                                    "FSIM-ELAB-103",
+                                    "$monitor currently requires direct "
+                                    "packed-signal value expressions",
+                                    output.value.span);
+                                return;
+                            }
+                            const auto signal =
+                                signals_.find(output.value.text);
+                            if (signal == signals_.end()) {
+                                report(
+                                    "FSIM-ELAB-020",
+                                    "unknown monitor signal '"
+                                        + output.value.text + "'",
+                                    output.value.span);
+                                return;
+                            }
+                            value.kind = MonitorValueKind::signal;
+                            value.signal = signal->second;
+                            value.format =
+                                runtime_output_format(output.format);
+                            value.signed_decimal =
+                                value.format
+                                        == runtime::simir::OutputFormat::
+                                            decimal
+                                    && is_signed_expression(output.value);
+                        }
+                        monitor.values.push_back(std::move(value));
+                    };
+                if (!statement.output_values.empty()) {
+                    for (const auto& output :
+                         statement.output_values) {
+                        append_value(output);
+                    }
+                    monitor.trailing_text =
+                        std::move(pending_prefix)
+                        + statement.output_trailing_text;
+                } else {
+                    append_value(
+                        frontend::OutputValue{
+                            statement.value,
+                            *statement.output_format,
+                            statement.output_prefix,
+                            statement.output_suppress_leading_zero,
+                            statement.output_minimum_width,
+                            statement.output_left_justify,
+                            statement.output_zero_pad});
+                    monitor.trailing_text =
+                        std::move(pending_prefix)
+                        + statement.output_suffix;
+                }
+                if (!monitor.values.empty()) {
+                    process_.operations.emplace_back(
+                        std::move(monitor));
+                }
+                break;
+            }
+            if (!statement.output_values.empty()) {
+                for (std::size_t index = 0;
+                     index < statement.output_values.size();
+                     ++index) {
+                    const auto& output = statement.output_values[index];
+                    const bool last =
+                        index + 1 == statement.output_values.size();
+                    if (output.format
+                        == frontend::OutputFormat::Hierarchy) {
+                        process_.operations.emplace_back(
+                            Display{
+                                output.prefix + hierarchy_
+                                    + (last
+                                           ? statement.output_trailing_text
+                                           : std::string{}),
+                                last && statement.output_newline,
+                                statement.output_postponed});
+                        continue;
+                    }
+                    if (output.format == frontend::OutputFormat::Time) {
+                        process_.operations.emplace_back(
+                            TimeDisplay{
+                                output.prefix,
+                                last
+                                    ? statement.output_trailing_text
+                                    : std::string{},
+                                last && statement.output_newline,
+                                statement.output_postponed,
+                                output.minimum_width,
+                                output.left_justify,
+                                output.zero_pad});
+                        continue;
+                    }
+                    const auto width =
+                        infer_width(output.value)
+                            .value_or(std::size_t{32});
+                    const auto source =
+                        lower_expression(output.value, width);
+                    if (!source) {
+                        report(
+                            "FSIM-ELAB-102",
+                            "formatted output value cannot be lowered",
+                            output.value.span);
+                        continue;
+                    }
+                    const auto format =
+                        runtime_output_format(output.format);
+                    process_.operations.emplace_back(
+                        FormatDisplay{
+                            *source,
+                            format,
+                            output.prefix,
+                            last
+                                ? statement.output_trailing_text
+                                : std::string{},
+                            last && statement.output_newline,
+                            statement.output_postponed,
+                            format
+                                    == runtime::simir::OutputFormat::decimal
+                                && is_signed_expression(output.value),
+                            output.suppress_leading_zero,
+                            output.minimum_width,
+                            output.left_justify,
+                            output.zero_pad});
+                }
+                break;
+            }
             if (statement.output_format) {
                 const auto width =
                     infer_width(statement.value)
@@ -3058,28 +3245,8 @@ private:
                         statement.span);
                     break;
                 }
-                auto format = runtime::simir::OutputFormat::binary;
-                switch (*statement.output_format) {
-                case frontend::OutputFormat::Binary:
-                    format = runtime::simir::OutputFormat::binary;
-                    break;
-                case frontend::OutputFormat::Hexadecimal:
-                    format =
-                        runtime::simir::OutputFormat::hexadecimal;
-                    break;
-                case frontend::OutputFormat::Octal:
-                    format = runtime::simir::OutputFormat::octal;
-                    break;
-                case frontend::OutputFormat::Decimal:
-                    format = runtime::simir::OutputFormat::decimal;
-                    break;
-                case frontend::OutputFormat::Character:
-                    format = runtime::simir::OutputFormat::character;
-                    break;
-                case frontend::OutputFormat::String:
-                    format = runtime::simir::OutputFormat::string;
-                    break;
-                }
+                const auto format =
+                    runtime_output_format(*statement.output_format);
                 process_.operations.emplace_back(
                     FormatDisplay{
                         *source,
@@ -3090,7 +3257,10 @@ private:
                         statement.output_postponed,
                         format == runtime::simir::OutputFormat::decimal
                             && is_signed_expression(statement.value),
-                        statement.output_suppress_leading_zero});
+                        statement.output_suppress_leading_zero,
+                        statement.output_minimum_width,
+                        statement.output_left_justify,
+                        statement.output_zero_pad});
             } else {
                 process_.operations.emplace_back(
                     Display{
@@ -3099,6 +3269,7 @@ private:
                         statement.output_postponed});
             }
             break;
+        }
         case StatementKind::Report: {
             AssertionSeverity severity = AssertionSeverity::note;
             switch (statement.assertion_severity) {
@@ -6536,6 +6707,11 @@ private:
                 if (statement.output_format) {
                     collect_identifiers(statement.value, output);
                 }
+                for (const auto& value : statement.output_values) {
+                    collect_identifiers(value.value, output);
+                }
+                break;
+            case StatementKind::MonitorControl:
                 break;
             case StatementKind::EventTrigger:
             case StatementKind::Report:
@@ -6606,6 +6782,7 @@ private:
     };
     std::vector<LoopControlContext> loop_controls_;
     frontend::Language language_{frontend::Language::Vhdl2008};
+    std::string hierarchy_;
 };
 
 namespace {

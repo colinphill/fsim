@@ -66,6 +66,9 @@ using runtime::simir::LoadConstant;
 using runtime::simir::LogicalBinary;
 using runtime::simir::LogicalBinaryOperator;
 using runtime::simir::LogicalNot;
+using runtime::simir::MonitorControl;
+using runtime::simir::MonitorInstall;
+using runtime::simir::MonitorValueKind;
 using runtime::simir::Operation;
 using runtime::simir::Pause;
 using runtime::simir::Process;
@@ -81,6 +84,7 @@ using runtime::simir::SignalEvent;
 using runtime::simir::SignalLastEvent;
 using runtime::simir::SignalLastValue;
 using runtime::simir::Stop;
+using runtime::simir::TimeDisplay;
 using runtime::simir::UnaryNot;
 using runtime::simir::UnknownBranchPolicy;
 using runtime::simir::WaitFor;
@@ -98,7 +102,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v8";
+    "fsim-llvm-native-object-v10";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -126,7 +130,10 @@ static_assert(offsetof(fsim_jit_runtime_v1, write_output) == 120);
 static_assert(offsetof(fsim_jit_runtime_v1, schedule_output) == 128);
 static_assert(offsetof(fsim_jit_runtime_v1, write_report) == 136);
 static_assert(offsetof(fsim_jit_runtime_v1, write_formatted) == 144);
-static_assert(sizeof(fsim_jit_runtime_v1) == 152);
+static_assert(offsetof(fsim_jit_runtime_v1, write_time) == 152);
+static_assert(offsetof(fsim_jit_runtime_v1, install_monitor) == 160);
+static_assert(offsetof(fsim_jit_runtime_v1, control_monitor) == 168);
+static_assert(sizeof(fsim_jit_runtime_v1) == 176);
 static_assert(sizeof(fsim_jit_frame_v1) == 64);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -361,6 +368,9 @@ struct ValidatedProcess {
   bool uses_postponed_output{};
   bool uses_report{};
   bool uses_formatted_output{};
+  bool uses_time_output{};
+  bool uses_monitor_install{};
+  bool uses_monitor_control{};
 };
 
 [[nodiscard]] ValidatedProcess
@@ -821,6 +831,20 @@ validate_process(const Process &process,
             [&](const FormatDisplay& operation) {
               record_use(operation.source, index);
               result.uses_formatted_output = true;
+            },
+            [&](const TimeDisplay&) {
+              result.uses_time_output = true;
+            },
+            [&](const MonitorInstall& operation) {
+              for (const auto& value : operation.values) {
+                if (value.kind == MonitorValueKind::signal) {
+                  (void)signal_width(value.signal, index);
+                }
+              }
+              result.uses_monitor_install = true;
+            },
+            [&](const MonitorControl&) {
+              result.uses_monitor_control = true;
             },
             [&](const Report&) {
               result.uses_report = true;
@@ -1543,6 +1567,90 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                   builder,
                   "suppress-leading-zero",
                   value.suppress_leading_zero ? 1U : 0U);
+              add_key_u64(
+                  builder, "minimum-width", value.minimum_width);
+              add_key_u64(
+                  builder,
+                  "left-justify",
+                  value.left_justify ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "zero-pad",
+                  value.zero_pad ? 1U : 0U);
+            },
+            [&](const TimeDisplay& value) {
+              builder.add("operation", "TimeDisplay");
+              builder.add("prefix", value.prefix);
+              builder.add("suffix", value.suffix);
+              add_key_u64(
+                  builder, "newline", value.newline ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "postponed",
+                  value.postponed ? 1U : 0U);
+              add_key_u64(
+                  builder, "minimum-width", value.minimum_width);
+              add_key_u64(
+                  builder,
+                  "left-justify",
+                  value.left_justify ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "zero-pad",
+                  value.zero_pad ? 1U : 0U);
+            },
+            [&](const MonitorInstall& value) {
+              builder.add("operation", "MonitorInstall");
+              add_key_u64(
+                  builder, "value-count", value.values.size());
+              for (std::size_t index = 0;
+                   index < value.values.size();
+                   ++index) {
+                const auto& item = value.values[index];
+                const auto key =
+                    "value-" + std::to_string(index) + "-";
+                add_key_u64(
+                    builder,
+                    key + "kind",
+                    static_cast<std::underlying_type_t<
+                        runtime::simir::MonitorValueKind>>(item.kind));
+                add_key_u64(
+                    builder, key + "signal", item.signal);
+                add_key_u64(
+                    builder,
+                    key + "format",
+                    static_cast<std::underlying_type_t<
+                        runtime::simir::OutputFormat>>(item.format));
+                builder.add(key + "prefix", item.prefix);
+                add_key_u64(
+                    builder,
+                    key + "signed-decimal",
+                    item.signed_decimal ? 1U : 0U);
+                add_key_u64(
+                    builder,
+                    key + "suppress-leading-zero",
+                    item.suppress_leading_zero ? 1U : 0U);
+                add_key_u64(
+                    builder,
+                    key + "minimum-width",
+                    item.minimum_width);
+                add_key_u64(
+                    builder,
+                    key + "left-justify",
+                    item.left_justify ? 1U : 0U);
+                add_key_u64(
+                    builder,
+                    key + "zero-pad",
+                    item.zero_pad ? 1U : 0U);
+              }
+              builder.add("trailing-text", value.trailing_text);
+              add_key_u64(
+                  builder, "newline", value.newline ? 1U : 0U);
+            },
+            [&](const MonitorControl& value) {
+              builder.add("operation", "MonitorControl");
+              add_key_u64(
+                  builder, "enabled", value.enabled ? 1U : 0U);
             },
             [&](const Report& value) {
               builder.add("operation", "Report");
@@ -2287,7 +2395,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       context,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -2429,6 +2538,30 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 20),
         "write_formatted");
   }
+  llvm::Value* time_output_callback = nullptr;
+  if (validated.uses_time_output) {
+    time_output_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 21),
+        "write_time");
+  }
+  llvm::Value* monitor_install_callback = nullptr;
+  if (validated.uses_monitor_install) {
+    monitor_install_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 22),
+        "install_monitor");
+  }
+  llvm::Value* monitor_control_callback = nullptr;
+  if (validated.uses_monitor_control) {
+    monitor_control_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 23),
+        "control_monitor");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -2473,6 +2606,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
           {pointer, i32, i32, i32, i64, i64},
+          false);
+  auto* time_output_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32},
           false);
 
   auto *register_aval = builder.CreateLoad(
@@ -3390,6 +3528,39 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   });
               branch_to_next();
             },
+            [&](const TimeDisplay&) {
+              builder.CreateCall(
+                  time_output_type,
+                  time_output_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      llvm::ConstantInt::get(i32, instruction),
+                  });
+              branch_to_next();
+            },
+            [&](const MonitorInstall&) {
+              builder.CreateCall(
+                  time_output_type,
+                  monitor_install_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      llvm::ConstantInt::get(i32, instruction),
+                  });
+              branch_to_next();
+            },
+            [&](const MonitorControl&) {
+              builder.CreateCall(
+                  time_output_type,
+                  monitor_control_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      llvm::ConstantInt::get(i32, instruction),
+                  });
+              branch_to_next();
+            },
             [&](const Report& operation) {
               builder.CreateCall(
                   report_type,
@@ -3545,6 +3716,9 @@ struct LlvmJit::Impl {
     bool uses_postponed_output{};
     bool uses_report{};
     bool uses_formatted_output{};
+    bool uses_time_output{};
+    bool uses_monitor_install{};
+    bool uses_monitor_control{};
   };
 
   struct NativeEntry {
@@ -3691,6 +3865,9 @@ void LlvmJit::add_process_module(
         validated.uses_postponed_output,
         validated.uses_report,
         validated.uses_formatted_output,
+        validated.uses_time_output,
+        validated.uses_monitor_install,
+        validated.uses_monitor_control,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -4014,13 +4191,46 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_formatted_output) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, write_time)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include write_formatted");
     }
     if (runtime.write_formatted == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires write_formatted for this process");
+    }
+  }
+  if (entry.info.uses_time_output) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, install_monitor)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include write_time");
+    }
+    if (runtime.write_time == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_time for this process");
+    }
+  }
+  if (entry.info.uses_monitor_install) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, control_monitor)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include install_monitor");
+    }
+    if (runtime.install_monitor == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires install_monitor for this process");
+    }
+  }
+  if (entry.info.uses_monitor_control) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include control_monitor");
+    }
+    if (runtime.control_monitor == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires control_monitor for this process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {
