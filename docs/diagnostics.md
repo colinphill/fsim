@@ -299,17 +299,18 @@ therefore excluded.
 | `FSIM-SV-PARSE-063` | error | A generate branch lacks `end` or has a mismatched end label. |
 | `FSIM-SV-PARSE-064` | error | Expected `endgenerate`. |
 | `FSIM-SV-PARSE-065` | error | Expected `(` after a generate `for`. |
-| `FSIM-SV-PARSE-066` | error | An executable generate loop does not declare its variable with inline `genvar`. |
+| `FSIM-SV-PARSE-066` | error | An executable generate-loop variable has neither an inline nor module-scope `genvar` declaration. |
 | `FSIM-SV-PARSE-067` | error | Expected `=` after a generate-loop variable. |
 | `FSIM-SV-PARSE-068` | error | Expected `;` after a generate-loop initializer. |
 | `FSIM-SV-PARSE-069` | error | Expected `;` after a generate-loop condition. |
 | `FSIM-SV-PARSE-070` | error | A generate-loop iteration assigns a name other than its loop variable. |
-| `FSIM-SV-PARSE-071` | error | Expected `=` in a generate-loop iteration. |
+| `FSIM-SV-PARSE-071` | error | A generate-loop iteration is not an assignment, prefix/postfix increment/decrement, `+=`, or `-=` update. |
 | `FSIM-SV-PARSE-072` | error | Expected `)` after a generate-loop header. |
 | `FSIM-SV-PARSE-073` | error | Expected `(` after a generate `case`. |
 | `FSIM-SV-PARSE-074` | error | Expected `)` after a generate-case selector. |
 | `FSIM-SV-PARSE-075` | error | Expected `:` after generate-case choices. |
 | `FSIM-SV-PARSE-076` | error | Expected `endcase` for a generate case. |
+| `FSIM-SV-PARSE-077` | error | Expected `;` after a module-scope `genvar` declaration. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -343,6 +344,7 @@ therefore excluded.
 | `FSIM-SV-SEM-019` | error | Named and positional parameter overrides are mixed on one instance. |
 | `FSIM-SV-SEM-020` | error | A parameter conflicts with a port or signal declaration in the same module or generate namespace. |
 | `FSIM-SV-SEM-021` | error | A generate case contains more than one `default` item. |
+| `FSIM-SV-SEM-022` | error | A module-scope `genvar` declaration is duplicated or conflicts with another object. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

@@ -59,6 +59,10 @@ VHDL selection choices retain an optional directed upper bound. Elaboration
 normalizes every non-null inclusive range to a signed 64-bit interval, detects
 interval/scalar overlap without enumerating its values, and treats a
 directionally null range as selecting no value.
+SystemVerilog generate-loop initialization may declare an inline `genvar` or
+refer to a module-scope declaration. The frontend normalizes `i = EXPR`,
+prefix/postfix `++`/`--`, and `+=`/`-=` into the same explicit next-value
+expression consumed by bounded constant elaboration and stall detection.
 
 Selected generated bodies may own packed local signals, concurrent
 assignments, processes, instances, and nested regions. Specialization flattens

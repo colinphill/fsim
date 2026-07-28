@@ -2202,8 +2202,9 @@ module generated_loop #(parameter COUNT = 3) (
   input logic value,
   output logic result
 );
+  genvar i;
   generate
-    for (genvar i = 0; i < COUNT; i = i + 1) begin : lane
+    for (i = 0; i < COUNT; i++) begin : lane
       logic [3:0] generated_value;
       assign generated_value = i;
       initial generated_value = i + 1;
@@ -2241,10 +2242,34 @@ module implicit_generated #(parameter ENABLED = 1);
 endmodule
 
 module implicit_loop_generated #(parameter COUNT = 2);
-  for (genvar i = 0; i < COUNT; i = i + 1) begin : lane
+  for (genvar i = 0; i < COUNT; i += 1) begin : lane
     logic [3:0] generated_value;
     initial generated_value = i;
   end
+endmodule
+
+module descending_loop_generated;
+  generate
+    for (genvar j = 2; j >= 0; --j) begin : lane
+      logic [3:0] generated_value;
+      initial generated_value = j;
+    end
+  endgenerate
+endmodule
+
+module compound_subtract_loop_generated;
+  for (genvar m = 2; m >= 0; m -= 1) begin : lane
+    logic generated_value;
+  end
+endmodule
+
+module late_genvar_generated;
+  generate
+    for (k = 0; k < 1; ++k) begin : lane
+      logic generated_value;
+    end
+  endgenerate
+  genvar k;
 endmodule
 
 module implicit_case_generated #(parameter MODE = 1);
@@ -2332,6 +2357,35 @@ endmodule
                 return signal.name == "i";
               }),
       "SystemVerilog canonical genvar-for region");
+  const auto* sv_descending_loop_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule,
+          "descending_loop_generated");
+  const auto* sv_late_genvar_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule,
+          "late_genvar_generated");
+  const auto* sv_compound_subtract_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule,
+          "compound_subtract_loop_generated");
+  require(
+      sv_descending_loop_unit != nullptr
+          && sv_descending_loop_unit->generate_regions.size() == 1
+          && sv_descending_loop_unit->generate_regions.front()
+                 .iteration.text
+              == "-"
+          && sv_late_genvar_unit != nullptr
+          && sv_late_genvar_unit->generate_regions.size() == 1
+          && sv_late_genvar_unit->generate_regions.front()
+                 .iteration.text
+              == "+"
+          && sv_compound_subtract_unit != nullptr
+          && sv_compound_subtract_unit->generate_regions.size() == 1
+          && sv_compound_subtract_unit->generate_regions.front()
+                 .iteration.text
+              == "-",
+      "SystemVerilog prefix updates and late module genvar");
   const auto* sv_case_unit =
       systemverilog.design.find(
           UnitKind::VerilogModule, "generated_case");
@@ -2692,6 +2746,24 @@ endmodule
                 return diagnostic.code == "FSIM-SV-PARSE-066";
               }),
       "non-inline-genvar loop generate is targeted");
+
+  const auto duplicate_systemverilog_genvar = parse_text(
+      "duplicate_genvar.sv",
+      R"(
+module duplicate_genvar;
+  genvar i, i;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !duplicate_systemverilog_genvar.ok()
+          && std::any_of(
+              duplicate_systemverilog_genvar.diagnostics.begin(),
+              duplicate_systemverilog_genvar.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-022";
+              }),
+      "duplicate module-scope genvar is targeted");
 
   const auto generated_port_direction = parse_text(
       "generated_port_direction.sv",

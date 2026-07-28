@@ -599,6 +599,8 @@ class VerilogParser final : private detail::ParserBase {
 
   void resolve_implicit_nets(DesignUnit& unit) {
     std::unordered_set<std::string> known;
+    known.insert(
+        declared_genvars_.begin(), declared_genvars_.end());
     for (const auto& parameter : unit.parameters) {
       known.insert(parameter.name);
     }
@@ -647,6 +649,8 @@ class VerilogParser final : private detail::ParserBase {
     implicit_net_references_.clear();
     current_procedural_names_.clear();
     current_generate_names_.clear();
+    declared_genvars_.clear();
+    external_genvar_uses_.clear();
     module_time_unit_magnitude_ = current_time_unit_magnitude_;
     module_time_unit_ = current_time_unit_;
     module_time_precision_ = current_time_precision_;
@@ -681,6 +685,8 @@ class VerilogParser final : private detail::ParserBase {
         parse_parameter_group(unit, false, false, previous());
       } else if (match_keyword("localparam")) {
         parse_parameter_group(unit, true, false, previous());
+      } else if (match_keyword("genvar")) {
+        parse_genvar_declaration(unit);
       } else if (is_declaration_start()) {
         parse_declaration(unit);
       } else if (match_keyword("assign")) {
@@ -730,9 +736,60 @@ class VerilogParser final : private detail::ParserBase {
     if (match(TokenKind::Colon)) {
       expect_identifier("module name after endmodule");
     }
+    for (const auto& use : external_genvar_uses_) {
+      if (!declared_genvars_.contains(use.text)) {
+        error(
+            use,
+            "FSIM-SV-PARSE-066",
+            "generate loop variable '" + use.text
+                + "' is not declared by inline or module-scope genvar");
+      }
+    }
     resolve_implicit_nets(unit);
     unit.span = span_from(start, previous());
     return unit;
+  }
+
+  void parse_genvar_declaration(DesignUnit& unit) {
+    for (;;) {
+      const auto name = expect_identifier("genvar name");
+      const bool object_conflict =
+          std::any_of(
+              unit.parameters.begin(),
+              unit.parameters.end(),
+              [&](const ParameterDeclaration& parameter) {
+                return parameter.name == name.text;
+              })
+          || std::any_of(
+              unit.ports.begin(),
+              unit.ports.end(),
+              [&](const SignalDeclaration& port) {
+                return port.name == name.text;
+              })
+          || std::any_of(
+              unit.signals.begin(),
+              unit.signals.end(),
+              [&](const SignalDeclaration& signal) {
+                return signal.name == name.text;
+              });
+      if (object_conflict
+          || !declared_genvars_.insert(name.text).second) {
+        error(
+            name,
+            "FSIM-SV-SEM-022",
+            "duplicate or conflicting genvar declaration '"
+                + name.text + "'");
+      } else {
+        ++current_generate_names_[name.text];
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after genvar declaration",
+        "FSIM-SV-PARSE-077");
   }
 
   void parse_generate_region(
@@ -896,9 +953,12 @@ class VerilogParser final : private detail::ParserBase {
         TokenKind::LeftParen,
         "'(' after generate for",
         "FSIM-SV-PARSE-065");
-    expect_keyword("genvar", false, "FSIM-SV-PARSE-066");
+    const bool inline_genvar = match_keyword("genvar");
     const auto variable = expect_identifier("generate loop variable");
     result.variable = variable.text;
+    if (!inline_genvar) {
+      external_genvar_uses_.push_back(variable);
+    }
     ++current_generate_names_[result.variable];
     expect(
         TokenKind::Assign,
@@ -914,6 +974,11 @@ class VerilogParser final : private detail::ParserBase {
         TokenKind::Semicolon,
         "';' after generate loop condition",
         "FSIM-SV-PARSE-069");
+    std::optional<Token> prefix_update;
+    if (match(TokenKind::PlusPlus)
+        || match(TokenKind::MinusMinus)) {
+      prefix_update = previous();
+    }
     const auto iteration_variable =
         expect_identifier("generate iteration variable");
     if (iteration_variable.text != result.variable) {
@@ -923,11 +988,71 @@ class VerilogParser final : private detail::ParserBase {
           "generate iteration must assign loop variable '"
               + result.variable + "'");
     }
-    expect(
-        TokenKind::Assign,
-        "'=' in generate loop iteration",
-        "FSIM-SV-PARSE-071");
-    result.iteration = parse_expression();
+    const auto stepped_iteration =
+        [&](const std::string_view operation,
+            Expression amount,
+            const SourceSpan& span) {
+          return Expression{
+              ExpressionKind::Binary,
+              std::string{operation},
+              {
+                  Expression{
+                      ExpressionKind::Identifier,
+                      result.variable,
+                      {},
+                      iteration_variable.span},
+                  std::move(amount)},
+              span};
+        };
+    const auto one = [&]() {
+      return Expression{
+          ExpressionKind::IntegerLiteral,
+          "1",
+          {},
+          iteration_variable.span};
+    };
+    if (prefix_update) {
+      result.iteration = stepped_iteration(
+          prefix_update->kind == TokenKind::PlusPlus
+              ? "+" : "-",
+          one(),
+          cover(
+              prefix_update->span,
+              iteration_variable.span));
+    } else if (match(TokenKind::Assign)) {
+      result.iteration = parse_expression();
+    } else if (
+        match(TokenKind::PlusPlus)
+        || match(TokenKind::MinusMinus)) {
+      const auto update = previous();
+      result.iteration = stepped_iteration(
+          update.kind == TokenKind::PlusPlus ? "+" : "-",
+          one(),
+          cover(iteration_variable.span, update.span));
+    } else if (
+        match(TokenKind::PlusAssign)
+        || match(TokenKind::MinusAssign)) {
+      const auto update = previous();
+      auto amount = parse_expression();
+      result.iteration = stepped_iteration(
+          update.kind == TokenKind::PlusAssign ? "+" : "-",
+          std::move(amount),
+          cover(iteration_variable.span, previous().span));
+    } else {
+      error(
+          current(),
+          "FSIM-SV-PARSE-071",
+          "generate loop iteration must use assignment, increment, "
+          "decrement, +=, or -=");
+      result.iteration = Expression{
+          ExpressionKind::Invalid,
+          current().text,
+          {},
+          current().span};
+      while (!at_end() && !at(TokenKind::RightParen)) {
+        advance();
+      }
+    }
     expect(
         TokenKind::RightParen,
         "')' after generate loop header",
@@ -1285,6 +1410,14 @@ class VerilogParser final : private detail::ParserBase {
       DesignUnit& unit,
       ParameterDeclaration parameter,
       const Token& name) {
+    if (declared_genvars_.contains(parameter.name)) {
+      error(
+          name,
+          "FSIM-SV-SEM-022",
+          "parameter '" + parameter.name
+              + "' conflicts with a genvar declaration");
+      return;
+    }
     const auto object_conflict =
         std::any_of(
             unit.ports.begin(),
@@ -1751,6 +1884,17 @@ class VerilogParser final : private detail::ParserBase {
           [&](const ParameterDeclaration& parameter) {
             return parameter.name == declaration.name;
           });
+      if (declared_genvars_.contains(declaration.name)) {
+        error(
+            name,
+            "FSIM-SV-SEM-022",
+            "object '" + declaration.name
+                + "' conflicts with a genvar declaration");
+        if (!match(TokenKind::Comma)) {
+          break;
+        }
+        continue;
+      }
       if (parameter_conflict) {
         error(
             name,
@@ -2624,6 +2768,8 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> current_procedural_names_;
   std::unordered_map<std::string, std::size_t>
       current_generate_names_;
+  std::unordered_set<std::string> declared_genvars_;
+  std::vector<Token> external_genvar_uses_;
   std::vector<ImplicitNetReference> implicit_net_references_;
   std::string current_default_nettype_{"wire"};
   bool current_cell_define_{};

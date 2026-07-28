@@ -139,9 +139,11 @@ checks parameter-dependent ports.
 VHDL `if`/`else generate` and SystemVerilog `generate if` instance branches
 are evaluated per specialization; selected block labels form stable hierarchy
 components, including for explicit bindings to or from SystemC factories.
-VHDL integer-range `for generate` and canonical inline-`genvar` SystemVerilog
-loops use deterministic `label[index]` components and substitute the loop
-constant into child construction actuals before specialization.
+VHDL integer-range `for generate` and SystemVerilog loops using inline or
+module-scope `genvar` declarations use deterministic `label[index]`
+components and substitute the loop constant into child construction actuals
+before specialization. Canonical assignment, prefix/postfix increment or
+decrement, and compound-add/subtract updates normalize to the same HIR.
 VHDL `case generate` supports scalar and inclusive locally static `to`/
 `downto` range choices, while SystemVerilog generate-case supports scalar
 constant choices. Both select default alternatives per specialization and

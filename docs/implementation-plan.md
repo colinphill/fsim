@@ -90,6 +90,9 @@ The following foundation is implemented:
   realized iterations, and selected alternatives;
 - interval-based VHDL case-generate `to`/`downto` choices with null-range and
   scalar/range-overlap handling;
+- inline or module-scope SystemVerilog `genvar` loops with declaration-order
+  validation and normalized assignment, prefix/postfix increment/decrement,
+  and compound add/subtract updates;
 - always-selected unguarded VHDL block statements, module-level implicit
   SystemVerilog conditional/iterative/selection generates, and direct or named
   static contents in explicit SystemVerilog generate regions, sharing
@@ -222,7 +225,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 463 unique current production diagnostic codes.
+- a stable catalog covering 465 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -237,7 +240,7 @@ Current Linux validation:
 | Boost.Context 1.91.0 fibers | Checksum-verified fetch/configure/build; GCC Debug full suite 13/13, ASan/UBSan focused application, and LLVM 22 compiled-SV/SystemC application tests pass |
 | Verilog/SV preprocessing/directives | GCC Debug and exact LLVM 22 atomic frontend/elaboration plus source-set/combined interpreter/compiled differentials pass, including shared default-net/cell/reset state and omitted-input pulls |
 | Conditional instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL and SV selection, stable generated mixed-binding paths, interpreter/JIT equivalence, and cold/warm native cache |
-| Iterative instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL ascending/descending ranges and canonical SV inline-`genvar` loops, nested expansion, mixed indexed bindings, interpreter/JIT equivalence, and cold/warm native cache |
+| Iterative instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL ascending/descending ranges and inline/module-scope SV `genvar` loops with assignment/prefix/postfix/compound updates, nested expansion, mixed indexed bindings, interpreter/JIT equivalence, and cold/warm native cache |
 | Selection instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for labeled VHDL scalar/directed-range and SV multi-choice/default alternatives, mixed selected paths, interval-overlap diagnostics, interpreter/JIT equivalence, and cold/warm native cache |
 | Executable generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for selected and per-iteration local signals, concurrent/process behavior, scoped debug/VCD names, interpreter/JIT equivalence, and specialization-level native cache |
 | Static/implicit generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for unguarded VHDL blocks, all three bounded implicit SV generate forms, direct explicit-generate contents, and named static SV blocks with exact conditional/static interpreter/JIT/VCD/cache behavior |
@@ -370,8 +373,8 @@ Remaining before the architecture gate passes:
   instances are implemented. Unguarded VHDL blocks, all three bounded implicit
   SV generate forms, direct/named static SV generate contents, and bounded
   generated constants/parameters also execute;
-  guarded VHDL blocks, broader SV loop syntax, nonintegral VHDL choices, and
-  additional generated declarative/module items remain.
+  guarded VHDL blocks, noncanonical SV loop-update expressions, nonintegral
+  VHDL choices, and additional generated declarative/module items remain.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
 
@@ -384,8 +387,9 @@ Early groundwork:
   statements;
 - SV modules, common declarations, simple hierarchy, basic procedural and
   continuous statements, bounded integral parameter specialization,
-  executable explicit/implicit conditional, canonical-genvar, selection, and
-  direct/named static generate bodies, and bounded `` `timescale`` handling;
+  executable explicit/implicit conditional, inline/module-genvar iterative,
+  selection, and direct/named static generate bodies, and bounded
+  `` `timescale`` handling;
 - domain, width, signedness, duplicate-declaration, driver, and binding checks;
   and
 - a checked-in feature matrix with positive, negative, elaboration, and
@@ -400,7 +404,7 @@ Planned implementation sequence:
    packages.
 3. Complete the remaining Verilog/SV `` `line``/pragma semantics, parameters,
    packages, interfaces/modports, general-body generates, broader legal
-   genvar/case-choice forms, and complete synthesizable types.
+   noncanonical genvar/case-choice forms, and complete synthesizable types.
    Includes, macros with default arguments, conditionals, compilation-unit
    sharing, cache provenance, `` `default_nettype``, and
    reset/cell/keyword/unconnected-drive state are implemented.

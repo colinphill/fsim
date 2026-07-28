@@ -791,8 +791,9 @@ endmodule
 module generated_sv_loop #(
   parameter COUNT = 3
 );
+  genvar i;
   generate
-    for (genvar i = 0; i < COUNT; i = i + 1) begin : lanes
+    for (i = 0; i < COUNT; i++) begin : lanes
       generated_vhdl_loop_bound #(.VALUE(i + 5)) child();
     end
   endgenerate
@@ -858,8 +859,9 @@ module generated_sv_behavior #(
 endmodule
 
 module generated_sv_loop_behavior #(parameter COUNT = 3);
+  genvar i;
   generate
-    for (genvar i = 0; i < COUNT; i = i + 1) begin : lane
+    for (i = COUNT - 1; i >= 0; i--) begin : lane
       localparam int LOCAL_VALUE = i + 1;
       logic [3:0] generated_value;
       initial generated_value = LOCAL_VALUE;

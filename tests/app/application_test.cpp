@@ -834,8 +834,9 @@ end architecture;
 module generated_loop_top #(
   parameter COUNT = 3
 );
+  genvar i;
   generate
-    for (genvar i = 0; i < COUNT; i = i + 1) begin : lanes
+    for (i = 0; i < COUNT; i++) begin : lanes
       generated_loop_bound #(.VALUE(i + 5)) child();
     end
   endgenerate

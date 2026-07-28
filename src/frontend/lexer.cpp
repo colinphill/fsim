@@ -425,10 +425,22 @@ class Lexer {
         }
         return;
       case '+':
-        emit(TokenKind::Plus, begin);
+        if (!is_vhdl() && consume_if('+')) {
+          emit(TokenKind::PlusPlus, begin);
+        } else if (!is_vhdl() && consume_if('=')) {
+          emit(TokenKind::PlusAssign, begin);
+        } else {
+          emit(TokenKind::Plus, begin);
+        }
         return;
       case '-':
-        emit(TokenKind::Minus, begin);
+        if (!is_vhdl() && consume_if('-')) {
+          emit(TokenKind::MinusMinus, begin);
+        } else if (!is_vhdl() && consume_if('=')) {
+          emit(TokenKind::MinusAssign, begin);
+        } else {
+          emit(TokenKind::Minus, begin);
+        }
         return;
       case '*':
         emit(TokenKind::Star, begin);
@@ -541,8 +553,16 @@ const char* to_string(TokenKind kind) noexcept {
       return "'||'";
     case TokenKind::Plus:
       return "'+'";
+    case TokenKind::PlusPlus:
+      return "'++'";
+    case TokenKind::PlusAssign:
+      return "'+='";
     case TokenKind::Minus:
       return "'-'";
+    case TokenKind::MinusMinus:
+      return "'--'";
+    case TokenKind::MinusAssign:
+      return "'-='";
     case TokenKind::Star:
       return "'*'";
     case TokenKind::Slash:
