@@ -963,9 +963,14 @@ All ten implementation features are complete:
     monitor without changing its registration.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM O0/O2, application,
-CLI, and diagnostic tests pass. The interval-wide full local regression,
-gate record, checkpoint commit, and remote push are now the remaining batch
-gate.
+CLI, and diagnostic tests pass. After a completion-audit correction ensured
+that literal/empty monitor calls replace an existing watched registration,
+the exact LLVM 22.1.8 warnings-as-errors regression passed all 23 tests in
+166.34 seconds on 2026-07-28. This includes the frontend, diagnostics catalog,
+cache, elaboration, SystemC header/ABI/plugin/compiler, strict JIT C ABI,
+LLVM, interpreter/O0/O2 application differentials, Tcl 9 relocation, native
+API, and runtime suites. The batch ends at feature commit `5fa32f3`; this gate
+record is pushed with the batch and the earlier Tcl 9 migration checkpoint.
 
 ## v1 release condition
 
