@@ -998,9 +998,13 @@ All ten implementation features are complete:
     the process random stream.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM O0/O2,
-application, CLI, native API, and diagnostic-catalog tests pass. The
-scheduled full local regression and gate record follow in a separate
-checkpoint commit.
+application, CLI, native API, and diagnostic-catalog tests pass. The exact
+LLVM 22.1.8 warnings-as-errors regression then passed all 24 tests in 165.52
+seconds on 2026-07-28. This includes the frontend, project and diagnostics
+catalogs, cache, elaboration, SystemC header/ABI/plugin/compiler, strict JIT C
+ABI, LLVM, interpreter/O0/O2 application differentials, Tcl 9 selection and
+relocation, native API/C header, and runtime suites. The batch ends at feature
+commit `4d078a5`; no GitHub Actions state was queried for this local gate.
 
 ## v1 release condition
 
