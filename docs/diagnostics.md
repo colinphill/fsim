@@ -153,6 +153,10 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-087` | error | Expected `:` after package constant names. |
 | `FSIM-VHDL-PARSE-088` | error | A package constant lacks its required `:=` default expression. |
 | `FSIM-VHDL-PARSE-089` | error | Expected `;` after a package constant declaration. |
+| `FSIM-VHDL-PARSE-090` | error | Expected `is` after a VHDL context declaration name. |
+| `FSIM-VHDL-PARSE-091` | error | Expected `end` for a VHDL context declaration. |
+| `FSIM-VHDL-PARSE-092` | error | A context declaration end name does not match its opening name. |
+| `FSIM-VHDL-PARSE-093` | error | Expected `;` after a VHDL context declaration. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -183,7 +187,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-013` | error | A subtype requires semantic type resolution not implemented in this slice. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | A non-generic integer-family object is parsed but not executable. |
-| `FSIM-VHDL-UNSUPPORTED-015` | error | VHDL context declarations are not implemented in this frontend slice. |
+| `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
 | `FSIM-VHDL-UNSUPPORTED-016` | error | A wait form requires unsupported bare, `until`, or combined-clause semantics. |
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
@@ -192,6 +196,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-021` | error | Guarded VHDL block statements are not executable yet. |
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package body or package declaration outside the bounded constant-only subset is not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
+| `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -442,6 +447,9 @@ therefore excluded.
 | `FSIM-ELAB-PKG-005` | error | A package constant default cannot be evaluated in declaration order. |
 | `FSIM-ELAB-PKG-006` | error | A package constant value violates its bounded scalar subtype. |
 | `FSIM-ELAB-PKG-007` | error | Project-package use visibility contains a dependency cycle. |
+| `FSIM-ELAB-CTX-001` | error | A bounded context reference is not `library.context`. |
+| `FSIM-ELAB-CTX-002` | error | A project context referenced by a library unit or another context was not found. |
+| `FSIM-ELAB-CTX-003` | error | Reusable VHDL context visibility contains a dependency cycle. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

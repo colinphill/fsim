@@ -4187,6 +4187,128 @@ private:
         return result;
     }
 
+    void expand_vhdl_context_references(
+        DesignUnit& unit,
+        const std::span<const frontend::VhdlContextItem> context,
+        std::vector<frontend::VhdlContextItem>& expanded,
+        std::vector<const DesignUnit*>& context_stack,
+        const std::string_view visibility_library) {
+        for (const auto& item : context) {
+            if (item.kind
+                != frontend::VhdlContextItemKind::
+                    ContextReference) {
+                auto visible_item = item;
+                if (visible_item.kind
+                    == frontend::VhdlContextItemKind::UseClause) {
+                    for (auto& selected_name :
+                         visible_item.selected_names) {
+                        const auto parts =
+                            selected_name_parts(selected_name);
+                        if (!parts.empty()
+                            && parts.front() == "work") {
+                            selected_name =
+                                std::string{visibility_library}
+                                + selected_name.substr(4);
+                        }
+                    }
+                }
+                expanded.push_back(std::move(visible_item));
+                continue;
+            }
+            for (const auto& selected_name : item.selected_names) {
+                const auto parts =
+                    selected_name_parts(selected_name);
+                if (parts.size() != 2) {
+                    report(
+                        "FSIM-ELAB-CTX-001",
+                        "bounded context references require "
+                        "library.context",
+                        item.span);
+                    continue;
+                }
+                const auto requested_library =
+                    parts[0] == "work"
+                        ? std::string{visibility_library}
+                        : parts[0];
+                const auto context_unit = std::find_if(
+                    parsed_.units.begin(),
+                    parsed_.units.end(),
+                    [&](const DesignUnit& candidate) {
+                        const auto candidate_library =
+                            candidate.library.empty()
+                                ? std::string_view{"work"}
+                                : std::string_view{
+                                      candidate.library};
+                        return candidate.kind
+                                == frontend::UnitKind::VhdlContext
+                            && candidate.name == parts[1]
+                            && candidate_library
+                                == requested_library;
+                    });
+                if (context_unit == parsed_.units.end()) {
+                    if (parts[0] == "ieee"
+                        || parts[0] == "std") {
+                        continue;
+                    }
+                    report(
+                        "FSIM-ELAB-CTX-002",
+                        "VHDL context '" + parts[0] + "."
+                            + parts[1] + "' was not found",
+                        item.span);
+                    continue;
+                }
+                const auto context_owner =
+                    (context_unit->library.empty()
+                         ? std::string{"work"}
+                         : context_unit->library)
+                    + "." + context_unit->name;
+                if (std::find(
+                        context_stack.begin(),
+                        context_stack.end(),
+                        &*context_unit)
+                    != context_stack.end()) {
+                    std::string cycle;
+                    for (const auto* referenced : context_stack) {
+                        if (!cycle.empty()) {
+                            cycle += " -> ";
+                        }
+                        cycle +=
+                            (referenced->library.empty()
+                                 ? std::string{"work"}
+                                 : referenced->library)
+                            + "." + referenced->name;
+                    }
+                    cycle += " -> " + context_owner;
+                    report(
+                        "FSIM-ELAB-CTX-003",
+                        "cyclic VHDL context visibility: " + cycle,
+                        item.span);
+                    continue;
+                }
+                if (std::find(
+                        unit.source_dependencies.begin(),
+                        unit.source_dependencies.end(),
+                        context_unit->span.source_name)
+                    == unit.source_dependencies.end()) {
+                    unit.source_dependencies.push_back(
+                        context_unit->span.source_name);
+                }
+                context_stack.push_back(&*context_unit);
+                const auto nested_library =
+                    context_unit->library.empty()
+                        ? std::string{"work"}
+                        : context_unit->library;
+                expand_vhdl_context_references(
+                    unit,
+                    context_unit->vhdl_context,
+                    expanded,
+                    context_stack,
+                    nested_library);
+                context_stack.pop_back();
+            }
+        }
+    }
+
     void import_vhdl_package_constants(
         DesignUnit& unit,
         const std::span<const frontend::VhdlContextItem>
@@ -4277,9 +4399,22 @@ private:
                 }
                 import_stack.push_back(&*package);
                 auto effective_package = *package;
-                import_vhdl_package_constants(
+                std::vector<frontend::VhdlContextItem>
+                    expanded_package_context;
+                std::vector<const DesignUnit*> context_stack;
+                const auto package_library =
+                    effective_package.library.empty()
+                        ? std::string{"work"}
+                        : effective_package.library;
+                expand_vhdl_context_references(
                     effective_package,
                     package->vhdl_context,
+                    expanded_package_context,
+                    context_stack,
+                    package_library);
+                import_vhdl_package_constants(
+                    effective_package,
+                    expanded_package_context,
                     import_stack);
                 auto specialized = specialize_unit(
                     effective_package,
@@ -4404,9 +4539,21 @@ private:
             context.end(),
             selected.vhdl_context.begin(),
             selected.vhdl_context.end());
+        std::vector<frontend::VhdlContextItem> expanded_context;
+        std::vector<const DesignUnit*> context_stack;
+        const auto unit_library =
+            result.library.empty()
+                ? std::string{"work"}
+                : result.library;
+        expand_vhdl_context_references(
+            result,
+            context,
+            expanded_context,
+            context_stack,
+            unit_library);
         std::vector<const DesignUnit*> import_stack;
         import_vhdl_package_constants(
-            result, context, import_stack);
+            result, expanded_context, import_stack);
         return result;
     }
 

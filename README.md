@@ -33,6 +33,9 @@ The current tree contains:
   integer/Boolean/bit constants, explicit `use library.package.all` or
   `use library.package.name` visibility, acyclic package-to-package imports,
   and transitive package-source specialization provenance;
+- bounded VHDL context declarations/references with recursive reusable
+  library/use visibility, cycle diagnostics, and transitive context-source
+  cache provenance;
 - Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
   macros, object/function expansion with default arguments, multiline
   replacements, token concatenation/stringification, conditional compilation,

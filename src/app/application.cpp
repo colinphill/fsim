@@ -861,6 +861,8 @@ std::string unit_key(const frontend::DesignUnit& unit) {
           + unit.primary_name + ':' + unit.name;
     case frontend::UnitKind::VhdlPackage:
       return "vhdl:" + unit.library + ":package:" + unit.name;
+    case frontend::UnitKind::VhdlContext:
+      return "vhdl:" + unit.library + ":context:" + unit.name;
     case frontend::UnitKind::VerilogModule:
       return "verilog:" + unit.library + ":module:" + unit.name;
   }

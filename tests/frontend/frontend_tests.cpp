@@ -903,23 +903,33 @@ void test_vhdl_context_diagnostics() {
       R"(
 context shared is
   library ieee;
+  use ieee.std_logic_1164.all;
+  context work.base;
 end context shared;
+context work.shared;
 entity context_user is
 end entity;
 )",
       Language::Vhdl2008);
-  require(!declaration.ok(),
-          "an unimplemented context declaration must be rejected");
   require(
-      std::any_of(
-          declaration.diagnostics.begin(),
-          declaration.diagnostics.end(),
-          [](const Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-VHDL-UNSUPPORTED-015";
-          }),
-      "context declaration needs a targeted diagnostic");
-  require(declaration.design.units.size() == 1,
-          "context-declaration recovery must retain the following unit");
+      declaration.ok() && declaration.design.units.size() == 2,
+      "bounded context declaration and following unit must parse");
+  require(
+      declaration.design.units[0].kind == UnitKind::VhdlContext
+          && declaration.design.units[0].name == "shared"
+          && declaration.design.units[0].vhdl_context.size() == 3
+          && declaration.design.units[0]
+                 .vhdl_context.back()
+                 .kind
+              == VhdlContextItemKind::ContextReference,
+      "context declaration retains reusable context items");
+  require(
+      declaration.design.units[1].vhdl_context.size() == 1
+          && declaration.design.units[1]
+                 .vhdl_context.front()
+                 .selected_names.front()
+              == "work.shared",
+      "context reference remains attached to the following unit");
 
   const auto malformed = parse_text(
       "malformed_context.vhd",
@@ -934,6 +944,35 @@ end entity;
             return diagnostic.code == "FSIM-VHDL-PARSE-044";
           }),
       "malformed context clause needs a targeted diagnostic");
+
+  const auto invalid_declaration = parse_text(
+      "invalid_context_declaration.vhd",
+      R"(
+context invalid is
+  signal not_a_context_item : bit;
+end context mismatched;
+entity recovered is
+end entity recovered;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_declaration.ok()
+          && invalid_declaration.design.units.size() == 2
+          && std::any_of(
+              invalid_declaration.diagnostics.begin(),
+              invalid_declaration.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-024";
+              })
+          && std::any_of(
+              invalid_declaration.diagnostics.begin(),
+              invalid_declaration.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-092";
+              }),
+      "invalid context declaration items and end names are targeted");
 }
 
 void test_vhdl_package_constants() {

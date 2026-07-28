@@ -17,6 +17,7 @@ enum class UnitKind {
   VhdlEntity,
   VhdlArchitecture,
   VhdlPackage,
+  VhdlContext,
   VerilogModule,
 };
 
@@ -347,9 +348,8 @@ struct DesignUnit {
   // Verilog/SystemVerilog compilation-directive state at unit declaration.
   std::string default_nettype;
   bool is_cell{};
-  // VHDL context items immediately preceding this library unit. Context
-  // declarations and semantic visibility resolution are not part of the
-  // current frontend slice.
+  // VHDL context items immediately preceding this library unit, or the
+  // reusable items contained by a bounded VHDL context declaration.
   std::vector<VhdlContextItem> vhdl_context;
   std::vector<ParameterDeclaration> parameters;
   std::vector<SignalDeclaration> ports;

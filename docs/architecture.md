@@ -61,6 +61,14 @@ is diagnosed with its package chain. Package bodies, types/subprograms,
 standard-package loading, and general VHDL visibility remain future semantic
 layer work.
 
+The bounded VHDL context path represents a reusable context declaration as a
+library unit containing library clauses, use clauses, and references to other
+project contexts. A `context library.name;` item is expanded recursively before
+package visibility resolution, so a context may expose constants through an
+acyclic context/package chain. Context sources join that chain's semantic
+source dependencies, and missing, malformed, or cyclic references are
+diagnosed before specialization.
+
 The current hierarchy builder recursively follows direct VHDL/SV instances,
 bounded conditional/iterative/selection generate regions, and always-selected
 static regions representing unguarded VHDL blocks or direct/named

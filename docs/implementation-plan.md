@@ -105,6 +105,9 @@ The following foundation is implemented:
   selected-constant use visibility, acyclic package-to-package imports,
   declaration-order folding, cycle diagnostics, and transitive source
   provenance in specialization/native-cache keys;
+- bounded reusable VHDL project contexts containing library/use/context items,
+  with recursive expansion, cycle diagnostics, package visibility, and
+  transitive context-source cache provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -229,7 +232,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 476 unique current production diagnostic codes.
+- a stable catalog covering 484 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -250,6 +253,7 @@ Current Linux validation:
 | Static/implicit generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for unguarded VHDL blocks, all three bounded implicit SV generate forms, direct explicit-generate contents, and named static SV blocks with exact conditional/static interpreter/JIT/VCD/cache behavior |
 | Generated constants/parameters | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for declaration-order, parent-scope, and loop-index folding, targeted evaluation/type failures, and exact interpreter/JIT/VCD/cache results |
 | VHDL package constants | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, `work` and cross-library selected/whole-package visibility, recursive declaration-order folding, interpreter/JIT/VCD equality, targeted import/evaluation/subtype/cycle diagnostics, and transitive package-only native-cache invalidation |
+| VHDL reusable contexts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive cross-library context/package visibility, missing/malformed/cycle diagnostics, interpreter/JIT/VCD equality, and context-only native-cache invalidation |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -387,8 +391,9 @@ Early groundwork:
 
 - handwritten tokenization and recursive-descent/precedence parsing;
 - VHDL entity/architecture/port/signal/process nodes and represented
-  library/use/context-reference clauses, bounded constant-only package
-  declarations and use visibility, bounded generic specialization, and
+  library/use/context-reference clauses, reusable bounded context declarations,
+  bounded constant-only package declarations and use visibility, bounded
+  generic specialization, and
   executable conditional/iterative/selection generate and unguarded block
   statements;
 - SV modules, common declarations, simple hierarchy, basic procedural and
@@ -405,8 +410,8 @@ Planned implementation sequence:
 
 1. Separate the compact frontend representation into language-specific typed
    HIR and an explicit elaborated DesignIR.
-2. Expand the bounded project-package constant slice into complete VHDL
-   libraries, packages/bodies, recursive visibility, contexts, configurations,
+2. Expand the bounded project-package/context visibility slice into complete
+   VHDL libraries, packages/bodies, context semantics, configurations,
    generics, overload/type resolution, constant evaluation, and reviewed IEEE
    packages.
 3. Complete the remaining Verilog/SV `` `line``/pragma semantics, parameters,

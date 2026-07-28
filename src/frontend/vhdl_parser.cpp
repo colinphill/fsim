@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
@@ -53,7 +54,18 @@ class VhdlParser final : private detail::ParserBase {
     ParsedDesign design;
     std::vector<VhdlContextItem> pending_context;
     while (!at_end()) {
-      if (any_keyword({"library", "use", "context"}, true)) {
+      if (keyword("context", 0, true)
+          && at(TokenKind::Identifier, 1)
+          && keyword("is", 2, true)) {
+        const auto start = advance();
+        auto unit = parse_context_declaration(start);
+        unit.vhdl_context.insert(
+            unit.vhdl_context.begin(),
+            std::make_move_iterator(pending_context.begin()),
+            std::make_move_iterator(pending_context.end()));
+        pending_context.clear();
+        design.units.push_back(std::move(unit));
+      } else if (any_keyword({"library", "use", "context"}, true)) {
         if (auto item = parse_context_item()) {
           pending_context.push_back(std::move(*item));
         }
@@ -119,8 +131,8 @@ class VhdlParser final : private detail::ParserBase {
       error(
           start,
           "FSIM-VHDL-UNSUPPORTED-015",
-          "VHDL context declarations are not implemented in this "
-          "frontend slice");
+          "a context declaration cannot be nested where a context "
+          "reference is required");
       while (!at_end()) {
         if (match_keyword("end", true)) {
           match_keyword("context", true);
@@ -189,6 +201,47 @@ class VhdlParser final : private detail::ParserBase {
 
   Token expect_identifier(std::string_view description) {
     return expect(TokenKind::Identifier, description, "FSIM-VHDL-PARSE-001");
+  }
+
+  DesignUnit parse_context_declaration(const Token& start) {
+    DesignUnit unit;
+    unit.kind = UnitKind::VhdlContext;
+    unit.language = Language::Vhdl2008;
+    const auto name = expect_identifier("context name");
+    unit.name = vhdl_name(name.text);
+    expect_keyword("is", true, "FSIM-VHDL-PARSE-090");
+    while (!at_end() && !keyword("end", 0, true)) {
+      if (any_keyword({"library", "use", "context"}, true)) {
+        if (auto item = parse_context_item()) {
+          unit.vhdl_context.push_back(std::move(*item));
+        }
+        continue;
+      }
+      const auto declaration = advance();
+      error(
+          declaration,
+          "FSIM-VHDL-UNSUPPORTED-024",
+          "unsupported context declaration item '"
+              + declaration.text + "'");
+      skip_to_semicolon();
+    }
+    expect_keyword("end", true, "FSIM-VHDL-PARSE-091");
+    (void)match_keyword("context", true);
+    if (at(TokenKind::Identifier)) {
+      const auto end_name = advance();
+      if (vhdl_name(end_name.text) != unit.name) {
+        error(
+            end_name,
+            "FSIM-VHDL-PARSE-092",
+            "context end name does not match '" + unit.name + "'");
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after context declaration",
+        "FSIM-VHDL-PARSE-093");
+    unit.span = span_from(start, previous());
+    return unit;
   }
 
   void skip_vhdl_package_body() {

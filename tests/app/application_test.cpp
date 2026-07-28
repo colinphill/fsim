@@ -4804,6 +4804,10 @@ end architecture rtl;
       directory / "package_base_constants.vhd";
   const auto package_constant_source =
       directory / "package_constants.vhd";
+  const auto package_base_context_source =
+      directory / "package_base_context.vhd";
+  const auto package_context_source =
+      directory / "package_context.vhd";
   const auto package_constant_user_source =
       directory / "package_constant_user.vhd";
   const auto write_package_constants =
@@ -4827,16 +4831,32 @@ end package constants;
 )";
   }
   {
+    std::ofstream output(package_base_context_source);
+    output << R"(
+context package_base_context is
+  library work;
+  use work.constants.all;
+end context package_base_context;
+)";
+  }
+  const auto write_package_context =
+      [&](const std::string_view revision) {
+        std::ofstream output(package_context_source);
+        output << "-- " << revision << '\n'
+               << "context package_context is\n"
+               << "  context work.package_base_context;\n"
+               << "end context package_context;\n";
+      };
+  write_package_context("context revision 1");
+  {
     std::ofstream output(package_constant_user_source);
     output << R"(
-library support;
-use support.constants.width;
+context support.package_context;
 entity package_constant_user is
   port (observed : out unsigned(width - 1 downto 0));
 end entity package_constant_user;
 
-library support;
-use support.constants.all;
+context support.package_context;
 architecture rtl of package_constant_user is
   signal local_value : unsigned(width - 1 downto 0);
 begin
@@ -4864,6 +4884,8 @@ end architecture rtl;
   package_library_sources.files = {
       package_base_constant_source,
       package_constant_source,
+      package_base_context_source,
+      package_context_source,
   };
   package_constant_config.source_sets.push_back(
       std::move(package_library_sources));
@@ -4908,6 +4930,18 @@ end architecture rtl;
                 dependencies.end(),
                 package_base_constant_source.string())
             != dependencies.end());
+        assert(
+            std::find(
+                dependencies.begin(),
+                dependencies.end(),
+                package_base_context_source.string())
+            != dependencies.end());
+        assert(
+            std::find(
+                dependencies.begin(),
+                dependencies.end(),
+                package_context_source.string())
+            != dependencies.end());
         auto key = project->specialization_cache_keys.front();
         auto simulation = capture_simulation(
             std::move(*project), engine);
@@ -4951,6 +4985,25 @@ end architecture rtl;
       package_constant_warm.simulation.native_cache.misses == 0);
 #endif
 
+  write_package_context("context revision 2");
+  const auto package_context_changed =
+      run_package_constants(
+          fsim::app::SimulationEngine::compiled);
+  assert(
+      package_context_changed.specialization_key
+      != package_constant_cold.specialization_key);
+  assert(
+      package_context_changed.simulation.final_values
+      == package_constant_cold.simulation.final_values);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      package_context_changed.simulation.native_cache.hits == 0);
+  assert(
+      package_context_changed.simulation.native_cache.misses == 1);
+  assert(
+      package_context_changed.simulation.native_cache.stores == 1);
+#endif
+
   write_package_constants(9);
   const auto package_constant_changed_reference =
       run_package_constants(
@@ -4963,7 +5016,7 @@ end architecture rtl;
       package_constant_changed.simulation);
   assert(
       package_constant_changed.specialization_key
-      != package_constant_cold.specialization_key);
+      != package_context_changed.specialization_key);
   assert((
       package_constant_changed.simulation.final_values
       == std::vector<std::string>{"1011", "1010"}));

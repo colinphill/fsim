@@ -523,16 +523,34 @@ package constants is
 end package constants;
 )",
         fsim::frontend::Language::Vhdl2008);
+    const auto package_base_context =
+        fsim::frontend::parse_text(
+            "package_base_context.vhd",
+            R"(
+context package_base_context is
+  library work;
+  use work.constants.all;
+end context package_base_context;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    const auto package_context = fsim::frontend::parse_text(
+        "package_context.vhd",
+        R"(
+context package_context is
+  context work.package_base_context;
+end context package_context;
+)",
+        fsim::frontend::Language::Vhdl2008);
     const auto package_user_source =
         fsim::frontend::parse_text(
             "package_user.vhd",
             R"(
-use work.constants.width;
+context work.package_context;
 entity package_user is
   port (observed : out unsigned(width - 1 downto 0));
 end entity package_user;
 
-use work.constants.all;
+context work.package_context;
 architecture rtl of package_user is
   signal local_value : unsigned(width - 1 downto 0);
 begin
@@ -543,6 +561,8 @@ end architecture rtl;
             fsim::frontend::Language::Vhdl2008);
     assert(package_base_source.ok());
     assert(package_source.ok());
+    assert(package_base_context.ok());
+    assert(package_context.ok());
     assert(package_user_source.ok());
     fsim::frontend::ParsedDesign package_design =
         package_base_source.design;
@@ -550,6 +570,14 @@ end architecture rtl;
         package_design.units.end(),
         package_source.design.units.begin(),
         package_source.design.units.end());
+    package_design.units.insert(
+        package_design.units.end(),
+        package_base_context.design.units.begin(),
+        package_base_context.design.units.end());
+    package_design.units.insert(
+        package_design.units.end(),
+        package_context.design.units.begin(),
+        package_context.design.units.end());
     package_design.units.insert(
         package_design.units.end(),
         package_user_source.design.units.begin(),
@@ -587,6 +615,16 @@ end architecture rtl;
                package_specialization.source_dependencies.end(),
                "package_base_constants.vhd")
            != package_specialization.source_dependencies.end());
+    assert(std::find(
+               package_specialization.source_dependencies.begin(),
+               package_specialization.source_dependencies.end(),
+               "package_base_context.vhd")
+           != package_specialization.source_dependencies.end());
+    assert(std::find(
+               package_specialization.source_dependencies.begin(),
+               package_specialization.source_dependencies.end(),
+               "package_context.vhd")
+           != package_specialization.source_dependencies.end());
     auto package_interpreter =
         package_elaborated.design->create_interpreter();
     assert(
@@ -600,6 +638,44 @@ end architecture rtl;
     assert(
         package_interpreter
             ->signal_value(*package_observed)
+            .to_msb_string()
+        == "0111");
+
+    auto cross_library_context_design = package_design;
+    for (auto& unit : cross_library_context_design.units) {
+        if (unit.kind
+                == fsim::frontend::UnitKind::VhdlPackage
+            || unit.kind
+                == fsim::frontend::UnitKind::VhdlContext) {
+            unit.library = "support";
+            continue;
+        }
+        for (auto& item : unit.vhdl_context) {
+            for (auto& selected_name : item.selected_names) {
+                if (selected_name == "work.package_context") {
+                    selected_name = "support.package_context";
+                }
+            }
+        }
+    }
+    const auto cross_library_context_elaborated =
+        fsim::elaboration::elaborate(
+            cross_library_context_design,
+            "vhdl:work.package_user(rtl)");
+    assert(cross_library_context_elaborated.ok());
+    const auto cross_library_context_observed =
+        cross_library_context_elaborated.design->find_signal(
+            "observed");
+    assert(cross_library_context_observed);
+    auto cross_library_context_interpreter =
+        cross_library_context_elaborated.design
+            ->create_interpreter();
+    assert(
+        cross_library_context_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        cross_library_context_interpreter
+            ->signal_value(*cross_library_context_observed)
             .to_msb_string()
         == "0111");
 
@@ -747,6 +823,38 @@ end architecture rtl;
     assert(!cyclic_package_result.ok());
     assert(has_diagnostic(
         cyclic_package_result, "FSIM-ELAB-PKG-007"));
+
+    const auto invalid_contexts = fsim::frontend::parse_text(
+        "invalid_contexts.vhd",
+        R"(
+context first_context is
+  context work.second_context;
+end context first_context;
+context second_context is
+  context work.first_context;
+end context second_context;
+context work.first_context;
+context work.too.many.parts;
+context work.not_present;
+entity invalid_context_user is
+end entity invalid_context_user;
+architecture rtl of invalid_context_user is
+begin
+end architecture rtl;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(invalid_contexts.ok());
+    const auto invalid_context_result =
+        fsim::elaboration::elaborate(
+            invalid_contexts.design,
+            "vhdl:work.invalid_context_user(rtl)");
+    assert(!invalid_context_result.ok());
+    assert(has_diagnostic(
+        invalid_context_result, "FSIM-ELAB-CTX-001"));
+    assert(has_diagnostic(
+        invalid_context_result, "FSIM-ELAB-CTX-002"));
+    assert(has_diagnostic(
+        invalid_context_result, "FSIM-ELAB-CTX-003"));
 
     const auto invalid_generics = fsim::frontend::parse_text(
         "invalid-generic-elaboration.vhd",
