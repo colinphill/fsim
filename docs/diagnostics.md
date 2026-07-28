@@ -476,7 +476,7 @@ therefore excluded.
 | `FSIM-SV-SEM-039` | error | A `$strobe` call uses a nonliteral or formatting argument outside the current bounded postponed-output slice. |
 | `FSIM-SV-SEM-040` | error | A Verilog/SystemVerilog output string uses an unsupported, incomplete, or out-of-byte-range escape. |
 | `FSIM-SV-SEM-041` | error | A `$monitor` call uses a value or formatting argument outside the literal-only initial-publication slice. |
-| `FSIM-SV-SEM-042` | error | An output format string uses an unsupported conversion, more than one conversion, or a malformed percent escape. |
+| `FSIM-SV-SEM-042` | error | An output format string uses a conversion other than the supported `%b`/`%h`, more than one conversion, or a malformed percent escape. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

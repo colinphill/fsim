@@ -3063,6 +3063,10 @@ private:
                 case frontend::OutputFormat::Binary:
                     format = runtime::simir::OutputFormat::binary;
                     break;
+                case frontend::OutputFormat::Hexadecimal:
+                    format =
+                        runtime::simir::OutputFormat::hexadecimal;
+                    break;
                 }
                 process_.operations.emplace_back(
                     FormatDisplay{

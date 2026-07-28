@@ -44,6 +44,37 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
         });
     return text;
   }
+  case OutputFormat::hexadecimal: {
+    constexpr std::string_view digits{"0123456789abcdef"};
+    const auto digit_count = (value.width() + 3U) / 4U;
+    std::string text(digit_count, '0');
+    for (std::size_t digit = 0; digit < digit_count; ++digit) {
+      const auto offset = digit * 4U;
+      const auto bit_count =
+          std::min<std::size_t>(4U, value.width() - offset);
+      unsigned known_value{};
+      bool all_x = true;
+      bool all_z = true;
+      bool has_unknown = false;
+      for (std::size_t bit = 0; bit < bit_count; ++bit) {
+        const auto state = value.get(offset + bit);
+        all_x = all_x && state == Logic4::x;
+        all_z = all_z && state == Logic4::z;
+        has_unknown =
+            has_unknown || state == Logic4::x || state == Logic4::z;
+        if (state == Logic4::one) {
+          known_value |= 1U << bit;
+        }
+      }
+      const char character =
+          all_x ? 'x'
+          : all_z ? 'z'
+          : has_unknown ? 'x'
+                        : digits[known_value];
+      text[digit_count - digit - 1U] = character;
+    }
+    return text;
+  }
   }
   throw std::logic_error{"invalid formatted-output conversion"};
 }

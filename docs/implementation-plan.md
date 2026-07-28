@@ -823,9 +823,12 @@ The twentieth post-gate batch is in progress:
    conversion with one packed runtime expression, preserve four-state width,
    prefix/suffix text and `%%`, and execute through a typed interpreter/LLVM
    formatting path.
+3. The same runtime formatting operation now supports `%h`, retaining
+   lowercase full-width nibbles, uniform X/Z nibbles, and conservative `x`
+   output for mixed known/unknown nibbles.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM, application, Tcl,
-native API, and diagnostic-catalog tests pass. This is feature 2 of 10, so the
+native API, and diagnostic-catalog tests pass. This is feature 3 of 10, so the
 interval full regression and remote push are not due yet.
 
 ## v1 release condition

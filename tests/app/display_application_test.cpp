@@ -157,7 +157,7 @@ void test_display(
   assert(reference.result.time == 2);
   assert(compiled.result.time == 2);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 11);
+  assert(reference.output.size() == 12);
   assert(reference.output[0].process == 0);
   assert(reference.output[0].text == "first\t");
   assert(!reference.output[0].newline);
@@ -182,21 +182,24 @@ void test_display(
   assert(!reference.output[5].newline);
   assert(reference.output[5].time == 0);
   assert(reference.output[5].delta == 0);
-  assert(reference.output[6].text == "postponed");
+  assert(reference.output[6].text == "h=x");
   assert(reference.output[6].newline);
   assert(reference.output[6].time == 0);
-  assert(reference.output[7].text == "monitored");
+  assert(reference.output[7].text == "postponed");
   assert(reference.output[7].newline);
   assert(reference.output[7].time == 0);
-  assert(reference.output[8].text == "second");
-  assert(!reference.output[8].newline);
-  assert(reference.output[8].time == 2);
-  assert(reference.output[9].text.empty());
+  assert(reference.output[8].text == "monitored");
+  assert(reference.output[8].newline);
+  assert(reference.output[8].time == 0);
+  assert(reference.output[9].text == "second");
   assert(!reference.output[9].newline);
   assert(reference.output[9].time == 2);
   assert(reference.output[10].text.empty());
-  assert(reference.output[10].newline);
+  assert(!reference.output[10].newline);
   assert(reference.output[10].time == 2);
+  assert(reference.output[11].text.empty());
+  assert(reference.output[11].newline);
+  assert(reference.output[11].time == 2);
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 1);
 }
@@ -285,6 +288,7 @@ module display_test;
     $display(8'shff);
     $display("q=%%:%b!", q);
     $write("[%b]", q);
+    $display("h=%h", q);
     $strobe("postponed");
     $monitor("monitored");
     #2 $write("second");
@@ -349,7 +353,7 @@ end architecture;
     assert(
         output.str().find(
             "first\t+line\nembedded \"quote\" \\ A\n"
-            "42\n-1\nq=%:10xz!\n[10xz]postponed\n"
+            "42\n-1\nq=%:10xz!\n[10xz]h=x\npostponed\n"
             "monitored\nsecond\n"
             "simulation stopped at tick 2")
         != std::string::npos);

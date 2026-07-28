@@ -61,11 +61,13 @@ literal marked signed is interpreted as two's-complement at its declared
 width. Unknown-state literals, unformatted dynamic operands, and additional
 operands remain deferred.
 
-Dynamic output status update: `$display` and `$write` accept one `%b`
+Dynamic output status update: `$display` and `$write` accept one `%b` or `%h`
 conversion with one packed runtime expression, literal prefix/suffix text,
-and `%%`. Full declared width and `0`/`1`/`x`/`z` bits are preserved.
-Additional arguments, other conversions, format width/precision modifiers,
-and dynamic `$strobe`/`$monitor` remain targeted.
+and `%%`. Binary output preserves full declared width and four-state bits;
+hex output retains `ceil(width/4)` lowercase digits, preserving uniform X/Z
+nibbles and mapping mixed known/unknown nibbles to `x`. Additional arguments,
+other conversions, format width/precision modifiers, and dynamic
+`$strobe`/`$monitor` remain targeted.
 
 Literal `$fatal` and immediate-assertion `$error` messages use the same
 Verilog/SystemVerilog escape decoding as output tasks, including byte-exact

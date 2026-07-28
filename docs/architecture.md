@@ -362,13 +362,15 @@ normalized to their width-truncated decimal value in typed HIR. Unknown-state,
 dynamic, and additional operands remain targeted. Based literals marked
 signed are interpreted as two's-complement at their declared width before
 decimal formatting.
-The first dynamic formatting slice lowers one `$display`/`$write` `%b`
+The dynamic formatting spine lowers one `$display`/`$write` `%b` or `%h`
 conversion to `FormatDisplay`, which retains a typed source register,
 prefix/suffix text, newline policy, and conversion kind. The interpreter
 formats the full packed value through the common four-state kernel. LLVM code
 passes its evaluated word plus immutable instruction identity through an
 append-only callback and therefore uses the same formatter and embedding
 output hook. `%%` is collapsed in the frontend.
+Hex formatting retains `ceil(width/4)` digits. Uniform X/Z nibbles remain
+`x`/`z`; a nibble mixing known and unknown states conservatively renders `x`.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

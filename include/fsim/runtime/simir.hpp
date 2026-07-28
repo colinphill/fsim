@@ -365,6 +365,7 @@ struct Display {
 
 enum class OutputFormat : std::uint8_t {
   binary,
+  hexadecimal,
 };
 
 /// Format one runtime value between literal prefix/suffix text.
