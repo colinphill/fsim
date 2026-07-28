@@ -3105,7 +3105,8 @@ class VerilogParser final : private detail::ParserBase {
     if (at(TokenKind::Ampersand)) {
       return BinaryOperation{5, "&"};
     }
-    if (at(TokenKind::EqualEqual)
+    if (at(TokenKind::EqualEqual) || at(TokenKind::CaseEqual)
+        || at(TokenKind::CaseNotEqual)
         || (at(TokenKind::NotEqual) && current().text == "!=")) {
       return BinaryOperation{6, current().text};
     }

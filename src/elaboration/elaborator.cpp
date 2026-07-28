@@ -596,10 +596,12 @@ std::optional<std::int64_t> evaluate_constant_expression(
     if (expression.text == "||") {
         return *right != 0 ? 1 : 0;
     }
-    if (expression.text == "==" || expression.text == "=") {
+    if (expression.text == "==" || expression.text == "==="
+        || expression.text == "=") {
         return *left == *right ? 1 : 0;
     }
-    if (expression.text == "!=" || expression.text == "/=") {
+    if (expression.text == "!=" || expression.text == "!=="
+        || expression.text == "/=") {
         return *left != *right ? 1 : 0;
     }
     if (expression.text == "<") {
@@ -4176,6 +4178,12 @@ private:
                 operation = BinaryOperator::equal;
             } else if (
                 language_ != frontend::Language::Vhdl2008
+                && (expression.text == "==="
+                    || expression.text == "!==")) {
+                operation = BinaryOperator::case_equal;
+                invert_result = expression.text == "!==";
+            } else if (
+                language_ != frontend::Language::Vhdl2008
                 && expression.text == "!=") {
                 operation = BinaryOperator::not_equal;
             } else if (
@@ -4280,6 +4288,7 @@ private:
             }
             const auto scalar_result =
                 *operation == BinaryOperator::equal
+                || *operation == BinaryOperator::case_equal
                 || *operation == BinaryOperator::not_equal
                 || *operation == BinaryOperator::less_unsigned
                 || *operation
@@ -4632,6 +4641,8 @@ private:
                 return is_signed_expression(expression.operands[0]);
             }
             if (expression.text == "=="
+                || expression.text == "==="
+                || expression.text == "!=="
                 || expression.text == "!="
                 || expression.text == "="
                 || expression.text == "<"

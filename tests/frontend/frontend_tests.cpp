@@ -2336,6 +2336,8 @@ module comparisons;
   always_comb begin
     result = !lhs;
     result = lhs != rhs;
+    result = lhs === rhs;
+    result = lhs !== rhs;
     result = lhs < rhs;
     result = lhs <= rhs;
     result = lhs > rhs;
@@ -2362,12 +2364,12 @@ endmodule
   const auto& statements =
       result.design.units.front().processes.front().statements;
   require(
-      statements.size() == 19
+      statements.size() == 21
           && statements[0].value.kind == ExpressionKind::Unary
           && statements[0].value.text == "!",
       "logical-negation expression node");
-  const std::array<std::string_view, 5> operators{
-      "!=", "<", "<=", ">", ">="};
+  const std::array<std::string_view, 7> operators{
+      "!=", "===", "!==", "<", "<=", ">", ">="};
   for (std::size_t index = 0; index < operators.size(); ++index) {
     require(
         statements[index + 1].value.kind
@@ -2377,40 +2379,40 @@ endmodule
         "comparison expression node");
   }
   require(
-      statements[6].value.kind == ExpressionKind::Binary
-          && statements[6].value.text == "&&"
-          && statements[7].value.kind == ExpressionKind::Binary
-          && statements[7].value.text == "||",
+      statements[8].value.kind == ExpressionKind::Binary
+          && statements[8].value.text == "&&"
+          && statements[9].value.kind == ExpressionKind::Binary
+          && statements[9].value.text == "||",
       "logical binary expression nodes");
   require(
-      statements[8].value.kind == ExpressionKind::Unary
-          && statements[8].value.text == "&"
-          && statements[9].value.kind == ExpressionKind::Unary
-          && statements[9].value.text == "|"
-          && statements[10].value.kind == ExpressionKind::Unary
-          && statements[10].value.text == "^",
+      statements[10].value.kind == ExpressionKind::Unary
+          && statements[10].value.text == "&"
+          && statements[11].value.kind == ExpressionKind::Unary
+          && statements[11].value.text == "|"
+          && statements[12].value.kind == ExpressionKind::Unary
+          && statements[12].value.text == "^",
       "reduction expression nodes");
   require(
-      statements[11].value.kind == ExpressionKind::Unary
-          && statements[11].value.text == "~&"
-          && statements[12].value.kind == ExpressionKind::Unary
-          && statements[12].value.text == "~|"
-          && statements[13].value.kind == ExpressionKind::Unary
-          && statements[13].value.text == "~^"
+      statements[13].value.kind == ExpressionKind::Unary
+          && statements[13].value.text == "~&"
           && statements[14].value.kind == ExpressionKind::Unary
-          && statements[14].value.text == "^~",
+          && statements[14].value.text == "~|"
+          && statements[15].value.kind == ExpressionKind::Unary
+          && statements[15].value.text == "~^"
+          && statements[16].value.kind == ExpressionKind::Unary
+          && statements[16].value.text == "^~",
       "complemented reduction expression nodes");
   require(
-      statements[15].value.kind == ExpressionKind::Binary
-          && statements[15].value.text == "~^"
-          && statements[16].value.kind == ExpressionKind::Binary
-          && statements[16].value.text == "^~",
+      statements[17].value.kind == ExpressionKind::Binary
+          && statements[17].value.text == "~^"
+          && statements[18].value.kind == ExpressionKind::Binary
+          && statements[18].value.text == "^~",
       "binary XNOR expression nodes");
   require(
-      statements[17].value.kind == ExpressionKind::Binary
-          && statements[17].value.text == "<<"
-          && statements[18].value.kind == ExpressionKind::Binary
-          && statements[18].value.text == ">>",
+      statements[19].value.kind == ExpressionKind::Binary
+          && statements[19].value.text == "<<"
+          && statements[20].value.kind == ExpressionKind::Binary
+          && statements[20].value.text == ">>",
       "logical-shift expression nodes");
 }
 

@@ -79,7 +79,8 @@ The current tree contains:
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - vector-aware SystemVerilog logical negation and unsigned
-  equality/relational comparisons with four-state unknown propagation;
+  equality/relational comparisons with four-state unknown propagation, plus
+  exact known-result `===`/`!==` comparison of `0`/`1`/`X`/`Z`;
 - mixed-width SystemVerilog logical conjunction/disjunction with controlling
   known-value and four-state indeterminate semantics;
 - SystemVerilog unary reductions (including `~&`, `~|`, `~^`, and `^~`),

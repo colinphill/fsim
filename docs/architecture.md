@@ -346,6 +346,10 @@ semantics: any known `1` makes `!` false, an otherwise unknown-containing
 operand produces `X`, and an all-zero operand produces true. Unsigned
 inequality and relational comparisons require equal operand widths and return
 `X` if either operand contains `X` or `Z`; known operands compare exactly.
+Case equality `===` compares both packed value and unknown-state planes, so
+matching `X` and matching `Z` are equal while `X` and `Z` differ; it always
+returns a known scalar. Case inequality `!==` applies a known scalar inversion
+to that result.
 The interpreter supports arbitrary packed widths while LLVM uses the common
 single-word fast path and falls back for wider value-bearing processes.
 

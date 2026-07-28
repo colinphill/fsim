@@ -434,11 +434,18 @@ void test_simir_wide_truth_and_comparison() {
       {"top.logical_not_known", PackedLogic4::from_msb_string("X")});
   const auto logical_not_unknown = interpreter.add_signal(
       {"top.logical_not_unknown", PackedLogic4::from_msb_string("0")});
+  const auto case_equal_unknown = interpreter.add_signal(
+      {"top.case_equal_unknown", PackedLogic4::from_msb_string("0")});
+  const auto case_equal_distinct = interpreter.add_signal(
+      {"top.case_equal_distinct", PackedLogic4::from_msb_string("1")});
+  const auto case_not_equal_distinct = interpreter.add_signal(
+      {"top.case_not_equal_distinct",
+       PackedLogic4::from_msb_string("0")});
 
   Process process;
   process.id = 0;
   process.name = "wide_truth_and_comparison";
-  process.register_count = 6;
+  process.register_count = 12;
   process.operations = {
       LoadConstant{
           0, PackedLogic4::from_msb_string(
@@ -455,6 +462,21 @@ void test_simir_wide_truth_and_comparison() {
                  "X" + std::string(64, '0'))},
       LogicalNot{5, 4},
       WriteBlocking{logical_not_unknown, 5},
+      LoadConstant{
+          6, PackedLogic4::from_msb_string(
+                 "X" + std::string(64, '0'))},
+      LoadConstant{
+          7, PackedLogic4::from_msb_string(
+                 "X" + std::string(64, '0'))},
+      Binary{BinaryOperator::case_equal, 8, 6, 7},
+      WriteBlocking{case_equal_unknown, 8},
+      LoadConstant{
+          9, PackedLogic4::from_msb_string(
+                 "Z" + std::string(64, '0'))},
+      Binary{BinaryOperator::case_equal, 10, 6, 9},
+      WriteBlocking{case_equal_distinct, 10},
+      UnaryNot{11, 10},
+      WriteBlocking{case_not_equal_distinct, 11},
       Halt{},
   };
   (void)interpreter.add_process(std::move(process));
@@ -471,6 +493,17 @@ void test_simir_wide_truth_and_comparison() {
       interpreter.signal_value(logical_not_unknown).to_msb_string()
           == "X",
       "wide unknown-only truth value remains unknown");
+  require(
+      interpreter.signal_value(case_equal_unknown).to_msb_string()
+          == "1",
+      "wide case equality matches identical unknown bits");
+  require(
+      interpreter.signal_value(case_equal_distinct).to_msb_string()
+              == "0"
+          && interpreter.signal_value(case_not_equal_distinct)
+                  .to_msb_string()
+              == "1",
+      "wide case equality distinguishes X from Z");
 }
 
 void test_simir_wide_reduction_and_shift() {

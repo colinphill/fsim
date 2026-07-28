@@ -4521,6 +4521,8 @@ module comparison_process;
   logic gt;
   logic ge;
   logic logical_not;
+  logic case_eq;
+  logic case_neq;
   always_comb begin
     neq = lhs != rhs;
     lt = lhs < rhs;
@@ -4528,6 +4530,8 @@ module comparison_process;
     gt = lhs > rhs;
     ge = lhs >= rhs;
     logical_not = !lhs;
+    case_eq = lhs === rhs;
+    case_neq = lhs !== rhs;
   end
 endmodule
 )",
@@ -4554,16 +4558,21 @@ endmodule
         elaborated_comparisons.design->find_signal("ge");
     const auto comparison_not =
         elaborated_comparisons.design->find_signal("logical_not");
+    const auto comparison_case_eq =
+        elaborated_comparisons.design->find_signal("case_eq");
+    const auto comparison_case_neq =
+        elaborated_comparisons.design->find_signal("case_neq");
     assert(
         comparison_lhs && comparison_rhs && comparison_neq
         && comparison_lt && comparison_le && comparison_gt
-        && comparison_ge && comparison_not);
+        && comparison_ge && comparison_not
+        && comparison_case_eq && comparison_case_neq);
     auto comparison_interpreter =
         elaborated_comparisons.design->create_interpreter();
     const auto run_comparison =
         [&](const std::string_view lhs,
             const std::string_view rhs,
-            const std::array<std::string_view, 6>& expected) {
+            const std::array<std::string_view, 8>& expected) {
           comparison_interpreter->deposit_signal(
               *comparison_lhs,
               fsim::runtime::PackedLogic4::from_msb_string(lhs));
@@ -4577,7 +4586,9 @@ endmodule
               *comparison_le,
               *comparison_gt,
               *comparison_ge,
-              *comparison_not};
+              *comparison_not,
+              *comparison_case_eq,
+              *comparison_case_neq};
           for (std::size_t index = 0; index < signals.size();
                ++index) {
             assert(
@@ -4588,13 +4599,26 @@ endmodule
           }
         };
     run_comparison(
-        "0010", "0011", {"1", "1", "1", "0", "0", "0"});
+        "0010", "0011",
+        {"1", "1", "1", "0", "0", "0", "0", "1"});
     run_comparison(
-        "0000", "0000", {"0", "0", "1", "0", "1", "1"});
+        "0000", "0000",
+        {"0", "0", "1", "0", "1", "1", "1", "0"});
     run_comparison(
-        "00X0", "0011", {"X", "X", "X", "X", "X", "X"});
+        "00X0", "0011",
+        {"X", "X", "X", "X", "X", "X", "0", "1"});
     run_comparison(
-        "01X0", "0011", {"X", "X", "X", "X", "X", "0"});
+        "01X0", "0011",
+        {"X", "X", "X", "X", "X", "0", "0", "1"});
+    run_comparison(
+        "00X0", "00X0",
+        {"X", "X", "X", "X", "X", "X", "1", "0"});
+    run_comparison(
+        "01Z0", "01Z0",
+        {"X", "X", "X", "X", "X", "0", "1", "0"});
+    run_comparison(
+        "00X0", "00Z0",
+        {"X", "X", "X", "X", "X", "X", "0", "1"});
 
     const auto signed_comparison = fsim::frontend::parse_text(
         "signed_comparison.sv",

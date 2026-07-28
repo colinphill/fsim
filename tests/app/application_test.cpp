@@ -219,6 +219,8 @@ module comparison_app;
   logic gt;
   logic ge;
   logic logical_not;
+  logic case_eq;
+  logic case_neq;
   always_comb begin
     neq = lhs != rhs;
     lt = lhs < rhs;
@@ -226,6 +228,8 @@ module comparison_app;
     gt = lhs > rhs;
     ge = lhs >= rhs;
     logical_not = !lhs;
+    case_eq = lhs === rhs;
+    case_neq = lhs !== rhs;
   end
   initial begin
     lhs = 4'b0010;
@@ -3916,7 +3920,8 @@ end architecture rtl;
   assert((
       comparison_hybrid.final_values
       == std::vector<std::string>{
-          "01Z0", "0011", "X", "X", "X", "X", "X", "0"}));
+          "01Z0", "0011", "X", "X", "X", "X", "X", "0",
+          "0", "1"}));
 
   auto logical_config = config;
   logical_config.project.name = "logical-expression-test";
