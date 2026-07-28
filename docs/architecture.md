@@ -721,8 +721,12 @@ direct enumeration and signal/process parent metadata follow their owning
 instance. Missing conditional/iterative hierarchy components are synthesized
 as nested generate-region scopes, including indexed names and generated local
 signal/process ownership. A generated process whose internal name equals its
-scope receives a stable `.$process` public path. Driver objects and source
-metadata for that deferred kind are not yet wired.
+scope receives a stable `.$process` public path. Each supported process/output
+relationship is a generation-safe driver object beneath its signal, deduplicated
+across repeated whole/slice blocking, update-phase, and delayed writes. In the
+current single-driver executable slice, driver reads return the corresponding
+signal value; driver mutation remains invalid. Resolved multi-driver storage
+and per-driver pre-resolution values remain pending with resolution semantics.
 
 Optimized `run` and instrumented `debug` are required to have identical
 simulation semantics. Bounded debug code uses addressable process frames and
@@ -756,7 +760,8 @@ previous handler on every exit path. Tests raise SIGINT through the real handler
 and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
 to terminal completion, and restore a preinstalled handler. The `locals`
 command reads declared packed process variables through an engine-neutral
-interface; richer local types and driver objects remain planned.
+interface; richer local types and resolved multi-driver inspection remain
+planned.
 
 ## Tcl automation
 

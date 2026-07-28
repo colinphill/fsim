@@ -853,6 +853,84 @@ max_deltas = 1000
   assert(info.source_line == 3);
   assert(info.source_column > 0);
 
+  fsim_object_t q_driver = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session, text("tb.q.$driver[0]"), &q_driver)
+      == FSIM_STATUS_OK);
+  std::vector<fsim_object_t> q_children;
+  assert(
+      fsim_session_visit_children(
+          session, q, collect_object, &q_children)
+      == FSIM_STATUS_OK);
+  assert(q_children.size() == 1);
+  assert(q_children.front() == q_driver);
+  fsim_object_info_t q_driver_info{};
+  q_driver_info.struct_size = sizeof(q_driver_info);
+  q_driver_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, q_driver, &q_driver_info)
+      == FSIM_STATUS_OK);
+  assert(q_driver_info.kind == FSIM_OBJECT_DRIVER);
+  assert(q_driver_info.parent == q);
+  assert(q_driver_info.width == 1);
+  assert(
+      std::string(
+          q_driver_info.name.data,
+          q_driver_info.name.size)
+      == "$driver[0]");
+  assert(
+      std::string(
+          q_driver_info.type_name.data,
+          q_driver_info.type_name.size)
+      == "driver");
+  assert(
+      (q_driver_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
+      == FSIM_OBJECT_FLAG_HAS_SOURCE);
+  assert(q_driver_info.source_line == 5);
+  int driver_children = 0;
+  assert(
+      fsim_session_visit_children(
+          session, q_driver, visit, &driver_children)
+      == FSIM_STATUS_OK);
+  assert(driver_children == 0);
+  assert(
+      fsim_session_deposit(session, q_driver, text("0"))
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_force(session, q_driver, text("1"))
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_release(session, q_driver)
+      == FSIM_STATUS_INVALID_HANDLE);
+
+  fsim_object_t generated_driver = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.selected.generated_value.$driver[0]"),
+          &generated_driver)
+      == FSIM_STATUS_OK);
+  fsim_object_info_t generated_driver_info{};
+  generated_driver_info.struct_size = sizeof(generated_driver_info);
+  generated_driver_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, generated_driver, &generated_driver_info)
+      == FSIM_STATUS_OK);
+  assert(generated_driver_info.parent == generated_signal);
+  std::vector<fsim_object_t> generated_signal_children;
+  assert(
+      fsim_session_visit_children(
+          session,
+          generated_signal,
+          collect_object,
+          &generated_signal_children)
+      == FSIM_STATUS_OK);
+  assert(generated_signal_children.size() == 1);
+  assert(generated_signal_children.front() == generated_driver);
+
   fsim_object_t observed = FSIM_INVALID_OBJECT;
   assert(
       fsim_session_find_object(
@@ -889,12 +967,30 @@ max_deltas = 1000
       fsim_session_read_value(session, q, value, sizeof(value), &required)
       == FSIM_STATUS_OK);
   assert(std::string(value) == "X");
+  assert(
+      fsim_session_read_value(
+          session,
+          q_driver,
+          value,
+          sizeof(value),
+          &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "X");
 
   assert(fsim_session_deposit(session, q, text("0")) == FSIM_STATUS_OK);
   assert(fsim_session_force(session, q, text("1")) == FSIM_STATUS_OK);
   assert(fsim_session_deposit(session, q, text("0")) == FSIM_STATUS_OK);
   assert(
       fsim_session_read_value(session, q, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "1");
+  assert(
+      fsim_session_read_value(
+          session,
+          q_driver,
+          value,
+          sizeof(value),
+          &required)
       == FSIM_STATUS_OK);
   assert(std::string(value) == "1");
   assert(fsim_session_release(session, q) == FSIM_STATUS_OK);
@@ -984,6 +1080,7 @@ max_deltas = 1000
 
   const auto old_root = root;
   const auto old_q = q;
+  const auto old_q_driver = q_driver;
   const auto old_process = process;
   const auto old_child_instance = child_instance;
   const auto old_generated_scope = generated_scope;
@@ -993,6 +1090,14 @@ max_deltas = 1000
   assert(
       fsim_session_read_value(
           session, old_q, value, sizeof(value), &required)
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_read_value(
+          session,
+          old_q_driver,
+          value,
+          sizeof(value),
+          &required)
       == FSIM_STATUS_INVALID_HANDLE);
   int stale_children = 0;
   assert(

@@ -320,7 +320,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the thirteenth post-gate batch, including native-C nested/indexed generate hierarchy and collision-free process paths (143.03 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the fourteenth post-gate batch, including native-C single-driver hierarchy, metadata, reads, and invalidation (133.37 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -659,10 +659,10 @@ Planned implementation sequence:
 4. Complete Windows execution evidence and broader event/list/error tests for
    the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
    timed, delta, and static-wait execution is implemented.
-5. Complete source metadata for driver objects and remaining executable
-   constructs. Native C instance, generate-region, process, lexical-scope,
-   packed-variable, signal, and port objects now carry retained source
-   metadata.
+5. Complete source metadata for remaining executable constructs and add
+   resolved per-driver storage with multi-driver semantics. Native C instance,
+   generate-region, process, lexical-scope, packed-variable, signal, port, and
+   current single-driver objects now carry retained source metadata.
 6. Complete remaining public C API object kinds and richer value metadata.
    Append-only input/output prefixes, legacy/current/future structure sizes,
    strict C11 use, and assertion diagnostic metadata now have automated
@@ -743,24 +743,23 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The thirteenth post-gate batch is implementation-complete:
+The fourteenth post-gate batch is implementation-complete:
 
-1. missing hierarchy components between parent and child specializations are
-   synthesized as generate-region scopes;
-2. nested conditional and iterative region paths are retained;
-3. indexed generate names such as `lane[0]` remain stable;
-4. generated regions use the existing generation-safe scope encoding;
-5. region metadata exposes leaf/full names, source, and `generate` type;
-6. generated local signals are parented directly beneath their region;
-7. generated processes are parented directly beneath their region;
-8. child instances are parented beneath the innermost generated region;
-9. a process/scope internal-name collision receives a stable `.$process`
-   public path with successful lookup round-trip; and
-10. direct traversal and rebuild invalidation cover region, indexed-region,
-    instance, generated signal, and generated process objects.
+1. driver handles use a collision-free generation-safe payload partition;
+2. whole-signal blocking writes produce driver relationships;
+3. update-phase and delayed whole-signal writes use the same adapter;
+4. blocking/update/delayed slice writes use the same adapter;
+5. repeated writes by one process to one signal deduplicate to one driver;
+6. driver paths are stable and resolve through full-path lookup;
+7. signals enumerate their drivers as direct children;
+8. driver metadata exposes parent, width, type, and process source;
+9. driver reads expose the current value in the supported single-driver slice,
+   while deposit/force/release are rejected; and
+10. generated-signal drivers, leaf traversal, and rebuild invalidation have
+    automated evidence.
 
-Focused native-C hierarchy tests pass. The interval LLVM 22 Debug regression
-passed all 19 tests in 143.03 seconds. This batch is ready to commit and push.
+Focused native-C driver tests pass. The interval LLVM 22 Debug regression
+passed all 19 tests in 133.37 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 

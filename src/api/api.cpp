@@ -27,6 +27,9 @@ namespace {
 
 constexpr std::uint32_t kRootPayload = 1;
 constexpr std::uint32_t kScopePayloadBase = 2;
+constexpr std::uint32_t kScopeIndexMask = UINT32_C(0x1fffffff);
+constexpr std::uint32_t kDriverPayload = UINT32_C(0x20000000);
+constexpr std::uint32_t kDriverIndexMask = UINT32_C(0x1fffffff);
 constexpr std::uint32_t kSignalPayload = UINT32_C(0x40000000);
 constexpr std::uint32_t kProcessPayload = UINT32_C(0x80000000);
 constexpr std::uint32_t kVariablePayload = UINT32_C(0xc0000000);
@@ -36,6 +39,12 @@ struct VariableObject {
   std::size_t process{};
   std::size_t local{};
   std::optional<std::size_t> parent_scope;
+  std::string full_name;
+};
+
+struct DriverObject {
+  fsim::runtime::simir::SignalId signal{};
+  std::size_t process{};
   std::string full_name;
 };
 
@@ -76,6 +85,7 @@ struct Session {
   std::vector<ScopeObject> scopes;
   std::vector<std::string> process_names;
   std::vector<VariableObject> variables;
+  std::vector<DriverObject> drivers;
   bool finished{};
 };
 
@@ -155,6 +165,30 @@ const fsim::runtime::simir::SourceLocation* process_source(
     }
   }
   return first;
+}
+
+std::optional<fsim::runtime::simir::SignalId> output_signal(
+    const fsim::runtime::simir::Operation& operation) {
+  using namespace fsim::runtime::simir;
+  if (const auto* value = std::get_if<WriteBlocking>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = std::get_if<WriteUpdate>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = std::get_if<WriteAfter>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = std::get_if<WriteBlockingSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = std::get_if<WriteUpdateSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = std::get_if<WriteAfterSlice>(&operation)) {
+    return value->signal;
+  }
+  return std::nullopt;
 }
 
 template <typename Function>
@@ -302,7 +336,7 @@ std::optional<std::size_t> object_variable(
 
 fsim_object_t scope_handle(
     const Session& session, const std::size_t scope) {
-  if (scope > kObjectIndexMask - kScopePayloadBase) {
+  if (scope > kScopeIndexMask - kScopePayloadBase) {
     return FSIM_INVALID_OBJECT;
   }
   return object_handle(
@@ -317,13 +351,41 @@ std::optional<std::size_t> object_scope(
     return std::nullopt;
   }
   const auto payload = object_payload(object);
-  if ((payload & ~kObjectIndexMask) != 0
+  if ((payload & ~kScopeIndexMask) != 0
       || payload < kScopePayloadBase) {
     return std::nullopt;
   }
   const auto index =
       static_cast<std::size_t>(payload - kScopePayloadBase);
   if (index >= session.scopes.size()) {
+    return std::nullopt;
+  }
+  return index;
+}
+
+fsim_object_t driver_handle(
+    const Session& session, const std::size_t driver) {
+  if (driver > kDriverIndexMask) {
+    return FSIM_INVALID_OBJECT;
+  }
+  return object_handle(
+      session,
+      kDriverPayload | static_cast<std::uint32_t>(driver));
+}
+
+std::optional<std::size_t> object_driver(
+    const Session& session,
+    const fsim_object_t object) {
+  if (!session.simulation || !current_object(session, object)) {
+    return std::nullopt;
+  }
+  const auto payload = object_payload(object);
+  if ((payload & ~kDriverIndexMask) != kDriverPayload) {
+    return std::nullopt;
+  }
+  const auto index =
+      static_cast<std::size_t>(payload & kDriverIndexMask);
+  if (index >= session.drivers.size()) {
     return std::nullopt;
   }
   return index;
@@ -344,7 +406,7 @@ std::optional<std::size_t> ensure_scope(
     }
   }
   if (session.scopes.size()
-      > kObjectIndexMask - kScopePayloadBase) {
+      > kScopeIndexMask - kScopePayloadBase) {
     return std::nullopt;
   }
   session.scopes.push_back(
@@ -398,7 +460,7 @@ std::optional<std::size_t> append_design_scope(
     }
   }
   if (session.scopes.size()
-      > kObjectIndexMask - kScopePayloadBase) {
+      > kScopeIndexMask - kScopePayloadBase) {
     return std::nullopt;
   }
   session.scopes.push_back(ScopeObject{
@@ -415,6 +477,7 @@ bool rebuild_debug_objects(Session& session) {
   session.scopes.clear();
   session.process_names.clear();
   session.variables.clear();
+  session.drivers.clear();
   if (!session.simulation) {
     return true;
   }
@@ -536,6 +599,37 @@ bool rebuild_debug_objects(Session& session) {
       name += ".$process";
     }
     session.process_names.push_back(std::move(name));
+  }
+
+  std::vector<std::size_t> driver_ordinals(
+      design.signals().size(), 0);
+  for (std::size_t process_index = 0;
+       process_index < processes.size(); ++process_index) {
+    std::vector<fsim::runtime::simir::SignalId> outputs;
+    for (const auto& operation : processes[process_index].operations) {
+      const auto signal = output_signal(operation);
+      if (signal
+          && std::find(outputs.begin(), outputs.end(), *signal)
+              == outputs.end()) {
+        outputs.push_back(*signal);
+      }
+    }
+    for (const auto signal : outputs) {
+      if (session.drivers.size() > kDriverIndexMask
+          || signal >= design.signals().size()) {
+        session.scopes.clear();
+        session.process_names.clear();
+        session.variables.clear();
+        session.drivers.clear();
+        return false;
+      }
+      const auto ordinal = driver_ordinals[signal]++;
+      session.drivers.push_back(DriverObject{
+          signal,
+          process_index,
+          design.signals()[signal].name + ".$driver["
+              + std::to_string(ordinal) + "]"});
+    }
   }
   return true;
 }
@@ -886,6 +980,7 @@ fsim_status_t fsim_session_load_project(
     value.scopes.clear();
     value.process_names.clear();
     value.variables.clear();
+    value.drivers.clear();
     advance_design_generation(value);
     value.finished = false;
     value.current_execution_process.reset();
@@ -930,6 +1025,7 @@ fsim_status_t fsim_session_build(const fsim_session_t session) {
     value.scopes.clear();
     value.process_names.clear();
     value.variables.clear();
+    value.drivers.clear();
     advance_design_generation(value);
     value.finished = false;
     value.current_execution_process.reset();
@@ -949,8 +1045,8 @@ fsim_status_t fsim_session_build(const fsim_session_t session) {
       value.simulation.reset();
       value.diagnostics.error(
           "FSIM-API-0004",
-          "the design contains too many debug-visible scopes or local "
-          "variables for the version-1 object handle encoding");
+          "the design contains too many debug-visible scopes, local "
+          "variables, or drivers for the version-1 object handle encoding");
       return FSIM_STATUS_INTERNAL_ERROR;
     }
     const auto native_cache =
@@ -1032,6 +1128,13 @@ fsim_status_t fsim_session_find_object(
         return FSIM_STATUS_OK;
       }
     }
+    for (std::size_t index = 0;
+         index < value.drivers.size(); ++index) {
+      if (value.drivers[index].full_name == requested) {
+        *out_object = driver_handle(value, index);
+        return FSIM_STATUS_OK;
+      }
+    }
     return FSIM_STATUS_INVALID_HANDLE;
   });
 }
@@ -1049,8 +1152,25 @@ fsim_status_t fsim_session_visit_children(
       return FSIM_STATUS_INVALID_ARGUMENT;
     }
     if (parent != root_handle(value)) {
-      if (object_signal(value, parent)
-          || object_variable(value, parent)) {
+      if (const auto signal = object_signal(value, parent)) {
+        for (std::size_t index = 0;
+             index < value.drivers.size(); ++index) {
+          if (value.drivers[index].signal != *signal) {
+            continue;
+          }
+          CallbackGuard guard{value};
+          if (callback(
+                  value.handle,
+                  driver_handle(value, index),
+                  user_data)
+              == 0) {
+            break;
+          }
+        }
+        return FSIM_STATUS_OK;
+      }
+      if (object_variable(value, parent)
+          || object_driver(value, parent)) {
         return FSIM_STATUS_OK;
       }
       if (const auto process = object_process(value, parent)) {
@@ -1342,6 +1462,23 @@ fsim_status_t fsim_session_get_object_info(
       set_source(info.source);
       return FSIM_STATUS_OK;
     }
+    if (const auto driver = object_driver(value, object)) {
+      const auto& reference = value.drivers[*driver];
+      const auto& signal =
+          value.simulation->design().signals().at(reference.signal);
+      const auto& process =
+          value.simulation->design().processes().at(reference.process);
+      out_info->parent = signal_handle(value, reference.signal);
+      out_info->kind = FSIM_OBJECT_DRIVER;
+      out_info->width = signal.width;
+      out_info->name = view(leaf_name(reference.full_name));
+      out_info->full_name = view(reference.full_name);
+      out_info->type_name = view("driver");
+      if (const auto* source = process_source(process)) {
+        set_source(*source);
+      }
+      return FSIM_STATUS_OK;
+    }
     return FSIM_STATUS_INVALID_HANDLE;
   });
 }
@@ -1363,6 +1500,9 @@ fsim_status_t fsim_session_read_value(
     std::optional<fsim::runtime::PackedLogic4> packed;
     if (const auto signal = object_signal(value, object)) {
       packed = value.simulation->read_signal(*signal);
+    } else if (const auto driver = object_driver(value, object)) {
+      packed = value.simulation->read_signal(
+          value.drivers[*driver].signal);
     } else if (const auto variable =
                    object_variable(value, object)) {
       const auto& reference = value.variables[*variable];
