@@ -75,7 +75,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, install_monitor) == 160,
                "runtime monitor-install callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, control_monitor) == 168,
                "runtime monitor-control callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 176,
+_Static_assert(offsetof(fsim_jit_runtime_v1, random_value) == 176,
+               "runtime random-value callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 184,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -109,6 +111,7 @@ typedef struct callback_state {
   uint32_t time_count;
   uint32_t monitor_install_count;
   uint32_t monitor_control_count;
+  uint32_t random_count;
 } callback_state;
 
 static uint64_t read_signal(
@@ -305,6 +308,27 @@ static void control_monitor(
   state->report_instruction = instruction;
 }
 
+static uint64_t random_value(
+    void* context,
+    uint32_t process,
+    uint32_t instruction,
+    uint64_t maximum_aval,
+    uint64_t maximum_bval,
+    uint64_t minimum_aval,
+    uint64_t minimum_bval,
+    uint64_t* result_bval) {
+  callback_state* state = (callback_state*)context;
+  ++state->random_count;
+  state->output_process = process;
+  state->report_instruction = instruction;
+  (void)maximum_aval;
+  (void)maximum_bval;
+  (void)minimum_aval;
+  (void)minimum_bval;
+  *result_bval = 0;
+  return UINT64_C(0x12345678);
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -331,7 +355,8 @@ int main(void) {
       write_formatted,
       write_time,
       install_monitor,
-      control_monitor};
+      control_monitor,
+      random_value};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -378,6 +403,16 @@ int main(void) {
       runtime.context, UINT32_C(12), UINT32_C(22));
   runtime.control_monitor(
       runtime.context, UINT32_C(12), UINT32_C(23));
+  uint64_t random_bval = UINT64_MAX;
+  const uint64_t random_aval = runtime.random_value(
+      runtime.context,
+      UINT32_C(12),
+      UINT32_C(24),
+      UINT64_C(9),
+      UINT64_C(1),
+      UINT64_C(3),
+      UINT64_C(0),
+      &random_bval);
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -425,7 +460,10 @@ int main(void) {
       state.time_count != UINT32_C(1) ||
       state.monitor_install_count != UINT32_C(1) ||
       state.monitor_control_count != UINT32_C(1) ||
-      state.report_instruction != UINT32_C(23) ||
+      state.random_count != UINT32_C(1) ||
+      state.report_instruction != UINT32_C(24) ||
+      random_aval != UINT64_C(0x12345678) ||
+      random_bval != UINT64_C(0) ||
       state.output_process != UINT32_C(12) ||
       state.output_newline != UINT32_C(1) ||
       state.output_size != UINT64_C(5)) {

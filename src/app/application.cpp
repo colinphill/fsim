@@ -33,6 +33,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <set>
 #include <span>
 #include <sstream>
@@ -66,6 +67,13 @@ namespace {
 using runtime::PackedLogic4;
 using runtime::SimulationTick;
 using runtime::simir::SignalId;
+
+[[nodiscard]] std::uint64_t entropy_seed() {
+  std::random_device source;
+  const auto high = static_cast<std::uint64_t>(source());
+  const auto low = static_cast<std::uint64_t>(source());
+  return (high << 32U) ^ low;
+}
 
 class SystemCProcessExecutor final
     : public runtime::simir::ProcessExecutor {
@@ -190,6 +198,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.write_time = write_time;
     runtime.install_monitor = install_monitor;
     runtime.control_monitor = control_monitor;
+    runtime.random_value = random_value;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -908,6 +917,60 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       state.context->set_monitor_enabled(operation->enabled);
     } catch (...) {
       capture_failure(state);
+    }
+  }
+
+  static std::uint64_t random_value(
+      void* context,
+      const std::uint32_t process,
+      const std::uint32_t instruction,
+      const std::uint64_t maximum_aval,
+      const std::uint64_t maximum_bval,
+      const std::uint64_t minimum_aval,
+      const std::uint64_t minimum_bval,
+      std::uint64_t* result_bval) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure || result_bval == nullptr) {
+      return 0;
+    }
+    try {
+      if (state.context == nullptr
+          || state.process == nullptr
+          || state.process->id != process
+          || instruction >= state.process->operations.size()) {
+        throw std::logic_error{
+            "invalid generated random-value callback"};
+      }
+      const auto* operation =
+          std::get_if<runtime::simir::RandomValue>(
+              &state.process->operations[instruction]);
+      if (operation == nullptr) {
+        throw std::logic_error{
+            "generated random-value callback references a "
+            "different operation"};
+      }
+      const auto maximum =
+          operation->maximum
+              ? std::optional<PackedLogic4>{
+                    PackedLogic4::from_aval_bval(
+                        32, maximum_aval, maximum_bval)}
+              : std::nullopt;
+      const auto minimum =
+          operation->minimum
+              ? std::optional<PackedLogic4>{
+                    PackedLogic4::from_aval_bval(
+                        32, minimum_aval, minimum_bval)}
+              : std::nullopt;
+      const auto result =
+          state.context->random_value(
+              operation->kind, maximum, minimum);
+      const auto encoded = result.low_word();
+      *result_bval = encoded.bval;
+      return encoded.aval;
+    } catch (...) {
+      capture_failure(state);
+      *result_bval = std::numeric_limits<std::uint64_t>::max();
+      return std::numeric_limits<std::uint64_t>::max();
     }
   }
 
@@ -2339,6 +2402,8 @@ int handle_build(
   const auto process_count = built->design.processes().size();
   const auto plugin_count = built->systemc_plugins.size();
   const auto cache_hit = built->cache_hit;
+  const auto selected_seed = built->seed;
+  const auto entropy_seed_selected = built->entropy_seed;
   Simulation prepared(
       std::move(*built),
       config.run.max_deltas,
@@ -2368,6 +2433,9 @@ int handle_build(
            << native_cache.rejected_entries << " rejected";
   }
   output << ")\n";
+  if (entropy_seed_selected) {
+    output << "random seed " << selected_seed << '\n';
+  }
   return 0;
 }
 
@@ -2385,6 +2453,9 @@ int handle_run(
       config, built->time_resolution, diagnostics);
   if (config.run.duration && !duration) {
     return 1;
+  }
+  if (built->entropy_seed) {
+    output << "random seed " << built->seed << '\n';
   }
   Simulation simulation(
       std::move(*built),
@@ -3447,6 +3518,9 @@ int handle_debug(
   if (!built) {
     return 1;
   }
+  if (built->entropy_seed) {
+    output << "random seed " << built->seed << '\n';
+  }
   Simulation simulation(
       std::move(*built),
       config.run.max_deltas,
@@ -4127,6 +4201,10 @@ std::optional<BuiltProject> build_project(
       return std::nullopt;
     }
   }
+  const auto selected_seed =
+      config.project.random_seed
+          ? entropy_seed()
+          : config.project.seed;
   return BuiltProject{
       std::move(*elaborated.design),
       key,
@@ -4137,6 +4215,8 @@ std::optional<BuiltProject> build_project(
       std::move(systemc_plugins),
       std::move(systemc_hierarchy),
       std::move(systemc_roots),
+      selected_seed,
+      config.project.random_seed,
       hit};
 }
 
@@ -4153,7 +4233,8 @@ struct Simulation::Impl {
       const SimulationEngine engine)
       : built(std::move(project)),
         interpreter(built.design.create_interpreter(
-            runtime::SchedulerOptions{max_deltas, 32})) {
+            runtime::SchedulerOptions{max_deltas, 32},
+            built.seed)) {
     if (!built.design.systemc_processes().empty()
         && !built.systemc_hierarchy) {
       throw std::logic_error{

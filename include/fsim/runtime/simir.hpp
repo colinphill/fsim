@@ -429,6 +429,21 @@ struct MonitorControl {
   bool enabled{};
 };
 
+enum class RandomKind : std::uint8_t {
+  urandom,
+  random,
+  urandom_range,
+};
+
+/// Produce one deterministic 32-bit random value from the current process's
+/// project-seeded stream.
+struct RandomValue {
+  RegisterId destination{};
+  RandomKind kind{RandomKind::urandom};
+  std::optional<RegisterId> maximum;
+  std::optional<RegisterId> minimum;
+};
+
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
 struct Report {
   std::string message;
@@ -454,8 +469,8 @@ using Operation =
                  WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
                  Branch, DebugPoint, Assert, Display, FormatDisplay,
-                 TimeDisplay, MonitorInstall, MonitorControl, Report, Pause,
-                 Stop, Halt>;
+                 TimeDisplay, MonitorInstall, MonitorControl, RandomValue,
+                 Report, Pause, Stop, Halt>;
 
 struct Signal {
   std::string name;
@@ -669,6 +684,13 @@ public:
       bool) {}
   virtual void install_monitor(const MonitorInstall&) {}
   virtual void set_monitor_enabled(bool) {}
+  [[nodiscard]] virtual PackedLogic4 random_value(
+      RandomKind,
+      const std::optional<PackedLogic4>&,
+      const std::optional<PackedLogic4>&) {
+    throw std::logic_error{
+        "alternate process executor does not support random values"};
+  }
   virtual void report(
       std::string_view,
       AssertionSeverity,
@@ -826,7 +848,9 @@ public:
       SimulationTick,
       std::uint64_t)>;
 
-  explicit Interpreter(SchedulerOptions options = {});
+  explicit Interpreter(
+      SchedulerOptions options = {},
+      std::uint64_t seed = 1);
   ~Interpreter();
   Interpreter(Interpreter &&) noexcept;
   Interpreter &operator=(Interpreter &&) noexcept;

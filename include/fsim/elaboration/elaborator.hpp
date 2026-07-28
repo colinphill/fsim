@@ -270,7 +270,8 @@ public:
     signal_paths() const;
 
     [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> create_interpreter(
-        runtime::SchedulerOptions options = {}) const;
+        runtime::SchedulerOptions options = {},
+        std::uint64_t seed = 1) const;
 
 private:
     friend struct ElaborationResult;

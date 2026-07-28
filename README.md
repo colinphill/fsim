@@ -461,6 +461,11 @@ analysis units.
 overridden with options such as `--top`, `--duration`, `--max-deltas`,
 `--trace`, `--seed`, `-O`, and `-j`.
 
+Random facilities use deterministic per-process streams and default to project
+seed `1`. A numeric `seed`/`--seed` value reproduces a run. Explicit
+`--seed=random` selects host entropy once and prints the effective numeric seed
+so it can be reused.
+
 The current debugger supports relative or absolute time runs,
 statement/process/delta/time stepping, source/time/signal-change breakpoints,
 scope/signal navigation, value inspection, and deposit/force/release. With LLVM

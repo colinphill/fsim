@@ -156,7 +156,8 @@ Required for v1:
 - functions/tasks, `initial`/`final`, delays/events, fork/join, and named
   events;
 - strings, files, dynamic/associative arrays and queues;
-- basic deterministic random functions, `$readmem*`, display/stop tasks; and
+- deterministic `$random`, `$urandom`, and `$urandom_range` streams seeded
+  per stable process ID, `$readmem*`, display/stop tasks; and
 - immediate assertions.
 
 Deferred beyond v1: classes, constraints and UVM; concurrent SVA; covergroups;

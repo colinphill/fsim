@@ -5922,6 +5922,54 @@ endmodule
       "unknown numeric output literals need a targeted diagnostic");
 }
 
+void test_systemverilog_random_functions() {
+  const auto parsed = parse_text(
+      "random_functions.sv",
+      R"(
+module random_functions;
+  logic [31:0] a, b, c, d, e, f, u;
+  initial begin
+    a = $urandom;
+    b = $urandom();
+    c = $random;
+    d = $random();
+    e = $urandom_range(9);
+    f = $urandom_range(9, 3);
+    u = $urandom_range(4'bx);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "random system functions must parse");
+  const auto& statements =
+      parsed.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 7
+          && std::ranges::all_of(
+              statements,
+              [](const Statement& statement) {
+                return statement.kind == StatementKind::Assignment
+                    && statement.value.kind == ExpressionKind::Call;
+              })
+          && statements[0].value.text == "$urandom"
+          && statements[0].value.operands.empty()
+          && statements[1].value.text == "$urandom"
+          && statements[1].value.operands.empty()
+          && statements[2].value.text == "$random"
+          && statements[2].value.operands.empty()
+          && statements[3].value.text == "$random"
+          && statements[3].value.operands.empty()
+          && statements[4].value.text == "$urandom_range"
+          && statements[4].value.operands.size() == 1
+          && statements[5].value.text == "$urandom_range"
+          && statements[5].value.operands.size() == 2
+          && statements[6].value.text == "$urandom_range"
+          && statements[6].value.operands.size() == 1
+          && statements[6].value.operands[0].kind
+              == ExpressionKind::LogicLiteral,
+      "bare/empty random calls and range arguments in typed HIR");
+}
+
 int main() {
   try {
     require(
@@ -5980,6 +6028,7 @@ int main() {
     test_conditional_generate_hierarchy();
     test_systemverilog_named_events();
     test_verilog_literal_display();
+    test_systemverilog_random_functions();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

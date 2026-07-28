@@ -3180,6 +3180,170 @@ void test_simir_display_output() {
       "failure report callback-before-termination semantics");
 }
 
+void test_deterministic_random_values() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto run_sequence =
+      [](const std::uint64_t seed) {
+        Interpreter interpreter{{1000, 32}, seed};
+        std::array<SignalId, 4> outputs{};
+        for (std::size_t index = 0; index < outputs.size(); ++index) {
+          outputs[index] = interpreter.add_signal(
+              {
+                  "random_" + std::to_string(index),
+                  PackedLogic4(32, Logic4::zero)});
+        }
+        Process process;
+        process.name = "random-sequence";
+        process.register_count = 6;
+        process.operations = {
+            RandomValue{
+                0,
+                RandomKind::urandom,
+                std::nullopt,
+                std::nullopt},
+            WriteBlocking{outputs[0], 0},
+            RandomValue{
+                1,
+                RandomKind::random,
+                std::nullopt,
+                std::nullopt},
+            WriteBlocking{outputs[1], 1},
+            LoadConstant{
+                2, PackedLogic4::from_aval_bval(32, 9, 0)},
+            RandomValue{
+                3,
+                RandomKind::urandom_range,
+                2,
+                std::nullopt},
+            WriteBlocking{outputs[2], 3},
+            LoadConstant{
+                4, PackedLogic4::from_aval_bval(32, 3, 0)},
+            LoadConstant{
+                5, PackedLogic4::from_aval_bval(32, 9, 0)},
+            RandomValue{
+                3,
+                RandomKind::urandom_range,
+                4,
+                5},
+            WriteBlocking{outputs[3], 3},
+            Halt{},
+        };
+        static_cast<void>(
+            interpreter.add_process(std::move(process)));
+        interpreter.start();
+        const auto result = interpreter.run();
+        require(
+            result.status == RunStatus::completed,
+            "random sequence must complete");
+        std::array<Logic4Word, 4> values{};
+        for (std::size_t index = 0; index < outputs.size(); ++index) {
+          values[index] =
+              interpreter.signal_value(outputs[index]).low_word();
+        }
+        return values;
+      };
+
+  const auto first = run_sequence(42);
+  const auto repeated = run_sequence(42);
+  const auto changed_seed = run_sequence(43);
+  require(
+      first == repeated,
+      "the same project seed must reproduce the random sequence");
+  require(
+      first[0] != changed_seed[0],
+      "a changed project seed must change the process stream");
+  require(
+      first[2].bval == 0 && first[2].aval <= 9,
+      "one-bound urandom_range inclusive bounds");
+  require(
+      first[3].bval == 0
+          && first[3].aval >= 3 && first[3].aval <= 9,
+      "two-bound urandom_range and reversed-bound normalization");
+
+  const auto run_after_optional_unknown =
+      [](const bool include_unknown) {
+        Interpreter interpreter{{1000, 32}, 77};
+        const auto random_output = interpreter.add_signal(
+            {"random", PackedLogic4(32, Logic4::zero)});
+        const auto unknown_output = interpreter.add_signal(
+            {"unknown", PackedLogic4(32, Logic4::zero)});
+        Process process;
+        process.name = "unknown-bound";
+        process.register_count = 3;
+        if (include_unknown) {
+          process.operations.emplace_back(
+              LoadConstant{0, PackedLogic4(32, Logic4::x)});
+          process.operations.emplace_back(
+              RandomValue{
+                  1,
+                  RandomKind::urandom_range,
+                  0,
+                  std::nullopt});
+          process.operations.emplace_back(
+              WriteBlocking{unknown_output, 1});
+        }
+        process.operations.emplace_back(
+            RandomValue{
+                2,
+                RandomKind::urandom,
+                std::nullopt,
+                std::nullopt});
+        process.operations.emplace_back(
+            WriteBlocking{random_output, 2});
+        process.operations.emplace_back(Halt{});
+        static_cast<void>(
+            interpreter.add_process(std::move(process)));
+        interpreter.start();
+        static_cast<void>(interpreter.run());
+        return std::pair{
+            interpreter.signal_value(random_output),
+            interpreter.signal_value(unknown_output)};
+      };
+  const auto [after_unknown, unknown_result] =
+      run_after_optional_unknown(true);
+  const auto [without_unknown, unused] =
+      run_after_optional_unknown(false);
+  static_cast<void>(unused);
+  require(
+      unknown_result
+              == PackedLogic4(32, Logic4::x)
+          && after_unknown == without_unknown,
+      "unknown range bounds return X without consuming the stream");
+
+  Interpreter per_process{{1000, 32}, 99};
+  const auto first_process_output = per_process.add_signal(
+      {"first", PackedLogic4(32, Logic4::zero)});
+  const auto second_process_output = per_process.add_signal(
+      {"second", PackedLogic4(32, Logic4::zero)});
+  for (ProcessId id = 0; id < 2; ++id) {
+    Process process;
+    process.id = id;
+    process.name = "random-process-" + std::to_string(id);
+    process.register_count = 1;
+    process.operations = {
+        RandomValue{
+            0,
+            RandomKind::urandom,
+            std::nullopt,
+            std::nullopt},
+        WriteBlocking{
+            id == 0 ? first_process_output : second_process_output,
+            0},
+        Halt{},
+    };
+    static_cast<void>(
+        per_process.add_process(std::move(process)));
+  }
+  per_process.start();
+  static_cast<void>(per_process.run());
+  require(
+      per_process.signal_value(first_process_output)
+          != per_process.signal_value(second_process_output),
+      "stable process IDs derive independent random streams");
+}
+
 void test_vcd() {
   using namespace fsim::runtime;
 
@@ -3250,6 +3414,7 @@ int main() {
     test_simir_assertion_metadata();
     test_simir_execution_point_ordering();
     test_simir_display_output();
+    test_deterministic_random_values();
     test_vcd();
   } catch (const std::exception &error) {
     std::cerr << "runtime test failure: " << error.what() << '\n';

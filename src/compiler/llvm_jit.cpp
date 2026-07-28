@@ -76,6 +76,7 @@ using runtime::simir::ReadSignal;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
+using runtime::simir::RandomValue;
 using runtime::simir::Report;
 using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
@@ -102,7 +103,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v10";
+    "fsim-llvm-native-object-v11";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -133,7 +134,8 @@ static_assert(offsetof(fsim_jit_runtime_v1, write_formatted) == 144);
 static_assert(offsetof(fsim_jit_runtime_v1, write_time) == 152);
 static_assert(offsetof(fsim_jit_runtime_v1, install_monitor) == 160);
 static_assert(offsetof(fsim_jit_runtime_v1, control_monitor) == 168);
-static_assert(sizeof(fsim_jit_runtime_v1) == 176);
+static_assert(offsetof(fsim_jit_runtime_v1, random_value) == 176);
+static_assert(sizeof(fsim_jit_runtime_v1) == 184);
 static_assert(sizeof(fsim_jit_frame_v1) == 64);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -371,6 +373,7 @@ struct ValidatedProcess {
   bool uses_time_output{};
   bool uses_monitor_install{};
   bool uses_monitor_control{};
+  bool uses_random_value{};
 };
 
 [[nodiscard]] ValidatedProcess
@@ -845,6 +848,23 @@ validate_process(const Process &process,
             },
             [&](const MonitorControl&) {
               result.uses_monitor_control = true;
+            },
+            [&](const RandomValue& operation) {
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+              if (operation.maximum) {
+                record_use(*operation.maximum, index);
+              }
+              if (operation.minimum) {
+                record_use(*operation.minimum, index);
+              }
+              if (operation.minimum && !operation.maximum) {
+                reject(
+                    process,
+                    index,
+                    "random minimum requires a maximum");
+              }
+              result.uses_random_value = true;
             },
             [&](const Report&) {
               result.uses_report = true;
@@ -1652,6 +1672,32 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(
                   builder, "enabled", value.enabled ? 1U : 0U);
             },
+            [&](const RandomValue& value) {
+              builder.add("operation", "RandomValue");
+              add_key_u64(
+                  builder, "destination", value.destination);
+              add_key_u64(
+                  builder,
+                  "kind",
+                  static_cast<std::underlying_type_t<
+                      runtime::simir::RandomKind>>(value.kind));
+              add_key_u64(
+                  builder,
+                  "has-maximum",
+                  value.maximum.has_value() ? 1U : 0U);
+              if (value.maximum) {
+                add_key_u64(
+                    builder, "maximum", *value.maximum);
+              }
+              add_key_u64(
+                  builder,
+                  "has-minimum",
+                  value.minimum.has_value() ? 1U : 0U);
+              if (value.minimum) {
+                add_key_u64(
+                    builder, "minimum", *value.minimum);
+              }
+            },
             [&](const Report& value) {
               builder.add("operation", "Report");
               builder.add("message", value.message);
@@ -2396,7 +2442,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer},
+       pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -2562,6 +2608,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 23),
         "control_monitor");
   }
+  llvm::Value* random_value_callback = nullptr;
+  if (validated.uses_random_value) {
+    random_value_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 24),
+        "random_value");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -2611,6 +2665,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
           {pointer, i32, i32},
+          false);
+  auto* random_value_type =
+      llvm::FunctionType::get(
+          i64,
+          {pointer, i32, i32, i64, i64, i64, i64, pointer},
           false);
 
   auto *register_aval = builder.CreateLoad(
@@ -3561,6 +3620,41 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   });
               branch_to_next();
             },
+            [&](const RandomValue& operation) {
+              const auto zero = constant_i64(context, 0);
+              const auto maximum =
+                  operation.maximum
+                      ? load_register(
+                            builder, registers, *operation.maximum)
+                      : EncodedValue{zero, zero, 32};
+              const auto minimum =
+                  operation.minimum
+                      ? load_register(
+                            builder, registers, *operation.minimum)
+                      : EncodedValue{zero, zero, 32};
+              builder.CreateStore(zero, read_bval_slot);
+              auto* aval = builder.CreateCall(
+                  random_value_type,
+                  random_value_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      llvm::ConstantInt::get(i32, instruction),
+                      maximum.aval,
+                      maximum.bval,
+                      minimum.aval,
+                      minimum.bval,
+                      read_bval_slot,
+                  });
+              auto* bval = builder.CreateLoad(
+                  i64, read_bval_slot, "random.bval");
+              store_register(
+                  builder,
+                  registers,
+                  operation.destination,
+                  EncodedValue{aval, bval, 32});
+              branch_to_next();
+            },
             [&](const Report& operation) {
               builder.CreateCall(
                   report_type,
@@ -3719,6 +3813,7 @@ struct LlvmJit::Impl {
     bool uses_time_output{};
     bool uses_monitor_install{};
     bool uses_monitor_control{};
+    bool uses_random_value{};
   };
 
   struct NativeEntry {
@@ -3868,6 +3963,7 @@ void LlvmJit::add_process_module(
         validated.uses_time_output,
         validated.uses_monitor_install,
         validated.uses_monitor_control,
+        validated.uses_random_value,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -4224,13 +4320,24 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_monitor_control) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, random_value)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include control_monitor");
     }
     if (runtime.control_monitor == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires control_monitor for this process");
+    }
+  }
+  if (entry.info.uses_random_value) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include random_value");
+    }
+    if (runtime.random_value == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires random_value for this process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {

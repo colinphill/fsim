@@ -4481,6 +4481,10 @@ class VerilogParser final : private detail::ParserBase {
                                 cover(name.span, previous().span)};
         return parse_postfix(std::move(expression));
       }
+      if (canonical == "$urandom" || canonical == "$random") {
+        expression.kind = ExpressionKind::Call;
+        return parse_postfix(std::move(expression));
+      }
       expression = parse_postfix(std::move(expression));
       const Expression* root = &expression;
       while ((root->kind == ExpressionKind::Index

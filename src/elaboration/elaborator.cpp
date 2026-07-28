@@ -5369,6 +5369,73 @@ private:
                 expression.operands.front(), source_width);
         }
         if (expression.kind == ExpressionKind::Call
+            && (expression.text == "$urandom"
+                || expression.text == "$random")) {
+            const bool urandom = expression.text == "$urandom";
+            if ((urandom
+                 && language_
+                     != frontend::Language::SystemVerilog2017)
+                || (!urandom
+                    && language_
+                        == frontend::Language::Vhdl2008)
+                || !expression.operands.empty()) {
+                report(
+                    "FSIM-ELAB-104",
+                    expression.text
+                        + " requires no arguments"
+                          + (urandom ? " in SystemVerilog" : ""),
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                32, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                RandomValue{
+                    destination,
+                    urandom
+                        ? RandomKind::urandom
+                        : RandomKind::random,
+                    std::nullopt,
+                    std::nullopt});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$urandom_range") {
+            if (language_
+                    != frontend::Language::SystemVerilog2017
+                || expression.operands.empty()
+                || expression.operands.size() > 2) {
+                report(
+                    "FSIM-ELAB-104",
+                    "$urandom_range requires one maximum and an "
+                    "optional minimum argument in SystemVerilog",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto maximum =
+                lower_expression(expression.operands[0], 32);
+            if (!maximum) {
+                return std::nullopt;
+            }
+            std::optional<RegisterId> minimum;
+            if (expression.operands.size() == 2) {
+                minimum =
+                    lower_expression(expression.operands[1], 32);
+                if (!minimum) {
+                    return std::nullopt;
+                }
+            }
+            const auto destination = allocate_register(
+                32, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                RandomValue{
+                    destination,
+                    RandomKind::urandom_range,
+                    *maximum,
+                    minimum});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
             && expression.text == "$isunknown") {
             if (language_
                     != frontend::Language::SystemVerilog2017
@@ -6385,6 +6452,12 @@ private:
             && expression.text == "$countbits") {
             return std::size_t{32};
         }
+        if (expression.kind == ExpressionKind::Call
+            && (expression.text == "$urandom"
+                || expression.text == "$random"
+                || expression.text == "$urandom_range")) {
+            return std::size_t{32};
+        }
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
                 local != locals_.end()) {
@@ -6518,6 +6591,10 @@ private:
             }
             return is_signed_expression(expression.operands[0]);
         case ExpressionKind::Call:
+            if (language_ != frontend::Language::Vhdl2008
+                && expression.text == "$random") {
+                return true;
+            }
             if (language_ == frontend::Language::Vhdl2008
                 && (expression.text == "'left"
                     || expression.text == "'right"
@@ -9524,8 +9601,11 @@ ElaboratedDesign::signal_paths() const {
 }
 
 std::unique_ptr<runtime::simir::Interpreter> ElaboratedDesign::create_interpreter(
-    const runtime::SchedulerOptions options) const {
-    auto interpreter = std::make_unique<runtime::simir::Interpreter>(options);
+    const runtime::SchedulerOptions options,
+    const std::uint64_t seed) const {
+    auto interpreter =
+        std::make_unique<runtime::simir::Interpreter>(
+            options, seed);
     for (const auto& signal : signals_) {
         (void)interpreter->add_signal(signal);
     }

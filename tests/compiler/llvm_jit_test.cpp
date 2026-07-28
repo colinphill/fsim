@@ -90,6 +90,7 @@ struct TestRuntime {
   std::vector<std::uint32_t> time_instructions;
   std::vector<std::uint32_t> monitor_install_instructions;
   std::vector<std::uint32_t> monitor_control_instructions;
+  std::vector<std::uint32_t> random_instructions;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -323,6 +324,21 @@ extern "C" void control_monitor(
   runtime.monitor_control_instructions.push_back(instruction);
 }
 
+extern "C" std::uint64_t random_value(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t instruction,
+    const std::uint64_t,
+    const std::uint64_t,
+    const std::uint64_t,
+    const std::uint64_t,
+    std::uint64_t* result_bval) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.random_instructions.push_back(instruction);
+  *result_bval = 0;
+  return UINT64_C(0x89abcdef);
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -349,6 +365,7 @@ extern "C" void control_monitor(
       &write_time,
       &install_monitor,
       &control_monitor,
+      &random_value,
   };
 }
 
@@ -3682,7 +3699,7 @@ void test_display_at_level(
   Process process;
   process.id = 13;
   process.name = std::string{symbol};
-  process.register_count = 1;
+  process.register_count = 2;
   process.operations = {
       Display{"hello", true},
       Display{"tail", false},
@@ -3711,6 +3728,11 @@ void test_display_at_level(
           "",
           true},
       MonitorControl{false},
+      RandomValue{
+          1,
+          RandomKind::urandom,
+          std::nullopt,
+          std::nullopt},
       Halt{},
   };
   const std::array<std::uint32_t, 1> signal_widths{8};
@@ -3747,6 +3769,9 @@ void test_display_at_level(
   assert(
       runtime.monitor_control_instructions
       == std::vector<std::uint32_t>({8}));
+  assert(
+      runtime.random_instructions
+      == std::vector<std::uint32_t>({9}));
 
   TestRuntime short_runtime;
   auto short_descriptor = abi(short_runtime);
@@ -3832,6 +3857,18 @@ void test_display_at_level(
             jit.lookup(symbol), short_monitor_control_descriptor);
       },
       "control_monitor");
+
+  TestRuntime short_random_runtime;
+  auto short_random_descriptor = abi(short_random_runtime);
+  short_random_descriptor.struct_size =
+      static_cast<std::uint32_t>(
+          offsetof(fsim_jit_runtime_v1, random_value));
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            jit.lookup(symbol), short_random_descriptor);
+      },
+      "random_value");
 }
 
 } // namespace

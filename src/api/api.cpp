@@ -80,6 +80,7 @@ struct Session {
   std::uint32_t design_generation{1};
   std::uint64_t max_deltas{100'000};
   std::uint64_t seed{1};
+  bool seed_override{};
   std::optional<fsim::runtime::simir::ProcessId>
       current_execution_process;
   std::vector<ScopeObject> scopes;
@@ -1038,6 +1039,7 @@ fsim_status_t fsim_session_create(
       if (FSIM_STRUCT_CONTAINS(
               options->struct_size, fsim_session_options_t, seed)) {
         session->seed = options->seed;
+        session->seed_override = true;
       }
     }
     fsim_session_t handle =
@@ -1117,7 +1119,10 @@ fsim_status_t fsim_session_load_project(
       return FSIM_STATUS_COMPILE_ERROR;
     }
     value.max_deltas = loaded->run.max_deltas;
-    if (!loaded->project.random_seed) {
+    if (value.seed_override) {
+      loaded->project.seed = value.seed;
+      loaded->project.random_seed = false;
+    } else if (!loaded->project.random_seed) {
       value.seed = loaded->project.seed;
     }
     value.project = std::move(loaded);

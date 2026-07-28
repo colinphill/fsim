@@ -55,6 +55,8 @@ struct BuiltProject {
   std::vector<std::filesystem::path> systemc_plugins;
   std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
   std::vector<std::uint64_t> systemc_roots;
+  std::uint64_t seed{1};
+  bool entropy_seed{};
   bool cache_hit{};
 };
 

@@ -190,6 +190,20 @@ typedef struct fsim_jit_runtime_v1 {
       void* context,
       uint32_t process,
       uint32_t instruction);
+
+  /*
+   * Append-only deterministic random-value callback. Bound values and the
+   * result use the common low-word aval/bval encoding.
+   */
+  uint64_t (*random_value)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint64_t maximum_aval,
+      uint64_t maximum_bval,
+      uint64_t minimum_aval,
+      uint64_t minimum_bval,
+      uint64_t* result_bval);
 } fsim_jit_runtime_v1;
 
 /*

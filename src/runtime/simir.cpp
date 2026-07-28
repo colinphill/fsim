@@ -1071,6 +1071,7 @@ struct Interpreter::Impl {
     std::optional<SimulationTick> wait_timeout_deadline;
     std::optional<RegisterId> wait_timeout_result;
     std::uint64_t wait_timeout_generation{};
+    std::uint64_t random_state{};
     bool halted{};
   };
 
@@ -1097,9 +1098,13 @@ struct Interpreter::Impl {
     std::uint64_t generation{};
   };
 
-  explicit Impl(SchedulerOptions options) : scheduler(options) {}
+  explicit Impl(
+      SchedulerOptions options,
+      const std::uint64_t seed)
+      : scheduler(options), root_seed(seed) {}
 
   Scheduler scheduler;
+  std::uint64_t root_seed{1};
   std::vector<Signal> signals;
   std::vector<PackedLogic4> driven_values;
   std::vector<PackedLogic4> signal_last_values;
@@ -1653,6 +1658,97 @@ struct Interpreter::Impl {
     }
   }
 
+  [[nodiscard]] static std::uint64_t initial_random_state(
+      const std::uint64_t seed,
+      const ProcessId process) noexcept {
+    auto value =
+        seed
+        + UINT64_C(0x9e3779b97f4a7c15)
+              * (static_cast<std::uint64_t>(process) + 1U);
+    value = (value ^ (value >> 30U))
+        * UINT64_C(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27U))
+        * UINT64_C(0x94d049bb133111eb);
+    return value ^ (value >> 31U);
+  }
+
+  [[nodiscard]] static std::uint32_t next_random(
+      ProcessState& process) noexcept {
+    auto value =
+        (process.random_state += UINT64_C(0x9e3779b97f4a7c15));
+    value = (value ^ (value >> 30U))
+        * UINT64_C(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27U))
+        * UINT64_C(0x94d049bb133111eb);
+    value ^= value >> 31U;
+    return static_cast<std::uint32_t>(value >> 32U);
+  }
+
+  [[nodiscard]] static std::optional<std::uint32_t>
+  known_random_bound(const PackedLogic4& value) {
+    if (value.empty()) {
+      return std::nullopt;
+    }
+    std::uint32_t result{};
+    const auto width = std::min<std::size_t>(32U, value.width());
+    for (std::size_t bit = 0; bit < width; ++bit) {
+      const auto state = value.get(bit);
+      if (state == Logic4::x || state == Logic4::z) {
+        return std::nullopt;
+      }
+      if (state == Logic4::one) {
+        result |= UINT32_C(1) << bit;
+      }
+    }
+    return result;
+  }
+
+  [[nodiscard]] PackedLogic4 random_value(
+      const ProcessId process_id,
+      const RandomKind kind,
+      const std::optional<PackedLogic4>& maximum,
+      const std::optional<PackedLogic4>& minimum) {
+    auto& process = get_process(process_id);
+    if (kind != RandomKind::urandom_range) {
+      return PackedLogic4::from_aval_bval(
+          32, next_random(process), 0);
+    }
+    if (!maximum) {
+      throw std::logic_error{
+          "$urandom_range operation has no maximum"};
+    }
+    const auto known_maximum = known_random_bound(*maximum);
+    const auto known_minimum =
+        minimum
+            ? known_random_bound(*minimum)
+            : std::optional<std::uint32_t>{0U};
+    if (!known_maximum || !known_minimum) {
+      return PackedLogic4(32, Logic4::x);
+    }
+    auto low = *known_minimum;
+    auto high = *known_maximum;
+    if (high < low) {
+      std::swap(low, high);
+    }
+    const auto span =
+        static_cast<std::uint64_t>(high)
+        - static_cast<std::uint64_t>(low) + 1U;
+    std::uint32_t sample{};
+    if (span == (UINT64_C(1) << 32U)) {
+      sample = next_random(process);
+    } else {
+      const auto full_range = UINT64_C(1) << 32U;
+      const auto accepted = full_range - full_range % span;
+      do {
+        sample = next_random(process);
+      } while (static_cast<std::uint64_t>(sample) >= accepted);
+      sample = static_cast<std::uint32_t>(
+          static_cast<std::uint64_t>(low)
+          + static_cast<std::uint64_t>(sample) % span);
+    }
+    return PackedLogic4::from_aval_bval(32, sample, 0);
+  }
+
   void publish(SignalId signal_id, PackedLogic4 value) {
     auto &signal = get_signal(signal_id);
     if (signal.initial_value.width() != value.width()) {
@@ -2134,6 +2230,14 @@ struct Interpreter::Impl::ExecutionContext final
 
   void set_monitor_enabled(const bool enabled) override {
     owner.set_monitor_enabled(enabled);
+  }
+
+  [[nodiscard]] PackedLogic4 random_value(
+      const RandomKind kind,
+      const std::optional<PackedLogic4>& maximum,
+      const std::optional<PackedLogic4>& minimum) override {
+    return owner.random_value(
+        process, kind, maximum, minimum);
   }
 
   void report(
@@ -2946,6 +3050,25 @@ void Interpreter::Impl::execute(ProcessId id) {
               set_monitor_enabled(op.enabled);
               ++process.pc;
             },
+            [&](const RandomValue& op) {
+              const auto maximum =
+                  op.maximum
+                      ? std::optional<PackedLogic4>{
+                            get_register(process, *op.maximum)}
+                      : std::nullopt;
+              const auto minimum =
+                  op.minimum
+                      ? std::optional<PackedLogic4>{
+                            get_register(process, *op.minimum)}
+                      : std::nullopt;
+              get_register(process, op.destination) =
+                  random_value(
+                      process.program.id,
+                      op.kind,
+                      maximum,
+                      minimum);
+              ++process.pc;
+            },
             [&](const Report& op) {
               if (report_hook) {
                 report_hook(
@@ -2987,8 +3110,10 @@ void Interpreter::Impl::execute(ProcessId id) {
   }
 }
 
-Interpreter::Interpreter(SchedulerOptions options)
-    : impl_(std::make_unique<Impl>(options)) {}
+Interpreter::Interpreter(
+    SchedulerOptions options,
+    const std::uint64_t seed)
+    : impl_(std::make_unique<Impl>(options, seed)) {}
 Interpreter::~Interpreter() = default;
 Interpreter::Interpreter(Interpreter &&) noexcept = default;
 Interpreter &Interpreter::operator=(Interpreter &&) noexcept = default;
@@ -3052,6 +3177,8 @@ ProcessId Interpreter::add_process(Process process) {
 
   Impl::ProcessState state;
   state.registers.assign(process.register_count, PackedLogic4{});
+  state.random_state = Impl::initial_random_state(
+      impl_->root_seed, id);
   state.waiting_on_static = !process.initialize;
   state.program = std::move(process);
   impl_->processes.push_back(std::move(state));

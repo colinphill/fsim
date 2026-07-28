@@ -320,6 +320,39 @@ cache_path = "assertion-cache"
 max_deltas = 1000
 )TOML";
   }
+  {
+    std::ofstream source(directory / "api_random.sv");
+    source << R"(
+module api_random;
+  logic [31:0] value;
+  initial value = $urandom;
+endmodule
+)";
+  }
+  const auto random_manifest_path = directory / "random.toml";
+  {
+    std::ofstream manifest(random_manifest_path);
+    manifest << R"(
+schema = 1
+[project]
+name = "api-random-test"
+top = "sv:work.api_random"
+time_resolution = "1ns"
+seed = 999
+
+[[source_set]]
+language = "systemverilog"
+standard = "2017"
+library = "work"
+files = ["api_random.sv"]
+
+[build]
+cache_path = "random-cache"
+
+[run]
+max_deltas = 1000
+)";
+  }
 
   fsim_session_options_t options{};
   options.struct_size = sizeof(options);
@@ -1433,6 +1466,59 @@ max_deltas = 1000
       == UINT64_C(0x0123456789abcdef));
 
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
+
+  const auto api_random_value =
+      [&](const std::uint64_t seed) {
+        fsim_session_options_t random_options{};
+        random_options.struct_size = sizeof(random_options);
+        random_options.api_version = FSIM_API_VERSION;
+        random_options.max_deltas = 1000;
+        random_options.seed = seed;
+        fsim_session_t random_session = FSIM_INVALID_SESSION;
+        assert(
+            fsim_session_create(
+                &random_options, &random_session)
+            == FSIM_STATUS_OK);
+        assert(
+            fsim_session_load_project(
+                random_session,
+                random_manifest_path.string().c_str())
+            == FSIM_STATUS_OK);
+        assert(
+            fsim_session_check(random_session)
+            == FSIM_STATUS_OK);
+        assert(
+            fsim_session_build(random_session)
+            == FSIM_STATUS_OK);
+        assert(
+            fsim_session_run(random_session, 10)
+            == FSIM_STATUS_OK);
+        fsim_object_t object = FSIM_INVALID_OBJECT;
+        assert(
+            fsim_session_find_object(
+                random_session,
+                text("api_random.value"),
+                &object)
+            == FSIM_STATUS_OK);
+        char random_text[64]{};
+        size_t random_required{};
+        assert(
+            fsim_session_read_value(
+                random_session,
+                object,
+                random_text,
+                sizeof(random_text),
+                &random_required)
+            == FSIM_STATUS_OK);
+        const std::string result{random_text};
+        assert(
+            fsim_session_destroy(random_session)
+            == FSIM_STATUS_OK);
+        return result;
+      };
+  const auto api_seed_111 = api_random_value(111);
+  assert(api_seed_111 == api_random_value(111));
+  assert(api_seed_111 != api_random_value(112));
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);

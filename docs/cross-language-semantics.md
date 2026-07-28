@@ -138,7 +138,9 @@ value and a bound SV child observes and inverts it in the following delta.
 Stable process IDs derive from deterministic elaboration order, not pointer
 values, thread timing, or hash-table iteration. Random facilities default to
 project seed `1`; each process receives a stream derived from its stable ID.
-`--seed=random` is an explicit opt-in to nondeterministic seeding.
+Numeric manifest, CLI, and native-session seeds reproduce the same per-process
+streams. `--seed=random` is an explicit opt-in to host-entropy seeding; fsim
+prints the selected numeric seed so the run can be reproduced.
 
 Simulation aborts when delta count exceeds `max_deltas` (default `100000`) at
 one timestamp. The diagnostic includes active process orders and recently

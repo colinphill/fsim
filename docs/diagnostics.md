@@ -586,6 +586,7 @@ therefore excluded.
 | `FSIM-ELAB-101` | error | A named-event trigger targets an object not declared as an event. |
 | `FSIM-ELAB-102` | error | A formatted-output value expression could not be lowered into SimIR. |
 | `FSIM-ELAB-103` | error | A value-sensitive `$monitor` operand is not yet a direct packed-signal reference. |
+| `FSIM-ELAB-104` | error | A random system function is used in an unsupported language or with an invalid argument count. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

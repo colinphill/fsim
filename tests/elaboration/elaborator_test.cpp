@@ -8554,5 +8554,122 @@ endmodule
         has_diagnostic(
             invalid_monitor_design, "FSIM-ELAB-103"));
 
+    const auto random_source = fsim::frontend::parse_text(
+        "random.sv",
+        R"(
+module random_test;
+  logic [31:0] a, b, c, d, e, f;
+  initial begin
+    a = $urandom;
+    b = $urandom();
+    c = $random;
+    d = $random();
+    e = $urandom_range(9);
+    f = $urandom_range(3, 9);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(random_source.ok());
+    const auto random_design = fsim::elaboration::elaborate(
+        random_source.design, "sv:work.random_test");
+    assert(random_design.ok());
+    std::vector<fsim::runtime::simir::RandomValue> random_operations;
+    for (const auto& operation :
+         random_design.design->processes().front().operations) {
+        if (const auto* random =
+                std::get_if<fsim::runtime::simir::RandomValue>(
+                    &operation)) {
+            random_operations.push_back(*random);
+        }
+    }
+    assert(
+        random_operations.size() == 6
+        && random_operations[0].kind
+            == fsim::runtime::simir::RandomKind::urandom
+        && random_operations[1].kind
+            == fsim::runtime::simir::RandomKind::urandom
+        && random_operations[2].kind
+            == fsim::runtime::simir::RandomKind::random
+        && random_operations[3].kind
+            == fsim::runtime::simir::RandomKind::random
+        && random_operations[4].kind
+            == fsim::runtime::simir::RandomKind::urandom_range
+        && random_operations[4].maximum
+        && !random_operations[4].minimum
+        && random_operations[5].maximum
+        && random_operations[5].minimum);
+
+    const auto invalid_random_source =
+        fsim::frontend::parse_text(
+            "invalid_random.sv",
+            R"(
+module invalid_random;
+  logic [31:0] q;
+  initial begin
+    q = $urandom(1);
+    q = $urandom_range();
+    q = $urandom_range(1, 2, 3);
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_random_source.ok());
+    const auto invalid_random_design =
+        fsim::elaboration::elaborate(
+            invalid_random_source.design,
+            "sv:work.invalid_random");
+    assert(!invalid_random_design.ok());
+    assert(
+        has_diagnostic(
+            invalid_random_design, "FSIM-ELAB-104"));
+
+    const auto verilog_random_source =
+        fsim::frontend::parse_text(
+            "verilog_random.v",
+            R"(
+module verilog_random;
+  reg [31:0] q;
+  initial q = $random;
+endmodule
+)",
+            fsim::frontend::Language::Verilog2005);
+    assert(verilog_random_source.ok());
+    const auto verilog_random_design =
+        fsim::elaboration::elaborate(
+            verilog_random_source.design,
+            "verilog:work.verilog_random");
+    assert(verilog_random_design.ok());
+    assert(std::ranges::any_of(
+        verilog_random_design.design->processes().front().operations,
+        [](const auto& operation) {
+          const auto* random =
+              std::get_if<fsim::runtime::simir::RandomValue>(
+                  &operation);
+          return random
+              && random->kind
+                  == fsim::runtime::simir::RandomKind::random;
+        }));
+
+    const auto invalid_verilog_random_source =
+        fsim::frontend::parse_text(
+            "invalid_verilog_random.v",
+            R"(
+module invalid_verilog_random;
+  reg [31:0] q;
+  initial q = $urandom;
+endmodule
+)",
+            fsim::frontend::Language::Verilog2005);
+    assert(invalid_verilog_random_source.ok());
+    const auto invalid_verilog_random_design =
+        fsim::elaboration::elaborate(
+            invalid_verilog_random_source.design,
+            "verilog:work.invalid_verilog_random");
+    assert(!invalid_verilog_random_design.ok());
+    assert(
+        has_diagnostic(
+            invalid_verilog_random_design, "FSIM-ELAB-104"));
+
     std::cout << "elaborator tests passed\n";
 }

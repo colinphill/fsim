@@ -972,6 +972,36 @@ LLVM, interpreter/O0/O2 application differentials, Tcl 9 relocation, native
 API, and runtime suites. The batch ends at feature commit `5fa32f3`; this gate
 record is pushed with the batch and the earlier Tcl 9 migration checkpoint.
 
+### Twenty-second feature batch — deterministic random facilities
+
+All ten implementation features are complete:
+
+1. Carry one effective 64-bit project seed through `BuiltProject`, the
+   elaborated interpreter, hybrid LLVM execution, debug execution, and the
+   native session path.
+2. Make the manifest default seed `1` and numeric manifest/CLI/API overrides
+   observable in simulation behavior.
+3. Resolve explicit `seed = "random"`/`--seed=random` from host entropy once
+   per build and disclose the selected numeric seed for reproducibility.
+4. Derive independent deterministic SplitMix64 streams from the project seed
+   and dense stable process IDs.
+5. Implement SystemVerilog `$urandom` with and without empty parentheses as a
+   32-bit unsigned runtime expression.
+6. Implement Verilog/SystemVerilog `$random` with and without empty
+   parentheses as a 32-bit signed runtime expression.
+7. Implement inclusive SystemVerilog `$urandom_range(maximum)` over
+   `[0, maximum]`.
+8. Implement inclusive SystemVerilog
+   `$urandom_range(maximum, minimum)`.
+9. Normalize reversed `$urandom_range` bounds deterministically.
+10. Return a 32-bit unknown value for an X/Z range bound without consuming
+    the process random stream.
+
+Focused frontend, elaboration, runtime, strict C ABI, LLVM O0/O2,
+application, CLI, native API, and diagnostic-catalog tests pass. The
+scheduled full local regression and gate record follow in a separate
+checkpoint commit.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
