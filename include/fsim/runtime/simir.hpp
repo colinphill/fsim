@@ -360,6 +360,7 @@ struct Assert {
 struct Display {
   std::string text;
   bool newline{true};
+  bool postponed{};
 };
 
 /// Stop the complete simulation, as requested by `$finish` or an equivalent
@@ -570,6 +571,7 @@ public:
   }
 
   virtual void display(std::string_view, bool) {}
+  virtual void postpone_display(std::string_view, bool) {}
 
   /// True when an embedding debugger currently requests source boundaries.
   [[nodiscard]] virtual bool execution_points_enabled() const noexcept {

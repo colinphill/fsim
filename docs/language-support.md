@@ -34,10 +34,11 @@ supersedes the older broad “named events” limitation in the compact table.
 Display-task status update: Verilog-2005/SystemVerilog literal
 `$display("text")`, `$display()`, and `$display` execute synchronously and
 append a newline through the CLI or Tcl-owned output stream; literal/empty
-`$write` uses the same path without appending a newline. Interpreter, LLVM O0,
-and LLVM O2 preserve process/time/delta ordering. Format substitutions,
-additional arguments, `$strobe`, and `$monitor` remain deferred. This update
-supersedes the compact table's broader display-task limitation.
+`$write` uses the same path without appending a newline, while literal/empty
+`$strobe` appends a newline in the current timestamp's postponed phase.
+Interpreter, LLVM O0, and LLVM O2 preserve process/time/delta ordering. Format
+substitutions, additional arguments, and `$monitor` remain deferred. This
+update supersedes the compact table's broader display-task limitation.
 
 The VHDL expression slice also executes one-dimensional packed-object
 `'left`, `'right`, `'low`, `'high`, `'length`, and `'ascending` attributes.

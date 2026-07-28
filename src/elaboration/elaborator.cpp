@@ -3046,7 +3046,8 @@ private:
             process_.operations.emplace_back(
                 Display{
                     statement.output_text,
-                    statement.output_newline});
+                    statement.output_newline,
+                    statement.output_postponed});
             break;
         case StatementKind::Pause:
             process_.operations.emplace_back(Pause{});

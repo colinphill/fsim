@@ -779,12 +779,15 @@ The nineteenth post-gate batch is in progress:
 3. Verilog-2005/SystemVerilog literal and empty `$write` reuse the typed output
    path with explicit no-newline behavior, including deterministic
    concatenation across interpreter, LLVM O0/O2, CLI, and Tcl-owned streams.
+4. Verilog-2005/SystemVerilog literal and empty `$strobe` now schedule typed
+   output in the current timestamp's postponed phase through interpreter and
+   an append-only LLVM callback, retaining stable process ordering.
 
 The forced no-system-Tcl dependency build and its isolated staged relocation
 probe pass; the ordinary installed-Tcl application regression also passes.
 Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and output
-application tests pass for the display/write slices. This is feature 3 of 10, so the
-interval full regression and remote push are not due yet.
+application tests pass for the display/write/strobe slices. This is feature 4
+of 10, so the interval full regression and remote push are not due yet.
 
 ## v1 release condition
 

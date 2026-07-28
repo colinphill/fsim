@@ -1661,6 +1661,27 @@ struct Interpreter::Impl::ExecutionContext final
     }
   }
 
+  void postpone_display(
+      const std::string_view text,
+      const bool newline) override {
+    owner.scheduler.schedule(
+        SchedulerPhase::postponed,
+        process,
+        [&owner = owner,
+         process = process,
+         text = std::string{text},
+         newline](Scheduler& scheduler) {
+          if (owner.output_hook) {
+            owner.output_hook(
+                process,
+                text,
+                newline,
+                scheduler.now(),
+                scheduler.delta());
+          }
+        });
+  }
+
   [[nodiscard]] bool
   execution_points_enabled() const noexcept override {
     return static_cast<bool>(owner.execution_point_hook);
@@ -2348,7 +2369,24 @@ void Interpreter::Impl::execute(ProcessId id) {
               ++process.pc;
             },
             [&](const Display& op) {
-              if (output_hook) {
+              if (op.postponed) {
+                scheduler.schedule(
+                    SchedulerPhase::postponed,
+                    process.program.id,
+                    [this,
+                     process_id = process.program.id,
+                     text = op.text,
+                     newline = op.newline](Scheduler& runtime) {
+                      if (output_hook) {
+                        output_hook(
+                            process_id,
+                            text,
+                            newline,
+                            runtime.now(),
+                            runtime.delta());
+                      }
+                    });
+              } else if (output_hook) {
                 output_hook(
                     process.program.id,
                     op.text,

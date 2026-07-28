@@ -63,7 +63,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, signal_active) == 112,
                "runtime signal-active callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, write_output) == 120,
                "runtime language-output callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 128,
+_Static_assert(offsetof(fsim_jit_runtime_v1, schedule_output) == 128,
+               "runtime postponed-output callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 136,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -87,6 +89,7 @@ typedef struct callback_state {
   uint32_t output_process;
   uint32_t output_newline;
   uint64_t output_size;
+  uint32_t scheduled_output_count;
 } callback_state;
 
 static uint64_t read_signal(
@@ -216,6 +219,17 @@ static void write_output(
   }
 }
 
+static void schedule_output(
+    void* context,
+    uint32_t process,
+    const char* text,
+    uint64_t text_size,
+    uint32_t newline) {
+  callback_state* state = (callback_state*)context;
+  ++state->scheduled_output_count;
+  write_output(context, process, text, text_size, newline);
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -236,7 +250,8 @@ int main(void) {
       signal_last_value,
       signal_last_event,
       signal_active,
-      write_output};
+      write_output,
+      schedule_output};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -265,6 +280,8 @@ int main(void) {
   const uint32_t active = runtime.signal_active(
       runtime.context, UINT32_C(11));
   runtime.write_output(
+      runtime.context, UINT32_C(12), "hello", UINT64_C(5), UINT32_C(1));
+  runtime.schedule_output(
       runtime.context, UINT32_C(12), "hello", UINT64_C(5), UINT32_C(1));
 
   if (runtime.abi_version != UINT32_C(1) ||
@@ -303,7 +320,8 @@ int main(void) {
       state.slice_aval != UINT64_C(0xabc) ||
       state.slice_bval != UINT64_C(0x400) ||
       state.slice_delay != UINT64_C(13) ||
-      state.output_count != UINT32_C(1) ||
+      state.output_count != UINT32_C(2) ||
+      state.scheduled_output_count != UINT32_C(1) ||
       state.output_process != UINT32_C(12) ||
       state.output_newline != UINT32_C(1) ||
       state.output_size != UINT64_C(5)) {

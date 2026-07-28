@@ -83,6 +83,7 @@ struct TestRuntime {
   std::vector<std::string> output;
   std::vector<std::uint32_t> output_processes;
   std::vector<bool> output_newlines;
+  std::vector<std::string> postponed_output;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -254,6 +255,24 @@ extern "C" void write_output(
   runtime.output_newlines.push_back(newline != 0);
 }
 
+extern "C" void schedule_output(
+    void* opaque,
+    const std::uint32_t,
+    const char* text,
+    const std::uint64_t text_size,
+    const std::uint32_t newline) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(text != nullptr || text_size == 0);
+  assert(
+      text_size
+      <= static_cast<std::uint64_t>(
+          std::numeric_limits<std::size_t>::max()));
+  assert(newline <= 1);
+  runtime.postponed_output.emplace_back(
+      text == nullptr ? "" : text,
+      static_cast<std::size_t>(text_size));
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -274,6 +293,7 @@ extern "C" void write_output(
       &signal_last_event,
       &signal_active,
       &write_output,
+      &schedule_output,
   };
 }
 
@@ -3610,6 +3630,7 @@ void test_display_at_level(
   process.operations = {
       Display{"hello", true},
       Display{"tail", false},
+      Display{"postponed", true, true},
       Halt{},
   };
   const std::array<std::uint32_t, 0> no_signals{};
@@ -3627,6 +3648,9 @@ void test_display_at_level(
       == std::vector<std::uint32_t>({13, 13}));
   assert(
       runtime.output_newlines == std::vector<bool>({true, false}));
+  assert(
+      runtime.postponed_output
+      == std::vector<std::string>({"postponed"}));
 
   TestRuntime short_runtime;
   auto short_descriptor = abi(short_runtime);
@@ -3638,6 +3662,18 @@ void test_display_at_level(
             jit.lookup(symbol), short_descriptor);
       },
       "write_output");
+
+  TestRuntime short_postponed_runtime;
+  auto short_postponed_descriptor = abi(short_postponed_runtime);
+  short_postponed_descriptor.struct_size =
+      static_cast<std::uint32_t>(
+          offsetof(fsim_jit_runtime_v1, schedule_output));
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            jit.lookup(symbol), short_postponed_descriptor);
+      },
+      "schedule_output");
 }
 
 } // namespace

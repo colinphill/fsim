@@ -3626,20 +3626,31 @@ class VerilogParser final : private detail::ParserBase {
       return statement;
     }
 
-    if (keyword("$display") || keyword("$write")) {
-      const bool newline = keyword("$display");
+    if (keyword("$display") || keyword("$write")
+        || keyword("$strobe")) {
+      const bool postponed = keyword("$strobe");
+      const bool newline = !keyword("$write");
       const std::string_view task_name =
-          newline ? "$display" : "$write";
+          postponed ? "$strobe"
+          : newline ? "$display"
+                    : "$write";
       const std::string semantic_code =
-          newline ? "FSIM-SV-SEM-037" : "FSIM-SV-SEM-038";
+          postponed ? "FSIM-SV-SEM-039"
+          : newline ? "FSIM-SV-SEM-037"
+                    : "FSIM-SV-SEM-038";
       const std::string close_code =
-          newline ? "FSIM-SV-PARSE-119" : "FSIM-SV-PARSE-121";
+          postponed ? "FSIM-SV-PARSE-123"
+          : newline ? "FSIM-SV-PARSE-119"
+                    : "FSIM-SV-PARSE-121";
       const std::string semicolon_code =
-          newline ? "FSIM-SV-PARSE-120" : "FSIM-SV-PARSE-122";
+          postponed ? "FSIM-SV-PARSE-124"
+          : newline ? "FSIM-SV-PARSE-120"
+                    : "FSIM-SV-PARSE-122";
       const auto start = advance();
       Statement statement;
       statement.kind = StatementKind::Display;
       statement.output_newline = newline;
+      statement.output_postponed = postponed;
       if (match(TokenKind::LeftParen)) {
         if (!at(TokenKind::RightParen)) {
           if (at(TokenKind::StringLiteral)) {

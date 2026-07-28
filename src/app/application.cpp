@@ -169,6 +169,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.signal_last_event = signal_last_event;
     runtime.signal_active = signal_active;
     runtime.write_output = write_output;
+    runtime.schedule_output = schedule_output;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -658,6 +659,36 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
             "invalid generated language-output callback");
       }
       state.context->display(
+          std::string_view{
+              text == nullptr ? "" : text,
+              static_cast<std::size_t>(text_size)},
+          newline != 0);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void schedule_output(
+      void* context,
+      const std::uint32_t,
+      const char* text,
+      const std::uint64_t text_size,
+      const std::uint32_t newline) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (state.context == nullptr
+          || (text == nullptr && text_size != 0)
+          || newline > 1
+          || text_size
+              > static_cast<std::uint64_t>(
+                  std::numeric_limits<std::size_t>::max())) {
+        throw std::logic_error{
+            "invalid generated postponed-output callback"};
+      }
+      state.context->postpone_display(
           std::string_view{
               text == nullptr ? "" : text,
               static_cast<std::size_t>(text_size)},

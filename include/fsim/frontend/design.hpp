@@ -317,6 +317,7 @@ struct Statement {
   // task slice. Formatting operands are added separately.
   std::string output_text;
   bool output_newline{true};
+  bool output_postponed{};
 
   // Block contents or the true branch/delayed statement.
   std::vector<Statement> statements;

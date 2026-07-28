@@ -5492,6 +5492,54 @@ endmodule
             return diagnostic.code == "FSIM-SV-SEM-038";
           }),
       "formatted $write arguments need a targeted diagnostic");
+
+  const auto strobe = parse_text(
+      "strobe.sv",
+      R"(
+module strobe;
+  initial begin
+    $strobe("later");
+    $strobe();
+    $strobe;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(strobe.ok(), "literal $strobe tasks must parse");
+  const auto& strobe_statements =
+      strobe.design.units.front().processes.front().statements;
+  require(
+      strobe_statements.size() == 3
+          && std::all_of(
+              strobe_statements.begin(),
+              strobe_statements.end(),
+              [](const Statement& statement) {
+                return statement.kind == StatementKind::Display
+                    && statement.output_newline
+                    && statement.output_postponed;
+              })
+          && strobe_statements.front().output_text == "later"
+          && strobe_statements[1].output_text.empty()
+          && strobe_statements[2].output_text.empty(),
+      "literal and empty $strobe HIR");
+
+  const auto unsupported_strobe = parse_text(
+      "formatted_strobe.sv",
+      R"(
+module formatted_strobe;
+  logic q;
+  initial $strobe("%b", q);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::any_of(
+          unsupported_strobe.diagnostics.begin(),
+          unsupported_strobe.diagnostics.end(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-039";
+          }),
+      "formatted $strobe arguments need a targeted diagnostic");
 }
 
 int main() {

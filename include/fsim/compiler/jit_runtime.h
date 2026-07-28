@@ -137,6 +137,18 @@ typedef struct fsim_jit_runtime_v1 {
       const char* text,
       uint64_t text_size,
       uint32_t newline);
+
+  /*
+   * Append-only postponed language-output callback. The callback copies or
+   * consumes text during the call and schedules publication in the current
+   * timestamp's postponed phase.
+   */
+  void (*schedule_output)(
+      void* context,
+      uint32_t process,
+      const char* text,
+      uint64_t text_size,
+      uint32_t newline);
 } fsim_jit_runtime_v1;
 
 /*

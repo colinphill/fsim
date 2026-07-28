@@ -2849,28 +2849,47 @@ void test_simir_display_output() {
   process.name = "display";
   process.operations = {
       Display{"first", true},
+      Display{"postponed", true, true},
       WaitFor{2},
       Display{"tail", false},
       Halt{},
   };
   const auto process_id = interpreter.add_process(std::move(process));
+  Process second_process;
+  second_process.id = 1;
+  second_process.name = "second-strobe";
+  second_process.operations = {
+      Display{"second-postponed", true, true},
+      Halt{},
+  };
+  const auto second_process_id =
+      interpreter.add_process(std::move(second_process));
   struct Event {
     ProcessId process{};
     std::string text;
     bool newline{};
     SimulationTick time{};
     std::uint64_t delta{};
+    SchedulerPhase phase{SchedulerPhase::active};
   };
   std::vector<Event> events;
   interpreter.set_output_hook(
-      [&events](
+      [&events, &interpreter](
           const ProcessId process_value,
           const std::string_view text,
           const bool newline,
           const SimulationTick time,
           const std::uint64_t delta) {
         events.push_back(
-            {process_value, std::string{text}, newline, time, delta});
+            {
+                process_value,
+                std::string{text},
+                newline,
+                time,
+                delta,
+                interpreter.scheduler()
+                    .current_phase()
+                    .value_or(SchedulerPhase::active)});
       });
   interpreter.start();
   const auto result = interpreter.run();
@@ -2878,18 +2897,32 @@ void test_simir_display_output() {
       result.status == RunStatus::completed,
       "display process must complete");
   require(
-      events.size() == 2
+      events.size() == 4
           && events[0].process == process_id
           && events[0].text == "first"
           && events[0].newline
           && events[0].time == 0
           && events[0].delta == 0
+          && events[0].phase == SchedulerPhase::active
           && events[1].process == process_id
-          && events[1].text == "tail"
-          && !events[1].newline
-          && events[1].time == 2
-          && events[1].delta == 0,
-      "display hook ordering and metadata");
+          && events[1].text == "postponed"
+          && events[1].newline
+          && events[1].time == 0
+          && events[1].delta == 0
+          && events[1].phase == SchedulerPhase::postponed
+          && events[2].process == second_process_id
+          && events[2].text == "second-postponed"
+          && events[2].newline
+          && events[2].time == 0
+          && events[2].delta == 0
+          && events[2].phase == SchedulerPhase::postponed
+          && events[3].process == process_id
+          && events[3].text == "tail"
+          && !events[3].newline
+          && events[3].time == 2
+          && events[3].delta == 0
+          && events[3].phase == SchedulerPhase::active,
+      "immediate/postponed display hook ordering and metadata");
 }
 
 void test_vcd() {
