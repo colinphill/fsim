@@ -6265,6 +6265,110 @@ endmodule
             .to_msb_string()
         == "0");
 
+    const auto systemverilog_loop_control =
+        fsim::frontend::parse_text(
+            "systemverilog_loop_control.sv",
+            R"(
+module systemverilog_loop_control;
+  logic [3:0] static_result;
+  logic [3:0] break_result;
+  logic [3:0] runtime_result;
+  logic [3:0] nested_result;
+  logic [3:0] cursor;
+  initial begin
+    static_result = 4'b0000;
+    repeat (3) begin
+      static_result = static_result + 1;
+      continue;
+      static_result = static_result + 4;
+    end
+    break_result = 4'b0000;
+    repeat (3) begin
+      break_result = break_result + 1;
+      break;
+      break_result = break_result + 4;
+    end
+    runtime_result = 4'b0000;
+    cursor = 4'b0000;
+    while (cursor < 6) begin
+      cursor = cursor + 1;
+      if (cursor == 2) continue;
+      if (cursor == 5) break;
+      runtime_result = runtime_result + cursor;
+    end
+    nested_result = 4'b0000;
+    for (int outer = 0; outer < 2; outer++) begin
+      for (int inner = 0; inner < 3; inner++) begin
+        nested_result = nested_result + 1;
+        break;
+      end
+    end
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(systemverilog_loop_control.ok());
+    const auto elaborated_systemverilog_loop_control =
+        fsim::elaboration::elaborate(
+            systemverilog_loop_control.design,
+            "sv:work.systemverilog_loop_control");
+    if (!elaborated_systemverilog_loop_control.ok()) {
+        for (const auto& diagnostic :
+             elaborated_systemverilog_loop_control.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_systemverilog_loop_control.ok());
+    auto systemverilog_loop_control_interpreter =
+        elaborated_systemverilog_loop_control.design
+            ->create_interpreter();
+    const auto systemverilog_loop_control_result =
+        systemverilog_loop_control_interpreter->run();
+    assert(
+        systemverilog_loop_control_result.status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto& [name, expected] :
+         std::initializer_list<std::pair<
+             std::string_view, std::string_view>>{
+             {"static_result", "0011"},
+             {"break_result", "0001"},
+             {"runtime_result", "1000"},
+             {"nested_result", "0010"}}) {
+        const auto signal =
+            elaborated_systemverilog_loop_control.design
+                ->find_signal(name);
+        assert(signal);
+        const auto actual =
+            systemverilog_loop_control_interpreter
+                ->signal_value(*signal)
+                .to_msb_string();
+        if (actual != expected) {
+            std::cerr << name << ": expected " << expected
+                      << ", got " << actual << '\n';
+        }
+        assert(
+            actual == expected);
+    }
+
+    const auto orphan_loop_control =
+        fsim::frontend::parse_text(
+            "orphan_loop_control.sv",
+            R"(
+module orphan_loop_control;
+  initial break;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(!orphan_loop_control.ok());
+    const auto rejected_orphan_loop_control =
+        fsim::elaboration::elaborate(
+            orphan_loop_control.design,
+            "sv:work.orphan_loop_control");
+    assert(!rejected_orphan_loop_control.ok());
+    assert(has_diagnostic(
+        rejected_orphan_loop_control, "FSIM-ELAB-078"));
+
     const auto vhdl_runtime_loop =
         fsim::frontend::parse_text(
             "vhdl_runtime_loop.vhd",
@@ -6313,6 +6417,94 @@ end architecture;
             ->signal_value(*vhdl_runtime_loop_observed)
             .to_msb_string()
         == "1");
+
+    const auto vhdl_loop_control =
+        fsim::frontend::parse_text(
+            "vhdl_loop_control.vhd",
+            R"(
+entity vhdl_loop_control is
+  port (
+    trigger : in std_logic;
+    static_ok : out boolean;
+    runtime_ok : out boolean;
+    nested_ok : out boolean
+  );
+end entity;
+architecture rtl of vhdl_loop_control is
+begin
+  execute: process(trigger)
+    variable static_result : boolean := false;
+    variable runtime_result : boolean := false;
+    variable nested_result : boolean := false;
+    variable keep_going : boolean := true;
+    variable skipped : boolean := false;
+  begin
+    for lane in 0 to 4 loop
+      next when lane = 0;
+      static_result := true;
+      exit;
+    end loop;
+    while keep_going loop
+      if not skipped then
+        skipped := true;
+        next;
+      end if;
+      runtime_result := true;
+      exit;
+    end loop;
+    for outer in 0 to 1 loop
+      for inner in 0 to 2 loop
+        nested_result := true;
+        exit;
+      end loop;
+    end loop;
+    static_ok <= static_result;
+    runtime_ok <= runtime_result;
+    nested_ok <= nested_result;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    if (!vhdl_loop_control.ok()) {
+        for (const auto& diagnostic :
+             vhdl_loop_control.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(vhdl_loop_control.ok());
+    const auto elaborated_vhdl_loop_control =
+        fsim::elaboration::elaborate(
+            vhdl_loop_control.design,
+            "vhdl:work.vhdl_loop_control(rtl)");
+    if (!elaborated_vhdl_loop_control.ok()) {
+        for (const auto& diagnostic :
+             elaborated_vhdl_loop_control.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_vhdl_loop_control.ok());
+    auto vhdl_loop_control_interpreter =
+        elaborated_vhdl_loop_control.design
+            ->create_interpreter();
+    const auto vhdl_loop_control_result =
+        vhdl_loop_control_interpreter->run();
+    assert(
+        vhdl_loop_control_result.status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto name :
+         {"static_ok", "runtime_ok", "nested_ok"}) {
+        const auto signal =
+            elaborated_vhdl_loop_control.design
+                ->find_signal(name);
+        assert(signal);
+        assert(
+            vhdl_loop_control_interpreter
+                ->signal_value(*signal)
+                .to_msb_string()
+            == "1");
+    }
 
     const auto invalid_vhdl_runtime_loop =
         fsim::frontend::parse_text(

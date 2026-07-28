@@ -173,6 +173,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-107` | error | Expected `end` for a sequential VHDL while loop. |
 | `FSIM-VHDL-PARSE-108` | error | Expected `loop` after a sequential VHDL while-loop body. |
 | `FSIM-VHDL-PARSE-109` | error | Expected `;` after a sequential VHDL while loop. |
+| `FSIM-VHDL-PARSE-110` | error | Expected `;` after a VHDL `exit` or `next` statement. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -193,6 +194,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-020` | error | A package constant name is declared more than once. |
 | `FSIM-VHDL-SEM-021` | error | A sequential VHDL case statement contains more than one `others` alternative. |
 | `FSIM-VHDL-SEM-022` | error | A sequential VHDL case statement has an alternative after `others`. |
+| `FSIM-VHDL-SEM-023` | error | A VHDL `exit` or `next` statement appears outside a sequential loop. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -216,6 +218,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
 | `FSIM-VHDL-UNSUPPORTED-025` | error | A sequential for loop uses an end label, which the bounded loop slice does not yet retain. |
+| `FSIM-VHDL-UNSUPPORTED-026` | error | A VHDL `exit` or `next` targets a loop label, which this frontend slice does not yet retain. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -368,6 +371,7 @@ therefore excluded.
 | `FSIM-SV-PARSE-101` | error | Expected `)` after a procedural repeat count. |
 | `FSIM-SV-PARSE-102` | error | Expected `(` after a procedural `while`. |
 | `FSIM-SV-PARSE-103` | error | Expected `)` after a procedural while condition. |
+| `FSIM-SV-PARSE-104` | error | Expected `;` after a SystemVerilog `break` or `continue` statement. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -410,6 +414,7 @@ therefore excluded.
 | `FSIM-SV-SEM-028` | error | A bounded procedural loop iteration updates a name other than its loop variable. |
 | `FSIM-SV-SEM-029` | error | A bounded procedural loop update is not a unit step toward its comparison bound. |
 | `FSIM-SV-SEM-030` | error | A bounded `forever` body has no timing control and therefore cannot suspend its process. |
+| `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -495,6 +500,7 @@ therefore excluded.
 | `FSIM-ELAB-075` | error | A Verilog/SystemVerilog repeat count is not locally static. |
 | `FSIM-ELAB-076` | error | A Verilog/SystemVerilog repeat count is negative. |
 | `FSIM-ELAB-077` | error | A VHDL while condition is not scalar Boolean. |
+| `FSIM-ELAB-078` | error | Loop-control HIR reached elaboration without an enclosing loop. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

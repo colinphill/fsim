@@ -235,6 +235,8 @@ enum class StatementKind {
   If,
   Case,
   Loop,
+  Break,
+  Continue,
   Assert,
   Delay,
   WaitOn,

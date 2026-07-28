@@ -2720,6 +2720,149 @@ endmodule
   }
 }
 
+void test_loop_control_statements() {
+  const auto systemverilog = parse_text(
+      "loop_control.sv",
+      R"(
+module loop_control;
+  logic flag;
+  initial begin
+    for (int outer = 0; outer < 2; outer++) begin
+      continue;
+      while (flag) begin
+        break;
+      end
+      break;
+    end
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "nested SystemVerilog break and continue statements must parse");
+  const auto& sv_loop =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements.front();
+  require(
+      sv_loop.kind == StatementKind::Loop
+          && sv_loop.statements.size() == 3
+          && sv_loop.statements[0].kind
+              == StatementKind::Continue
+          && sv_loop.statements[1].kind == StatementKind::Loop
+          && sv_loop.statements[1].statements.size() == 1
+          && sv_loop.statements[1].statements[0].kind
+              == StatementKind::Break
+          && sv_loop.statements[2].kind
+              == StatementKind::Break,
+      "SystemVerilog loop controls retain their nested HIR scopes");
+
+  const auto invalid_systemverilog = parse_text(
+      "invalid_loop_control.sv",
+      R"(
+module invalid_loop_control;
+  initial begin
+    break;
+    continue
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_systemverilog.ok()
+          && std::ranges::any_of(
+              invalid_systemverilog.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-031";
+              })
+          && std::ranges::any_of(
+              invalid_systemverilog.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-104";
+              }),
+      "out-of-loop and malformed SystemVerilog controls are diagnosed");
+
+  const auto vhdl = parse_text(
+      "loop_control.vhd",
+      R"(
+entity loop_control is
+end entity;
+architecture rtl of loop_control is
+begin
+  exercise: process
+  begin
+    for outer in 0 to 1 loop
+      next when outer = 0;
+      while true loop
+        exit;
+      end loop;
+      exit when outer = 1;
+    end loop;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      vhdl.ok(),
+      "nested VHDL exit and next statements must parse");
+  const auto* architecture =
+      vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
+  const auto& vhdl_loop =
+      architecture->processes.front().statements.front();
+  require(
+      vhdl_loop.kind == StatementKind::Loop
+          && vhdl_loop.statements.size() == 3
+          && vhdl_loop.statements[0].kind == StatementKind::If
+          && vhdl_loop.statements[0].statements.front().kind
+              == StatementKind::Continue
+          && vhdl_loop.statements[1].kind == StatementKind::Loop
+          && vhdl_loop.statements[1].statements.front().kind
+              == StatementKind::Break
+          && vhdl_loop.statements[2].kind == StatementKind::If
+          && vhdl_loop.statements[2].statements.front().kind
+              == StatementKind::Break,
+      "conditional VHDL loop controls lower to conditional HIR nodes");
+
+  const auto invalid_vhdl = parse_text(
+      "invalid_loop_control.vhd",
+      R"(
+architecture rtl of invalid_loop_control is
+begin
+  exercise: process
+  begin
+    exit;
+    for lane in 0 to 1 loop
+      next outer when lane = 0
+    end loop;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_vhdl.ok()
+          && std::ranges::any_of(
+              invalid_vhdl.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-023";
+              })
+          && std::ranges::any_of(
+              invalid_vhdl.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-026";
+              })
+          && std::ranges::any_of(
+              invalid_vhdl.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-110";
+              }),
+      "out-of-loop, labeled, and malformed VHDL controls are diagnosed");
+}
+
 void test_systemverilog_conditional_expression() {
   const auto result = parse_text(
       "conditional.sv",
@@ -3991,6 +4134,7 @@ int main() {
     test_systemverilog_procedural_for_loops();
     test_verilog_repeat_statements();
     test_runtime_loop_statements();
+    test_loop_control_statements();
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
     test_systemverilog_arithmetic_expressions();

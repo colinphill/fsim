@@ -115,6 +115,9 @@ The current tree contains:
 - executable VHDL/Verilog/SystemVerilog `while` backedges plus suspending
   Verilog/SystemVerilog `forever` loops, with language-specific condition
   truth rules and statement safe points on every iteration;
+- nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, including
+  conditional VHDL forms, with innermost-loop control across both statically
+  unrolled and runtime loops;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

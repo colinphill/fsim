@@ -2398,6 +2398,7 @@ public:
         local_signed_.clear();
         local_ranges_.clear();
         local_members_.clear();
+        loop_controls_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = std::string(hierarchy) + "."
             + (source.name.empty()
@@ -2512,6 +2513,7 @@ public:
         local_signed_.clear();
         local_ranges_.clear();
         local_members_.clear();
+        loop_controls_.clear();
         return std::move(process_);
     }
 
@@ -2529,6 +2531,7 @@ public:
         local_signed_.clear();
         local_ranges_.clear();
         local_members_.clear();
+        loop_controls_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = name + ".concurrent_" + std::to_string(order);
         emit_debug_point(DebugPointKind::process_entry, statement.span);
@@ -2555,6 +2558,7 @@ public:
         local_signed_.clear();
         local_ranges_.clear();
         local_members_.clear();
+        loop_controls_.clear();
         return std::move(process_);
     }
 
@@ -2752,6 +2756,12 @@ private:
             break;
         case StatementKind::Loop:
             lower_loop(statement);
+            break;
+        case StatementKind::Break:
+            lower_loop_control(statement, true);
+            break;
+        case StatementKind::Continue:
+            lower_loop_control(statement, false);
             break;
         case StatementKind::Assert:
             lower_assert(statement);
@@ -3519,6 +3529,7 @@ private:
                 ? value < *limit
                 : value <= *limit;
         };
+        loop_controls_.push_back({});
         while (in_range()) {
             if (count++ == maximum_iterations) {
                 report(
@@ -3526,6 +3537,7 @@ private:
                     "sequential for loop exceeds the bounded "
                     "1,000,000-iteration elaboration limit",
                     statement.span);
+                loop_controls_.pop_back();
                 return;
             }
             auto body = statement.statements;
@@ -3541,11 +3553,28 @@ private:
                 diagnostics_,
                 language_);
             lower_statements(body);
+            const auto next_iteration =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            for (const auto jump :
+                 loop_controls_.back().continue_jumps) {
+                process_.operations[jump] =
+                    Jump{next_iteration};
+            }
+            loop_controls_.back().continue_jumps.clear();
             if (!statement.loop_limit_exclusive
                 && value == *limit) {
                 break;
             }
             value += statement.loop_descending ? -1 : 1;
+        }
+        auto loop_control = std::move(loop_controls_.back());
+        loop_controls_.pop_back();
+        const auto end =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        for (const auto jump : loop_control.break_jumps) {
+            process_.operations[jump] = Jump{end};
         }
     }
 
@@ -3572,13 +3601,48 @@ private:
         const auto body_start =
             static_cast<InstructionIndex>(
                 process_.operations.size());
+        loop_controls_.push_back(
+            LoopControlContext{loop_start, {}, {}});
         lower_statements(statement.statements);
+        auto loop_control = std::move(loop_controls_.back());
+        loop_controls_.pop_back();
         process_.operations.emplace_back(Jump{loop_start});
         const auto end =
             static_cast<InstructionIndex>(
                 process_.operations.size());
         process_.operations[branch_index] = Branch{
             *condition, body_start, end, unknown_policy};
+        for (const auto jump : loop_control.break_jumps) {
+            process_.operations[jump] = Jump{end};
+        }
+    }
+
+    void lower_loop_control(
+        const Statement& statement, const bool is_break) {
+        if (loop_controls_.empty()) {
+            report(
+                "FSIM-ELAB-078",
+                std::string{"a "}
+                    + (is_break ? "break/exit" : "continue/next")
+                    + " statement has no enclosing loop",
+                statement.span);
+            return;
+        }
+        const auto jump =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        if (!is_break
+            && loop_controls_.back().continue_target) {
+            process_.operations.emplace_back(
+                Jump{*loop_controls_.back().continue_target});
+            return;
+        }
+        process_.operations.emplace_back(Jump{0});
+        auto& targets =
+            is_break
+                ? loop_controls_.back().break_jumps
+                : loop_controls_.back().continue_jumps;
+        targets.push_back(jump);
     }
 
     struct PackedMemberReference {
@@ -4948,6 +5012,8 @@ private:
                         statement.loop_limit, output);
                 }
                 break;
+            case StatementKind::Break:
+            case StatementKind::Continue:
             case StatementKind::Delay:
             case StatementKind::WaitOn:
             case StatementKind::Finish:
@@ -5004,6 +5070,12 @@ private:
     std::unordered_map<
         std::string, std::vector<frontend::PackedMember>>
         local_members_;
+    struct LoopControlContext {
+        std::optional<InstructionIndex> continue_target;
+        std::vector<InstructionIndex> continue_jumps;
+        std::vector<InstructionIndex> break_jumps;
+    };
+    std::vector<LoopControlContext> loop_controls_;
     frontend::Language language_{frontend::Language::Vhdl2008};
 };
 

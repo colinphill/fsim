@@ -8,7 +8,7 @@ evidence-backed progress of the current repository. It complements the
 [feature matrix](feature-matrix.md), which tracks individual language and
 runtime features.
 
-Last updated: 2026-07-27.
+Last updated: 2026-07-28.
 
 The repository is currently a pre-alpha architecture vertical slice. It is not
 the fsim v1 release, and a milestone is not complete merely because its
@@ -213,6 +213,9 @@ The following foundation is implemented:
   language-specific condition rules, per-iteration debug-safe points, and
   resumable backedges accepted by LLVM while raw zero-time cycles remain
   rejected;
+- nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, including
+  conditional VHDL forms, lowered through an innermost-loop target stack for
+  both elaboration-unrolled and cyclic runtime CFGs;
 - nested VHDL `if`/`elsif`/`else` with Boolean literals and typed Boolean
   operators, plus nested SystemVerilog `if`/`else` and immediate assertions
   using packed four-state truth conversion, with O0/O2 differential evidence;
@@ -266,7 +269,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 573 unique current production diagnostic codes.
+- a stable catalog covering 579 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -292,6 +295,7 @@ Current Linux validation:
 | SystemVerilog package constants and packed types | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive imports, direct scoped constants/types, alias chains, parameterized ranges, explicit/implicit enum values, non-nested packed-struct layouts/member reads/writes, targeted legality failures, interpreter/JIT/VCD equality, unrelated-package reuse, and transitive native-cache invalidation |
 | SystemVerilog expression semantics | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for four-state logical/reduction/shift/arithmetic operations, complemented reductions/XNOR, and exact `===`/`!==` X/Z comparison |
 | VHDL packed shifts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for `sll`/`srl`/`sra`, including X-containing data and arithmetic left-element fill |
+| Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional VHDL forms, static-unrolled and runtime loops, innermost-loop targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -501,6 +505,8 @@ Completed groundwork:
 - executable multi-language `while` and timing-controlled
   Verilog/SystemVerilog `forever` loops through suspension-safe SimIR
   backedges;
+- nested SystemVerilog `break`/`continue` and VHDL `exit`/`next` control for
+  statically unrolled and runtime loops;
 - bounded nested VHDL and SystemVerilog conditional statements, including
   language-specific Boolean/four-state condition rules;
 - deterministic project seed handling;

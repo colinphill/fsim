@@ -1679,7 +1679,9 @@ class VhdlParser final : private detail::ParserBase {
       }
       statement.loop_limit = parse_expression();
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-102");
+      ++sequential_loop_depth_;
       statement.statements = parse_statement_list({"end"});
+      --sequential_loop_depth_;
       expect_keyword("end", true, "FSIM-VHDL-PARSE-103");
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-104");
       if (at(TokenKind::Identifier)) {
@@ -1704,7 +1706,9 @@ class VhdlParser final : private detail::ParserBase {
       statement.loop_runtime = true;
       statement.condition = parse_expression();
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-106");
+      ++sequential_loop_depth_;
       statement.statements = parse_statement_list({"end"});
+      --sequential_loop_depth_;
       expect_keyword("end", true, "FSIM-VHDL-PARSE-107");
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-108");
       if (at(TokenKind::Identifier)) {
@@ -1721,6 +1725,51 @@ class VhdlParser final : private detail::ParserBase {
           "FSIM-VHDL-PARSE-109");
       statement.span = span_from(start, previous());
       return statement;
+    }
+    if (keyword("exit", 0, true) || keyword("next", 0, true)) {
+      const auto start = advance();
+      const auto is_exit = detail::iequals(start.text, "exit");
+      if (sequential_loop_depth_ == 0) {
+        error(
+            start,
+            "FSIM-VHDL-SEM-023",
+            std::string{"a VHDL "}
+                + (is_exit ? "exit" : "next")
+                + " statement must be nested in a sequential loop");
+      }
+      if (at(TokenKind::Identifier)
+          && !keyword("when", 0, true)) {
+        const auto label = advance();
+        error(
+            label,
+            "FSIM-VHDL-UNSUPPORTED-026",
+            "targeted loop labels on VHDL exit and next statements are "
+            "not implemented in this frontend slice");
+      }
+
+      Statement control;
+      control.kind =
+          is_exit ? StatementKind::Break : StatementKind::Continue;
+      control.span = start.span;
+      if (match_keyword("when", true)) {
+        Statement conditional;
+        conditional.kind = StatementKind::If;
+        conditional.condition = parse_expression();
+        control.span = span_from(start, previous());
+        conditional.statements.push_back(std::move(control));
+        expect(
+            TokenKind::Semicolon,
+            "';' after VHDL exit or next statement",
+            "FSIM-VHDL-PARSE-110");
+        conditional.span = span_from(start, previous());
+        return conditional;
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after VHDL exit or next statement",
+          "FSIM-VHDL-PARSE-110");
+      control.span = span_from(start, previous());
+      return control;
     }
     if (match_keyword("null", true)) {
       const auto start = previous();
@@ -2010,6 +2059,8 @@ class VhdlParser final : private detail::ParserBase {
       }
     }
   }
+
+  std::size_t sequential_loop_depth_{};
 };
 
 }  // namespace

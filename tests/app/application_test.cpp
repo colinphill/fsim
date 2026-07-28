@@ -507,6 +507,8 @@ module conditional_statement_app;
   logic [2:0] repeat_result;
   logic [2:0] runtime_loop_result;
   logic forever_clock;
+  logic [3:0] static_continue_result;
+  logic [3:0] runtime_control_result;
   always_comb begin
     if (selector) begin
       if (selector[3])
@@ -532,6 +534,19 @@ module conditional_statement_app;
     runtime_loop_result = 3'b000;
     while (runtime_loop_result < 3)
       runtime_loop_result = runtime_loop_result + 1;
+    static_continue_result = 4'b0000;
+    repeat (3) begin
+      static_continue_result = static_continue_result + 1;
+      continue;
+      static_continue_result = static_continue_result + 4;
+    end
+    runtime_control_result = 4'b0000;
+    while (runtime_control_result < 5) begin
+      runtime_control_result = runtime_control_result + 1;
+      if (runtime_control_result == 2) continue;
+      if (runtime_control_result == 5) break;
+      runtime_control_result = runtime_control_result + 1;
+    end
     if (4'b0000)
       zero_case = 1'b1;
     else
@@ -574,12 +589,20 @@ architecture rtl of vhdl_conditional_statement_app is
   signal sequential_loop_result : std_logic_vector(3 downto 0);
   signal null_loop_result : std_logic_vector(1 downto 0);
   signal runtime_while_result : boolean;
+  signal static_control_result : boolean;
+  signal runtime_control_result : boolean;
+  signal nested_control_result : boolean;
 begin
   choose: process(trigger)
     variable assembled : std_logic_vector(3 downto 0) := "0000";
     variable untouched : std_logic_vector(1 downto 0) := "00";
     variable keep_going : boolean := true;
     variable while_result : boolean := false;
+    variable static_control : boolean := false;
+    variable runtime_control : boolean := false;
+    variable nested_control : boolean := false;
+    variable keep_controlling : boolean := true;
+    variable skipped : boolean := false;
   begin
     if true then
       true_case <= true;
@@ -630,9 +653,31 @@ begin
       while_result := true;
       keep_going := false;
     end loop;
+    for lane in 0 to 2 loop
+      next when lane = 0;
+      static_control := true;
+      exit;
+    end loop;
+    while keep_controlling loop
+      if not skipped then
+        skipped := true;
+        next;
+      end if;
+      runtime_control := true;
+      exit;
+    end loop;
+    for outer in 0 to 1 loop
+      for inner in 0 to 2 loop
+        nested_control := true;
+        exit;
+      end loop;
+    end loop;
     sequential_loop_result <= assembled;
     null_loop_result <= untouched;
     runtime_while_result <= while_result;
+    static_control_result <= static_control;
+    runtime_control_result <= runtime_control;
+    nested_control_result <= nested_control;
   end process;
 end architecture;
 )";
@@ -4309,11 +4354,23 @@ end architecture rtl;
     assert(conditional_statement_hybrid.compiled_processes == 3);
     assert(conditional_statement_hybrid.compiled_modules == 1);
 #endif
+    if (conditional_statement_hybrid.final_values
+        != std::vector<std::string>{
+            "1000", "0", "1", "0", "0001",
+            "0011", "00", "011", "011", "0",
+            "0011", "0101"}) {
+      for (const auto& value :
+           conditional_statement_hybrid.final_values) {
+        std::cerr << value << ' ';
+      }
+      std::cerr << '\n';
+    }
     assert((
         conditional_statement_hybrid.final_values
         == std::vector<std::string>{
             "1000", "0", "1", "0", "0001",
-            "0011", "00", "011", "011", "0"}));
+            "0011", "00", "011", "011", "0",
+            "0011", "0101"}));
   }
 
   auto vhdl_conditional_statement_config = config;
@@ -4373,11 +4430,21 @@ end architecture rtl;
         vhdl_conditional_statement_hybrid.compiled_modules
         == 1);
 #endif
+    if (vhdl_conditional_statement_hybrid.final_values
+        != std::vector<std::string>{
+            "X", "1", "1", "1", "1", "01",
+            "0011", "00", "1", "1", "1", "1"}) {
+      for (const auto& value :
+           vhdl_conditional_statement_hybrid.final_values) {
+        std::cerr << value << ' ';
+      }
+      std::cerr << '\n';
+    }
     assert((
         vhdl_conditional_statement_hybrid.final_values
         == std::vector<std::string>{
             "X", "1", "1", "1", "1", "01",
-            "0011", "00", "1"}));
+            "0011", "00", "1", "1", "1", "1"}));
   }
 
   auto partial_group_config = config;
