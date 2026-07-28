@@ -2457,6 +2457,88 @@ endmodule
       "case diagnostics must recover to following processes");
 }
 
+void test_systemverilog_procedural_for_loops() {
+  const auto result = parse_text(
+      "procedural_for.sv",
+      R"(
+module procedural_for;
+  logic [3:0] result;
+  initial begin
+    result = 4'b0000;
+    for (int lane = 0; lane < 4; lane++)
+      result[lane] = 1'b1;
+    for (integer lane = 3; lane >= 2; --lane) begin
+      result[lane] = 1'b0;
+    end
+    for (int lane = 2; lane < 1; lane += 1)
+      result[0] = 1'b0;
+    for (int lane = 0; lane <= 0; lane = lane + 1)
+      result[0] = result[0];
+    for (int lane = 0; lane > 0; lane -= 1)
+      result[0] = 1'b0;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "bounded SystemVerilog procedural for loops must parse");
+  require(
+      result.design.units.front().signals.size() == 1
+          && result.design.units.front().signals.front().name
+              == "result",
+      "inline procedural loop indices must not become implicit nets");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 6
+          && statements[1].kind == StatementKind::Loop
+          && statements[1].loop_variable == "lane"
+          && statements[1].loop_initial.text == "0"
+          && statements[1].loop_limit.text == "4"
+          && !statements[1].loop_descending
+          && statements[1].loop_limit_exclusive
+          && statements[2].kind == StatementKind::Loop
+          && statements[2].loop_descending
+          && !statements[2].loop_limit_exclusive
+          && statements[2].statements.size() == 1
+          && statements[3].kind == StatementKind::Loop
+          && statements[4].kind == StatementKind::Loop
+          && !statements[4].loop_limit_exclusive
+          && statements[5].kind == StatementKind::Loop
+          && statements[5].loop_descending
+          && statements[5].loop_limit_exclusive,
+      "SystemVerilog loop range normalization and bodies");
+
+  const auto invalid = parse_text(
+      "bad_procedural_for.sv",
+      R"(
+module bad_procedural_for;
+  initial begin
+    for (lane = 0; lane < 4; lane++);
+    for (int lane = 0; other < 4; lane++);
+    for (int lane = 0; lane < 4; other++);
+    for (int lane = 0; lane < 4; lane--);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid.ok(), "noncanonical procedural loops must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-UNSUPPORTED-031"},
+           std::string_view{"FSIM-SV-SEM-027"},
+           std::string_view{"FSIM-SV-SEM-028"},
+           std::string_view{"FSIM-SV-SEM-029"}}) {
+    require(
+        std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted bounded procedural loop diagnostic");
+  }
+}
+
 void test_systemverilog_conditional_expression() {
   const auto result = parse_text(
       "conditional.sv",
@@ -3725,6 +3807,7 @@ int main() {
     test_procedural_wait_statements();
     test_wildcard_and_always_comb_processes();
     test_systemverilog_case_statements();
+    test_systemverilog_procedural_for_loops();
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
     test_systemverilog_arithmetic_expressions();

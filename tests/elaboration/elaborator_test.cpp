@@ -6048,6 +6048,96 @@ end architecture;
         assert(has_diagnostic(rejected_vhdl_loops, code));
     }
 
+    const auto systemverilog_procedural_loops =
+        fsim::frontend::parse_text(
+            "procedural_loops.sv",
+            R"(
+module procedural_loops;
+  logic [3:0] observed;
+  logic [1:0] null_range_observed;
+  initial begin
+    observed = 4'b0000;
+    null_range_observed = 2'b00;
+    for (int lane = 0; lane < 4; lane++)
+      observed[lane] = 1'b1;
+    for (int lane = 3; lane >= 2; --lane)
+      observed[lane] = 1'b0;
+    for (int lane = 2; lane < 1; lane += 1)
+      null_range_observed[0] = 1'b1;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(systemverilog_procedural_loops.ok());
+    const auto elaborated_systemverilog_procedural_loops =
+        fsim::elaboration::elaborate(
+            systemverilog_procedural_loops.design,
+            "sv:work.procedural_loops");
+    if (!elaborated_systemverilog_procedural_loops.ok()) {
+        for (const auto& diagnostic :
+             elaborated_systemverilog_procedural_loops.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_systemverilog_procedural_loops.ok());
+    auto systemverilog_loop_interpreter =
+        elaborated_systemverilog_procedural_loops.design
+            ->create_interpreter();
+    const auto systemverilog_loop_result =
+        systemverilog_loop_interpreter->run();
+    assert(
+        systemverilog_loop_result.status
+        == fsim::runtime::RunStatus::completed);
+    const auto systemverilog_loop_observed =
+        elaborated_systemverilog_procedural_loops.design
+            ->find_signal("observed");
+    const auto systemverilog_null_range_observed =
+        elaborated_systemverilog_procedural_loops.design
+            ->find_signal("null_range_observed");
+    assert(
+        systemverilog_loop_observed
+        && systemverilog_null_range_observed);
+    assert(
+        systemverilog_loop_interpreter
+            ->signal_value(*systemverilog_loop_observed)
+            .to_msb_string()
+        == "0011");
+    assert(
+        systemverilog_loop_interpreter
+            ->signal_value(*systemverilog_null_range_observed)
+            .to_msb_string()
+        == "00");
+
+    const auto invalid_systemverilog_loops =
+        fsim::frontend::parse_text(
+            "invalid_procedural_loops.sv",
+            R"(
+module invalid_procedural_loops;
+  logic dynamic_bound;
+  initial begin
+    for (int lane = dynamic_bound; lane < 1; lane++);
+    for (int lane = 0; lane < dynamic_bound; lane++);
+    for (int lane = 0; lane < 1000001; lane++);
+    for (int lane = 0; lane < 1; lane++) lane = 2;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_systemverilog_loops.ok());
+    const auto rejected_systemverilog_loops =
+        fsim::elaboration::elaborate(
+            invalid_systemverilog_loops.design,
+            "sv:work.invalid_procedural_loops");
+    assert(!rejected_systemverilog_loops.ok());
+    for (const auto code :
+         {"FSIM-ELAB-071", "FSIM-ELAB-072",
+          "FSIM-ELAB-073", "FSIM-ELAB-074"}) {
+        assert(
+            has_diagnostic(
+                rejected_systemverilog_loops, code));
+    }
+
     const auto invalid_vhdl_condition =
         fsim::frontend::parse_text(
             "invalid_condition.vhd",

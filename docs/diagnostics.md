@@ -355,6 +355,11 @@ therefore excluded.
 | `FSIM-SV-PARSE-092` | error | A built-in gate primitive does not begin its terminal list with an output lvalue. |
 | `FSIM-SV-PARSE-093` | error | Expected `)` after a built-in gate primitive terminal list. |
 | `FSIM-SV-PARSE-094` | error | Expected `;` after a built-in gate primitive instance. |
+| `FSIM-SV-PARSE-095` | error | Expected `(` after a procedural `for`. |
+| `FSIM-SV-PARSE-096` | error | Expected `=` after an inline procedural loop variable. |
+| `FSIM-SV-PARSE-097` | error | Expected `;` after a procedural loop initializer. |
+| `FSIM-SV-PARSE-098` | error | Expected `;` after a procedural loop condition. |
+| `FSIM-SV-PARSE-099` | error | Expected `)` after a procedural loop header. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -393,6 +398,9 @@ therefore excluded.
 | `FSIM-SV-SEM-024` | error | A bounded scope declares the same typedef name more than once. |
 | `FSIM-SV-SEM-025` | error | A bounded packed aggregate declares the same member name more than once. |
 | `FSIM-SV-SEM-026` | error | A bounded built-in gate primitive has an invalid number of input terminals. |
+| `FSIM-SV-SEM-027` | error | A bounded procedural loop condition is not a canonical comparison of its loop variable and a locally static bound. |
+| `FSIM-SV-SEM-028` | error | A bounded procedural loop iteration updates a name other than its loop variable. |
+| `FSIM-SV-SEM-029` | error | A bounded procedural loop update is not a unit step toward its comparison bound. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -421,6 +429,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-028` | error | A packed-struct member uses a nested aggregate or unsupported data type. |
 | `FSIM-SV-UNSUPPORTED-029` | error | A packed-struct member has an unpacked dimension or initializer. |
 | `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
+| `FSIM-SV-UNSUPPORTED-031` | error | A procedural `for` loop does not declare an inline `int` or `integer` index. |
 
 ## Elaboration and SimIR lowering
 
@@ -473,7 +482,7 @@ therefore excluded.
 | `FSIM-ELAB-071` | error | A sequential VHDL for-loop initial bound is not locally static. |
 | `FSIM-ELAB-072` | error | A sequential VHDL for-loop final bound is not locally static. |
 | `FSIM-ELAB-073` | error | A sequential VHDL for loop exceeds the bounded one-million-iteration elaboration limit. |
-| `FSIM-ELAB-074` | error | A sequential VHDL for-loop body attempts to assign its implicit constant parameter. |
+| `FSIM-ELAB-074` | error | A sequential for-loop body assigns its VHDL implicit constant or statically substituted SystemVerilog index. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

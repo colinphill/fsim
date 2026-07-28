@@ -3423,9 +3423,13 @@ private:
                 statement.statements)) {
             report(
                 "FSIM-ELAB-074",
-                "sequential for-loop parameter '"
+                "sequential for-loop index '"
                     + statement.loop_variable
-                    + "' is an implicit constant and cannot be assigned",
+                    + (language_ == frontend::Language::Vhdl2008
+                           ? "' is an implicit constant and cannot be "
+                             "assigned"
+                           : "' is statically substituted by this bounded "
+                             "slice and cannot be assigned in the body"),
                 statement.span);
             return;
         }
@@ -3455,14 +3459,23 @@ private:
 
         const bool null_range =
             statement.loop_descending
-                ? *initial < *limit
-                : *initial > *limit;
+                ? (statement.loop_limit_exclusive
+                       ? *initial <= *limit
+                       : *initial < *limit)
+                : (statement.loop_limit_exclusive
+                       ? *initial >= *limit
+                       : *initial > *limit);
         if (null_range) {
             return;
         }
-        const auto distance = index_distance(*initial, *limit);
+        const auto distance =
+            index_distance(*initial, *limit);
         constexpr std::uint64_t maximum_iterations = 1'000'000;
-        if (distance >= maximum_iterations) {
+        const bool too_many_iterations =
+            statement.loop_limit_exclusive
+                ? distance > maximum_iterations
+                : distance >= maximum_iterations;
+        if (too_many_iterations) {
             report(
                 "FSIM-ELAB-073",
                 "sequential for loop exceeds the bounded "
@@ -3476,7 +3489,26 @@ private:
             statement.loop_variable,
             frontend::ValueDomain::Integer);
         auto value = *initial;
-        while (true) {
+        std::size_t count = 0;
+        const auto in_range = [&]() {
+            if (statement.loop_descending) {
+                return statement.loop_limit_exclusive
+                    ? value > *limit
+                    : value >= *limit;
+            }
+            return statement.loop_limit_exclusive
+                ? value < *limit
+                : value <= *limit;
+        };
+        while (in_range()) {
+            if (count++ == maximum_iterations) {
+                report(
+                    "FSIM-ELAB-073",
+                    "sequential for loop exceeds the bounded "
+                    "1,000,000-iteration elaboration limit",
+                    statement.span);
+                return;
+            }
             auto body = statement.statements;
             ConstantEnvironment environment;
             environment.emplace(statement.loop_variable, value);
@@ -3487,7 +3519,8 @@ private:
                 diagnostics_,
                 language_);
             lower_statements(body);
-            if (value == *limit) {
+            if (!statement.loop_limit_exclusive
+                && value == *limit) {
                 break;
             }
             value += statement.loop_descending ? -1 : 1;

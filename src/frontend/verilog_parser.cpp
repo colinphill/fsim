@@ -610,7 +610,8 @@ class VerilogParser final : private detail::ParserBase {
       }
     }
     if (!current_procedural_names_.contains(name.text)
-        && !current_generate_names_.contains(name.text)) {
+        && !current_generate_names_.contains(name.text)
+        && !current_loop_names_.contains(name.text)) {
       implicit_net_references_.push_back(
           {name.text, current_default_nettype_, name.span,
            name.expansion_stack});
@@ -669,6 +670,7 @@ class VerilogParser final : private detail::ParserBase {
     implicit_net_references_.clear();
     current_procedural_names_.clear();
     current_generate_names_.clear();
+    current_loop_names_.clear();
     declared_genvars_.clear();
     external_genvar_uses_.clear();
     module_time_unit_magnitude_ = current_time_unit_magnitude_;
@@ -2909,6 +2911,146 @@ class VerilogParser final : private detail::ParserBase {
     return statement;
   }
 
+  Statement parse_procedural_for_statement(const Token& start) {
+    Statement statement;
+    statement.kind = StatementKind::Loop;
+    expect(
+        TokenKind::LeftParen,
+        "'(' after procedural for",
+        "FSIM-SV-PARSE-095");
+    if (!match_keyword("int") && !match_keyword("integer")) {
+      error(
+          current(),
+          "FSIM-SV-UNSUPPORTED-031",
+          "this bounded procedural for-loop slice requires an inline "
+          "int or integer loop variable");
+    }
+    const auto variable =
+        expect_identifier("procedural loop variable");
+    statement.loop_variable = variable.text;
+    expect(
+        TokenKind::Assign,
+        "'=' after procedural loop variable",
+        "FSIM-SV-PARSE-096");
+    statement.loop_initial = parse_expression();
+    ++current_loop_names_[statement.loop_variable];
+    expect(
+        TokenKind::Semicolon,
+        "';' after procedural loop initializer",
+        "FSIM-SV-PARSE-097");
+
+    auto condition = parse_expression();
+    expect(
+        TokenKind::Semicolon,
+        "';' after procedural loop condition",
+        "FSIM-SV-PARSE-098");
+    if (condition.kind != ExpressionKind::Binary
+        || condition.operands.size() != 2
+        || condition.operands.front().kind
+            != ExpressionKind::Identifier
+        || condition.operands.front().text
+            != statement.loop_variable
+        || (condition.text != "<" && condition.text != "<="
+            && condition.text != ">" && condition.text != ">=")) {
+      error(
+          variable,
+          "FSIM-SV-SEM-027",
+          "bounded procedural for-loop condition must compare the loop "
+          "variable against a locally static upper or lower bound");
+      statement.loop_limit = Expression{
+          ExpressionKind::Invalid, {}, {}, condition.span};
+    } else {
+      statement.loop_descending =
+          condition.text == ">" || condition.text == ">=";
+      statement.loop_limit_exclusive =
+          condition.text == "<" || condition.text == ">";
+      statement.loop_limit = std::move(condition.operands[1]);
+    }
+
+    std::optional<Token> prefix_update;
+    if (match(TokenKind::PlusPlus)
+        || match(TokenKind::MinusMinus)) {
+      prefix_update = previous();
+    }
+    const auto iteration_variable =
+        expect_identifier("procedural loop iteration variable");
+    if (iteration_variable.text != statement.loop_variable) {
+      error(
+          iteration_variable,
+          "FSIM-SV-SEM-028",
+          "procedural loop iteration must update loop variable '"
+              + statement.loop_variable + "'");
+    }
+    std::string update_operation;
+    std::optional<std::int64_t> update_amount;
+    if (prefix_update) {
+      update_operation =
+          prefix_update->kind == TokenKind::PlusPlus ? "+" : "-";
+      update_amount = 1;
+    } else if (
+        match(TokenKind::PlusPlus)
+        || match(TokenKind::MinusMinus)) {
+      update_operation =
+          previous().kind == TokenKind::PlusPlus ? "+" : "-";
+      update_amount = 1;
+    } else if (
+        match(TokenKind::PlusAssign)
+        || match(TokenKind::MinusAssign)) {
+      update_operation =
+          previous().kind == TokenKind::PlusAssign ? "+" : "-";
+      update_amount = simple_integer_constant(parse_expression());
+    } else if (match(TokenKind::Assign)) {
+      auto iteration = parse_expression();
+      if (iteration.kind == ExpressionKind::Binary
+          && iteration.operands.size() == 2
+          && iteration.operands[0].kind
+              == ExpressionKind::Identifier
+          && iteration.operands[0].text
+              == statement.loop_variable
+          && (iteration.text == "+" || iteration.text == "-")) {
+        update_operation = iteration.text;
+        update_amount =
+            simple_integer_constant(iteration.operands[1]);
+      }
+    }
+    if (!update_amount || *update_amount != 1
+        || (statement.loop_descending
+                ? update_operation != "-"
+                : update_operation != "+")) {
+      error(
+          iteration_variable,
+          "FSIM-SV-SEM-029",
+          "bounded procedural for-loop iteration must advance by one "
+          "toward its comparison bound");
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after procedural loop header",
+        "FSIM-SV-PARSE-099");
+    if (auto body = parse_statement()) {
+      if (body->kind == StatementKind::Block) {
+        if (!body->declarations.empty()) {
+          error(
+              start,
+              "FSIM-SV-UNSUPPORTED-015",
+              "nested procedural block declarations are not implemented "
+              "in this frontend slice");
+        }
+        statement.statements = std::move(body->statements);
+      } else {
+        statement.statements.push_back(std::move(*body));
+      }
+    }
+    const auto loop_name =
+        current_loop_names_.find(statement.loop_variable);
+    if (loop_name != current_loop_names_.end()
+        && --loop_name->second == 0) {
+      current_loop_names_.erase(loop_name);
+    }
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   std::optional<Statement> parse_statement() {
     if (language_ == Language::SystemVerilog2017
         && (keyword("unique") || keyword("unique0")
@@ -2929,6 +3071,10 @@ class VerilogParser final : private detail::ParserBase {
     }
     if (match_keyword("case")) {
       return parse_case_statement(previous());
+    }
+    if (language_ == Language::SystemVerilog2017
+        && match_keyword("for")) {
+      return parse_procedural_for_statement(previous());
     }
     if (language_ == Language::SystemVerilog2017
         && match_keyword("assert")) {
@@ -3465,6 +3611,8 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> current_procedural_names_;
   std::unordered_map<std::string, std::size_t>
       current_generate_names_;
+  std::unordered_map<std::string, std::size_t>
+      current_loop_names_;
   std::unordered_set<std::string> declared_genvars_;
   std::vector<Token> external_genvar_uses_;
   std::vector<ImplicitNetReference> implicit_net_references_;

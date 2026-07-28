@@ -278,6 +278,9 @@ struct Statement {
   Expression loop_initial;
   Expression loop_limit;
   bool loop_descending{};
+  // SystemVerilog `<`/`>` loop conditions exclude the retained limit;
+  // VHDL discrete ranges and SV `<=`/`>=` include it.
+  bool loop_limit_exclusive{};
   std::optional<Delay> delay;
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;

@@ -107,6 +107,9 @@ The current tree contains:
 - locally static VHDL sequential `for` loops in either `to` or `downto`
   direction, including null ranges and loop-indexed packed selections,
   elaborated into deterministic source-order SimIR;
+- bounded SystemVerilog procedural `for` loops with inline `int`/`integer`
+  indices, canonical unit-step conditions/updates, exclusive or inclusive
+  bounds, and the same deterministic common-loop lowering;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,
