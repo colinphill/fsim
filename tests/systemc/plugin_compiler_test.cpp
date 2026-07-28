@@ -686,7 +686,8 @@ int main(const int argc, char** argv) {
     auto mutating_request = request;
     mutating_request.sources = {mutating_source};
     mutating_request.settings.compiler =
-        filesystem::absolute(filesystem::path{argv[0]}, error);
+        filesystem::absolute(
+            filesystem::path{argv[0]}, error).string();
     assert(!error);
     mutating_request.settings.include_directories.clear();
     mutating_request.settings.defines = {
