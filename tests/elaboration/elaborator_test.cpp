@@ -356,6 +356,17 @@ package base_values;
   parameter int WIDTH = 4;
   localparam int BASE = 5;
   typedef logic [WIDTH-1:0] word_t;
+  typedef enum logic [WIDTH-1:0] {
+    IDLE,
+    ACTIVE = BASE + 1,
+    DONE
+  } state_t;
+  typedef enum logic signed [1:0] {
+    LOW = -2,
+    NEXT_LOW,
+    ZERO,
+    HIGH
+  } signed_state_t;
 endpackage : base_values
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -366,7 +377,7 @@ endpackage : base_values
 import base_values::*;
 package derived_values;
   localparam int NEXT = BASE + 1;
-  typedef base_values::word_t result_t;
+  typedef base_values::state_t result_t;
 endpackage : derived_values
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -375,8 +386,9 @@ endpackage : derived_values
             "systemverilog_package_user.sv",
             R"(
 import derived_values::NEXT, derived_values::result_t;
+import base_values::ACTIVE;
 module systemverilog_package_user #(
-  parameter result_t INITIAL = NEXT
+  parameter result_t INITIAL = ACTIVE
 )(
   output result_t observed
 );
@@ -485,11 +497,19 @@ endpackage
 package broken_values;
   localparam int BROKEN = 1 / 0;
 endpackage
+package invalid_enum_values;
+  typedef enum logic [1:0] {
+    ZERO = 0,
+    DUPLICATE = 0,
+    TOO_LARGE = 4
+  } invalid_t;
+endpackage
 import duplicate_values::MISSING;
 import missing_values::*;
 import first_values::*;
 import alpha_values::*, beta_values::*;
 import broken_values::*;
+import invalid_enum_values::*;
 module invalid_systemverilog_package_user;
   logic value;
   missing_t missing_value;
@@ -516,7 +536,9 @@ endmodule
              "FSIM-ELAB-SVPKG-006",
              "FSIM-ELAB-SVTYPE-001",
              "FSIM-ELAB-SVTYPE-002",
-             "FSIM-ELAB-SVTYPE-003"}) {
+             "FSIM-ELAB-SVTYPE-003",
+             "FSIM-ELAB-SVENUM-001",
+             "FSIM-ELAB-SVENUM-002"}) {
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));
     }

@@ -328,6 +328,9 @@ therefore excluded.
 | `FSIM-SV-PARSE-080` | error | Expected `;` after a SystemVerilog package header. |
 | `FSIM-SV-PARSE-081` | error | Expected `endpackage` for a package declaration. |
 | `FSIM-SV-PARSE-082` | error | Expected `;` after a bounded SystemVerilog typedef declaration. |
+| `FSIM-SV-PARSE-083` | error | Expected `{` before the literals of a bounded enum typedef. |
+| `FSIM-SV-PARSE-084` | error | Expected `}` after the literals of a bounded enum typedef. |
+| `FSIM-SV-PARSE-085` | error | A bounded enum typedef has no literals. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -387,6 +390,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-023` | error | A package item is outside the bounded integral parameter/localparam and import subset. |
 | `FSIM-SV-UNSUPPORTED-024` | error | A bounded typedef target is not an integral built-in or user-defined type. |
 | `FSIM-SV-UNSUPPORTED-025` | error | An unpacked typedef dimension is outside the current packed alias subset. |
+| `FSIM-SV-UNSUPPORTED-026` | error | A bounded enum typedef lacks an explicit packed `bit`, `logic`, or `reg` base type. |
 
 ## Elaboration and SimIR lowering
 
@@ -472,6 +476,8 @@ therefore excluded.
 | `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
 | `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
+| `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
+| `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

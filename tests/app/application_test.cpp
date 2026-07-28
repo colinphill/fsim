@@ -5084,6 +5084,10 @@ end architecture rtl;
                << "  localparam int BASE = "
                << base_value << ";\n"
                << "  typedef logic [WIDTH-1:0] word_t;\n"
+               << "  typedef enum logic [WIDTH-1:0] {\n"
+               << "    IDLE = 0,\n"
+               << "    ACTIVE = BASE + 1\n"
+               << "  } state_t;\n"
                << "endpackage : base_values\n";
       };
   write_systemverilog_base_package(5, 4);
@@ -5094,7 +5098,7 @@ end architecture rtl;
 import base_values::*;
 package derived_values;
   localparam int NEXT = BASE + 1;
-  typedef base_values::word_t result_t;
+  typedef base_values::state_t result_t;
 endpackage : derived_values
 )";
   }
@@ -5113,10 +5117,11 @@ endpackage : derived_values
         systemverilog_package_user_source);
     output << R"(
 import derived_values::NEXT, derived_values::result_t;
+import base_values::ACTIVE;
 module systemverilog_package_user(
   output result_t observed
 );
-  assign observed = NEXT;
+  assign observed = ACTIVE;
 endmodule
 )";
   }

@@ -1955,6 +1955,64 @@ SpecializedUnit specialize_unit(
             result.environment,
             diagnostics,
             source.language);
+        if (alias.enum_literals.empty()) {
+            continue;
+        }
+        const auto width = alias.type.width();
+        if (!width || *width == 0 || *width > 64) {
+            diagnostics.push_back({
+                "FSIM-ELAB-SVENUM-001",
+                "enum '" + alias.name
+                    + "' has an unsupported base width",
+                alias.span});
+            continue;
+        }
+        std::unordered_map<std::int64_t, std::string>
+            enum_values;
+        for (const auto& literal : alias.enum_literals) {
+            const auto value =
+                result.environment.find(literal.name);
+            if (value == result.environment.end()) {
+                continue;
+            }
+            bool in_range = false;
+            if (alias.type.is_signed) {
+                if (*width == 64) {
+                    in_range = true;
+                } else {
+                    const auto limit =
+                        std::int64_t{1} << (*width - 1U);
+                    in_range =
+                        value->second >= -limit
+                        && value->second < limit;
+                }
+            } else if (value->second >= 0) {
+                in_range =
+                    *width == 64
+                    || static_cast<std::uint64_t>(
+                           value->second)
+                        < (std::uint64_t{1} << *width);
+            }
+            if (!in_range) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SVENUM-001",
+                    "enum literal '" + literal.name
+                        + "' does not fit the base type of '"
+                        + alias.name + "'",
+                    literal.span});
+            }
+            const auto [duplicate, inserted] =
+                enum_values.emplace(
+                    value->second, literal.name);
+            if (!inserted) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SVENUM-002",
+                    "enum literals '" + duplicate->second
+                        + "' and '" + literal.name
+                        + "' have the same value",
+                    literal.span});
+            }
+        }
     }
     for (auto& port : result.unit.ports) {
         substitute_parameters(
@@ -4993,6 +5051,23 @@ private:
                     == specialized_package->environment.end()) {
                     continue;
                 }
+                const auto specialized_declaration =
+                    std::find_if(
+                        specialized_package->unit.parameters.begin(),
+                        specialized_package->unit.parameters.end(),
+                        [&](const auto& candidate) {
+                            return candidate.name
+                                    == declaration.name
+                                && candidate.span.source_name
+                                    == declaration.span.source_name
+                                && candidate.span.begin.offset
+                                    == declaration.span.begin.offset;
+                        });
+                const auto& imported_type =
+                    specialized_declaration
+                            == specialized_package->unit.parameters.end()
+                        ? declaration.type
+                        : specialized_declaration->type;
                 const auto [owner, inserted] =
                     owners.emplace(
                         declaration.name, package->name);
@@ -5018,11 +5093,11 @@ private:
                 }
                 imports.push_back({
                     declaration.name,
-                    declaration.type,
+                    imported_type,
                     constant_expression(
                         value->second,
                         declaration.span,
-                        declaration.type.domain,
+                        imported_type.domain,
                         frontend::Language::
                             SystemVerilog2017),
                     true,
@@ -5165,13 +5240,30 @@ private:
                 == specialized_package->environment.end()) {
                 continue;
             }
+            const auto specialized_declaration =
+                std::find_if(
+                    specialized_package->unit.parameters.begin(),
+                    specialized_package->unit.parameters.end(),
+                    [&](const auto& candidate) {
+                        return candidate.name
+                                == declaration->name
+                            && candidate.span.source_name
+                                == declaration->span.source_name
+                            && candidate.span.begin.offset
+                                == declaration->span.begin.offset;
+                    });
+            const auto& imported_type =
+                specialized_declaration
+                        == specialized_package->unit.parameters.end()
+                    ? declaration->type
+                    : specialized_declaration->type;
             imports.push_back({
                 identifier,
-                declaration->type,
+                imported_type,
                 constant_expression(
                     value->second,
                     declaration->span,
-                    declaration->type.domain,
+                    imported_type.domain,
                     frontend::Language::
                         SystemVerilog2017),
                 true,

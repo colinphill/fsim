@@ -113,7 +113,8 @@ The following foundation is implemented:
   parameters/localparams and packed integral typedef aliases,
   compilation-unit and unit-local wildcard/selected imports, recursive
   case-sensitive visibility, direct scoped constants/types, parameterized
-  alias ranges, and precise source/cache provenance;
+  alias ranges, packed enums with explicit/implicit enumerators and legality
+  checks, and precise source/cache provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -238,7 +239,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 506 unique current production diagnostic codes.
+- a stable catalog covering 512 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -261,7 +262,7 @@ Current Linux validation:
 | VHDL package constants | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, `work` and cross-library selected/whole-package visibility, recursive declaration-order folding, interpreter/JIT/VCD equality, targeted import/evaluation/subtype/cycle diagnostics, and transitive package-only native-cache invalidation |
 | VHDL selected package constants | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for two-/three-part qualified constants in ranges and behavior, recursive folding, missing/malformed diagnostics, interpreter/JIT/VCD equality, and precise native-cache provenance |
 | VHDL reusable contexts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive cross-library context/package visibility, missing/malformed/cycle diagnostics, interpreter/JIT/VCD equality, and context-only native-cache invalidation |
-| SystemVerilog package constants and packed aliases | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive imports, direct scoped constants/types, alias chains and parameterized ranges, case-sensitive/visibility/ambiguity/cycle failures, interpreter/JIT/VCD equality, unrelated-package reuse, and transitive native-cache invalidation |
+| SystemVerilog package constants, packed aliases, and enums | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive imports, direct scoped constants/types, alias chains, parameterized ranges, explicit/implicit enum values, range/uniqueness checks, case-sensitive/visibility/ambiguity/cycle failures, interpreter/JIT/VCD equality, unrelated-package reuse, and transitive native-cache invalidation |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -406,7 +407,7 @@ Early groundwork:
   statements;
 - SV modules, common declarations, simple hierarchy, basic procedural and
   continuous statements, bounded integral parameter specialization and
-  bounded integral packages/imports/packed typedef aliases,
+  bounded integral packages/imports/packed typedef aliases and enums,
   executable explicit/implicit conditional, inline/module-genvar iterative,
   selection, and direct/named static generate bodies, and bounded
   `` `timescale`` handling;
@@ -424,7 +425,7 @@ Planned implementation sequence:
    generics, overload/type resolution, constant evaluation, and reviewed IEEE
    packages.
 3. Complete the remaining Verilog/SV `` `line``/pragma semantics, parameters,
-   package struct/union/enum types and subprograms, interfaces/modports,
+   package struct/union and general enum types plus subprograms,
    general-body generates, broader legal noncanonical genvar/case-choice
    forms, and complete synthesizable types. Bounded parameterized packed
    integral package/module aliases now resolve through imports and scoped

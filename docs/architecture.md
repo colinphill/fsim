@@ -80,6 +80,10 @@ diagnosed before specialization.
 The bounded SystemVerilog package path represents integral package parameters
 and localparams as immutable declaration-ordered constants, plus packed
 integral `typedef` aliases whose ranges may depend on those constants.
+Bounded `typedef enum` declarations use an explicit packed `bit`, `logic`, or
+`reg` base; their explicit or implicit enumerator values enter the same
+declaration-ordered constant environment and are checked for base-width fit
+and duplicate values during specialization.
 Compilation-unit and unit-local `import package::*` or
 `import package::name` clauses inject case-sensitive direct constants and
 types, while `package::name` remains explicitly scoped. Alias chains resolve

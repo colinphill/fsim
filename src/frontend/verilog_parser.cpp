@@ -1968,7 +1968,92 @@ class VerilogParser final : private detail::ParserBase {
       DesignUnit& unit,
       const Token& start) {
     Type type;
-    if (keyword("logic") || keyword("reg")
+    std::vector<std::pair<
+        ParameterDeclaration,
+        Token>> enum_parameters;
+    std::vector<EnumLiteralDeclaration> enum_literals;
+    if (match_keyword("enum")) {
+      if (keyword("logic") || keyword("reg")
+          || keyword("bit")) {
+        const auto type_token = advance();
+        type.spelling = type_token.text;
+        type.domain =
+            type_token.text == "bit"
+                ? ValueDomain::Bit2
+                : ValueDomain::Logic4;
+        parse_optional_signedness(type);
+        parse_optional_range(type);
+      } else {
+        error(
+            current(),
+            "FSIM-SV-UNSUPPORTED-026",
+            "bounded enum typedefs require an explicit bit, logic, or "
+            "reg base type");
+        skip_to_semicolon();
+        return;
+      }
+      expect(
+          TokenKind::LeftBrace,
+          "'{' before enum literals",
+          "FSIM-SV-PARSE-083");
+      if (at(TokenKind::RightBrace)) {
+        error(
+            current(),
+            "FSIM-SV-PARSE-085",
+            "bounded enum typedefs require at least one literal");
+      }
+      std::optional<std::string> previous_literal;
+      while (!at_end() && !at(TokenKind::RightBrace)) {
+        const auto literal =
+            expect_identifier("enum literal name");
+        Expression value;
+        if (match(TokenKind::Assign)) {
+          value = parse_expression();
+        } else if (!previous_literal) {
+          value = Expression{
+              ExpressionKind::IntegerLiteral,
+              "0",
+              {},
+              literal.span};
+        } else {
+          value = Expression{
+              ExpressionKind::Binary,
+              "+",
+              {
+                  Expression{
+                      ExpressionKind::Identifier,
+                      *previous_literal,
+                      {},
+                      literal.span},
+                  Expression{
+                      ExpressionKind::IntegerLiteral,
+                      "1",
+                      {},
+                      literal.span},
+              },
+              literal.span};
+        }
+        enum_literals.push_back({
+            literal.text, value,
+            cover(literal.span, previous().span)});
+        enum_parameters.push_back({
+            ParameterDeclaration{
+                literal.text,
+                type,
+                std::move(value),
+                true,
+                cover(literal.span, previous().span)},
+            literal});
+        previous_literal = literal.text;
+        if (!match(TokenKind::Comma)) {
+          break;
+        }
+      }
+      expect(
+          TokenKind::RightBrace,
+          "'}' after enum literals",
+          "FSIM-SV-PARSE-084");
+    } else if (keyword("logic") || keyword("reg")
         || keyword("bit") || keyword("integer")
         || keyword("int")) {
       const auto type_token = advance();
@@ -2025,7 +2110,13 @@ class VerilogParser final : private detail::ParserBase {
     unit.type_aliases.push_back({
         name.text,
         std::move(type),
-        cover(start.span, previous().span)});
+        cover(start.span, previous().span),
+        std::move(enum_literals)});
+    for (auto& [parameter, parameter_name] :
+         enum_parameters) {
+      add_parameter(
+          unit, std::move(parameter), parameter_name);
+    }
   }
 
   void parse_optional_net_type(Type& type) {

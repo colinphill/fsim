@@ -1551,6 +1551,17 @@ package base_values;
   parameter int WIDTH = 4;
   localparam int BASE = 5;
   typedef logic [WIDTH-1:0] word_t;
+  typedef enum logic [1:0] {
+    IDLE,
+    RUN = 2,
+    DONE
+  } state_t;
+  typedef enum logic signed [1:0] {
+    LOW = -2,
+    NEXT_LOW,
+    ZERO,
+    HIGH
+  } signed_state_t;
 endpackage : base_values
 
 import base_values::*;
@@ -1590,14 +1601,14 @@ endmodule
               == UnitKind::VerilogModule,
       "packages and module retain distinct unit kinds");
   require(
-      parsed.design.units[0].parameters.size() == 2
+      parsed.design.units[0].parameters.size() == 9
           && parsed.design.units[0].parameters[0].local
           && parsed.design.units[1].parameters.front()
                  .default_value.operands.front().text
               == "BASE",
       "package parameters are immutable declaration-ordered constants");
   require(
-      parsed.design.units[0].type_aliases.size() == 1
+      parsed.design.units[0].type_aliases.size() == 3
           && parsed.design.units[0].type_aliases.front()
                  .name
               == "word_t"
@@ -1608,6 +1619,24 @@ endmodule
                  .type.named_type
               == "base_values::word_t",
       "package typedef targets and parameterized ranges survive parsing");
+  const auto& state_type =
+      parsed.design.units[0].type_aliases[1];
+  require(
+      state_type.name == "state_t"
+          && state_type.enum_literals.size() == 3
+          && state_type.enum_literals[0].value.text == "0"
+          && state_type.enum_literals[1].value.text == "2"
+          && state_type.enum_literals[2].value.kind
+              == ExpressionKind::Binary
+          && state_type.enum_literals[2].value.operands[0].text
+              == "RUN",
+      "packed enum typedefs retain explicit and implicit literal values");
+  require(
+      parsed.design.units[0].type_aliases[2].type.is_signed
+          && parsed.design.units[0].type_aliases[2]
+                 .enum_literals.size()
+              == 4,
+      "signed packed enum bases and literal sequences survive parsing");
   require(
       parsed.design.units[1].systemverilog_imports.size() == 1
           && parsed.design.units[1]
@@ -1650,6 +1679,10 @@ package invalid_values;
   typedef logic duplicate_t;
   typedef bit duplicate_t;
   typedef logic unpacked_t [2];
+  typedef enum { MISSING_BASE } missing_base_t;
+  typedef enum logic [1:0] {} empty_enum_t;
+  typedef enum logic [1:0] A, B } missing_open_t;
+  typedef enum logic [1:0] { C missing_close_t;
 endpackage : wrong_name
 import invalid_values;
 module recovered;
@@ -1669,6 +1702,10 @@ endmodule
           && has_code("FSIM-SV-UNSUPPORTED-023")
           && has_code("FSIM-SV-UNSUPPORTED-024")
           && has_code("FSIM-SV-UNSUPPORTED-025")
+          && has_code("FSIM-SV-UNSUPPORTED-026")
+          && has_code("FSIM-SV-PARSE-083")
+          && has_code("FSIM-SV-PARSE-084")
+          && has_code("FSIM-SV-PARSE-085")
           && has_code("FSIM-SV-SEM-023")
           && has_code("FSIM-SV-SEM-024")
           && has_code("FSIM-SV-PARSE-078"),

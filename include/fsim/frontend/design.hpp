@@ -115,10 +115,20 @@ struct Type {
   [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
 
+struct EnumLiteralDeclaration {
+  std::string name;
+  Expression value;
+  SourceSpan span;
+};
+
 struct TypeAliasDeclaration {
   std::string name;
   Type type;
   SourceSpan span;
+  // Non-empty only for a bounded SystemVerilog enum typedef. Values retain
+  // their declaration-order expressions while matching immutable local
+  // parameter declarations carry them through specialization.
+  std::vector<EnumLiteralDeclaration> enum_literals;
 };
 
 struct SignalDeclaration {
