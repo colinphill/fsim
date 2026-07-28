@@ -1456,6 +1456,7 @@ enum class SpecializationDiagnostic {
 
 const char* specialization_diagnostic_code(
     const bool is_vhdl,
+    const bool is_package,
     const SpecializationDiagnostic diagnostic) {
     switch (diagnostic) {
     case SpecializationDiagnostic::invalid_actual:
@@ -1475,11 +1476,16 @@ const char* specialization_diagnostic_code(
             ? "FSIM-ELAB-GENERIC-004"
             : "FSIM-ELAB-PARAM-004";
     case SpecializationDiagnostic::default_evaluation:
+        if (is_package) {
+            return "FSIM-ELAB-PKG-005";
+        }
         return is_vhdl
             ? "FSIM-ELAB-GENERIC-005"
             : "FSIM-ELAB-PARAM-005";
     case SpecializationDiagnostic::subtype_constraint:
-        return "FSIM-ELAB-GENERIC-008";
+        return is_package
+            ? "FSIM-ELAB-PKG-006"
+            : "FSIM-ELAB-GENERIC-008";
     case SpecializationDiagnostic::ambiguous_name:
         return "FSIM-ELAB-PARAM-009";
     }
@@ -1524,6 +1530,8 @@ SpecializedUnit specialize_unit(
     result.unit = source;
     const bool is_vhdl =
         source.language == frontend::Language::Vhdl2008;
+    const bool is_package =
+        source.kind == frontend::UnitKind::VhdlPackage;
     const bool is_verilog =
         source.language == frontend::Language::SystemVerilog2017
         || source.language == frontend::Language::Verilog2005;
@@ -1531,10 +1539,11 @@ SpecializedUnit specialize_unit(
         association_language == frontend::Language::Vhdl2008;
     const auto code = [&](const SpecializationDiagnostic diagnostic) {
         return specialization_diagnostic_code(
-            is_vhdl, diagnostic);
+            is_vhdl, is_package, diagnostic);
     };
     const auto object_kind =
-        is_vhdl ? std::string_view{"generic"}
+        is_package ? std::string_view{"package constant"}
+        : is_vhdl ? std::string_view{"generic"}
                 : std::string_view{"parameter"};
     if (!is_vhdl && !is_verilog) {
         if (!overrides.empty()) {
@@ -1703,7 +1712,8 @@ SpecializedUnit specialize_unit(
                     code(
                         SpecializationDiagnostic::
                             subtype_constraint),
-                    "generic '" + parameter.name
+                    std::string{object_kind} + " '"
+                        + parameter.name
                         + "' value is outside subtype '"
                         + parameter.type.spelling + "'",
                     parameter.span});
@@ -4157,6 +4167,173 @@ private:
     using SignalMap = std::unordered_map<std::string, SignalId>;
     using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
 
+    static std::vector<std::string> selected_name_parts(
+        const std::string_view name) {
+        std::vector<std::string> result;
+        std::size_t begin = 0;
+        while (begin <= name.size()) {
+            const auto separator = name.find('.', begin);
+            result.emplace_back(
+                name.substr(
+                    begin,
+                    separator == std::string_view::npos
+                        ? name.size() - begin
+                        : separator - begin));
+            if (separator == std::string_view::npos) {
+                break;
+            }
+            begin = separator + 1;
+        }
+        return result;
+    }
+
+    void import_vhdl_package_constants(
+        DesignUnit& unit,
+        const std::span<const frontend::VhdlContextItem>
+            context) {
+        std::vector<frontend::ParameterDeclaration> imports;
+        std::unordered_map<std::string, std::string> bare_owners;
+        std::unordered_set<std::string> dependencies;
+        const auto owner_library =
+            unit.library.empty()
+                ? std::string{"work"}
+                : unit.library;
+        for (const auto& item : context) {
+            if (item.kind
+                != frontend::VhdlContextItemKind::UseClause) {
+                continue;
+            }
+            for (const auto& selected_name : item.selected_names) {
+                const auto parts =
+                    selected_name_parts(selected_name);
+                if (parts.size() != 3) {
+                    report(
+                        "FSIM-ELAB-PKG-001",
+                        "bounded package imports require "
+                        "library.package.all or "
+                        "library.package.constant",
+                        item.span);
+                    continue;
+                }
+                const auto requested_library =
+                    parts[0] == "work"
+                        ? owner_library
+                        : parts[0];
+                const auto package = std::find_if(
+                    parsed_.units.begin(),
+                    parsed_.units.end(),
+                    [&](const DesignUnit& candidate) {
+                        const auto candidate_library =
+                            candidate.library.empty()
+                                ? std::string_view{"work"}
+                                : std::string_view{
+                                      candidate.library};
+                        return candidate.kind
+                                == frontend::UnitKind::VhdlPackage
+                            && candidate.name == parts[1]
+                            && candidate_library
+                                == requested_library;
+                    });
+                if (package == parsed_.units.end()) {
+                    if (parts[0] == "ieee"
+                        || parts[0] == "std") {
+                        continue;
+                    }
+                    report(
+                        "FSIM-ELAB-PKG-002",
+                        "VHDL package '" + parts[0] + "."
+                            + parts[1] + "' was not found",
+                        item.span);
+                    continue;
+                }
+                const auto package_owner =
+                    (package->library.empty()
+                         ? std::string{"work"}
+                         : package->library)
+                    + "." + package->name;
+                auto specialized = specialize_unit(
+                    *package,
+                    {},
+                    {},
+                    frontend::Language::Vhdl2008,
+                    diagnostics_);
+                const bool import_all = parts[2] == "all";
+                bool found_selected = import_all;
+                for (const auto& declaration :
+                     package->parameters) {
+                    if (!import_all
+                        && declaration.name != parts[2]) {
+                        continue;
+                    }
+                    found_selected = true;
+                    const auto value =
+                        specialized.environment.find(
+                            declaration.name);
+                    if (value
+                        == specialized.environment.end()) {
+                        continue;
+                    }
+                    const auto add_alias =
+                        [&](std::string alias) {
+                          const auto [owner, inserted] =
+                              bare_owners.emplace(
+                                  alias, package_owner);
+                          if (!inserted
+                              && owner->second != package_owner) {
+                              report(
+                                  "FSIM-ELAB-PKG-004",
+                                  "VHDL package constant '"
+                                      + alias
+                                      + "' is directly visible "
+                                      "from multiple packages",
+                                  item.span);
+                              return;
+                          }
+                          if (std::any_of(
+                                  imports.begin(),
+                                  imports.end(),
+                                  [&](const auto& existing) {
+                                      return existing.name
+                                          == alias;
+                                  })) {
+                              return;
+                          }
+                          imports.push_back({
+                              std::move(alias),
+                              declaration.type,
+                              constant_expression(
+                                  value->second,
+                                  declaration.span,
+                                  declaration.type.domain,
+                                  frontend::Language::Vhdl2008),
+                              true,
+                              declaration.span});
+                        };
+                    add_alias(declaration.name);
+                }
+                if (!found_selected) {
+                    report(
+                        "FSIM-ELAB-PKG-003",
+                        "VHDL package '" + parts[0] + "."
+                            + parts[1]
+                            + "' has no constant '" + parts[2]
+                            + "'",
+                        item.span);
+                }
+                if (dependencies.insert(
+                        package->span.source_name).second) {
+                    unit.source_dependencies.push_back(
+                        package->span.source_name);
+                }
+            }
+        }
+        imports.insert(
+            imports.end(),
+            std::make_move_iterator(unit.parameters.begin()),
+            std::make_move_iterator(unit.parameters.end()));
+        unit.parameters = std::move(imports);
+    }
+
     DesignUnit effective_unit(const DesignUnit& selected) {
         auto result = selected;
         if (selected.kind
@@ -4183,6 +4360,13 @@ private:
                     generic.span);
             }
         }
+        std::vector<frontend::VhdlContextItem> context =
+            entity->vhdl_context;
+        context.insert(
+            context.end(),
+            selected.vhdl_context.begin(),
+            selected.vhdl_context.end());
+        import_vhdl_package_constants(result, context);
         return result;
     }
 
@@ -5443,6 +5627,17 @@ private:
                     != specialization.source) {
                 specialization.source_dependencies.push_back(
                     entity->span.source_name);
+            }
+        }
+        for (const auto& dependency : unit.source_dependencies) {
+            if (dependency != specialization.source
+                && std::find(
+                       specialization.source_dependencies.begin(),
+                       specialization.source_dependencies.end(),
+                       dependency)
+                    == specialization.source_dependencies.end()) {
+                specialization.source_dependencies.push_back(
+                    dependency);
             }
         }
         specialization.language = unit.language;

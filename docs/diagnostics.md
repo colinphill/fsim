@@ -149,6 +149,10 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-083` | error | Expected `:` after generated constant names. |
 | `FSIM-VHDL-PARSE-084` | error | A generated constant lacks its required `:=` default expression. |
 | `FSIM-VHDL-PARSE-085` | error | Expected `;` after a generated constant declaration. |
+| `FSIM-VHDL-PARSE-086` | error | Expected `is` after a VHDL package name. |
+| `FSIM-VHDL-PARSE-087` | error | Expected `:` after package constant names. |
+| `FSIM-VHDL-PARSE-088` | error | A package constant lacks its required `:=` default expression. |
+| `FSIM-VHDL-PARSE-089` | error | Expected `;` after a package constant declaration. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -166,6 +170,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-017` | error | A case generate contains more than one `others` alternative. |
 | `FSIM-VHDL-SEM-018` | error | An `others` case-generate alternative is not last. |
 | `FSIM-VHDL-SEM-019` | error | A generated constant is duplicated or conflicts with a generated signal. |
+| `FSIM-VHDL-SEM-020` | error | A package constant name is declared more than once. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -185,6 +190,8 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
 | `FSIM-VHDL-UNSUPPORTED-021` | error | Guarded VHDL block statements are not executable yet. |
+| `FSIM-VHDL-UNSUPPORTED-022` | error | A package body or package declaration outside the bounded constant-only subset is not implemented. |
+| `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -428,6 +435,12 @@ therefore excluded.
 | `FSIM-ELAB-GEN-010` | error | Selection-generate scalar/range choices overlap or contain duplicate defaults. |
 | `FSIM-ELAB-GEN-011` | error | A generated constant or parameter cannot be evaluated in its declaration-order environment. |
 | `FSIM-ELAB-GEN-012` | error | A generated constant/parameter violates a bounded scalar subtype or exceeds the 64-bit integral width. |
+| `FSIM-ELAB-PKG-001` | error | A bounded VHDL package import is not `library.package.all` or `library.package.constant`. |
+| `FSIM-ELAB-PKG-002` | error | A project VHDL package named by a use clause was not found in the selected library. |
+| `FSIM-ELAB-PKG-003` | error | A selected package constant named by a use clause does not exist. |
+| `FSIM-ELAB-PKG-004` | error | The same bare VHDL constant name is directly visible from multiple imported packages. |
+| `FSIM-ELAB-PKG-005` | error | A package constant default cannot be evaluated in declaration order. |
+| `FSIM-ELAB-PKG-006` | error | A package constant value violates its bounded scalar subtype. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

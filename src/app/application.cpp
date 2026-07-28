@@ -859,6 +859,8 @@ std::string unit_key(const frontend::DesignUnit& unit) {
     case frontend::UnitKind::VhdlArchitecture:
       return "vhdl:" + unit.library + ":architecture:"
           + unit.primary_name + ':' + unit.name;
+    case frontend::UnitKind::VhdlPackage:
+      return "vhdl:" + unit.library + ":package:" + unit.name;
     case frontend::UnitKind::VerilogModule:
       return "verilog:" + unit.library + ":module:" + unit.name;
   }
@@ -1496,7 +1498,8 @@ make_specialization_cache_keys(
   };
   const auto settings_for =
       [&](const elaboration::SpecializationInfo& specialization,
-          const std::string_view source)
+          const std::string_view source,
+          const bool require_specialization_library)
           -> std::optional<SourceSettings> {
         const auto source_path =
             std::filesystem::path{source}
@@ -1523,9 +1526,13 @@ make_specialization_cache_keys(
             continue;
           }
           if (frontend_language(source_set.language)
-                  != specialization.language
-              || (source_set.library.empty() ? "work"
-                                             : source_set.library)
+              != specialization.language) {
+            continue;
+          }
+          if (require_specialization_library
+              && (source_set.library.empty()
+                      ? "work"
+                      : source_set.library)
                   != specialization.library) {
             continue;
           }
@@ -1546,7 +1553,8 @@ make_specialization_cache_keys(
   result.reserve(design.specializations().size());
   for (const auto& specialization : design.specializations()) {
     const auto settings =
-        settings_for(specialization, specialization.source);
+        settings_for(
+            specialization, specialization.source, true);
     if (!settings) {
       diagnostics.error(
           "FSIM-CACHE-0001",
@@ -1559,7 +1567,7 @@ make_specialization_cache_keys(
     compiler::CacheKeyBuilder key;
     key.add(
         "specialization-provenance-schema",
-        "fsim-specialization-provenance-v2");
+        "fsim-specialization-provenance-v3");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
     key.add(
@@ -1584,37 +1592,62 @@ make_specialization_cache_keys(
           "dependency-content",
           dependency.content_digest);
     }
-    for (const auto& interface_source :
+    for (const auto& dependency_source :
          specialization.source_dependencies) {
-      const auto interface_settings =
-          settings_for(specialization, interface_source);
-      if (!interface_settings) {
+      const auto dependency_settings =
+          settings_for(
+              specialization, dependency_source, false);
+      if (!dependency_settings) {
         diagnostics.error(
             "FSIM-CACHE-0001",
-            "cannot associate elaborated specialization interface '"
-                + interface_source + "' for '"
+            "cannot associate elaborated specialization dependency '"
+                + dependency_source + "' for '"
                 + specialization.unit + "' with a checked source");
         return std::nullopt;
       }
       key.add(
-          "interface-source-path",
-          interface_settings->checked_source->path
+          "semantic-dependency-source-path",
+          dependency_settings->checked_source->path
               .lexically_normal()
               .generic_string());
       key.add(
-          "interface-source-content",
-          interface_settings->checked_source->content_digest);
+          "semantic-dependency-source-content",
+          dependency_settings->checked_source->content_digest);
       key.add(
-          "interface-source-compilation-unit",
-          interface_settings->checked_source
+          "semantic-dependency-source-compilation-unit",
+          dependency_settings->checked_source
               ->compilation_unit_digest);
-      for (const auto& dependency :
-           interface_settings->checked_source->dependencies) {
+      key.add(
+          "semantic-dependency-language",
+          project::to_string(
+              dependency_settings->source_set->language));
+      key.add(
+          "semantic-dependency-standard",
+          dependency_settings->source_set->standard);
+      key.add(
+          "semantic-dependency-library",
+          dependency_settings->source_set->library);
+      key.add(
+          "semantic-dependency-compilation-unit",
+          dependency_settings->source_set->compilation_unit);
+      for (const auto& define :
+           dependency_settings->source_set->defines) {
+        key.add("semantic-dependency-define", define);
+      }
+      for (const auto& include :
+           dependency_settings->source_set
+               ->include_directories) {
         key.add(
-            "interface-dependency-path",
+            "semantic-dependency-include",
+            include.lexically_normal().generic_string());
+      }
+      for (const auto& dependency :
+           dependency_settings->checked_source->dependencies) {
+        key.add(
+            "semantic-dependency-transitive-path",
             dependency.path.lexically_normal().generic_string());
         key.add(
-            "interface-dependency-content",
+            "semantic-dependency-transitive-content",
             dependency.content_digest);
       }
     }

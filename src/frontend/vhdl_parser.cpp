@@ -65,6 +65,21 @@ class VhdlParser final : private detail::ParserBase {
         auto unit = parse_architecture(previous());
         unit.vhdl_context = std::exchange(pending_context, {});
         design.units.push_back(std::move(unit));
+      } else if (match_keyword("package", true)) {
+        const auto start = previous();
+        if (match_keyword("body", true)) {
+          error(
+              start,
+              "FSIM-VHDL-UNSUPPORTED-022",
+              "VHDL package bodies are not implemented in this bounded "
+              "package slice");
+          skip_vhdl_package_body();
+          pending_context.clear();
+        } else {
+          auto unit = parse_package(start);
+          unit.vhdl_context = std::exchange(pending_context, {});
+          design.units.push_back(std::move(unit));
+        }
       } else {
         const auto unexpected = advance();
         error(unexpected, "FSIM-VHDL-UNSUPPORTED-001",
@@ -174,6 +189,110 @@ class VhdlParser final : private detail::ParserBase {
 
   Token expect_identifier(std::string_view description) {
     return expect(TokenKind::Identifier, description, "FSIM-VHDL-PARSE-001");
+  }
+
+  void skip_vhdl_package_body() {
+    while (!at_end()) {
+      if (keyword("end", 0, true)
+          && keyword("package", 1, true)
+          && keyword("body", 2, true)) {
+        advance();
+        advance();
+        advance();
+        if (at(TokenKind::Identifier)) {
+          advance();
+        }
+        skip_to_semicolon();
+        return;
+      }
+      advance();
+    }
+  }
+
+  DesignUnit parse_package(const Token& start) {
+    DesignUnit unit;
+    unit.kind = UnitKind::VhdlPackage;
+    unit.language = Language::Vhdl2008;
+    const auto name = expect_identifier("package name");
+    unit.name = vhdl_name(name.text);
+    expect_keyword("is", true, "FSIM-VHDL-PARSE-086");
+    while (!at_end() && !keyword("end", 0, true)) {
+      if (match_keyword("constant", true)) {
+        parse_package_constant(unit, previous());
+      } else {
+        const auto declaration = advance();
+        error(
+            declaration,
+            "FSIM-VHDL-UNSUPPORTED-022",
+            "unsupported package declaration '"
+                + declaration.text + "'");
+        skip_to_semicolon();
+      }
+    }
+    parse_vhdl_end("package");
+    unit.span = span_from(start, previous());
+    return unit;
+  }
+
+  void parse_package_constant(
+      DesignUnit& unit, const Token& start) {
+    std::vector<Token> names;
+    names.push_back(expect_identifier("package constant name"));
+    while (match(TokenKind::Comma)) {
+      names.push_back(
+          expect_identifier("package constant name"));
+    }
+    expect(
+        TokenKind::Colon,
+        "':' after package constant names",
+        "FSIM-VHDL-PARSE-087");
+    const auto type = parse_vhdl_type(true);
+    if (type.packed_range
+        || (type.domain != ValueDomain::Integer
+            && type.domain != ValueDomain::Boolean
+            && type.domain != ValueDomain::Bit2)) {
+      error(
+          names.front(),
+          "FSIM-VHDL-UNSUPPORTED-023",
+          "package constants are bounded to scalar integer, Boolean, and "
+          "bit types");
+    }
+    Expression value;
+    if (match(TokenKind::ColonEqual)) {
+      value = parse_expression();
+    } else {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-088",
+          "a package constant requires a default expression");
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after package constant declaration",
+        "FSIM-VHDL-PARSE-089");
+    for (const auto& constant_name : names) {
+      const auto canonical =
+          vhdl_name(constant_name.text);
+      if (std::any_of(
+              unit.parameters.begin(),
+              unit.parameters.end(),
+              [&](const ParameterDeclaration& existing) {
+                return existing.name == canonical;
+              })) {
+        error(
+            constant_name,
+            "FSIM-VHDL-SEM-020",
+            "duplicate package constant declaration '"
+                + canonical + "'");
+        continue;
+      }
+      unit.parameters.push_back(ParameterDeclaration{
+          canonical,
+          type,
+          value,
+          true,
+          span_from(start, previous())});
+    }
   }
 
   DesignUnit parse_entity(const Token& start) {

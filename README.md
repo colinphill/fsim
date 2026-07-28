@@ -29,6 +29,10 @@ The current tree contains:
 - a typed SimIR and reference interpreter;
 - hand-written VHDL-2008 and Verilog/SystemVerilog tokenizers and parsers for a
   deliberately small executable subset;
+- bounded VHDL package declarations with declaration-ordered scalar
+  integer/Boolean/bit constants, explicit `use library.package.all` or
+  `use library.package.name` visibility, and package-source specialization
+  provenance;
 - Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
   macros, object/function expansion with default arguments, multiline
   replacements, token concatenation/stringification, conditional compilation,
@@ -168,9 +172,9 @@ multi-driver resolution, complete VHDL generic typing and SystemVerilog
 parameter typing, complete scoped/local type coverage and call
 safe points, broader interpreter/JIT differential coverage, remaining SystemC
 kernel behavior, fractional-delay and declaration-based time semantics,
-IEEE VHDL packages, complete HDL event controls, and most testbench features
-remain work in progress. Unsupported syntax is diagnosed rather than silently
-accepted.
+general VHDL package declarations/bodies and IEEE packages, complete HDL event
+controls, and most testbench features remain work in progress. Unsupported
+syntax is diagnosed rather than silently accepted.
 
 ## Requirements
 

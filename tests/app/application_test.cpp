@@ -4800,6 +4800,163 @@ end architecture rtl;
       == 2);
 #endif
 
+  const auto package_constant_source =
+      directory / "package_constants.vhd";
+  const auto package_constant_user_source =
+      directory / "package_constant_user.vhd";
+  const auto write_package_constants =
+      [&](const std::uint64_t base_value) {
+        std::ofstream output(package_constant_source);
+        output << "package constants is\n"
+               << "  constant width : natural := 4;\n"
+               << "  constant base_value : natural := "
+               << base_value << ";\n"
+               << "  constant next_value : natural := "
+                  "base_value + 1;\n"
+               << "end package constants;\n";
+      };
+  write_package_constants(5);
+  {
+    std::ofstream output(package_constant_user_source);
+    output << R"(
+library support;
+use support.constants.width;
+entity package_constant_user is
+  port (observed : out unsigned(width - 1 downto 0));
+end entity package_constant_user;
+
+library support;
+use support.constants.all;
+architecture rtl of package_constant_user is
+  signal local_value : unsigned(width - 1 downto 0);
+begin
+  local_value <= next_value;
+  observed <= local_value + 1;
+end architecture rtl;
+)";
+  }
+  auto package_constant_config = config;
+  package_constant_config.project.name =
+      "vhdl-package-constant-test";
+  package_constant_config.project.top =
+      "vhdl:work.package_constant_user(rtl)";
+  package_constant_config.build.optimization =
+      fsim::project::Optimization::o2;
+  package_constant_config.build.cache_path =
+      directory / "vhdl-package-constant-cache";
+  package_constant_config.source_sets.clear();
+  fsim::project::SourceSet package_library_sources;
+  package_library_sources.language =
+      fsim::project::Language::vhdl;
+  package_library_sources.standard = "2008";
+  package_library_sources.library = "support";
+  package_library_sources.compilation_unit = "file";
+  package_library_sources.files = {package_constant_source};
+  package_constant_config.source_sets.push_back(
+      std::move(package_library_sources));
+  fsim::project::SourceSet package_user_sources;
+  package_user_sources.language =
+      fsim::project::Language::vhdl;
+  package_user_sources.standard = "2008";
+  package_user_sources.library = "work";
+  package_user_sources.compilation_unit = "file";
+  package_user_sources.files = {package_constant_user_source};
+  package_constant_config.source_sets.push_back(
+      std::move(package_user_sources));
+  struct PackageConstantRun {
+    std::string specialization_key;
+    CapturedSimulation simulation;
+  };
+  const auto run_package_constants =
+      [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            package_constant_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 1);
+        assert(project->specialization_cache_keys.size() == 1);
+        const auto& dependencies =
+            project->design.specializations()
+                .front()
+                .source_dependencies;
+        assert(
+            std::find(
+                dependencies.begin(),
+                dependencies.end(),
+                package_constant_source.string())
+            != dependencies.end());
+        auto key = project->specialization_cache_keys.front();
+        auto simulation = capture_simulation(
+            std::move(*project), engine);
+        return PackageConstantRun{
+            std::move(key), std::move(simulation)};
+      };
+  const auto package_constant_reference =
+      run_package_constants(
+          fsim::app::SimulationEngine::interpreter);
+  const auto package_constant_cold =
+      run_package_constants(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      package_constant_reference.simulation,
+      package_constant_cold.simulation);
+  assert((
+      package_constant_cold.simulation.final_values
+      == std::vector<std::string>{"0111", "0110"}));
+  assert(package_constant_cold.simulation.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      package_constant_cold.simulation.compiled_processes == 2);
+  assert(
+      package_constant_cold.simulation.compiled_modules == 1);
+  assert(package_constant_cold.simulation.native_cache.hits == 0);
+  assert(
+      package_constant_cold.simulation.native_cache.misses == 1);
+  assert(
+      package_constant_cold.simulation.native_cache.stores == 1);
+#endif
+
+  const auto package_constant_warm =
+      run_package_constants(
+          fsim::app::SimulationEngine::compiled);
+  assert(
+      package_constant_warm.specialization_key
+      == package_constant_cold.specialization_key);
+#if defined(FSIM_HAS_LLVM)
+  assert(package_constant_warm.simulation.native_cache.hits == 1);
+  assert(
+      package_constant_warm.simulation.native_cache.misses == 0);
+#endif
+
+  write_package_constants(9);
+  const auto package_constant_changed_reference =
+      run_package_constants(
+          fsim::app::SimulationEngine::interpreter);
+  const auto package_constant_changed =
+      run_package_constants(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      package_constant_changed_reference.simulation,
+      package_constant_changed.simulation);
+  assert(
+      package_constant_changed.specialization_key
+      != package_constant_cold.specialization_key);
+  assert((
+      package_constant_changed.simulation.final_values
+      == std::vector<std::string>{"1011", "1010"}));
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      package_constant_changed.simulation.native_cache.hits == 0);
+  assert(
+      package_constant_changed.simulation.native_cache.misses == 1);
+  assert(
+      package_constant_changed.simulation.native_cache.stores == 1);
+#endif
+
   // Explicit mixed-language bindings carry construction actuals from the
   // parent syntax into the selected foreign unit before boundary widths are
   // checked. Exercise both hierarchy directions through the interpreter and

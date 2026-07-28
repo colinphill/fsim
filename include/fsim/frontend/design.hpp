@@ -16,6 +16,7 @@ namespace fsim::frontend {
 enum class UnitKind {
   VhdlEntity,
   VhdlArchitecture,
+  VhdlPackage,
   VerilogModule,
 };
 
@@ -357,6 +358,9 @@ struct DesignUnit {
   std::vector<Process> processes;
   std::vector<Instance> instances;
   std::vector<GenerateRegion> generate_regions;
+  // Semantically imported design-unit sources that affect specialization and
+  // native-cache identity (for example bounded VHDL package constants).
+  std::vector<std::string> source_dependencies;
   SourceSpan span;
 };
 

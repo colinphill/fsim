@@ -936,6 +936,109 @@ end entity;
       "malformed context clause needs a targeted diagnostic");
 }
 
+void test_vhdl_package_constants() {
+  const auto parsed = parse_text(
+      "package_constants.vhd",
+      R"(
+library support;
+package constants is
+  constant width, lanes : natural := 4;
+  constant next_value : integer := width + 1;
+  constant enabled : boolean := true;
+  constant initial_bit : bit := '1';
+end package constants;
+
+use work.constants.all;
+entity package_user is
+end entity package_user;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "bounded VHDL package constants must parse");
+  require(
+      parsed.design.units.size() == 2,
+      "package and following entity are retained");
+  const auto& package = parsed.design.units[0];
+  require(
+      package.kind == UnitKind::VhdlPackage
+          && package.name == "constants"
+          && package.parameters.size() == 5,
+      "package declaration records each constant");
+  require(
+      package.parameters[0].name == "width"
+          && package.parameters[1].name == "lanes"
+          && package.parameters[2].default_value.kind
+              == ExpressionKind::Binary
+          && package.parameters[3].type.domain
+              == ValueDomain::Boolean
+          && package.parameters[4].type.domain
+              == ValueDomain::Bit2,
+      "package constant names, expressions, and scalar types survive");
+  require(
+      package.vhdl_context.size() == 1
+          && package.vhdl_context.front().kind
+              == VhdlContextItemKind::LibraryClause,
+      "package retains its own context");
+  require(
+      parsed.design.units[1].vhdl_context.size() == 1
+          && parsed.design.units[1]
+                 .vhdl_context.front()
+                 .selected_names.front()
+              == "work.constants.all",
+      "following unit retains package use visibility");
+
+  const auto invalid = parse_text(
+      "invalid_package_constants.vhd",
+      R"(
+package invalid_constants is
+  constant duplicate : natural := 1;
+  constant duplicate : natural := 2;
+  constant missing : natural;
+  constant vector_value : bit_vector(3 downto 0) := "0000";
+end package invalid_constants;
+)",
+      Language::Vhdl2008);
+  require(!invalid.ok(), "invalid package constants must fail");
+  const auto has_code = [&](const std::string_view code) {
+    return std::any_of(
+        invalid.diagnostics.begin(),
+        invalid.diagnostics.end(),
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      has_code("FSIM-VHDL-SEM-020")
+          && has_code("FSIM-VHDL-PARSE-088")
+          && has_code("FSIM-VHDL-UNSUPPORTED-023"),
+      "invalid package constants have targeted diagnostics");
+
+  const auto body = parse_text(
+      "package_body.vhd",
+      R"(
+package body unsupported is
+  function identity(value : integer) return integer is
+  begin
+    return value;
+  end function identity;
+end package body unsupported;
+entity recovered is
+end entity recovered;
+)",
+      Language::Vhdl2008);
+  require(
+      !body.ok()
+          && body.design.units.size() == 1
+          && body.design.units.front().name == "recovered"
+          && std::any_of(
+              body.diagnostics.begin(),
+              body.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-022";
+              }),
+      "package-body rejection recovers at the outer end clause");
+}
+
 void test_ignored_initializers_are_rejected() {
   const auto vhdl = parse_text(
       "initializers.vhd",
@@ -2975,6 +3078,7 @@ int main() {
     test_non_ansi_verilog_ports();
     test_diagnostics_and_spans();
     test_vhdl_context_diagnostics();
+    test_vhdl_package_constants();
     test_ignored_initializers_are_rejected();
     test_duplicate_declarations_are_rejected();
     test_systemverilog_timescale_context();

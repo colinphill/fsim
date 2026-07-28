@@ -503,6 +503,203 @@ end architecture;
             .to_msb_string()
         == "00000000");
 
+    const auto package_source = fsim::frontend::parse_text(
+        "package_constants.vhd",
+        R"(
+package constants is
+  constant width : natural := 4;
+  constant base_value : natural := 5;
+  constant next_value : natural := base_value + 1;
+end package constants;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    const auto package_user_source =
+        fsim::frontend::parse_text(
+            "package_user.vhd",
+            R"(
+use work.constants.width;
+entity package_user is
+  port (observed : out unsigned(width - 1 downto 0));
+end entity package_user;
+
+use work.constants.all;
+architecture rtl of package_user is
+  signal local_value : unsigned(width - 1 downto 0);
+begin
+  local_value <= next_value;
+  observed <= local_value + 1;
+end architecture rtl;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(package_source.ok());
+    assert(package_user_source.ok());
+    fsim::frontend::ParsedDesign package_design =
+        package_source.design;
+    package_design.units.insert(
+        package_design.units.end(),
+        package_user_source.design.units.begin(),
+        package_user_source.design.units.end());
+    const auto package_elaborated =
+        fsim::elaboration::elaborate(
+            package_design,
+            "vhdl:work.package_user(rtl)");
+    if (!package_elaborated.ok()) {
+        for (const auto& diagnostic :
+             package_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(package_elaborated.ok());
+    const auto package_observed =
+        package_elaborated.design->find_signal("observed");
+    const auto package_local =
+        package_elaborated.design->find_signal("local_value");
+    assert(package_observed && package_local);
+    assert(
+        package_elaborated.design->signals()
+            .at(*package_observed).width
+        == 4);
+    const auto& package_specialization =
+        package_elaborated.design->specializations().front();
+    assert(std::find(
+               package_specialization.source_dependencies.begin(),
+               package_specialization.source_dependencies.end(),
+               "package_constants.vhd")
+           != package_specialization.source_dependencies.end());
+    auto package_interpreter =
+        package_elaborated.design->create_interpreter();
+    assert(
+        package_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        package_interpreter
+            ->signal_value(*package_local)
+            .to_msb_string()
+        == "0110");
+    assert(
+        package_interpreter
+            ->signal_value(*package_observed)
+            .to_msb_string()
+        == "0111");
+
+    const auto missing_package = fsim::frontend::parse_text(
+        "missing_package.vhd",
+        R"(
+use work.not_present.all;
+entity missing_package is
+end entity missing_package;
+architecture rtl of missing_package is
+begin
+end architecture rtl;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(missing_package.ok());
+    const auto missing_package_result =
+        fsim::elaboration::elaborate(
+            missing_package.design,
+            "vhdl:work.missing_package(rtl)");
+    assert(!missing_package_result.ok());
+    assert(has_diagnostic(
+        missing_package_result, "FSIM-ELAB-PKG-002"));
+
+    const auto missing_constant = fsim::frontend::parse_text(
+        "missing_package_constant.vhd",
+        R"(
+package values is
+  constant present : natural := 1;
+end package values;
+use work.values.absent;
+entity missing_package_constant is
+end entity missing_package_constant;
+architecture rtl of missing_package_constant is
+begin
+end architecture rtl;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(missing_constant.ok());
+    const auto missing_constant_result =
+        fsim::elaboration::elaborate(
+            missing_constant.design,
+            "vhdl:work.missing_package_constant(rtl)");
+    assert(!missing_constant_result.ok());
+    assert(has_diagnostic(
+        missing_constant_result, "FSIM-ELAB-PKG-003"));
+
+    const auto ambiguous_constant = fsim::frontend::parse_text(
+        "ambiguous_package_constant.vhd",
+        R"(
+package first_values is
+  constant width : natural := 1;
+end package first_values;
+package second_values is
+  constant width : natural := 2;
+end package second_values;
+use work.first_values.all;
+use work.second_values.all;
+entity ambiguous_package_constant is
+end entity ambiguous_package_constant;
+architecture rtl of ambiguous_package_constant is
+begin
+end architecture rtl;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(ambiguous_constant.ok());
+    const auto ambiguous_constant_result =
+        fsim::elaboration::elaborate(
+            ambiguous_constant.design,
+            "vhdl:work.ambiguous_package_constant(rtl)");
+    assert(!ambiguous_constant_result.ok());
+    assert(has_diagnostic(
+        ambiguous_constant_result, "FSIM-ELAB-PKG-004"));
+
+    const auto malformed_import = fsim::frontend::parse_text(
+        "malformed_package_import.vhd",
+        R"(
+use work.values;
+entity malformed_package_import is
+end entity malformed_package_import;
+architecture rtl of malformed_package_import is
+begin
+end architecture rtl;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(malformed_import.ok());
+    const auto malformed_import_result =
+        fsim::elaboration::elaborate(
+            malformed_import.design,
+            "vhdl:work.malformed_package_import(rtl)");
+    assert(!malformed_import_result.ok());
+    assert(has_diagnostic(
+        malformed_import_result, "FSIM-ELAB-PKG-001"));
+
+    const auto invalid_package_values =
+        fsim::frontend::parse_text(
+            "invalid_package_values.vhd",
+            R"(
+package invalid_values is
+  constant missing_dependency : natural := absent + 1;
+  constant invalid_positive : positive := 0;
+end package invalid_values;
+use work.invalid_values.all;
+entity invalid_package_values is
+end entity invalid_package_values;
+architecture rtl of invalid_package_values is
+begin
+end architecture rtl;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_package_values.ok());
+    const auto invalid_package_values_result =
+        fsim::elaboration::elaborate(
+            invalid_package_values.design,
+            "vhdl:work.invalid_package_values(rtl)");
+    assert(!invalid_package_values_result.ok());
+    assert(has_diagnostic(
+        invalid_package_values_result, "FSIM-ELAB-PKG-005"));
+    assert(has_diagnostic(
+        invalid_package_values_result, "FSIM-ELAB-PKG-006"));
+
     const auto invalid_generics = fsim::frontend::parse_text(
         "invalid-generic-elaboration.vhd",
         R"(

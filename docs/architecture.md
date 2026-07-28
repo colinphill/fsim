@@ -45,6 +45,20 @@ and native-cache identity. Typed bounded scalar construction values also cross
 SystemC factory boundaries in both directions. Complete generic/parameter
 typing and reusable code-specialization deduplication remain planned.
 
+The bounded VHDL package path represents a constant-only package as its own
+library unit. An explicit `use library.package.all` or
+`use library.package.constant` clause resolves the project package, evaluates
+its scalar integer/Boolean/bit constants in declaration order, and injects
+folded immutable names into the consuming entity/architecture specialization.
+The imported package source is recorded as a semantic source dependency, so a
+package-only edit changes the owning specialization's native-object key even
+when the executable unit source is unchanged. Cross-library dependencies are
+associated with their own source set, and its language, standard, library,
+compilation-unit policy, defines, and include settings enter the provenance
+key. Package bodies, recursive package imports, types/subprograms,
+standard-package loading, and general VHDL visibility remain future
+semantic-layer work.
+
 The current hierarchy builder recursively follows direct VHDL/SV instances,
 bounded conditional/iterative/selection generate regions, and always-selected
 static regions representing unguarded VHDL blocks or direct/named
