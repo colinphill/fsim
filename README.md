@@ -299,11 +299,10 @@ particular, complete semantic analysis, general mixed-boundary conversions and
 multi-driver resolution, complete VHDL generic typing and SystemVerilog
 parameter typing, complete scoped/local type coverage and call
 safe points, broader interpreter/JIT differential coverage, remaining SystemC
-  kernel behavior, delay triplets and parameterized/nonconstant delay
-  expressions, general VHDL package declarations/bodies and IEEE packages,
-  complete HDL event controls, and most testbench features remain work in
-  progress. Unsupported
-syntax is diagnosed rather than silently accepted.
+kernel behavior, parameterized/nonconstant and multiple rise/fall/turnoff
+delays, general VHDL package declarations/bodies and IEEE packages, complete
+HDL event controls, and most testbench features remain work in progress.
+Unsupported syntax is diagnosed rather than silently accepted.
 
 ## Requirements
 

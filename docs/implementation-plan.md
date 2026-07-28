@@ -1127,9 +1127,12 @@ The planned ten implementation features are:
 All ten implementation features are complete. Focused frontend, project,
 diagnostic-catalog, existing time/named-event, manifest/CLI, interpreter, LLVM
 O0/O2, callback/timestamp, VCD, branch-specific automatic-resolution, and
-cold/warm mode-distinct native-cache tests pass. The full local regression,
-feature commit, checkpoint commit, and push remain pending. GitHub Actions
-will not be queried.
+cold/warm mode-distinct native-cache tests pass. The exact LLVM 22.1.8
+warnings-as-errors regression then passed all 27 tests in 202.09 seconds on
+2026-07-28, including enabled Boost.Context SystemC fibers and installed Tcl
+9.0.4. The fetched-Tcl relocation companion also passed. The batch ends at
+feature commit `efdc0a7`; GitHub Actions state was not queried for this local
+gate.
 
 ## v1 release condition
 
