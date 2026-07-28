@@ -5445,6 +5445,53 @@ endmodule
             return diagnostic.code == "FSIM-SV-SEM-037";
           }),
       "formatted $display arguments need a targeted diagnostic");
+
+  const auto write = parse_text(
+      "write.sv",
+      R"(
+module write;
+  initial begin
+    $write("hello");
+    $write();
+    $write;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(write.ok(), "literal $write tasks must parse");
+  const auto& write_statements =
+      write.design.units.front().processes.front().statements;
+  require(
+      write_statements.size() == 3
+          && std::all_of(
+              write_statements.begin(),
+              write_statements.end(),
+              [](const Statement& statement) {
+                return statement.kind == StatementKind::Display
+                    && !statement.output_newline;
+              })
+          && write_statements.front().output_text == "hello"
+          && write_statements[1].output_text.empty()
+          && write_statements[2].output_text.empty(),
+      "literal and empty $write HIR");
+
+  const auto unsupported_write = parse_text(
+      "formatted_write.sv",
+      R"(
+module formatted_write;
+  logic q;
+  initial $write("%b", q);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::any_of(
+          unsupported_write.diagnostics.begin(),
+          unsupported_write.diagnostics.end(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-038";
+          }),
+      "formatted $write arguments need a targeted diagnostic");
 }
 
 int main() {

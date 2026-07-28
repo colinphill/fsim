@@ -3626,10 +3626,20 @@ class VerilogParser final : private detail::ParserBase {
       return statement;
     }
 
-    if (keyword("$display")) {
+    if (keyword("$display") || keyword("$write")) {
+      const bool newline = keyword("$display");
+      const std::string_view task_name =
+          newline ? "$display" : "$write";
+      const std::string semantic_code =
+          newline ? "FSIM-SV-SEM-037" : "FSIM-SV-SEM-038";
+      const std::string close_code =
+          newline ? "FSIM-SV-PARSE-119" : "FSIM-SV-PARSE-121";
+      const std::string semicolon_code =
+          newline ? "FSIM-SV-PARSE-120" : "FSIM-SV-PARSE-122";
       const auto start = advance();
       Statement statement;
       statement.kind = StatementKind::Display;
+      statement.output_newline = newline;
       if (match(TokenKind::LeftParen)) {
         if (!at(TokenKind::RightParen)) {
           if (at(TokenKind::StringLiteral)) {
@@ -3638,9 +3648,9 @@ class VerilogParser final : private detail::ParserBase {
           } else {
             error(
                 current(),
-                "FSIM-SV-SEM-037",
-                "the current $display slice requires a literal string "
-                "argument");
+                semantic_code,
+                "the current " + std::string{task_name}
+                    + " slice requires a literal string argument");
             while (!at_end() && !at(TokenKind::RightParen)
                    && !at(TokenKind::Semicolon)) {
               advance();
@@ -3649,8 +3659,9 @@ class VerilogParser final : private detail::ParserBase {
           if (match(TokenKind::Comma)) {
             error(
                 previous(),
-                "FSIM-SV-SEM-037",
-                "$display format arguments are not implemented");
+                semantic_code,
+                std::string{task_name}
+                    + " format arguments are not implemented");
             while (!at_end() && !at(TokenKind::RightParen)
                    && !at(TokenKind::Semicolon)) {
               advance();
@@ -3659,13 +3670,13 @@ class VerilogParser final : private detail::ParserBase {
         }
         expect(
             TokenKind::RightParen,
-            "')' after $display arguments",
-            "FSIM-SV-PARSE-119");
+            "')' after " + std::string{task_name} + " arguments",
+            close_code);
       }
       expect(
           TokenKind::Semicolon,
-          "';' after $display",
-          "FSIM-SV-PARSE-120");
+          "';' after " + std::string{task_name},
+          semicolon_code);
       statement.span = span_from(start, previous());
       return statement;
     }

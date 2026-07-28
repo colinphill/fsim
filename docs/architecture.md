@@ -329,13 +329,14 @@ whether the eventual wake was the timeout. A VHDL process containing explicit
 waits jumps back to its post-initializer entry when its body completes,
 preserving implicit process repetition without reinitializing locals.
 
-The initial output slice lowers literal or empty Verilog/SystemVerilog
-`$display` calls to a typed `Display` operation. The interpreter invokes an
+The initial output slices lower literal or empty Verilog/SystemVerilog
+`$display` and `$write` calls to a typed `Display` operation carrying explicit
+newline policy. The interpreter invokes an
 embedding-owned output hook synchronously with process, time, and delta
 metadata. Compiled O0/O2 code calls the same hook through an append-only
 plain-C runtime-table tail, so output ordering remains part of the common
-single-thread simulation semantics. Formatting operands, `$write`, and
-postponed `$strobe`/`$monitor` remain subsequent slices.
+single-thread simulation semantics. Formatting operands and postponed
+`$strobe`/`$monitor` remain subsequent slices.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

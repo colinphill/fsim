@@ -8460,7 +8460,9 @@ endmodule
 module display;
   initial begin
     $display("first");
+    $write("continued");
     #1 $display;
+    $write;
   end
 endmodule
 )",
@@ -8481,11 +8483,15 @@ endmodule
         }
     }
     assert(
-        displays.size() == 2
+        displays.size() == 4
         && displays[0].text == "first"
         && displays[0].newline
-        && displays[1].text.empty()
-        && displays[1].newline);
+        && displays[1].text == "continued"
+        && !displays[1].newline
+        && displays[2].text.empty()
+        && displays[2].newline
+        && displays[3].text.empty()
+        && !displays[3].newline);
 
     std::cout << "elaborator tests passed\n";
 }

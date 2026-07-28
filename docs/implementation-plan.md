@@ -776,11 +776,14 @@ The nineteenth post-gate batch is in progress:
    typed synchronous output operation with process/time/delta metadata, route
    through CLI and Tcl-owned streams, and execute directly through the
    append-only LLVM O0/O2 runtime callback.
+3. Verilog-2005/SystemVerilog literal and empty `$write` reuse the typed output
+   path with explicit no-newline behavior, including deterministic
+   concatenation across interpreter, LLVM O0/O2, CLI, and Tcl-owned streams.
 
 The forced no-system-Tcl dependency build and its isolated staged relocation
 probe pass; the ordinary installed-Tcl application regression also passes.
-Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and display
-application tests pass for the display slice. This is feature 2 of 10, so the
+Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and output
+application tests pass for the display/write slices. This is feature 3 of 10, so the
 interval full regression and remote push are not due yet.
 
 ## v1 release condition

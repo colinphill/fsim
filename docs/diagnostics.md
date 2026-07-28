@@ -408,6 +408,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-118` | error | Expected `;` after an immediate named-event trigger. |
 | `FSIM-SV-PARSE-119` | error | Expected `)` after Verilog/SystemVerilog `$display` arguments. |
 | `FSIM-SV-PARSE-120` | error | Expected `;` after a Verilog/SystemVerilog `$display` task. |
+| `FSIM-SV-PARSE-121` | error | Expected `)` after Verilog/SystemVerilog `$write` arguments. |
+| `FSIM-SV-PARSE-122` | error | Expected `;` after a Verilog/SystemVerilog `$write` task. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -462,6 +464,7 @@ therefore excluded.
 | `FSIM-SV-SEM-035` | error | A named event conflicts with another event, signal, or port declaration. |
 | `FSIM-SV-SEM-036` | error | A delayed named-event trigger uses immediate `->` rather than nonblocking `->>` syntax. |
 | `FSIM-SV-SEM-037` | error | A `$display` call uses a nonliteral or formatting argument outside the current bounded display slice. |
+| `FSIM-SV-SEM-038` | error | A `$write` call uses a nonliteral or formatting argument outside the current bounded output slice. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

@@ -127,18 +127,24 @@ void test_display(
   assert(reference.result.time == 2);
   assert(compiled.result.time == 2);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 3);
+  assert(reference.output.size() == 5);
   assert(reference.output[0].process == 0);
   assert(reference.output[0].text == "first");
-  assert(reference.output[0].newline);
+  assert(!reference.output[0].newline);
   assert(reference.output[0].time == 0);
   assert(reference.output[0].delta == 0);
-  assert(reference.output[1].text == "second");
+  assert(reference.output[1].text == "+line");
   assert(reference.output[1].newline);
-  assert(reference.output[1].time == 2);
-  assert(reference.output[2].text.empty());
-  assert(reference.output[2].newline);
+  assert(reference.output[1].time == 0);
+  assert(reference.output[2].text == "second");
+  assert(!reference.output[2].newline);
   assert(reference.output[2].time == 2);
+  assert(reference.output[3].text.empty());
+  assert(!reference.output[3].newline);
+  assert(reference.output[3].time == 2);
+  assert(reference.output[4].text.empty());
+  assert(reference.output[4].newline);
+  assert(reference.output[4].time == 2);
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 1);
 }
@@ -158,8 +164,10 @@ int main() {
     output << R"(
 module display_test;
   initial begin
-    $display("first");
-    #2 $display("second");
+    $write("first");
+    $display("+line");
+    #2 $write("second");
+    $write;
     $display;
     $finish;
   end
@@ -200,7 +208,7 @@ endmodule
     assert(error.str().empty());
     assert(
         output.str().find(
-            "first\nsecond\n\nsimulation stopped at tick 2")
+            "first+line\nsecond\nsimulation stopped at tick 2")
         != std::string::npos);
   }
 
