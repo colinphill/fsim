@@ -861,6 +861,7 @@ struct Interpreter::Impl {
   Scheduler scheduler;
   std::vector<Signal> signals;
   std::vector<PackedLogic4> driven_values;
+  std::vector<PackedLogic4> signal_last_values;
   std::vector<std::optional<PackedLogic4>> forced_values;
   std::vector<ProcessState> processes;
   std::vector<std::vector<Fanout>> static_fanout;
@@ -1308,6 +1309,7 @@ struct Interpreter::Impl {
       return;
     }
     const auto old_value = signal.initial_value;
+    signal_last_values[signal_id] = old_value;
     signal.initial_value = std::move(value);
     signal_events[signal_id] =
         std::pair{scheduler.now(), scheduler.delta() + 1};
@@ -1610,6 +1612,12 @@ struct Interpreter::Impl::ExecutionContext final
     return event
         && event->first == owner.scheduler.now()
         && event->second == owner.scheduler.delta();
+  }
+
+  [[nodiscard]] Logic4Word
+  signal_last_value_word(const SignalId signal) const override {
+    (void)owner.get_signal(signal);
+    return owner.signal_last_values[signal].low_word();
   }
 
   void request_channel_update(
@@ -2051,6 +2059,12 @@ void Interpreter::Impl::execute(ProcessId id) {
                       1, active ? Logic4::one : Logic4::zero);
               ++process.pc;
             },
+            [&](const SignalLastValue& op) {
+              (void)get_signal(op.signal);
+              get_register(process, op.destination) =
+                  signal_last_values[op.signal];
+              ++process.pc;
+            },
             [&](const CopyRegister& op) {
               get_register(process, op.destination) =
                   get_register(process, op.source);
@@ -2307,6 +2321,7 @@ SignalId Interpreter::add_signal(Signal signal) {
     throw std::length_error("too many SimIR signals");
   }
   impl_->driven_values.push_back(signal.initial_value);
+  impl_->signal_last_values.push_back(signal.initial_value);
   impl_->forced_values.emplace_back();
   impl_->signals.push_back(std::move(signal));
   impl_->static_fanout.emplace_back();

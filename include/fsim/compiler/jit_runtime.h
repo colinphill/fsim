@@ -113,6 +113,13 @@ typedef struct fsim_jit_runtime_v1 {
 
   /* Append-only delta-scoped signal event query. Returns zero or one. */
   uint32_t (*signal_event)(void* context, uint32_t signal);
+
+  /*
+   * Append-only effective value immediately before the latest signal event.
+   * Uses the same aval/bval representation as read_signal.
+   */
+  uint64_t (*signal_last_value)(
+      void* context, uint32_t signal, uint64_t* bval);
 } fsim_jit_runtime_v1;
 
 /*

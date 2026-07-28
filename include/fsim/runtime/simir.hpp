@@ -38,6 +38,12 @@ struct SignalEvent {
   SignalId signal{};
 };
 
+/// The effective value immediately before the signal's most recent event.
+struct SignalLastValue {
+  RegisterId destination{};
+  SignalId signal{};
+};
+
 struct CopyRegister {
   RegisterId destination{};
   RegisterId source{};
@@ -344,9 +350,9 @@ struct Pause {};
 struct Halt {};
 
 using Operation =
-    std::variant<LoadConstant, ReadSignal, SignalEvent, CopyRegister, UnaryNot,
-                 LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
-                 Shift, Extract, Concatenate, Binary, Insert,
+    std::variant<LoadConstant, ReadSignal, SignalEvent, SignalLastValue,
+                 CopyRegister, UnaryNot, LogicalNot, LogicalBinary, Reduction,
+                 CountOnes, CountBits, Shift, Extract, Concatenate, Binary, Insert,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
@@ -509,6 +515,13 @@ public:
   /// committed value change.
   [[nodiscard]] virtual bool signal_event(SignalId) const {
     return false;
+  }
+
+  /// Return the effective value immediately before the signal's latest
+  /// committed value change.
+  [[nodiscard]] virtual Logic4Word signal_last_value_word(SignalId) const {
+    throw std::logic_error{
+        "alternate process executor does not support signal last-value reads"};
   }
 
   /// Request one alternate-language primitive-channel update. `channel` is a

@@ -55,7 +55,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, write_after_slice) == 80,
                "runtime delayed partial-write callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, signal_event) == 88,
                "runtime signal-event callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 96,
+_Static_assert(offsetof(fsim_jit_runtime_v1, signal_last_value) == 96,
+               "runtime signal-last-value callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 104,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -168,6 +170,13 @@ static uint32_t signal_event(void* context, uint32_t signal) {
   return signal == UINT32_C(9);
 }
 
+static uint64_t signal_last_value(
+    void* context, uint32_t signal, uint64_t* bval) {
+  (void)context;
+  *bval = UINT64_C(0x80);
+  return UINT64_C(0xa5) + signal;
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -184,7 +193,8 @@ int main(void) {
       write_slice,
       write_slice,
       write_after_slice,
-      signal_event};
+      signal_event,
+      signal_last_value};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -205,6 +215,9 @@ int main(void) {
       UINT64_C(0xabc), UINT64_C(0x400), UINT64_C(13));
   const uint32_t event_active =
       runtime.signal_event(runtime.context, UINT32_C(9));
+  uint64_t last_bval = 0;
+  const uint64_t last_aval = runtime.signal_last_value(
+      runtime.context, UINT32_C(2), &last_bval);
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -215,6 +228,10 @@ int main(void) {
   }
   if (event_active != UINT32_C(1)) {
     return 5;
+  }
+  if (last_aval != UINT64_C(0xa7)
+      || last_bval != UINT64_C(0x80)) {
+    return 6;
   }
   if (state.update_count != UINT32_C(1) ||
       state.after_count != UINT32_C(1) ||

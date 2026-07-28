@@ -112,6 +112,8 @@ The current tree contains:
   `'ascending` attributes with declared-direction preservation;
 - VHDL signal `'event` with delta-scoped effective-value-change semantics and
   the classic `clk'event and clk = '1'` clock idiom;
+- VHDL signal `'last_value`, preserving the packed effective value immediately
+  before the latest value-changing event;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and

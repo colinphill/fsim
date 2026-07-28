@@ -158,6 +158,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.write_update_slice = write_update_slice;
     runtime.write_after_slice = write_after_slice;
     runtime.signal_event = signal_event;
+    runtime.signal_last_value = signal_last_value;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -550,6 +551,41 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       return state.context->signal_event(signal) ? 1U : 0U;
     } catch (...) {
       capture_failure(state);
+      return 0;
+    }
+  }
+
+  static std::uint64_t signal_last_value(
+      void* context,
+      const std::uint32_t signal,
+      std::uint64_t* bval) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      if (bval != nullptr) {
+        *bval = 0;
+      }
+      return 0;
+    }
+    try {
+      if (bval == nullptr || state.context == nullptr
+          || signal >= state.signal_widths.size()) {
+        throw std::logic_error(
+            "invalid generated signal-last-value callback");
+      }
+      const auto value =
+          state.context->signal_last_value_word(signal);
+      if (value.width != state.signal_widths[signal]
+          || value.width == 0 || value.width > 64) {
+        throw std::logic_error(
+            "generated signal-last-value callback observed an invalid width");
+      }
+      *bval = value.bval;
+      return value.aval;
+    } catch (...) {
+      capture_failure(state);
+      if (bval != nullptr) {
+        *bval = 0;
+      }
       return 0;
     }
   }
