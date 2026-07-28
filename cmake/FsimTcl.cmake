@@ -40,7 +40,7 @@ function(fsim_add_fetched_tcl)
       SOURCE_DIR "${tcl_source}"
       CONFIGURE_COMMAND ""
       BUILD_COMMAND
-        "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc core
+        "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc core dlls
         "OPTS=static,msvcrt" "INSTALLDIR=<INSTALL_DIR>"
       INSTALL_COMMAND
         "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc
