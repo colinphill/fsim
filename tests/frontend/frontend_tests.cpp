@@ -2489,7 +2489,10 @@ begin
     zero: when 0 =>
       child: entity work.leaf(rtl)
         port map (value => value, result => result);
-    selected: when 1 | 2 =>
+    selected: when 1 to 2 | 7 downto 5 =>
+      child: entity work.leaf(rtl)
+        port map (value => value, result => result);
+    empty_choice: when 3 to 1 =>
       child: entity work.leaf(rtl)
         port map (value => value, result => result);
     fallback: when others =>
@@ -2586,12 +2589,19 @@ end architecture;
   require(
       vhdl_case.kind == GenerateKind::Selection
           && vhdl_case.condition.text == "mode"
-          && vhdl_case.alternatives.size() == 3
+          && vhdl_case.alternatives.size() == 4
           && vhdl_case.alternatives[0].scope == "zero"
           && vhdl_case.alternatives[1].scope == "selected"
           && vhdl_case.alternatives[1].choices.size() == 2
-          && vhdl_case.alternatives[2].scope == "fallback"
-          && vhdl_case.alternatives[2].is_default,
+          && vhdl_case.alternatives[1].choices[0].right
+          && !vhdl_case.alternatives[1].choices[0].descending
+          && vhdl_case.alternatives[1].choices[1].right
+          && vhdl_case.alternatives[1].choices[1].descending
+          && vhdl_case.alternatives[2].scope == "empty_choice"
+          && vhdl_case.alternatives[2].choices.front().right
+          && !vhdl_case.alternatives[2].choices.front().descending
+          && vhdl_case.alternatives[3].scope == "fallback"
+          && vhdl_case.alternatives[3].is_default,
       "VHDL case-generate alternatives");
   const auto vhdl_block_unit = std::find_if(
       vhdl.design.units.begin(),

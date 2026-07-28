@@ -998,7 +998,7 @@ end architecture;
 
 entity generated_vhdl_case_top is
   generic (
-    mode : integer := 1
+    mode : integer := 6
   );
 end entity;
 architecture rtl of generated_vhdl_case_top is
@@ -1010,10 +1010,16 @@ begin
           value => 1
         )
         port map ();
-    selected: when 1 | 2 =>
+    selected: when 1 to 2 | 7 downto 5 =>
       child: entity work.generated_case_foreign(rtl)
         generic map (
           value => 7
+        )
+        port map ();
+    empty_choice: when 3 to 1 =>
+      child: entity work.generated_vhdl_internal_leaf(rtl)
+        generic map (
+          value => 15
         )
         port map ();
     fallback: when others =>
@@ -1022,6 +1028,25 @@ begin
           value => 3
         )
         port map ();
+  end generate selection;
+end architecture;
+
+entity generated_vhdl_overlapping_ranges is
+end entity;
+architecture rtl of generated_vhdl_overlapping_ranges is
+begin
+  selection: case 2 generate
+    first_choice: when 0 to 2 =>
+    second_choice: when 2 to 4 =>
+  end generate selection;
+end architecture;
+
+entity generated_vhdl_bad_range is
+end entity;
+architecture rtl of generated_vhdl_bad_range is
+begin
+  selection: case 2 generate
+    invalid_choice: when 0 to missing_bound =>
   end generate selection;
 end architecture;
 
@@ -1408,6 +1433,24 @@ end architecture;
             ->signal_value(*generated_vhdl_case_q)
             .to_msb_string()
         == "0111");
+
+    const auto generated_vhdl_overlapping_ranges =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_overlapping_ranges(rtl)");
+    assert(!generated_vhdl_overlapping_ranges.ok());
+    assert(has_diagnostic(
+        generated_vhdl_overlapping_ranges,
+        "FSIM-ELAB-GEN-010"));
+
+    const auto generated_vhdl_bad_range =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_bad_range(rtl)");
+    assert(!generated_vhdl_bad_range.ok());
+    assert(has_diagnostic(
+        generated_vhdl_bad_range,
+        "FSIM-ELAB-GEN-009"));
 
     const auto generated_sv_behavior =
         fsim::elaboration::elaborate(
@@ -1817,10 +1860,10 @@ end architecture;
             .generate_regions.front()
             .alternatives.front()
             .choices.front();
-    invalid_case_choice.kind =
+    invalid_case_choice.left.kind =
         fsim::frontend::ExpressionKind::Identifier;
-    invalid_case_choice.text = "MISSING_CASE_CHOICE";
-    invalid_case_choice.operands.clear();
+    invalid_case_choice.left.text = "MISSING_CASE_CHOICE";
+    invalid_case_choice.left.operands.clear();
     const auto invalid_case_choice_result =
         fsim::elaboration::elaborate(
             invalid_case_choice_design,
@@ -1835,7 +1878,7 @@ end architecture;
             .generate_regions.front()
             .alternatives.front()
             .choices.front();
-    overlapping_choice.text = "2";
+    overlapping_choice.left.text = "2";
     const auto overlapping_case =
         fsim::elaboration::elaborate(
             overlapping_case_design,

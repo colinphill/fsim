@@ -891,10 +891,17 @@ void substitute_parameters(
         for (auto& alternative : generate.alternatives) {
             for (auto& choice : alternative.choices) {
                 substitute_parameters(
-                    choice,
+                    choice.left,
                     body_environment,
                     body_domains,
                     language);
+                if (choice.right) {
+                    substitute_parameters(
+                        *choice.right,
+                        body_environment,
+                        body_domains,
+                        language);
+                }
             }
             substitute_parameters(
                 alternative.body,
@@ -1184,7 +1191,11 @@ void expand_generate_regions(
             const frontend::GenerateAlternative* default_alternative =
                 nullptr;
             bool invalid = false;
-            std::unordered_set<std::int64_t> choice_values;
+            struct ChoiceInterval {
+                std::int64_t lower;
+                std::int64_t upper;
+            };
+            std::vector<ChoiceInterval> choice_intervals;
             for (const auto& alternative : generate.alternatives) {
                 if (alternative.is_default) {
                     if (default_alternative != nullptr) {
@@ -1202,9 +1213,9 @@ void expand_generate_regions(
                 bool alternative_matches = false;
                 for (const auto& choice : alternative.choices) {
                     error.clear();
-                    const auto value = evaluate_constant_expression(
-                        choice, environment, error);
-                    if (!value) {
+                    const auto left = evaluate_constant_expression(
+                        choice.left, environment, error);
+                    if (!left) {
                         diagnostics.push_back({
                             "FSIM-ELAB-GEN-009",
                             "cannot evaluate selection-generate choice: "
@@ -1213,16 +1224,56 @@ void expand_generate_regions(
                         invalid = true;
                         continue;
                     }
-                    if (!choice_values.insert(*value).second) {
+                    auto right = left;
+                    if (choice.right) {
+                        error.clear();
+                        right = evaluate_constant_expression(
+                            *choice.right, environment, error);
+                        if (!right) {
+                            diagnostics.push_back({
+                                "FSIM-ELAB-GEN-009",
+                                "cannot evaluate selection-generate range "
+                                "bound: " + error,
+                                choice.span});
+                            invalid = true;
+                            continue;
+                        }
+                    }
+                    const bool empty_range =
+                        choice.right
+                        && (choice.descending
+                                ? *left < *right
+                                : *left > *right);
+                    if (empty_range) {
+                        continue;
+                    }
+                    const ChoiceInterval interval{
+                        std::min(*left, *right),
+                        std::max(*left, *right)};
+                    const bool overlaps =
+                        std::any_of(
+                            choice_intervals.begin(),
+                            choice_intervals.end(),
+                            [&](const ChoiceInterval& existing) {
+                                return interval.lower
+                                           <= existing.upper
+                                    && existing.lower
+                                           <= interval.upper;
+                            });
+                    if (overlaps) {
                         diagnostics.push_back({
                             "FSIM-ELAB-GEN-010",
                             "selection generate has overlapping "
-                            "constant choices",
+                            "constant choices or ranges",
                             choice.span});
                         invalid = true;
+                    } else {
+                        choice_intervals.push_back(interval);
                     }
                     alternative_matches =
-                        alternative_matches || *value == *selector;
+                        alternative_matches
+                        || (interval.lower <= *selector
+                            && *selector <= interval.upper);
                 }
                 if (alternative_matches) {
                     if (selected != nullptr) {

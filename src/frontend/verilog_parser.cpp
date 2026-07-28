@@ -972,7 +972,13 @@ class VerilogParser final : private detail::ParserBase {
         saw_default = true;
       } else {
         do {
-          alternative.choices.push_back(parse_expression());
+          auto expression = parse_expression();
+          const auto span = expression.span;
+          alternative.choices.push_back(GenerateChoice{
+              std::move(expression),
+              std::nullopt,
+              false,
+              span});
         } while (match(TokenKind::Comma));
       }
       expect(

@@ -88,6 +88,8 @@ The following foundation is implemented:
   loop-variable substitution, stable labeled/indexed/alternative hierarchy
   paths, and explicit mixed-language bindings through selected branches,
   realized iterations, and selected alternatives;
+- interval-based VHDL case-generate `to`/`downto` choices with null-range and
+  scalar/range-overlap handling;
 - always-selected unguarded VHDL block statements, module-level implicit
   SystemVerilog conditional/iterative/selection generates, and direct or named
   static contents in explicit SystemVerilog generate regions, sharing
@@ -236,7 +238,7 @@ Current Linux validation:
 | Verilog/SV preprocessing/directives | GCC Debug and exact LLVM 22 atomic frontend/elaboration plus source-set/combined interpreter/compiled differentials pass, including shared default-net/cell/reset state and omitted-input pulls |
 | Conditional instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL and SV selection, stable generated mixed-binding paths, interpreter/JIT equivalence, and cold/warm native cache |
 | Iterative instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL ascending/descending ranges and canonical SV inline-`genvar` loops, nested expansion, mixed indexed bindings, interpreter/JIT equivalence, and cold/warm native cache |
-| Selection instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for labeled VHDL/SV multi-choice/default alternatives, mixed selected paths, interpreter/JIT equivalence, and cold/warm native cache |
+| Selection instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for labeled VHDL scalar/directed-range and SV multi-choice/default alternatives, mixed selected paths, interval-overlap diagnostics, interpreter/JIT equivalence, and cold/warm native cache |
 | Executable generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for selected and per-iteration local signals, concurrent/process behavior, scoped debug/VCD names, interpreter/JIT equivalence, and specialization-level native cache |
 | Static/implicit generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for unguarded VHDL blocks, all three bounded implicit SV generate forms, direct explicit-generate contents, and named static SV blocks with exact conditional/static interpreter/JIT/VCD/cache behavior |
 | Generated constants/parameters | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for declaration-order, parent-scope, and loop-index folding, targeted evaluation/type failures, and exact interpreter/JIT/VCD/cache results |
@@ -368,7 +370,7 @@ Remaining before the architecture gate passes:
   instances are implemented. Unguarded VHDL blocks, all three bounded implicit
   SV generate forms, direct/named static SV generate contents, and bounded
   generated constants/parameters also execute;
-  guarded VHDL blocks, broader SV loop syntax, VHDL range choices, and
+  guarded VHDL blocks, broader SV loop syntax, nonintegral VHDL choices, and
   additional generated declarative/module items remain.
 
 ### 3. Near-full synthesizable frontend coverage — Pending

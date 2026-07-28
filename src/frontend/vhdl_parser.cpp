@@ -783,7 +783,19 @@ class VhdlParser final : private detail::ParserBase {
         saw_default = true;
       } else {
         do {
-          alternative.choices.push_back(parse_expression());
+          GenerateChoice choice;
+          choice.left = parse_expression();
+          choice.span = choice.left.span;
+          if (match_keyword("to", true)
+              || match_keyword("downto", true)) {
+            choice.descending =
+                vhdl_name(previous().text) == "downto";
+            choice.right = parse_expression();
+            choice.span =
+                cover(choice.left.span, choice.right->span);
+          }
+          alternative.choices.push_back(
+              std::move(choice));
         } while (match(TokenKind::Pipe));
         if (alternative.choices.empty()) {
           error(

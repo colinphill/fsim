@@ -142,9 +142,10 @@ components, including for explicit bindings to or from SystemC factories.
 VHDL integer-range `for generate` and canonical inline-`genvar` SystemVerilog
 loops use deterministic `label[index]` components and substitute the loop
 constant into child construction actuals before specialization.
-VHDL `case generate` and SystemVerilog generate-case select constant-choice or
-default alternatives per specialization, retaining the alternative label in
-explicit mixed-language binding paths.
+VHDL `case generate` supports scalar and inclusive locally static `to`/
+`downto` range choices, while SystemVerilog generate-case supports scalar
+constant choices. Both select default alternatives per specialization and
+retain the alternative label in explicit mixed-language binding paths.
 Selected generated bodies can execute local packed signals, concurrent
 assignments, and processes. Their local names are scope-qualified for
 debug/VCD visibility, including independent `label[index]` objects for each

@@ -282,9 +282,16 @@ struct GenerateBody {
   std::vector<GenerateRegion> generate_regions;
 };
 
+struct GenerateChoice {
+  Expression left;
+  std::optional<Expression> right;
+  bool descending{};
+  SourceSpan span;
+};
+
 struct GenerateAlternative {
   std::string scope;
-  std::vector<Expression> choices;
+  std::vector<GenerateChoice> choices;
   bool is_default{};
   GenerateBody body;
   SourceSpan span;

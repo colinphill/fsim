@@ -55,6 +55,10 @@ Only selected branches/alternatives and realized iterations enter DesignIR.
 Declared block/alternative labels become stable path components; loop
 iterations use the common `label[index]` spelling so explicit mixed-language
 bindings do not depend on source-language hierarchy syntax.
+VHDL selection choices retain an optional directed upper bound. Elaboration
+normalizes every non-null inclusive range to a signed 64-bit interval, detects
+interval/scalar overlap without enumerating its values, and treats a
+directionally null range as selecting no value.
 
 Selected generated bodies may own packed local signals, concurrent
 assignments, processes, instances, and nested regions. Specialization flattens

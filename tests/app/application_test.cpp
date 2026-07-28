@@ -927,6 +927,29 @@ begin
     observed <= 1;
   end generate chosen;
 end architecture;
+
+entity generated_range_behavior_vhdl is
+  generic (
+    mode : integer := 6
+  );
+  port (
+    observed : out unsigned(3 downto 0)
+  );
+end entity;
+
+architecture rtl of generated_range_behavior_vhdl is
+begin
+  selection: case mode generate
+    zero: when 0 =>
+      observed <= 1;
+    selected: when 1 to 2 | 7 downto 5 =>
+      observed <= 9;
+    empty_choice: when 4 to 3 =>
+      observed <= 15;
+    fallback: when others =>
+      observed <= 3;
+  end generate selection;
+end architecture;
 )";
   }
   const auto generated_static_behavior_sv_source =
@@ -5408,6 +5431,12 @@ end architecture rtl;
           "vhdl:work.generated_behavior_vhdl(rtl)",
           fsim::project::Language::vhdl,
           generated_behavior_vhdl_source);
+  auto generated_range_behavior_vhdl_config =
+      make_generated_behavior_config(
+          "generated-range-behavior-vhdl-test",
+          "vhdl:work.generated_range_behavior_vhdl(rtl)",
+          fsim::project::Language::vhdl,
+          generated_behavior_vhdl_source);
   auto generated_static_behavior_sv_config =
       make_generated_behavior_config(
           "generated-static-behavior-sv-test",
@@ -5521,6 +5550,11 @@ end architecture rtl;
       {"chosen.generated_value"},
       {"0111", "0110"},
       2);
+  verify_generated_behavior(
+      generated_range_behavior_vhdl_config,
+      {},
+      {"1001"},
+      1);
   verify_generated_behavior(
       generated_static_behavior_sv_config,
       {"direct_value", "named_scope.nested_value"},
