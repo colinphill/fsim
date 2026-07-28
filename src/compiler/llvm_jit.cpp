@@ -571,6 +571,9 @@ validate_process(const Process &process,
               case ShiftOperator::logical_left:
               case ShiftOperator::logical_right:
               case ShiftOperator::arithmetic_right:
+              case ShiftOperator::arithmetic_left:
+              case ShiftOperator::rotate_left:
+              case ShiftOperator::rotate_right:
                 break;
               default:
                 reject(
@@ -2358,16 +2361,67 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   builder.CreateAnd(amount.aval, amount_mask);
               auto* amount_too_large = builder.CreateICmpUGE(
                   amount_bits, constant_i64(context, value.width));
-              auto* safe_amount = builder.CreateSelect(
-                  amount_too_large,
-                  constant_i64(context, 0),
-                  amount_bits);
+              const auto rotating =
+                  operation.operation == ShiftOperator::rotate_left
+                  || operation.operation == ShiftOperator::rotate_right;
+              auto* safe_amount =
+                  rotating
+                      ? builder.CreateURem(
+                            amount_bits,
+                            constant_i64(context, value.width))
+                      : builder.CreateSelect(
+                            amount_too_large,
+                            constant_i64(context, 0),
+                            amount_bits);
               const auto shift_component =
                   [&](llvm::Value* component) {
                     if (operation.operation
-                        == ShiftOperator::logical_left) {
-                      return builder.CreateShl(
+                            == ShiftOperator::rotate_left
+                        || operation.operation
+                            == ShiftOperator::rotate_right) {
+                      auto* inverse_amount = builder.CreateURem(
+                          builder.CreateSub(
+                              constant_i64(context, value.width),
+                              safe_amount),
+                          constant_i64(context, value.width));
+                      auto* left_amount =
+                          operation.operation
+                                  == ShiftOperator::rotate_left
+                              ? safe_amount
+                              : inverse_amount;
+                      auto* right_amount =
+                          operation.operation
+                                  == ShiftOperator::rotate_left
+                              ? inverse_amount
+                              : safe_amount;
+                      return builder.CreateOr(
+                          builder.CreateShl(component, left_amount),
+                          builder.CreateLShr(component, right_amount));
+                    }
+                    if (operation.operation
+                            == ShiftOperator::logical_left
+                        || operation.operation
+                            == ShiftOperator::arithmetic_left) {
+                      auto* shifted = builder.CreateShl(
                           component, safe_amount);
+                      if (operation.operation
+                          == ShiftOperator::arithmetic_left) {
+                        auto* fill_mask = builder.CreateSub(
+                            builder.CreateShl(
+                                constant_i64(context, 1),
+                                safe_amount),
+                            constant_i64(context, 1));
+                        auto* rightmost = builder.CreateAnd(
+                            component, constant_i64(context, 1));
+                        auto* fill = builder.CreateSelect(
+                            builder.CreateICmpNE(
+                                rightmost,
+                                constant_i64(context, 0)),
+                            fill_mask,
+                            constant_i64(context, 0));
+                        return builder.CreateOr(shifted, fill);
+                      }
+                      return shifted;
                     }
                     if (operation.operation
                         == ShiftOperator::logical_right) {
@@ -2413,13 +2467,33 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                     };
                 oversized_aval = sign_fill(value.aval);
                 oversized_bval = sign_fill(value.bval);
+              } else if (
+                  operation.operation
+                  == ShiftOperator::arithmetic_left) {
+                const auto right_fill =
+                    [&](llvm::Value* component) {
+                      auto* rightmost = builder.CreateAnd(
+                          component, constant_i64(context, 1));
+                      return builder.CreateSelect(
+                          builder.CreateICmpNE(
+                              rightmost,
+                              constant_i64(context, 0)),
+                          value_mask,
+                          constant_i64(context, 0));
+                    };
+                oversized_aval = right_fill(value.aval);
+                oversized_bval = right_fill(value.bval);
               }
               auto* known_aval = builder.CreateSelect(
-                  amount_too_large,
+                  rotating
+                      ? llvm::ConstantInt::getFalse(context)
+                      : amount_too_large,
                   oversized_aval,
                   builder.CreateAnd(shifted_aval, value_mask));
               auto* known_bval = builder.CreateSelect(
-                  amount_too_large,
+                  rotating
+                      ? llvm::ConstantInt::getFalse(context)
+                      : amount_too_large,
                   oversized_bval,
                   builder.CreateAnd(shifted_bval, value_mask));
               store_register(

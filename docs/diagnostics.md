@@ -501,7 +501,7 @@ therefore excluded.
 | `FSIM-ELAB-067` | error | A VHDL arithmetic expression mixes explicitly signed and unsigned packed operands without conversion. |
 | `FSIM-ELAB-068` | error | A bit/part select does not have constant in-range bounds, a positive indexed width, or a direction compatible with its declared packed range. |
 | `FSIM-ELAB-069` | error | A concatenation is empty or has an operand/result width that cannot be inferred or represented. |
-| `FSIM-ELAB-070` | error | A VHDL packed shift count is negative or not locally static in the current executable slice. |
+| `FSIM-ELAB-070` | error | A VHDL packed shift or rotate count is not locally static in the current executable slice. |
 | `FSIM-ELAB-071` | error | A sequential VHDL for-loop initial bound is not locally static. |
 | `FSIM-ELAB-072` | error | A sequential VHDL for-loop final bound is not locally static. |
 | `FSIM-ELAB-073` | error | A sequential VHDL for loop exceeds the bounded one-million-iteration elaboration limit. |

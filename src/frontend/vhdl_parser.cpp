@@ -2033,7 +2033,8 @@ class VhdlParser final : private detail::ParserBase {
       return BinaryOperation{3, current().text};
     }
     if (keyword("sll", 0, true) || keyword("srl", 0, true)
-        || keyword("sra", 0, true)) {
+        || keyword("sla", 0, true) || keyword("sra", 0, true)
+        || keyword("rol", 0, true) || keyword("ror", 0, true)) {
       return BinaryOperation{
           4, detail::ascii_lower(current().text)};
     }

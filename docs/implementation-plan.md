@@ -198,8 +198,10 @@ The following foundation is implemented:
   VHDL and SystemVerilog, including distinct signed remainder/modulo,
   arbitrary-width interpreter algorithms, guarded LLVM lowering, and
   differential source tests;
-- VHDL packed `sll`/`srl`/`sra` for locally static nonnegative counts through
-  the common four-state interpreter and LLVM shift kernels;
+- VHDL packed `sll`/`srl`/`sla`/`sra` and `rol`/`ror` for locally static
+  integer counts through common four-state interpreter and LLVM kernels,
+  including negative-count direction reversal, end-element arithmetic fill,
+  and modulo-width rotation;
 - ordered VHDL sequential packed `case` statements with exact multi-choice
   matching, nested statement bodies, and `others`;
 - locally static VHDL sequential `for` loops with ascending, descending, and
@@ -310,7 +312,7 @@ application target was added:
 | SystemVerilog expression semantics | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for four-state logical/reduction/shift/arithmetic operations, complemented reductions/XNOR, and exact `===`/`!==` X/Z comparison |
 | SystemVerilog wildcard equality | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler tests plus the fast expression application target pass for SystemVerilog-only `==?`/`!=?`, right-side `X`/`Z` masks, unmasked left-side unknown propagation, known mismatch behavior, interpreter/LLVM equality alignment, O0/O2 scalar/vector tables, and operator-sensitive native-cache identity; focused ASan/UBSan passes with local leak detection disabled under ptrace |
 | SystemVerilog wildcard case semantics | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests for ordered `casez`/`casex`, selector- and choice-side wildcards, known-bit mismatch preservation, defensive HIR rejection, interpreter/JIT equivalence, LLVM O0/O2 truth tables, and operator-sensitive native-cache identity |
-| VHDL packed shifts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for `sll`/`srl`/`sra`, including X-containing data and arithmetic left-element fill |
+| VHDL packed shifts and rotates | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler plus the fast expression application target and focused ASan/UBSan pass for `sll`/`srl`/`sla`/`sra` and `rol`/`ror`, including X/Z data, end-element arithmetic fill, oversized counts, modulo-width rotation, and negative-count direction reversal |
 | Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional and labeled VHDL forms, named outer-loop transfers across static/runtime loops, opening/end label validation, guaranteed first execution, trailing-condition continue targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
 | Conditional and combined waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for all bounded VHDL wait-clause combinations and Verilog/SystemVerilog `wait (expression)`, first-suspend versus immediate-test semantics, event/timeout races, absolute-deadline rearming, engine-owned wake-result registers, multi-signal dependency rechecks, debugger-visible permanent suspension, append-only status 9, cache identity, and interpreter/JIT O0/O2 equivalence |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |

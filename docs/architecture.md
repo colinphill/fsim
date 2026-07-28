@@ -403,10 +403,12 @@ The bounded VHDL path rejects explicitly mixed signed/unsigned operands while
 allowing an integer literal to take its surrounding numeric context.
 
 VHDL `sll` and `srl` use the common zero-filling packed shift operations.
-`sra` uses the common arithmetic-right operation, which replicates the
-leftmost packed element including `X` or `Z`. The current source slice accepts
-locally static nonnegative counts; dynamic counts, negative reversal, and
-`sla`/`rol`/`ror` remain pending.
+`sla` replicates the rightmost packed element and `sra` replicates the
+leftmost packed element, including `X` or `Z`. `rol` and `ror` reduce the
+count modulo the packed width and retain every four-state element. Locally
+static negative counts reverse the operation direction (`sll`/`srl`,
+`sla`/`sra`, or `rol`/`ror`) before lowering the absolute magnitude. Dynamic
+VHDL shift counts remain pending.
 
 DesignIR retains each signal's optional declared packed range in addition to
 its normalized storage width. Constant SystemVerilog bit/part selects and VHDL

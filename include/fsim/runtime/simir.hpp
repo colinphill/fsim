@@ -81,6 +81,9 @@ enum class ShiftOperator : std::uint8_t {
   logical_left,
   logical_right,
   arithmetic_right,
+  arithmetic_left,
+  rotate_left,
+  rotate_right,
 };
 
 /// Packed shift with independently sized value and shift-count operands.

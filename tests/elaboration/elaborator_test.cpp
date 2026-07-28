@@ -5495,7 +5495,13 @@ entity vhdl_signed_arithmetic is
     less : out std_logic;
     shifted_left : out signed(7 downto 0);
     shifted_right : out signed(7 downto 0);
-    shifted_arithmetic : out signed(7 downto 0)
+    shifted_arithmetic : out signed(7 downto 0);
+    shifted_arithmetic_left : out signed(7 downto 0);
+    rotated_left : out signed(7 downto 0);
+    rotated_right : out signed(7 downto 0);
+    reversed_logical_left : out signed(7 downto 0);
+    reversed_arithmetic_right : out signed(7 downto 0);
+    reversed_rotate_left : out signed(7 downto 0)
   );
 end entity;
 
@@ -5513,6 +5519,12 @@ begin
     shifted_left <= lhs sll 1;
     shifted_right <= lhs srl 1;
     shifted_arithmetic <= lhs sra 1;
+    shifted_arithmetic_left <= lhs sla 1;
+    rotated_left <= lhs rol 1;
+    rotated_right <= lhs ror 1;
+    reversed_logical_left <= lhs sll -1;
+    reversed_arithmetic_right <= lhs sra -1;
+    reversed_rotate_left <= lhs rol -1;
   end process;
 end architecture;
 )",
@@ -5556,7 +5568,19 @@ end architecture;
         elaborated_vhdl_signed_arithmetic.design->find_signal(
             "shifted_right"),
         elaborated_vhdl_signed_arithmetic.design->find_signal(
-            "shifted_arithmetic")};
+            "shifted_arithmetic"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "shifted_arithmetic_left"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "rotated_left"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "rotated_right"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "reversed_logical_left"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "reversed_arithmetic_right"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "reversed_rotate_left")};
     assert(vhdl_signed_lhs && vhdl_signed_rhs);
     assert(std::ranges::all_of(
         vhdl_signed_outputs,
@@ -5575,7 +5599,7 @@ end architecture;
         fsim::runtime::PackedLogic4::from_msb_string(
             "00000011"));
     (void)vhdl_signed_interpreter->run();
-    const std::array<std::string_view, 10>
+    const std::array<std::string_view, 16>
         expected_vhdl_signed{
             "11111110",
             "11111000",
@@ -5586,6 +5610,12 @@ end architecture;
             "1",
             "11110110",
             "01111101",
+            "11111101",
+            "11110111",
+            "11110111",
+            "11111101",
+            "01111101",
+            "11110111",
             "11111101"};
     for (std::size_t index = 0;
          index < vhdl_signed_outputs.size(); ++index) {
@@ -5600,9 +5630,17 @@ end architecture;
         fsim::runtime::PackedLogic4::from_msb_string(
             "10X01000"));
     (void)vhdl_signed_interpreter->run();
-    const std::array<std::string_view, 3>
+    const std::array<std::string_view, 9>
         expected_unknown_shifts{
-            "0X010000", "010X0100", "110X0100"};
+            "0X010000",
+            "010X0100",
+            "110X0100",
+            "0X010000",
+            "0X010001",
+            "010X0100",
+            "010X0100",
+            "0X010000",
+            "010X0100"};
     for (std::size_t index = 0;
          index < expected_unknown_shifts.size(); ++index) {
       assert(
@@ -5625,7 +5663,7 @@ end entity;
 
 architecture rtl of invalid_vhdl_shift is
 begin
-  result <= lhs sll -1;
+  result <= lhs sll lhs;
 end architecture;
 )",
             fsim::frontend::Language::Vhdl2008);

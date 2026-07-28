@@ -728,7 +728,10 @@ entity signed_ops is
     modulo : out signed(7 downto 0);
     shifted_left : out signed(7 downto 0);
     shifted_right : out signed(7 downto 0);
-    shifted_arithmetic : out signed(7 downto 0)
+    shifted_arithmetic : out signed(7 downto 0);
+    shifted_arithmetic_left : out signed(7 downto 0);
+    rotated_left : out signed(7 downto 0);
+    rotated_right : out signed(7 downto 0)
   );
 end entity;
 architecture rtl of signed_ops is
@@ -739,6 +742,9 @@ begin
   shifted_left <= lhs sll 1;
   shifted_right <= lhs srl 1;
   shifted_arithmetic <= lhs sra 1;
+  shifted_arithmetic_left <= lhs sla 1;
+  rotated_left <= lhs rol 1;
+  rotated_right <= lhs ror 1;
 end architecture;
 )",
       Language::Vhdl2008);
@@ -748,7 +754,7 @@ end architecture;
   const auto* architecture =
       vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(
-      entity != nullptr && entity->ports.size() == 8
+      entity != nullptr && entity->ports.size() == 11
           && std::ranges::all_of(
               entity->ports,
               [](const SignalDeclaration& port) {
@@ -757,7 +763,7 @@ end architecture;
       "VHDL signed subtype metadata");
   require(
       architecture != nullptr
-          && architecture->concurrent_statements.size() == 6
+          && architecture->concurrent_statements.size() == 9
           && architecture->concurrent_statements[0].value.text == "/"
           && architecture->concurrent_statements[1].value.text
               == "rem"
@@ -768,8 +774,14 @@ end architecture;
           && architecture->concurrent_statements[4].value.text
               == "srl"
           && architecture->concurrent_statements[5].value.text
-              == "sra",
-      "VHDL signed arithmetic and shift expression nodes");
+              == "sra"
+          && architecture->concurrent_statements[6].value.text
+              == "sla"
+          && architecture->concurrent_statements[7].value.text
+              == "rol"
+          && architecture->concurrent_statements[8].value.text
+              == "ror",
+      "VHDL signed arithmetic, shift, and rotate expression nodes");
 
   const auto systemverilog = parse_text(
       "signed_ops.sv",

@@ -4676,31 +4676,70 @@ private:
                 || expression.text == ">>>"
                 || expression.text == "sll"
                 || expression.text == "srl"
-                || expression.text == "sra")) {
+                || expression.text == "sla"
+                || expression.text == "sra"
+                || expression.text == "rol"
+                || expression.text == "ror")) {
+            auto effective_operator = expression.text;
+            std::optional<std::uint64_t> static_amount;
             if (language_ == frontend::Language::Vhdl2008) {
                 const auto count =
                     constant_index(expression.operands[1]);
-                if (!count || *count < 0) {
+                if (!count) {
                     report(
                         "FSIM-ELAB-070",
-                        "VHDL packed shifts currently require a locally "
-                        "static nonnegative count",
+                        "VHDL packed shifts and rotates currently require "
+                        "a locally static integer count",
                         expression.operands[1].span);
                     return std::nullopt;
+                }
+                static_amount = index_distance(*count, 0);
+                if (*count < 0) {
+                    if (effective_operator == "sll") {
+                        effective_operator = "srl";
+                    } else if (effective_operator == "srl") {
+                        effective_operator = "sll";
+                    } else if (effective_operator == "sla") {
+                        effective_operator = "sra";
+                    } else if (effective_operator == "sra") {
+                        effective_operator = "sla";
+                    } else if (effective_operator == "rol") {
+                        effective_operator = "ror";
+                    } else if (effective_operator == "ror") {
+                        effective_operator = "rol";
+                    }
                 }
             }
             const auto value_width =
                 infer_width(expression.operands[0])
                     .value_or(expected_width);
-            const auto amount_width =
+            auto amount_width =
                 infer_width(expression.operands[1])
                     .value_or(expected_width);
+            if (static_amount) {
+                auto magnitude = *static_amount;
+                std::size_t required_width = 1;
+                while (magnitude > 1) {
+                    ++required_width;
+                    magnitude >>= 1U;
+                }
+                amount_width =
+                    std::max(amount_width, required_width);
+            }
             const auto value =
                 lower_expression(
                     expression.operands[0], value_width);
-            const auto amount =
-                lower_expression(
+            std::optional<RegisterId> amount;
+            if (static_amount) {
+                amount = allocate_register(
+                    amount_width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant{
+                    *amount,
+                    unsigned_value(*static_amount, amount_width)});
+            } else {
+                amount = lower_expression(
                     expression.operands[1], amount_width);
+            }
             if (!value || !amount) {
                 return std::nullopt;
             }
@@ -4718,15 +4757,21 @@ private:
                 allocate_register(
                     register_width(*value), result_domain);
             process_.operations.emplace_back(Shift{
-                expression.text == ">>"
-                    || expression.text == "srl"
-                    || (expression.text == ">>>"
+                effective_operator == ">>"
+                    || effective_operator == "srl"
+                    || (effective_operator == ">>>"
                         && !is_signed_expression(
                             expression.operands[0]))
                     ? ShiftOperator::logical_right
-                    : expression.text == ">>>"
-                            || expression.text == "sra"
+                    : effective_operator == ">>>"
+                            || effective_operator == "sra"
                         ? ShiftOperator::arithmetic_right
+                        : effective_operator == "sla"
+                            ? ShiftOperator::arithmetic_left
+                        : effective_operator == "rol"
+                            ? ShiftOperator::rotate_left
+                        : effective_operator == "ror"
+                            ? ShiftOperator::rotate_right
                         : ShiftOperator::logical_left,
                 destination,
                 *value,
@@ -5260,7 +5305,10 @@ private:
                 || expression.text == ">>>"
                 || expression.text == "sll"
                 || expression.text == "srl"
-                || expression.text == "sra") {
+                || expression.text == "sla"
+                || expression.text == "sra"
+                || expression.text == "rol"
+                || expression.text == "ror") {
                 return is_signed_expression(expression.operands[0]);
             }
             if (expression.text == "=="

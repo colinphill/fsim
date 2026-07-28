@@ -684,13 +684,25 @@ void test_simir_wide_reduction_and_shift() {
       interpreter.add_signal(
           {"top.shifted_arithmetic_oversized",
            PackedLogic4(65, Logic4::x)});
+  const auto shifted_arithmetic_left = interpreter.add_signal(
+      {"top.shifted_arithmetic_left", PackedLogic4(65, Logic4::x)});
+  const auto shifted_arithmetic_left_oversized =
+      interpreter.add_signal(
+          {"top.shifted_arithmetic_left_oversized",
+           PackedLogic4(65, Logic4::x)});
+  const auto rotated_left = interpreter.add_signal(
+      {"top.rotated_left", PackedLogic4(65, Logic4::x)});
+  const auto rotated_right = interpreter.add_signal(
+      {"top.rotated_right", PackedLogic4(65, Logic4::x)});
+  const auto rotated_full_width = interpreter.add_signal(
+      {"top.rotated_full_width", PackedLogic4(65, Logic4::x)});
 
   const auto source_text =
       "1" + std::string(63, '0') + "Z";
   Process process;
   process.id = 0;
   process.name = "wide_reduction_and_shift";
-  process.register_count = 13;
+  process.register_count = 18;
   process.operations = {
       LoadConstant{
           0, PackedLogic4::from_msb_string(source_text)},
@@ -718,6 +730,16 @@ void test_simir_wide_reduction_and_shift() {
       WriteBlocking{shifted_arithmetic, 11},
       Shift{ShiftOperator::arithmetic_right, 12, 0, 9},
       WriteBlocking{shifted_arithmetic_oversized, 12},
+      Shift{ShiftOperator::arithmetic_left, 13, 0, 1},
+      WriteBlocking{shifted_arithmetic_left, 13},
+      Shift{ShiftOperator::arithmetic_left, 14, 0, 9},
+      WriteBlocking{shifted_arithmetic_left_oversized, 14},
+      Shift{ShiftOperator::rotate_left, 15, 0, 1},
+      WriteBlocking{rotated_left, 15},
+      Shift{ShiftOperator::rotate_right, 16, 0, 1},
+      WriteBlocking{rotated_right, 16},
+      Shift{ShiftOperator::rotate_left, 17, 0, 9},
+      WriteBlocking{rotated_full_width, 17},
       Halt{},
   };
   (void)interpreter.add_process(std::move(process));
@@ -758,6 +780,28 @@ void test_simir_wide_reduction_and_shift() {
               .to_msb_string()
           == std::string(65, '1'),
       "wide oversized arithmetic right shift fills with the sign bit");
+  require(
+      interpreter.signal_value(shifted_arithmetic_left)
+              .to_msb_string()
+          == std::string(63, '0') + "ZZ",
+      "wide arithmetic left shift fills with the rightmost element");
+  require(
+      interpreter.signal_value(shifted_arithmetic_left_oversized)
+              .to_msb_string()
+          == std::string(65, 'Z'),
+      "wide oversized arithmetic left shift fills with the rightmost element");
+  require(
+      interpreter.signal_value(rotated_left).to_msb_string()
+          == std::string(63, '0') + "Z1",
+      "wide rotate left wraps the leftmost element");
+  require(
+      interpreter.signal_value(rotated_right).to_msb_string()
+          == "Z1" + std::string(63, '0'),
+      "wide rotate right wraps the rightmost element");
+  require(
+      interpreter.signal_value(rotated_full_width).to_msb_string()
+          == source_text,
+      "wide rotate reduces its amount modulo the operand width");
 }
 
 void test_simir_wide_unsigned_arithmetic() {

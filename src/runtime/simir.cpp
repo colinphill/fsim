@@ -111,33 +111,58 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     const ShiftOperator operation,
     const PackedLogic4& value,
     const PackedLogic4& amount_value) {
+  const auto rotating =
+      operation == ShiftOperator::rotate_left
+      || operation == ShiftOperator::rotate_right;
   std::size_t amount = 0;
+  std::size_t rotate_bit = 1U % value.width();
   for (std::size_t index = 0; index < amount_value.width(); ++index) {
     const auto bit = amount_value.get(index);
     if (bit == Logic4::x || bit == Logic4::z) {
       return PackedLogic4(value.width(), Logic4::x);
     }
-    if (bit != Logic4::one) {
-      continue;
+    if (rotating) {
+      if (bit == Logic4::one) {
+        amount =
+            amount >= value.width() - rotate_bit
+                ? amount - (value.width() - rotate_bit)
+                : amount + rotate_bit;
+      }
+      rotate_bit =
+          rotate_bit >= value.width() - rotate_bit
+              ? rotate_bit - (value.width() - rotate_bit)
+              : rotate_bit + rotate_bit;
+    } else if (bit == Logic4::one) {
+      if (index >= std::numeric_limits<std::size_t>::digits
+          || (std::size_t{1} << index) >= value.width()) {
+        amount = value.width();
+        break;
+      }
+      amount |= std::size_t{1} << index;
     }
-    if (index >= std::numeric_limits<std::size_t>::digits
-        || (std::size_t{1} << index) >= value.width()) {
-      amount = value.width();
-      break;
-    }
-    amount |= std::size_t{1} << index;
   }
-
   const auto fill =
       operation == ShiftOperator::arithmetic_right
           ? value.get(value.width() - 1U)
+          : operation == ShiftOperator::arithmetic_left
+              ? value.get(0)
           : Logic4::zero;
   PackedLogic4 result(value.width(), fill);
   if (amount >= value.width()) {
     return result;
   }
   for (std::size_t index = 0; index < value.width(); ++index) {
-    if (operation == ShiftOperator::logical_left) {
+    if (operation == ShiftOperator::rotate_left) {
+      result.set(
+          index,
+          value.get((index + value.width() - amount) % value.width()));
+    } else if (operation == ShiftOperator::rotate_right) {
+      result.set(
+          index,
+          value.get((index + amount) % value.width()));
+    } else if (
+        operation == ShiftOperator::logical_left
+        || operation == ShiftOperator::arithmetic_left) {
       if (index >= amount) {
         result.set(index, value.get(index - amount));
       }

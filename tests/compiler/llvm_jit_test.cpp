@@ -1542,7 +1542,7 @@ void test_reduction_and_shift_at_level(
   Process process;
   process.id = 0;
   process.name = std::string{symbol};
-  process.register_count = 8;
+  process.register_count = 11;
   process.operations = {
       ReadSignal{0, 0},
       ReadSignal{1, 1},
@@ -1558,10 +1558,16 @@ void test_reduction_and_shift_at_level(
       WriteBlocking{6, 6},
       Shift{ShiftOperator::arithmetic_right, 7, 0, 1},
       WriteBlocking{7, 7},
+      Shift{ShiftOperator::arithmetic_left, 8, 0, 1},
+      WriteBlocking{8, 8},
+      Shift{ShiftOperator::rotate_left, 9, 0, 1},
+      WriteBlocking{9, 9},
+      Shift{ShiftOperator::rotate_right, 10, 0, 1},
+      WriteBlocking{10, 10},
       Halt{},
   };
-  const std::array<std::uint32_t, 8> widths{
-      4, 3, 1, 1, 1, 4, 4, 4};
+  const std::array<std::uint32_t, 11> widths{
+      4, 3, 1, 1, 1, 4, 4, 4, 4, 4, 4};
   jit.add_process(symbol, process, widths);
   const auto handle = jit.lookup(symbol);
 
@@ -1574,26 +1580,32 @@ void test_reduction_and_shift_at_level(
     std::string_view expected_left;
     std::string_view expected_right;
     std::string_view expected_arithmetic_right;
+    std::string_view expected_arithmetic_left;
+    std::string_view expected_rotate_left;
+    std::string_view expected_rotate_right;
   };
   const std::array cases{
       TestCase{
           "1111", "001", "1", "1", "0", "1110", "0111",
-          "1111"},
+          "1111", "1111", "1111", "1111"},
       TestCase{
           "1011", "000", "0", "1", "1", "1011", "1011",
-          "1011"},
+          "1011", "1011", "1011", "1011"},
       TestCase{
           "10X1", "001", "0", "1", "X", "0X10", "010X",
-          "110X"},
+          "110X", "0X11", "0X11", "110X"},
       TestCase{
           "11X1", "011", "X", "1", "X", "1000", "0001",
-          "1111"},
+          "1111", "1111", "111X", "1X11"},
       TestCase{
           "00X0", "0X1", "0", "X", "X", "XXXX", "XXXX",
-          "XXXX"},
+          "XXXX", "XXXX", "XXXX", "XXXX"},
       TestCase{
           "Z001", "100", "0", "1", "X", "0000", "0000",
-          "ZZZZ"},
+          "ZZZZ", "1111", "Z001", "Z001"},
+      TestCase{
+          "1001", "101", "0", "1", "0", "0000", "0000",
+          "1111", "1111", "0011", "1100"},
   };
   for (const auto& test : cases) {
     TestRuntime runtime;
@@ -1613,7 +1625,10 @@ void test_reduction_and_shift_at_level(
         test.expected_xor,
         test.expected_left,
         test.expected_right,
-        test.expected_arithmetic_right};
+        test.expected_arithmetic_right,
+        test.expected_arithmetic_left,
+        test.expected_rotate_left,
+        test.expected_rotate_right};
     for (std::size_t index = 0; index < expected.size();
          ++index) {
       const auto encoded =
@@ -1623,7 +1638,6 @@ void test_reduction_and_shift_at_level(
           == EncodedSignal{encoded.aval, encoded.bval}));
     }
   }
-
 }
 
 void test_unsigned_arithmetic_at_level(
