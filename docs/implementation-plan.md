@@ -764,9 +764,9 @@ commit `3cfb932` is pushed. A subsequent forced no-system-Tcl probe downloaded,
 checksum-verified, built, and linked Tcl 8.6.18; relocation testing then found
 and drove the bundled standard-library packaging fix in the next batch.
 
-## Current ten-feature regression batch
+## Most recent ten-feature regression batch
 
-The nineteenth post-gate batch is in progress:
+The nineteenth post-gate batch is complete:
 
 1. CMake now falls back to a checksum-pinned native Tcl 8.6.18 static build
    when development files are absent, installs its standard-library scripts
@@ -803,9 +803,13 @@ The nineteenth post-gate batch is in progress:
 The forced no-system-Tcl dependency build and its isolated staged relocation
 probe pass; the ordinary installed-Tcl application regression also passes.
 Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and output
-application tests pass for the cross-language output slices. This is feature
-10 of 10, so the interval full regression and remote push are due after the
-targeted signed-output checks pass.
+application tests pass for the cross-language output slices. The interval LLVM
+22 Debug regression passed all 21 tests in 144.72 seconds on 2026-07-28,
+including the 144.71-second broad application integration test. The batch ends
+at feature commit `7cd9fda`; the gate-record commit is pushed with the batch.
+
+The twentieth post-gate batch starts at 0 of 10 features. Its full regression
+and remote push are not due until feature 10.
 
 ## v1 release condition
 
