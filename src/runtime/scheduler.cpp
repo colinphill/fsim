@@ -345,6 +345,15 @@ bool Scheduler::stop_requested() const noexcept {
   return impl_->stop.load(std::memory_order_relaxed);
 }
 
+void Scheduler::discard_pending() {
+  if (impl_->in_run || impl_->in_callback) {
+    throw std::logic_error(
+        "cannot discard scheduler work while it is running");
+  }
+  impl_->current.reset();
+  impl_->future.clear();
+}
+
 bool Scheduler::has_pending() const noexcept {
   return impl_->current.has_value() || !impl_->future.empty();
 }

@@ -103,6 +103,11 @@ public:
   void clear_stop() noexcept;
   [[nodiscard]] bool stop_requested() const noexcept;
 
+  /// Discard all queued work without changing the current simulation time.
+  /// This is used after a terminal design stop before scheduling final-only
+  /// lifecycle work.
+  void discard_pending();
+
   [[nodiscard]] bool has_pending() const noexcept;
   [[nodiscard]] bool running() const noexcept;
   [[nodiscard]] SimulationTick now() const noexcept;

@@ -1309,13 +1309,20 @@ void test_simir_final_process_lifecycle() {
   Interpreter design_stop;
   const auto stopped_value = design_stop.add_signal(
       {"top.stopped_value", PackedLogic4::from_msb_string("0")});
+  Process pending;
+  pending.id = 0;
+  pending.name = "pending";
+  pending.operations = {
+      WaitFor{1},
+      Halt{}};
+  (void)design_stop.add_process(std::move(pending));
   Process stopper;
-  stopper.id = 0;
+  stopper.id = 1;
   stopper.name = "stopper";
   stopper.operations = {Stop{}};
   (void)design_stop.add_process(std::move(stopper));
   Process stop_final;
-  stop_final.id = 1;
+  stop_final.id = 2;
   stop_final.name = "stop_final";
   stop_final.register_count = 1;
   stop_final.initialize = false;
@@ -1329,8 +1336,10 @@ void test_simir_final_process_lifecycle() {
   require(
       stopped_result.status == RunStatus::stopped
           && design_stop.stopped_by_design()
+          && stopped_result.time == 0
           && design_stop.signal_value(stopped_value).to_msb_string() == "1",
-      "design Stop must execute finals while preserving stopped identity");
+      "design Stop must discard ordinary future work, execute finals, and "
+      "preserve stopped identity");
 
   Interpreter invalid;
   Process invalid_final;

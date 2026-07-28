@@ -2467,6 +2467,7 @@ RunResult Interpreter::run(std::optional<SimulationTick> until) {
 
   impl_->finals_ran = true;
   if (design_stop) {
+    impl_->scheduler.discard_pending();
     impl_->scheduler.clear_stop();
   }
   for (ProcessId id = 0; id < impl_->processes.size(); ++id) {

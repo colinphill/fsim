@@ -300,7 +300,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 15/15 tests pass after the mixed-language exponentiation, SystemVerilog procedural-update, and VHDL conditional-assignment batches (143.87 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 15/15 tests pass after the ten-feature batch through VHDL signal `'active`, including design-stop/final isolation with ordinary future work pending (136.92 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -333,6 +333,7 @@ Current and most recent aggregate Linux regression snapshots:
 | VHDL signal last-event attribute | Exact LLVM 22 frontend/runtime/compiler/diagnostic-catalog plus the fast expression application target for 64-bit `'last_event`, a nonzero elapsed-time sample, `TIME'HIGH` initialization policy, appended plain-C time callback validation, and interpreter/LLVM O0/O2 equivalence |
 | VHDL zero-duration stable attribute | Exact LLVM 22 frontend/elaboration/diagnostic-catalog plus the fast expression application target for `'stable` in and outside an event delta, common event-negation lowering, and interpreter/LLVM O0/O2 equivalence |
 | VHDL signal active attribute | Exact LLVM 22 frontend/runtime/compiler/diagnostic-catalog plus the fast expression application target for transaction-scoped `'active`, redundant same-value assignment versus value-changing `'event`, appended plain-C transaction callback validation, and interpreter/LLVM O0/O2 equivalence |
+| Design-stop final isolation | LLVM 22 runtime/elaboration and full 15/15 aggregate regression for `$finish` with a timed `forever` process still pending; ordinary queued work is discarded before exactly-once final procedures run at the stop timestamp |
 | VHDL conditional assignments | Exact LLVM 22 frontend/elaboration/diagnostic-catalog plus the fast expression application target for concurrent and sequential VHDL-2008 `when`/`else` assignments, chained source-order alternatives, Boolean-condition enforcement, missing-else recovery, and interpreter/LLVM O0/O2 equivalence |
 | VHDL selected signal assignments | Exact LLVM 22 frontend/diagnostic-catalog plus the fast expression application target for labeled/unlabeled `with`/`select`, grouped exact choices, final `others`, retained waveform delays, inferred selector/value sensitivity, timed reactive selection, and interpreter/LLVM O0/O2 equivalence |
 | VHDL clock-edge guards | Exact LLVM 22 frontend/elaboration plus the fast expression application target for sole outer `rising_edge`/`falling_edge` sensitivity refinement, negative-edge scheduling, and interpreter/LLVM O0/O2 equivalence |

@@ -373,6 +373,9 @@ SystemVerilog final procedures lower to ordinary resumable SimIR processes
 marked `final` and `initialize = false`. When ordinary scheduling becomes
 quiescent, or a SimIR `Stop` records a design `$finish`, the interpreter queues
 all final processes once in stable process-ID order at the current timestamp.
+For `$finish`, the scheduler first discards ordinary current, next-delta, and
+future work; only final processes are then queued, so a pending timed `forever`
+process cannot resume past the terminal stop.
 Their blocking writes and update phase complete before the run result is
 returned. An external debugger stop does not trigger finals, and a design
 stop remains distinguishable after finals complete. The frontend rejects
