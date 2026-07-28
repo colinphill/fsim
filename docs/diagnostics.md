@@ -452,6 +452,7 @@ therefore excluded.
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
 | `FSIM-SV-SEM-033` | error | A SystemVerilog `final` procedure contains a nonblocking assignment. |
+| `FSIM-SV-SEM-034` | error | A procedural block closing label has no opening label or does not match it. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -464,7 +465,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-011` | error | Declaration initializers are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-012` | error | Integer objects are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
-| `FSIM-SV-UNSUPPORTED-015` | error | A nested procedural block declaration requires unsupported local-scope semantics. |
 | `FSIM-SV-UNSUPPORTED-017` | error | A `case` statement uses an unsupported `unique`, `unique0`, or `priority` qualifier. |
 | `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
@@ -511,9 +511,8 @@ therefore excluded.
 | `FSIM-ELAB-050` | error | Assignment into a two-state target would implicitly lose four- or nine-state values. |
 | `FSIM-ELAB-051` | error | A VHDL assertion condition does not have scalar Boolean type. |
 | `FSIM-ELAB-052` | error | A local variable has no executable packed width. |
-| `FSIM-ELAB-053` | error | A local variable duplicates another local or shadows a signal in the bounded slice. |
+| `FSIM-ELAB-053` | error | A local-variable declaration duplicates another declaration in the same lexical scope. |
 | `FSIM-ELAB-054` | error | A local variable initializer has the wrong packed width. |
-| `FSIM-ELAB-055` | error | A nested procedural block variable reached lowering without supported scope semantics. |
 | `FSIM-ELAB-056` | error | A local variable assignment is delayed or nonblocking. |
 | `FSIM-ELAB-057` | error | A local variable assignment has the wrong packed width. |
 | `FSIM-ELAB-058` | error | A local variable initializer or assignment would implicitly lose four- or nine-state values. |

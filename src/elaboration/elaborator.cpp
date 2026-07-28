@@ -2499,6 +2499,9 @@ public:
         local_signed_.clear();
         local_ranges_.clear();
         local_members_.clear();
+        declaration_registers_.clear();
+        debug_local_names_.clear();
+        local_scope_.clear();
         loop_controls_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = std::string(hierarchy) + "."
@@ -2619,6 +2622,9 @@ public:
         local_signed_.clear();
         local_ranges_.clear();
         local_members_.clear();
+        declaration_registers_.clear();
+        debug_local_names_.clear();
+        local_scope_.clear();
         loop_controls_.clear();
         return std::move(process_);
     }
@@ -2637,6 +2643,9 @@ public:
         local_signed_.clear();
         local_ranges_.clear();
         local_members_.clear();
+        declaration_registers_.clear();
+        debug_local_names_.clear();
+        local_scope_.clear();
         loop_controls_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
         process_.name = name + "."
@@ -2681,6 +2690,9 @@ public:
         local_signed_.clear();
         local_ranges_.clear();
         local_members_.clear();
+        declaration_registers_.clear();
+        debug_local_names_.clear();
+        local_scope_.clear();
         loop_controls_.clear();
         return std::move(process_);
     }
@@ -2717,6 +2729,7 @@ private:
         };
         std::vector<Pending> pending;
         pending.reserve(variables.size());
+        std::unordered_set<std::string> declared_here;
         for (const auto& variable : variables) {
             const auto width = variable.type.width();
             if (!width || *width == 0) {
@@ -2727,35 +2740,50 @@ private:
                     variable.span);
                 continue;
             }
-            if (locals_.contains(variable.name)
-                || signals_.contains(variable.name)) {
+            if (!declared_here.emplace(variable.name).second) {
                 report(
                     "FSIM-ELAB-053",
-                    "duplicate or shadowing local variable '"
+                    "duplicate local variable in the same scope '"
                         + variable.name + "'",
                     variable.span);
                 continue;
             }
-            const auto register_id =
-                allocate_register(*width, variable.type.domain);
-            locals_.emplace(variable.name, register_id);
-            local_signed_.emplace(
+            const auto key = declaration_key(variable);
+            const auto register_found = declaration_registers_.find(key);
+            RegisterId register_id{};
+            if (register_found == declaration_registers_.end()) {
+                register_id =
+                    allocate_register(*width, variable.type.domain);
+                declaration_registers_.emplace(key, register_id);
+                auto debug_name = scoped_local_name(variable.name);
+                if (!debug_local_names_.emplace(debug_name).second) {
+                    debug_name += "@"
+                        + std::to_string(variable.span.begin.line)
+                        + ":" + std::to_string(
+                            variable.span.begin.column);
+                    debug_local_names_.emplace(debug_name);
+                }
+                process_.debug_locals.push_back(DebugLocal{
+                    std::move(debug_name),
+                    variable.type.spelling,
+                    register_id,
+                    *width,
+                    SourceLocation{
+                        variable.span.source_name,
+                        static_cast<std::uint32_t>(
+                            variable.span.begin.line),
+                        static_cast<std::uint32_t>(
+                            variable.span.begin.column)}});
+            } else {
+                register_id = register_found->second;
+            }
+            locals_.insert_or_assign(variable.name, register_id);
+            local_signed_.insert_or_assign(
                 variable.name, variable.type.is_signed);
-            local_ranges_.emplace(
+            local_ranges_.insert_or_assign(
                 variable.name, variable.type.packed_range);
-            local_members_.emplace(
+            local_members_.insert_or_assign(
                 variable.name, variable.type.packed_members);
-            process_.debug_locals.push_back(DebugLocal{
-                variable.name,
-                variable.type.spelling,
-                register_id,
-                *width,
-                SourceLocation{
-                    variable.span.source_name,
-                    static_cast<std::uint32_t>(
-                        variable.span.begin.line),
-                    static_cast<std::uint32_t>(
-                        variable.span.begin.column)}});
             pending.push_back(Pending{&variable, register_id, *width});
         }
         for (const auto& local : pending) {
@@ -2807,6 +2835,55 @@ private:
         }
     }
 
+    [[nodiscard]] static std::string declaration_key(
+        const frontend::VariableDeclaration& variable) {
+        return variable.span.source_name + ":"
+            + std::to_string(variable.span.begin.offset) + ":"
+            + variable.name;
+    }
+
+    [[nodiscard]] std::string scoped_local_name(
+        const std::string_view name) const {
+        std::string result;
+        for (const auto& scope : local_scope_) {
+            if (!result.empty()) {
+                result += ".";
+            }
+            result += scope;
+        }
+        if (!result.empty()) {
+            result += ".";
+        }
+        result += name;
+        return result;
+    }
+
+    [[nodiscard]] static std::string block_scope_name(
+        const Statement& statement) {
+        if (!statement.label.empty()) {
+            return statement.label;
+        }
+        return "$block_"
+            + std::to_string(statement.span.begin.line) + "_"
+            + std::to_string(statement.span.begin.column) + "_"
+            + std::to_string(statement.span.begin.offset);
+    }
+
+    void lower_block(const Statement& statement) {
+        auto outer_locals = locals_;
+        auto outer_signed = local_signed_;
+        auto outer_ranges = local_ranges_;
+        auto outer_members = local_members_;
+        local_scope_.push_back(block_scope_name(statement));
+        initialize_variables(statement.declarations);
+        lower_statements(statement.statements);
+        local_scope_.pop_back();
+        locals_ = std::move(outer_locals);
+        local_signed_ = std::move(outer_signed);
+        local_ranges_ = std::move(outer_ranges);
+        local_members_ = std::move(outer_members);
+    }
+
     static const Statement* recognized_vhdl_edge_guard(
         const frontend::Process& source) {
         if (source.statements.empty()) {
@@ -2848,13 +2925,6 @@ private:
     }
 
     void lower_statement(const Statement& statement) {
-        if (!statement.declarations.empty()) {
-            report(
-                "FSIM-ELAB-055",
-                "nested procedural block variables are not executable in "
-                "this slice",
-                statement.span);
-        }
         if (statement.kind != StatementKind::Block
             && !(statement.kind == StatementKind::Loop
                  && statement.loop_runtime)) {
@@ -2923,7 +2993,7 @@ private:
             process_.operations.emplace_back(Stop{});
             break;
         case StatementKind::Block:
-            lower_statements(statement.statements);
+            lower_block(statement);
             break;
         case StatementKind::Null:
             break;
@@ -6372,6 +6442,10 @@ private:
     std::unordered_map<
         std::string, std::vector<frontend::PackedMember>>
         local_members_;
+    std::unordered_map<std::string, RegisterId>
+        declaration_registers_;
+    std::unordered_set<std::string> debug_local_names_;
+    std::vector<std::string> local_scope_;
     struct LoopControlContext {
         std::optional<InstructionIndex> continue_target;
         std::vector<InstructionIndex> continue_jumps;

@@ -148,6 +148,24 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;expressions"
   )
 
+  add_executable(
+    fsim_scoped_local_application_tests
+    app/scoped_local_application_test.cpp
+  )
+  fsim_configure_test(fsim_scoped_local_application_tests)
+  target_link_libraries(
+    fsim_scoped_local_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.scoped_locals
+    COMMAND fsim_scoped_local_application_tests
+  )
+  set_tests_properties(
+    fsim.application.scoped_locals
+    PROPERTIES LABELS "fast;scoped-locals"
+  )
+
   add_executable(fsim_application_tests app/application_test.cpp)
   fsim_configure_test(fsim_application_tests)
   target_compile_definitions(

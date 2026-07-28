@@ -424,8 +424,10 @@ O2 tests one size-gated runtime flag so ordinary runs continue through them.
 Signal breakpoints accept exact-state `==`/`!=` conditions. When a debug VCD is
 configured, `trace add`, `trace remove`, `trace all`, `trace clear`, and
 `trace list` change the live committed-value selection. Call instrumentation
-and nested/scoped locals remain future work; bounded packed process variables
-are shown by `locals` through interpreter or compiled frames. A design
+and native-C local-object lookup remain future work. Bounded packed process
+variables in nested SystemVerilog lexical blocks retain shadowing and
+block-entry initialization semantics and are shown with stable hierarchical
+names by `locals` through interpreter or compiled frames. A design
 `$finish` is terminal for that simulation; a debugger or Ctrl-C stop remains
 resumable, while a fatal runtime error poisons the simulation and prevents
 further execution. The CLI installs its SIGINT handler only for the active

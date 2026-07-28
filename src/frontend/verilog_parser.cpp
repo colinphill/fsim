@@ -2750,7 +2750,8 @@ class VerilogParser final : private detail::ParserBase {
     }
     auto body = parse_statement();
     if (body) {
-      if (body->kind == StatementKind::Block) {
+      if (body->kind == StatementKind::Block
+          && body->label.empty()) {
         process.variables = std::move(body->declarations);
         process.statements = std::move(body->statements);
       } else {
@@ -2818,7 +2819,8 @@ class VerilogParser final : private detail::ParserBase {
     process.kind = ProcessKind::Initial;
     auto body = parse_statement();
     if (body) {
-      if (body->kind == StatementKind::Block) {
+      if (body->kind == StatementKind::Block
+          && body->label.empty()) {
         process.variables = std::move(body->declarations);
         process.statements = std::move(body->statements);
       } else {
@@ -2849,7 +2851,8 @@ class VerilogParser final : private detail::ParserBase {
     }
     auto body = parse_statement();
     if (body) {
-      if (body->kind == StatementKind::Block) {
+      if (body->kind == StatementKind::Block
+          && body->label.empty()) {
         process.variables = std::move(body->declarations);
         process.statements = std::move(body->statements);
       } else {
@@ -3018,24 +3021,20 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_procedural_loop_body(
       const Token& start, Statement& statement) {
+    (void)start;
     ++current_loop_depth_;
     auto body = parse_statement();
     --current_loop_depth_;
     if (!body) {
       return;
     }
-    if (body->kind == StatementKind::Block) {
-      if (!body->declarations.empty()) {
-        error(
-            start,
-            "FSIM-SV-UNSUPPORTED-015",
-            "nested procedural block declarations are not implemented "
-            "in this frontend slice");
-      }
+    if (body->kind == StatementKind::Block
+        && body->label.empty()
+        && body->declarations.empty()) {
       statement.statements = std::move(body->statements);
-    } else {
-      statement.statements.push_back(std::move(*body));
+      return;
     }
+    statement.statements.push_back(std::move(*body));
   }
 
   Statement parse_procedural_for_statement(const Token& start) {
@@ -3436,11 +3435,13 @@ class VerilogParser final : private detail::ParserBase {
     }
     if (match_keyword("begin")) {
       const auto start = previous();
+      std::string opening_label;
       if (match(TokenKind::Colon)) {
-        expect_identifier("block name");
+        opening_label = expect_identifier("block name").text;
       }
       Statement block;
       block.kind = StatementKind::Block;
+      block.label = opening_label;
       while (!at_end() && !keyword("end")) {
         const auto before = position();
         if (is_declaration_start()) {
@@ -3454,7 +3455,20 @@ class VerilogParser final : private detail::ParserBase {
       }
       expect_keyword("end", false, "FSIM-SV-PARSE-017");
       if (match(TokenKind::Colon)) {
-        expect_identifier("block name");
+        const auto closing_label = expect_identifier("block name");
+        if (opening_label.empty()) {
+          error(
+              closing_label,
+              "FSIM-SV-SEM-034",
+              "an end block label requires a matching opening label");
+        } else if (closing_label.text != opening_label) {
+          error(
+              closing_label,
+              "FSIM-SV-SEM-034",
+              "end block label '" + closing_label.text
+                  + "' does not match opening label '"
+                  + opening_label + "'");
+        }
       }
       block.span = span_from(start, previous());
       return block;
@@ -3469,14 +3483,9 @@ class VerilogParser final : private detail::ParserBase {
       expect(TokenKind::RightParen, "')' after if condition",
              "FSIM-SV-PARSE-019");
       if (auto true_branch = parse_statement()) {
-        if (true_branch->kind == StatementKind::Block) {
-          if (!true_branch->declarations.empty()) {
-            error(
-                current(),
-                "FSIM-SV-UNSUPPORTED-015",
-                "nested procedural block declarations are not implemented "
-                "in this frontend slice");
-          }
+        if (true_branch->kind == StatementKind::Block
+            && true_branch->label.empty()
+            && true_branch->declarations.empty()) {
           statement.statements = std::move(true_branch->statements);
         } else {
           statement.statements.push_back(std::move(*true_branch));
@@ -3484,14 +3493,9 @@ class VerilogParser final : private detail::ParserBase {
       }
       if (match_keyword("else")) {
         if (auto false_branch = parse_statement()) {
-          if (false_branch->kind == StatementKind::Block) {
-            if (!false_branch->declarations.empty()) {
-              error(
-                  current(),
-                  "FSIM-SV-UNSUPPORTED-015",
-                  "nested procedural block declarations are not implemented "
-                  "in this frontend slice");
-            }
+          if (false_branch->kind == StatementKind::Block
+              && false_branch->label.empty()
+              && false_branch->declarations.empty()) {
             statement.else_statements =
                 std::move(false_branch->statements);
           } else {

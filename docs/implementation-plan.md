@@ -70,6 +70,10 @@ The following foundation is implemented:
 - packed 2-, 4-, and 9-state value kernels;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
+- executable SystemVerilog procedural lexical blocks with named-scope
+  validation, same-scope duplicate rejection, nested local/signal shadowing,
+  block-entry initialization, stable hierarchical debugger names, and one
+  reusable frame object per declaration across static-loop expansion;
 - a multi-root Verilog/SystemVerilog preprocessor with exact ordered
   compilation-unit/transitive snapshots, manifest macros, object/function
   expansion with default arguments, multiline replacement, token
@@ -482,9 +486,9 @@ Completed:
 
 Remaining before the architecture gate passes:
 
-- add call safe points, complete nested/scoped local-variable semantics, C API
-  local objects, and complete source metadata to the current O0 hybrid
-  debugger;
+- add call safe points, C API local objects, and complete source metadata to
+  the current O0 hybrid debugger; bounded nested/scoped SystemVerilog packed
+  locals now have interpreter/LLVM O0/O2 and cache-differential evidence;
 - run every supported semantic test through interpreter and JIT and compare
   final state, assertions, scheduler observations, and trace events;
 - extend the bounded mixed-language differential to O0 and mixed-language
@@ -648,7 +652,8 @@ Planned implementation sequence:
 4. Complete Windows execution evidence and broader event/list/error tests for
    the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
    timed, delta, and static-wait execution is implemented.
-5. Complete nested/scoped debug locals and add call safe points.
+5. Expose scoped debug locals through the native C object model and add call
+   safe points.
 6. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
    process, severity, source location, and message.
@@ -692,8 +697,8 @@ Remaining before v1 release:
 The next development iterations should occur in this order:
 
 1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   call instrumentation and complete scoped locals, add remaining VHDL generic
-   and SystemVerilog parameter semantics, and broaden the
+   call instrumentation and native-C scoped-local enumeration, add remaining
+   VHDL generic and SystemVerilog parameter semantics, and broaden the
    interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.
@@ -729,27 +734,26 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The sixth post-gate batch is implementation-complete:
+The seventh post-gate batch is implementation-complete:
 
-1. canonical native-object entry enumeration across cache shards;
-2. deterministic maximum-entry-count eviction;
-3. encoded on-disk maximum-byte eviction;
-4. maximum-age eviction;
-5. successful-load recency refresh for oldest-first LRU ordering;
-6. nonblocking skip of entries protected by a live per-key writer lock;
-7. stale publisher-temporary cleanup under the destination lock;
-8. preservation of malformed/unrelated files plus empty canonical-shard
-   reclamation;
-9. prune result and LLVM cache telemetry for entries, bytes, skips, and
-   failures; and
-10. best-effort LLVM startup pruning with 10 GiB, 10,000-entry, and 30-day
-    defaults that never prevent JIT construction.
+1. named process-body blocks remain explicit lexical HIR scopes;
+2. nested named procedural blocks retain their declarations and labels;
+3. matching closing labels are accepted while orphan/mismatched labels receive
+   `FSIM-SV-SEM-034`;
+4. declared conditional-branch and procedural-loop bodies retain their
+   lexical blocks instead of losing declarations during normalization;
+5. each lexical declaration owns one stable process-frame register;
+6. declaration initialization executes whenever its block is entered;
+7. inner locals may shadow and then restore an outer local binding;
+8. locals may shadow and then restore a visible module signal binding;
+9. debugger-local names encode named/anonymous lexical ancestry without
+   duplicating static-loop-expanded declarations; and
+10. interpreter, LLVM O0, LLVM O2, final frame values, and warm native-cache
+    behavior agree for nested, static-loop, and runtime-loop locals.
 
-Focused cache and LLVM tests cover combined limits, touched-entry survival,
-active-lock retry, temporary grace periods, invalid policies, absent roots,
-malformed files, adapter pruning, and an unusable cache root. The interval
-LLVM 22 Debug regression passed all 16 tests in 165.74 seconds. This batch is
-ready to commit and push.
+Focused frontend, elaboration, diagnostic-catalog, and scoped-local application
+tests pass. The interval LLVM 22 Debug regression passed all 17 tests in
+141.75 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 

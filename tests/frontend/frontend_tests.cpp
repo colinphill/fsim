@@ -2984,6 +2984,112 @@ endmodule
       "SystemVerilog procedural-variable metadata");
 }
 
+void test_systemverilog_procedural_block_scopes() {
+  const auto result = parse_text(
+      "block_scopes.sv",
+      R"(
+module block_scopes;
+  logic result;
+  initial begin : root_scope
+    logic value = 1'b0;
+    begin : inner_scope
+      logic value = 1'b1;
+      result = value;
+    end : inner_scope
+    begin
+      logic anonymous_value;
+      result = anonymous_value;
+    end
+    for (int lane = 0; lane < 2; lane++) begin : iteration
+      bit temporary;
+      temporary = value;
+    end : iteration
+    if (result) begin : selected
+      logic branch_value;
+      result = branch_value;
+    end : selected
+    else begin : alternate
+      logic branch_value;
+      result = branch_value;
+    end : alternate
+  end : root_scope
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "named procedural blocks and loop-local declarations must parse");
+  const auto& process =
+      result.design.units.front().processes.front();
+  require(
+      process.variables.empty()
+          && process.statements.size() == 1
+          && process.statements.front().kind
+              == StatementKind::Block
+          && process.statements.front().label == "root_scope"
+          && process.statements.front().declarations.size() == 1,
+      "a named process body must remain a lexical HIR block");
+  const auto& root = process.statements.front();
+  require(
+      root.statements.size() == 4
+          && root.statements.front().kind
+              == StatementKind::Block
+          && root.statements.front().label == "inner_scope"
+          && root.statements.front().declarations.size() == 1,
+      "nested named block declarations and labels");
+  require(
+      root.statements[1].kind == StatementKind::Block
+          && root.statements[1].label.empty()
+          && root.statements[1].declarations.size() == 1
+          && root.statements[1].declarations.front().name
+              == "anonymous_value",
+      "an anonymous block with declarations must retain its lexical HIR");
+  const auto& loop = root.statements[2];
+  require(
+      loop.kind == StatementKind::Loop
+          && loop.statements.size() == 1
+          && loop.statements.front().kind
+              == StatementKind::Block
+          && loop.statements.front().label == "iteration"
+          && loop.statements.front().declarations.size() == 1,
+      "a procedural loop must retain its declared lexical block");
+  const auto& conditional = root.statements[3];
+  require(
+      conditional.kind == StatementKind::If
+          && conditional.statements.size() == 1
+          && conditional.statements.front().kind
+              == StatementKind::Block
+          && conditional.statements.front().label == "selected"
+          && conditional.statements.front().declarations.size() == 1
+          && conditional.else_statements.size() == 1
+          && conditional.else_statements.front().kind
+              == StatementKind::Block
+          && conditional.else_statements.front().label == "alternate"
+          && conditional.else_statements.front().declarations.size() == 1,
+      "conditional branches must retain declared lexical blocks");
+
+  const auto mismatched = parse_text(
+      "bad_block_labels.sv",
+      R"(
+module bad_block_labels;
+  initial begin : opening
+  end : closing
+  initial begin
+  end : orphan
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !mismatched.ok()
+          && std::ranges::count_if(
+                 mismatched.diagnostics,
+                 [](const Diagnostic& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-034";
+                 })
+              == 2,
+      "mismatched and orphan procedural end labels need stable diagnostics");
+}
+
 void test_procedural_wait_statements() {
   const auto vhdl = parse_text(
       "waits.vhd",
@@ -5214,6 +5320,7 @@ int main() {
     test_systemverilog_packages();
     test_immediate_assertions();
     test_process_variable_declarations();
+    test_systemverilog_procedural_block_scopes();
     test_procedural_wait_statements();
     test_wildcard_and_always_comb_processes();
     test_systemverilog_case_statements();

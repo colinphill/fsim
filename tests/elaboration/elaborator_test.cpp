@@ -4071,6 +4071,164 @@ endmodule
         local_interpreter->signal_value(*local_q).to_msb_string()
         == "1");
 
+    const auto scoped_variables = fsim::frontend::parse_text(
+        "scoped_variables.sv",
+        R"(
+module scoped_variables;
+  logic [7:0] result;
+  logic [1:0] count;
+  logic [7:0] value;
+  initial begin : root_scope
+    logic [7:0] value = 8'd1;
+    result = 8'd0;
+    count = 2'd0;
+    begin : inner_scope
+      logic [7:0] value = 8'd4;
+      result = result + value;
+    end : inner_scope
+    result = result + value;
+    begin
+      logic [7:0] anonymous = 8'd1;
+      result = result + anonymous;
+    end
+    for (int lane = 0; lane < 2; lane++) begin : each
+      logic [7:0] scratch = 8'd2;
+      result = result + scratch;
+      scratch = 8'd9;
+    end : each
+    while (count < 2) begin : dynamic
+      logic [7:0] scratch = 8'd3;
+      result = result + scratch;
+      scratch = 8'd7;
+      count++;
+    end : dynamic
+    if (count == 2) begin : selected
+      logic [7:0] branch = 8'd5;
+      result = result + branch;
+    end : selected
+    else begin : alternate
+      logic [7:0] branch = 8'd8;
+      result = result + branch;
+    end : alternate
+  end : root_scope
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(scoped_variables.ok());
+    const auto elaborated_scoped =
+        fsim::elaboration::elaborate(
+            scoped_variables.design, "scoped_variables");
+    if (!elaborated_scoped.ok()) {
+        for (const auto& diagnostic :
+             elaborated_scoped.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_scoped.ok());
+    const auto& scoped_process =
+        elaborated_scoped.design->processes().front();
+    assert(scoped_process.debug_locals.size() == 7);
+    assert(
+        scoped_process.debug_locals[0].name
+        == "root_scope.value");
+    assert(
+        scoped_process.debug_locals[1].name
+        == "root_scope.inner_scope.value");
+    assert(
+        scoped_process.debug_locals[2].name.starts_with(
+            "root_scope.$block_")
+        && scoped_process.debug_locals[2].name.ends_with(
+            ".anonymous"));
+    assert(
+        scoped_process.debug_locals[3].name
+        == "root_scope.each.scratch");
+    assert(
+        scoped_process.debug_locals[4].name
+        == "root_scope.dynamic.scratch");
+    assert(
+        scoped_process.debug_locals[5].name
+        == "root_scope.selected.branch");
+    assert(
+        scoped_process.debug_locals[6].name
+        == "root_scope.alternate.branch");
+    // The statically expanded two-iteration loop reuses one frame register
+    // for its lexical declaration instead of duplicating debugger objects.
+    assert(
+        std::count_if(
+            scoped_process.debug_locals.begin(),
+            scoped_process.debug_locals.end(),
+            [](const auto& local) {
+                return local.name
+                    == "root_scope.each.scratch";
+            })
+        == 1);
+    auto scoped_interpreter =
+        elaborated_scoped.design->create_interpreter();
+    const auto scoped_run = scoped_interpreter->run();
+    assert(scoped_run.status == fsim::runtime::RunStatus::completed);
+    const auto scoped_result =
+        elaborated_scoped.design->find_signal("result");
+    const auto scoped_count =
+        elaborated_scoped.design->find_signal("count");
+    const auto shadowed_signal =
+        elaborated_scoped.design->find_signal("value");
+    assert(scoped_result && scoped_count && shadowed_signal);
+    assert(
+        scoped_interpreter
+            ->signal_value(*scoped_result)
+            .to_msb_string()
+        == "00010101");
+    assert(
+        scoped_interpreter
+            ->signal_value(*scoped_count)
+            .to_msb_string()
+        == "10");
+    assert(
+        scoped_interpreter
+            ->signal_value(*shadowed_signal)
+            .to_msb_string()
+        == "XXXXXXXX");
+    assert(
+        scoped_interpreter->read_debug_local(0, 0).to_msb_string()
+        == "00000001");
+    assert(
+        scoped_interpreter->read_debug_local(0, 1).to_msb_string()
+        == "00000100");
+    assert(
+        scoped_interpreter->read_debug_local(0, 2).to_msb_string()
+        == "00000001");
+    assert(
+        scoped_interpreter->read_debug_local(0, 3).to_msb_string()
+        == "00001001");
+    assert(
+        scoped_interpreter->read_debug_local(0, 4).to_msb_string()
+        == "00000111");
+    assert(
+        scoped_interpreter->read_debug_local(0, 5).to_msb_string()
+        == "00000101");
+
+    const auto duplicate_scoped_variables =
+        fsim::frontend::parse_text(
+            "duplicate_scoped_variables.sv",
+            R"(
+module duplicate_scoped_variables;
+  initial begin
+    logic duplicate;
+    logic duplicate;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(duplicate_scoped_variables.ok());
+    const auto rejected_duplicate_scoped =
+        fsim::elaboration::elaborate(
+            duplicate_scoped_variables.design,
+            "duplicate_scoped_variables");
+    assert(!rejected_duplicate_scoped.ok());
+    assert(has_diagnostic(
+        rejected_duplicate_scoped, "FSIM-ELAB-053"));
+
     const auto vhdl_local_variables = fsim::frontend::parse_text(
         "local_variables.vhd",
         R"(
