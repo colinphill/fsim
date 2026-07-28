@@ -69,6 +69,9 @@ struct TclContext {
   int exit_code{};
 };
 
+std::string_view assertion_severity_name(
+    runtime::simir::AssertionSeverity severity);
+
 struct TclChannelState {
   std::istream* input{};
   std::ostream* output{};
@@ -619,6 +622,19 @@ bool ensure_simulation(
         if (newline) {
           context.output << '\n';
         }
+      });
+  context.simulation->set_report_hook(
+      [&context](
+          const runtime::simir::ProcessId,
+          const std::string_view message,
+          const runtime::simir::AssertionSeverity severity,
+          const runtime::simir::SourceLocation& source,
+          const runtime::SimulationTick,
+          const std::uint64_t) {
+        context.output << source.path << ':' << source.line << ':'
+                       << source.column << ": "
+                       << assertion_severity_name(severity)
+                       << "[FSIM-VHDL-REPORT]: " << message << '\n';
       });
   context.built.reset();
   context.simulation_engine = engine;

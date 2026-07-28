@@ -34,9 +34,22 @@ struct OutputEvent {
   friend bool operator==(const OutputEvent&, const OutputEvent&) = default;
 };
 
+struct ReportEvent {
+  fsim::runtime::simir::ProcessId process{};
+  std::string message;
+  fsim::runtime::simir::AssertionSeverity severity{
+      fsim::runtime::simir::AssertionSeverity::note};
+  fsim::runtime::simir::SourceLocation source;
+  fsim::runtime::SimulationTick time{};
+  std::uint64_t delta{};
+
+  friend bool operator==(const ReportEvent&, const ReportEvent&) = default;
+};
+
 struct Capture {
   fsim::runtime::RunResult result;
   std::vector<OutputEvent> output;
+  std::vector<ReportEvent> reports;
   std::size_t compiled_processes{};
 };
 
@@ -74,6 +87,23 @@ Capture execute(
           const std::uint64_t delta) {
         capture.output.push_back(
             {process, std::string{text}, newline, time, delta});
+      });
+  simulation.set_report_hook(
+      [&capture](
+          const fsim::runtime::simir::ProcessId process,
+          const std::string_view message,
+          const fsim::runtime::simir::AssertionSeverity severity,
+          const fsim::runtime::simir::SourceLocation& source,
+          const fsim::runtime::SimulationTick time,
+          const std::uint64_t delta) {
+        capture.reports.push_back(
+            {
+                process,
+                std::string{message},
+                severity,
+                source,
+                time,
+                delta});
       });
   capture.result = simulation.run();
   return capture;
@@ -204,11 +234,24 @@ void test_vhdl_report(
   assert(reference.result.status == fsim::runtime::RunStatus::completed);
   assert(compiled.result.status == fsim::runtime::RunStatus::completed);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 2);
-  assert(reference.output[0].text == "vhdl \"quote\"");
-  assert(reference.output[0].newline);
-  assert(reference.output[1].text.empty());
-  assert(reference.output[1].newline);
+  assert(reference.output.empty());
+  assert(reference.reports == compiled.reports);
+  assert(reference.reports.size() == 3);
+  assert(reference.reports[0].message == "vhdl \"quote\"");
+  assert(
+      reference.reports[0].severity
+      == fsim::runtime::simir::AssertionSeverity::note);
+  assert(reference.reports[0].source.path == source.string());
+  assert(reference.reports[0].source.line == 8);
+  assert(reference.reports[0].time == 0);
+  assert(reference.reports[0].delta == 0);
+  assert(reference.reports[1].message.empty());
+  assert(
+      reference.reports[1].severity
+      == fsim::runtime::simir::AssertionSeverity::warning);
+  assert(
+      reference.reports[2].severity
+      == fsim::runtime::simir::AssertionSeverity::error);
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 1);
 }
@@ -254,7 +297,8 @@ begin
   process
   begin
     report "vhdl ""quote""" severity note;
-    report "";
+    report "" severity warning;
+    report "error" severity error;
     wait;
   end process;
 end architecture;

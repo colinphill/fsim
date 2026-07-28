@@ -1624,7 +1624,8 @@ class VhdlParser final : private detail::ParserBase {
     if (match_keyword("report", true)) {
       const auto start = previous();
       Statement statement;
-      statement.kind = StatementKind::Display;
+      statement.kind = StatementKind::Report;
+      statement.assertion_severity = AssertionSeverity::Note;
       const auto message = expect(
           TokenKind::StringLiteral,
           "literal string after report",
@@ -1633,12 +1634,24 @@ class VhdlParser final : private detail::ParserBase {
       if (match_keyword("severity", true)) {
         const auto severity =
             expect_identifier("report severity");
-        if (!detail::iequals(severity.text, "note")) {
+        if (detail::iequals(severity.text, "note")) {
+          statement.assertion_severity = AssertionSeverity::Note;
+        } else if (detail::iequals(severity.text, "warning")) {
+          statement.assertion_severity = AssertionSeverity::Warning;
+        } else if (detail::iequals(severity.text, "error")) {
+          statement.assertion_severity = AssertionSeverity::Error;
+        } else if (detail::iequals(severity.text, "failure")) {
           error(
               severity,
               "FSIM-VHDL-SEM-031",
-              "the current VHDL report slice supports only note "
-              "severity");
+              "VHDL report severity failure requires the configurable "
+              "assertion-stop threshold");
+        } else {
+          error(
+              severity,
+              "FSIM-VHDL-SEM-011",
+              "report severity must be note, warning, error, or "
+              "failure");
         }
       }
       expect(

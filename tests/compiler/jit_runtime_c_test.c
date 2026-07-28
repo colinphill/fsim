@@ -65,7 +65,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, write_output) == 120,
                "runtime language-output callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, schedule_output) == 128,
                "runtime postponed-output callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 136,
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_report) == 136,
+               "runtime report callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 144,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -90,6 +92,8 @@ typedef struct callback_state {
   uint32_t output_newline;
   uint64_t output_size;
   uint32_t scheduled_output_count;
+  uint32_t report_count;
+  uint32_t report_instruction;
 } callback_state;
 
 static uint64_t read_signal(
@@ -230,6 +234,16 @@ static void schedule_output(
   write_output(context, process, text, text_size, newline);
 }
 
+static void write_report(
+    void* context,
+    uint32_t process,
+    uint32_t instruction) {
+  callback_state* state = (callback_state*)context;
+  ++state->report_count;
+  state->output_process = process;
+  state->report_instruction = instruction;
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -251,7 +265,8 @@ int main(void) {
       signal_last_event,
       signal_active,
       write_output,
-      schedule_output};
+      schedule_output,
+      write_report};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -283,6 +298,8 @@ int main(void) {
       runtime.context, UINT32_C(12), "hello", UINT64_C(5), UINT32_C(1));
   runtime.schedule_output(
       runtime.context, UINT32_C(12), "hello", UINT64_C(5), UINT32_C(1));
+  runtime.write_report(
+      runtime.context, UINT32_C(12), UINT32_C(19));
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -322,6 +339,8 @@ int main(void) {
       state.slice_delay != UINT64_C(13) ||
       state.output_count != UINT32_C(2) ||
       state.scheduled_output_count != UINT32_C(1) ||
+      state.report_count != UINT32_C(1) ||
+      state.report_instruction != UINT32_C(19) ||
       state.output_process != UINT32_C(12) ||
       state.output_newline != UINT32_C(1) ||
       state.output_size != UINT64_C(5)) {

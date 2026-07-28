@@ -345,10 +345,14 @@ quote, backslash, and one-byte octal escapes; SimIR and generated code retain
 the exact byte string, including embedded NUL bytes.
 The same decoder is used for bounded `$fatal` and immediate-assertion `$error`
 literal messages before assertion metadata enters SimIR.
-Bounded VHDL literal `report` statements at `note` severity reuse the same
-immediate typed operation and output hook. VHDL doubled quotes are decoded in
-the frontend. Higher report severities remain separate from this output-only
-slice so their future stop-threshold behavior is not silently discarded.
+Bounded VHDL literal `report` statements lower to a distinct typed `Report`
+operation retaining severity and source metadata. `note`, `warning`, and
+`error` reports invoke a synchronous report hook and continue; the LLVM
+adapter uses an append-only instruction-index callback to recover the same
+immutable metadata. CLI/Tcl render the report and the native C assertion
+callback receives it without terminating the session. VHDL doubled quotes are
+decoded in the frontend. `failure` remains targeted until the assertion-stop
+threshold is configurable.
 The literal-only `$monitor` base case schedules one initial postponed
 publication. Because it has no value operands, it has no subsequent change
 trigger; monitor-list replacement and value-sensitive re-publication remain

@@ -84,6 +84,7 @@ struct TestRuntime {
   std::vector<std::uint32_t> output_processes;
   std::vector<bool> output_newlines;
   std::vector<std::string> postponed_output;
+  std::vector<std::uint32_t> report_instructions;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -273,6 +274,14 @@ extern "C" void schedule_output(
       static_cast<std::size_t>(text_size));
 }
 
+extern "C" void write_report(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t instruction) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.report_instructions.push_back(instruction);
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -294,6 +303,7 @@ extern "C" void schedule_output(
       &signal_active,
       &write_output,
       &schedule_output,
+      &write_report,
   };
 }
 
@@ -3631,6 +3641,10 @@ void test_display_at_level(
       Display{"hello", true},
       Display{"tail", false},
       Display{"postponed", true, true},
+      Report{
+          "warning",
+          AssertionSeverity::warning,
+          SourceLocation{"report.vhd", 7, 5}},
       Halt{},
   };
   const std::array<std::uint32_t, 0> no_signals{};
@@ -3651,6 +3665,9 @@ void test_display_at_level(
   assert(
       runtime.postponed_output
       == std::vector<std::string>({"postponed"}));
+  assert(
+      runtime.report_instructions
+      == std::vector<std::uint32_t>({3}));
 
   TestRuntime short_runtime;
   auto short_descriptor = abi(short_runtime);
@@ -3674,6 +3691,18 @@ void test_display_at_level(
             jit.lookup(symbol), short_postponed_descriptor);
       },
       "schedule_output");
+
+  TestRuntime short_report_runtime;
+  auto short_report_descriptor = abi(short_report_runtime);
+  short_report_descriptor.struct_size =
+      static_cast<std::uint32_t>(
+          offsetof(fsim_jit_runtime_v1, write_report));
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            jit.lookup(symbol), short_report_descriptor);
+      },
+      "write_report");
 }
 
 } // namespace

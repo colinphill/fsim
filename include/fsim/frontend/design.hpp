@@ -243,6 +243,7 @@ enum class StatementKind {
   WaitUntil,
   EventTrigger,
   Display,
+  Report,
   Pause,
   Finish,
   Block,

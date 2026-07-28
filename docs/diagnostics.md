@@ -30,6 +30,7 @@ therefore excluded.
 | `FSIM-API-0003` | error | A C API operation requires a successfully built design. |
 | `FSIM-API-0004` | error | A built design contains more debug-visible local variables than the version-1 object-handle encoding can represent. |
 | `FSIM-API-ASSERT-0001` | assertion severity | A false HDL assertion stopped simulation through the C API; the diagnostic carries its process, source location, severity, and message. |
+| `FSIM-API-REPORT-0001` | report severity | A nonfatal VHDL report was delivered through the C API assertion callback. |
 | `FSIM-API-RUN-0001` | error | Simulation invoked through the C API failed at runtime. |
 | `FSIM-API-VALUE-0001` | error | A C API deposit or force value is invalid for the selected signal. |
 
@@ -220,7 +221,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-028` | error | A selected-assignment alternative follows `others`. |
 | `FSIM-VHDL-SEM-029` | error | The bounded selected-assignment form has no final `others` alternative. |
 | `FSIM-VHDL-SEM-030` | error | The selected VHDL attribute is outside the bounded supported array-attribute set. |
-| `FSIM-VHDL-SEM-031` | error | A bounded VHDL `report` explicitly uses a severity other than `note`. |
+| `FSIM-VHDL-SEM-031` | error | A VHDL `report` uses `failure` severity before the configurable assertion-stop threshold is available. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -709,6 +710,7 @@ therefore excluded.
 | `FSIM-RUN-0001` | error | The SimIR interpreter failed during a CLI run. |
 | `FSIM-RUN-0002` | error | Another exception terminated a CLI run. |
 | `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
+| `FSIM-VHDL-REPORT` | report severity | A nonfatal VHDL report was emitted through a command or Tcl output stream. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |
 | `FSIM-VCD-0001` | error | The trace output directory could not be created. |
 | `FSIM-VCD-0002` | error | The VCD trace file could not be opened. |

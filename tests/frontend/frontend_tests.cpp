@@ -2940,7 +2940,8 @@ begin
   process
   begin
     report "vhdl ""quote""" severity note;
-    report "";
+    report "" severity warning;
+    report "error" severity error;
     wait;
   end process;
 end architecture;
@@ -2952,26 +2953,31 @@ end architecture;
   require(
       architecture != nullptr
           && architecture->processes.size() == 1
-          && architecture->processes.front().statements.size() == 3
+          && architecture->processes.front().statements.size() == 4
           && architecture->processes.front().statements[0].kind
-              == StatementKind::Display
+              == StatementKind::Report
           && architecture->processes.front().statements[0].output_text
               == "vhdl \"quote\""
-          && architecture->processes.front().statements[0].output_newline
+          && architecture->processes.front().statements[0]
+                 .assertion_severity == AssertionSeverity::Note
           && architecture->processes.front().statements[1].kind
-              == StatementKind::Display
-          && architecture->processes.front().statements[1].output_text.empty(),
-      "VHDL report literal HIR and doubled-quote decoding");
+              == StatementKind::Report
+          && architecture->processes.front().statements[1].output_text.empty()
+          && architecture->processes.front().statements[1]
+                 .assertion_severity == AssertionSeverity::Warning
+          && architecture->processes.front().statements[2]
+                 .assertion_severity == AssertionSeverity::Error,
+      "VHDL report literal HIR, severity, and doubled-quote decoding");
 
   const auto unsupported = parse_text(
-      "report_warning.vhd",
+      "report_failure.vhd",
       R"(
 entity reporter is end entity;
 architecture rtl of reporter is
 begin
   process
   begin
-    report "warning" severity warning;
+    report "failure" severity failure;
     wait;
   end process;
 end architecture;
@@ -2984,7 +2990,7 @@ end architecture;
           [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-VHDL-SEM-031";
           }),
-      "non-note VHDL report severity needs a targeted diagnostic");
+      "failure VHDL report severity needs a targeted diagnostic");
 }
 
 void test_process_variable_declarations() {

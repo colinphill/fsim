@@ -876,6 +876,7 @@ struct Interpreter::Impl {
   SignalChangeHook signal_change_hook;
   ExecutionPointHook execution_point_hook;
   OutputHook output_hook;
+  ReportHook report_hook;
   bool update_commit_scheduled{};
   bool started{};
   bool stopped_by_design{};
@@ -1682,6 +1683,21 @@ struct Interpreter::Impl::ExecutionContext final
         });
   }
 
+  void report(
+      const std::string_view message,
+      const AssertionSeverity severity,
+      const SourceLocation& source) override {
+    if (owner.report_hook) {
+      owner.report_hook(
+          process,
+          message,
+          severity,
+          source,
+          owner.scheduler.now(),
+          owner.scheduler.delta());
+    }
+  }
+
   [[nodiscard]] bool
   execution_points_enabled() const noexcept override {
     return static_cast<bool>(owner.execution_point_hook);
@@ -2396,6 +2412,18 @@ void Interpreter::Impl::execute(ProcessId id) {
               }
               ++process.pc;
             },
+            [&](const Report& op) {
+              if (report_hook) {
+                report_hook(
+                    process.program.id,
+                    op.message,
+                    op.severity,
+                    op.source,
+                    scheduler.now(),
+                    scheduler.delta());
+              }
+              ++process.pc;
+            },
             [&](const Pause &) {
               boundary = true;
             },
@@ -2654,6 +2682,10 @@ void Interpreter::set_execution_point_hook(ExecutionPointHook hook) {
 
 void Interpreter::set_output_hook(OutputHook hook) {
   impl_->output_hook = std::move(hook);
+}
+
+void Interpreter::set_report_hook(ReportHook hook) {
+  impl_->report_hook = std::move(hook);
 }
 
 } // namespace fsim::runtime::simir

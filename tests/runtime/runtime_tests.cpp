@@ -2923,6 +2923,62 @@ void test_simir_display_output() {
           && events[3].delta == 0
           && events[3].phase == SchedulerPhase::active,
       "immediate/postponed display hook ordering and metadata");
+
+  Interpreter report_interpreter;
+  Process report_process;
+  report_process.name = "reports";
+  report_process.operations = {
+      Report{
+          "warning",
+          AssertionSeverity::warning,
+          SourceLocation{"report.vhd", 9, 5}},
+      Report{
+          "error",
+          AssertionSeverity::error,
+          SourceLocation{"report.vhd", 10, 5}},
+      Halt{},
+  };
+  const auto report_process_id =
+      report_interpreter.add_process(std::move(report_process));
+  struct ObservedReport {
+    ProcessId process{};
+    std::string message;
+    AssertionSeverity severity{AssertionSeverity::note};
+    SourceLocation source;
+    SimulationTick time{};
+    std::uint64_t delta{};
+  };
+  std::vector<ObservedReport> reports;
+  report_interpreter.set_report_hook(
+      [&reports](
+          const ProcessId process_value,
+          const std::string_view message,
+          const AssertionSeverity severity,
+          const SourceLocation& source,
+          const SimulationTick time,
+          const std::uint64_t delta) {
+        reports.push_back(
+            {
+                process_value,
+                std::string{message},
+                severity,
+                source,
+                time,
+                delta});
+      });
+  report_interpreter.start();
+  const auto report_result = report_interpreter.run();
+  require(
+      report_result.status == RunStatus::completed
+          && reports.size() == 2
+          && reports[0].process == report_process_id
+          && reports[0].message == "warning"
+          && reports[0].severity == AssertionSeverity::warning
+          && reports[0].source.line == 9
+          && reports[0].time == 0
+          && reports[0].delta == 0
+          && reports[1].severity == AssertionSeverity::error,
+      "nonfatal report hook severity, source, and ordering");
 }
 
 void test_vcd() {

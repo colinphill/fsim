@@ -785,6 +785,62 @@ void attach_callbacks(Session& session) {
             nullptr,
             phase);
       });
+  session.simulation->set_report_hook(
+      [state](
+          const fsim::runtime::simir::ProcessId process,
+          const std::string_view message,
+          const fsim::runtime::simir::AssertionSeverity severity,
+          const fsim::runtime::simir::SourceLocation& source,
+          const fsim::runtime::SimulationTick,
+          const std::uint64_t) {
+        fsim::diagnostic::Severity diagnostic_severity =
+            fsim::diagnostic::Severity::error;
+        switch (severity) {
+        case fsim::runtime::simir::AssertionSeverity::note:
+          diagnostic_severity = fsim::diagnostic::Severity::note;
+          break;
+        case fsim::runtime::simir::AssertionSeverity::warning:
+          diagnostic_severity = fsim::diagnostic::Severity::warning;
+          break;
+        case fsim::runtime::simir::AssertionSeverity::error:
+          diagnostic_severity = fsim::diagnostic::Severity::error;
+          break;
+        case fsim::runtime::simir::AssertionSeverity::failure:
+          diagnostic_severity = fsim::diagnostic::Severity::fatal;
+          break;
+        }
+        fsim::diagnostic::SourceSpan span;
+        span.path = source.path;
+        span.begin.line = source.line;
+        span.begin.column = source.column;
+        span.end = span.begin;
+        state->diagnostics.report(fsim::diagnostic::Diagnostic{
+            diagnostic_severity,
+            "FSIM-API-REPORT-0001",
+            std::string{message},
+            std::move(span),
+            {}});
+        if (!state->callbacks.assertion) {
+          return;
+        }
+        const auto& stored =
+            state->diagnostics.diagnostics().back();
+        fsim_diagnostic_t diagnostic{};
+        diagnostic.struct_size = sizeof(diagnostic);
+        diagnostic.api_version = FSIM_API_VERSION;
+        diagnostic.severity = convert_severity(stored.severity);
+        diagnostic.code = view(stored.code);
+        diagnostic.message = view(stored.message);
+        diagnostic.path = view(stored.span.path);
+        diagnostic.line = stored.span.begin.line;
+        diagnostic.column = stored.span.begin.column;
+        CallbackGuard guard{*state};
+        state->callbacks.assertion(
+            state->handle,
+            process_handle(*state, process),
+            &diagnostic,
+            state->callbacks.user_data);
+      });
   if (session.callbacks.safe_point
       || session.callbacks.safe_point_info) {
     session.simulation->set_execution_point_hook(

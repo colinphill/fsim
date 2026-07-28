@@ -44,11 +44,12 @@ Output string literals decode `\n`, `\t`, `\"`, `\\`, and one-to-three-digit
 octal byte escapes. Unsupported or out-of-range escapes are diagnosed instead
 of being silently rewritten.
 
-VHDL report status update: literal `report "text";` and explicit
-`severity note` statements execute through the unified output hook, including
-VHDL doubled-quote decoding and interpreter/LLVM O0/O2 equivalence. General
-string expressions and `warning`/`error`/`failure` report severity behavior
-remain deferred and are diagnosed rather than downgraded.
+VHDL report status update: literal `report "text";` statements at `note`,
+`warning`, and `error` severity execute through a severity/source-aware hook,
+including VHDL doubled-quote decoding, native API callback delivery, and
+interpreter/LLVM O0/O2 equivalence. General string expressions and `failure`
+stop-threshold behavior remain deferred and are diagnosed rather than
+downgraded.
 
 Literal `$monitor("text")` and empty `$monitor` forms publish once in the
 postponed phase. Value operands, formatting substitutions, monitor-list

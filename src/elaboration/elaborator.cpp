@@ -2982,7 +2982,9 @@ private:
             auto kind = DebugPointKind::statement;
             if (statement.kind == StatementKind::Assert) {
                 kind = DebugPointKind::assertion;
-            } else if (statement.kind == StatementKind::Display) {
+            } else if (
+                statement.kind == StatementKind::Display
+                || statement.kind == StatementKind::Report) {
                 kind = DebugPointKind::call;
             } else if (
                 statement.kind == StatementKind::Delay
@@ -3049,6 +3051,34 @@ private:
                     statement.output_newline,
                     statement.output_postponed});
             break;
+        case StatementKind::Report: {
+            AssertionSeverity severity = AssertionSeverity::note;
+            switch (statement.assertion_severity) {
+            case frontend::AssertionSeverity::Note:
+                severity = AssertionSeverity::note;
+                break;
+            case frontend::AssertionSeverity::Warning:
+                severity = AssertionSeverity::warning;
+                break;
+            case frontend::AssertionSeverity::Error:
+                severity = AssertionSeverity::error;
+                break;
+            case frontend::AssertionSeverity::Failure:
+                severity = AssertionSeverity::failure;
+                break;
+            }
+            process_.operations.emplace_back(
+                runtime::simir::Report{
+                    statement.output_text,
+                    severity,
+                    SourceLocation{
+                        statement.span.source_name,
+                        static_cast<std::uint32_t>(
+                            statement.span.begin.line),
+                        static_cast<std::uint32_t>(
+                            statement.span.begin.column)}});
+            break;
+        }
         case StatementKind::Pause:
             process_.operations.emplace_back(Pause{});
             break;
@@ -6456,6 +6486,7 @@ private:
             case StatementKind::WaitOn:
             case StatementKind::EventTrigger:
             case StatementKind::Display:
+            case StatementKind::Report:
             case StatementKind::Pause:
             case StatementKind::Finish:
             case StatementKind::Block:

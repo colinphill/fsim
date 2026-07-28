@@ -48,6 +48,21 @@
 namespace fsim::app {
 namespace {
 
+[[nodiscard]] std::string_view report_severity_name(
+    const runtime::simir::AssertionSeverity severity) noexcept {
+  switch (severity) {
+  case runtime::simir::AssertionSeverity::note:
+    return "note";
+  case runtime::simir::AssertionSeverity::warning:
+    return "warning";
+  case runtime::simir::AssertionSeverity::error:
+    return "error";
+  case runtime::simir::AssertionSeverity::failure:
+    return "failure";
+  }
+  return "error";
+}
+
 using runtime::PackedLogic4;
 using runtime::SimulationTick;
 using runtime::simir::SignalId;
@@ -147,7 +162,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
 
     CallbackState callback_state{
-        &context, signal_widths_, {}};
+        &context, &process_, signal_widths_, {}};
     fsim_jit_runtime_v1 runtime{};
     runtime.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V1;
     runtime.struct_size = sizeof(runtime);
@@ -170,6 +185,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.signal_active = signal_active;
     runtime.write_output = write_output;
     runtime.schedule_output = schedule_output;
+    runtime.write_report = write_report;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -322,6 +338,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
  private:
   struct CallbackState {
     runtime::simir::ProcessExecutionContext* context{};
+    const runtime::simir::Process* process{};
     std::span<const std::uint32_t> signal_widths;
     std::exception_ptr failure;
   };
@@ -693,6 +710,39 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
               text == nullptr ? "" : text,
               static_cast<std::size_t>(text_size)},
           newline != 0);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_report(
+      void* context,
+      const std::uint32_t process,
+      const std::uint32_t instruction) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (state.context == nullptr
+          || state.process == nullptr
+          || state.process->id != process
+          || instruction >= state.process->operations.size()) {
+        throw std::logic_error{
+            "invalid generated report callback"};
+      }
+      const auto* report =
+          std::get_if<runtime::simir::Report>(
+              &state.process->operations[instruction]);
+      if (report == nullptr) {
+        throw std::logic_error{
+            "generated report callback references a non-report "
+            "instruction"};
+      }
+      state.context->report(
+          report->message,
+          report->severity,
+          report->source);
     } catch (...) {
       capture_failure(state);
     }
@@ -2189,6 +2239,19 @@ int handle_run(
           output << '\n';
         }
       });
+  simulation.set_report_hook(
+      [&output](
+          const runtime::simir::ProcessId,
+          const std::string_view message,
+          const runtime::simir::AssertionSeverity severity,
+          const runtime::simir::SourceLocation& source,
+          const SimulationTick,
+          const std::uint64_t) {
+        output << source.path << ':' << source.line << ':'
+               << source.column << ": "
+               << report_severity_name(severity)
+               << "[FSIM-VHDL-REPORT]: " << message << '\n';
+      });
   report_native_cache_failures(simulation, diagnostics);
   auto trace = attach_trace(simulation, config, diagnostics);
   if (config.run.trace_file && !trace) {
@@ -3237,6 +3300,19 @@ int handle_debug(
           output << '\n';
         }
       });
+  simulation.set_report_hook(
+      [&output](
+          const runtime::simir::ProcessId,
+          const std::string_view message,
+          const runtime::simir::AssertionSeverity severity,
+          const runtime::simir::SourceLocation& source,
+          const SimulationTick,
+          const std::uint64_t) {
+        output << source.path << ':' << source.line << ':'
+               << source.column << ": "
+               << report_severity_name(severity)
+               << "[FSIM-VHDL-REPORT]: " << message << '\n';
+      });
   report_native_cache_failures(simulation, diagnostics);
   auto trace = attach_trace(simulation, config, diagnostics, true);
   if (config.run.trace_file && !trace) {
@@ -4033,6 +4109,24 @@ struct Simulation::Impl {
             output_hook(process, text, newline, time, delta);
           }
         });
+    interpreter->set_report_hook(
+        [this](
+            const runtime::simir::ProcessId process,
+            const std::string_view message,
+            const runtime::simir::AssertionSeverity severity,
+            const runtime::simir::SourceLocation& source,
+            const SimulationTick time,
+            const std::uint64_t delta) {
+          if (report_hook) {
+            report_hook(
+                process,
+                message,
+                severity,
+                source,
+                time,
+                delta);
+          }
+        });
     interpreter->scheduler().set_safe_point_hook(
         [this](
             runtime::Scheduler& scheduler,
@@ -4131,6 +4225,7 @@ struct Simulation::Impl {
   std::map<std::uint64_t, SafePointHook> safe_point_observers;
   std::uint64_t next_safe_point_observer{1};
   OutputHook output_hook;
+  ReportHook report_hook;
   Lifecycle lifecycle{Lifecycle::ready};
   bool systemc_start_attempted{};
   bool systemc_ended{};
@@ -4336,6 +4431,10 @@ void Simulation::set_execution_point_hook(ExecutionPointHook hook) {
 
 void Simulation::set_output_hook(OutputHook hook) {
   impl_->output_hook = std::move(hook);
+}
+
+void Simulation::set_report_hook(ReportHook hook) {
+  impl_->report_hook = std::move(hook);
 }
 
 int run_debug_repl(

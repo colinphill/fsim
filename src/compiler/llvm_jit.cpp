@@ -72,6 +72,7 @@ using runtime::simir::ReadSignal;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
+using runtime::simir::Report;
 using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
 using runtime::simir::SignalActive;
@@ -96,7 +97,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v5";
+    "fsim-llvm-native-object-v6";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -122,7 +123,8 @@ static_assert(offsetof(fsim_jit_runtime_v1, signal_last_event) == 104);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_active) == 112);
 static_assert(offsetof(fsim_jit_runtime_v1, write_output) == 120);
 static_assert(offsetof(fsim_jit_runtime_v1, schedule_output) == 128);
-static_assert(sizeof(fsim_jit_runtime_v1) == 136);
+static_assert(offsetof(fsim_jit_runtime_v1, write_report) == 136);
+static_assert(sizeof(fsim_jit_runtime_v1) == 144);
 static_assert(sizeof(fsim_jit_frame_v1) == 64);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -356,6 +358,7 @@ struct ValidatedProcess {
   bool uses_signal_active{};
   bool uses_output{};
   bool uses_postponed_output{};
+  bool uses_report{};
 };
 
 [[nodiscard]] ValidatedProcess
@@ -812,6 +815,9 @@ validate_process(const Process &process,
               } else {
                 result.uses_output = true;
               }
+            },
+            [&](const Report&) {
+              result.uses_report = true;
             },
             [&](const Jump &operation) {
               validate_target(operation.target, index, "jump");
@@ -1506,6 +1512,21 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                   builder,
                   "postponed",
                   value.postponed ? 1U : 0U);
+            },
+            [&](const Report& value) {
+              builder.add("operation", "Report");
+              builder.add("message", value.message);
+              add_key_u64(
+                  builder,
+                  "severity",
+                  static_cast<std::underlying_type_t<
+                      runtime::simir::AssertionSeverity>>(
+                      value.severity));
+              builder.add("source-path", value.source.path);
+              add_key_u64(
+                  builder, "source-line", value.source.line);
+              add_key_u64(
+                  builder, "source-column", value.source.column);
             },
             [&](const Jump &value) {
               builder.add("operation", "Jump");
@@ -2235,7 +2256,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       context,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -2361,6 +2382,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 18),
         "schedule_output");
   }
+  llvm::Value* report_callback = nullptr;
+  if (validated.uses_report) {
+    report_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 19),
+        "write_report");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -2395,6 +2424,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
           {pointer, i32, pointer, i64, i32},
+          false);
+  auto* report_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32},
           false);
 
   auto *register_aval = builder.CreateLoad(
@@ -3296,6 +3330,17 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   });
               branch_to_next();
             },
+            [&](const Report&) {
+              builder.CreateCall(
+                  report_type,
+                  report_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      llvm::ConstantInt::get(i32, instruction),
+                  });
+              branch_to_next();
+            },
             [&](const Jump &operation) {
               builder.CreateBr(instruction_blocks[operation.target]);
             },
@@ -3428,6 +3473,7 @@ struct LlvmJit::Impl {
     bool uses_signal_active{};
     bool uses_output{};
     bool uses_postponed_output{};
+    bool uses_report{};
   };
 
   struct NativeEntry {
@@ -3572,6 +3618,7 @@ void LlvmJit::add_process_module(
         validated.uses_signal_active,
         validated.uses_output,
         validated.uses_postponed_output,
+        validated.uses_report,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -3873,13 +3920,24 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_postponed_output) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, write_report)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include schedule_output");
     }
     if (runtime.schedule_output == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires schedule_output for this process");
+    }
+  }
+  if (entry.info.uses_report) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include write_report");
+    }
+    if (runtime.write_report == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_report for this process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {

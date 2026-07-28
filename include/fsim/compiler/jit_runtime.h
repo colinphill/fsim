@@ -149,6 +149,15 @@ typedef struct fsim_jit_runtime_v1 {
       const char* text,
       uint64_t text_size,
       uint32_t newline);
+
+  /*
+   * Append-only nonfatal report callback. instruction identifies immutable
+   * SimIR report metadata owned by the embedding process descriptor.
+   */
+  void (*write_report)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction);
 } fsim_jit_runtime_v1;
 
 /*

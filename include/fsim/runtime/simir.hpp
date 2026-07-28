@@ -363,6 +363,13 @@ struct Display {
   bool postponed{};
 };
 
+/// Emit a nonfatal VHDL report with retained severity and source metadata.
+struct Report {
+  std::string message;
+  AssertionSeverity severity{AssertionSeverity::note};
+  SourceLocation source;
+};
+
 /// Stop the complete simulation, as requested by `$finish` or an equivalent
 /// language construct.
 struct Stop {};
@@ -380,7 +387,8 @@ using Operation =
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
-                 Branch, DebugPoint, Assert, Display, Pause, Stop, Halt>;
+                 Branch, DebugPoint, Assert, Display, Report, Pause, Stop,
+                 Halt>;
 
 struct Signal {
   std::string name;
@@ -572,6 +580,10 @@ public:
 
   virtual void display(std::string_view, bool) {}
   virtual void postpone_display(std::string_view, bool) {}
+  virtual void report(
+      std::string_view,
+      AssertionSeverity,
+      const SourceLocation&) {}
 
   /// True when an embedding debugger currently requests source boundaries.
   [[nodiscard]] virtual bool execution_points_enabled() const noexcept {
@@ -717,6 +729,13 @@ public:
       bool,
       SimulationTick,
       std::uint64_t)>;
+  using ReportHook = std::function<void(
+      ProcessId,
+      std::string_view,
+      AssertionSeverity,
+      const SourceLocation&,
+      SimulationTick,
+      std::uint64_t)>;
 
   explicit Interpreter(SchedulerOptions options = {});
   ~Interpreter();
@@ -767,6 +786,7 @@ public:
   void set_signal_change_hook(SignalChangeHook hook);
   void set_execution_point_hook(ExecutionPointHook hook);
   void set_output_hook(OutputHook hook);
+  void set_report_hook(ReportHook hook);
 
 private:
   struct Impl;

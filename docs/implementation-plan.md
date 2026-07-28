@@ -811,6 +811,19 @@ at feature commit `7cd9fda`; the gate-record commit is pushed with the batch.
 The twentieth post-gate batch starts at 0 of 10 features. Its full regression
 and remote push are not due until feature 10.
 
+### Twentieth post-gate batch
+
+The twentieth post-gate batch is in progress:
+
+1. VHDL-2008 literal reports at `note`, `warning`, and `error` severity now
+   lower to a distinct typed operation retaining source metadata, continue
+   after synchronous interpreter/LLVM delivery, render through CLI/Tcl, and
+   reach the native C assertion callback without terminating the session.
+
+Focused frontend, elaboration, runtime, strict C ABI, LLVM, application, Tcl,
+native API, and diagnostic-catalog tests pass. This is feature 1 of 10, so the
+interval full regression and remote push are not due yet.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

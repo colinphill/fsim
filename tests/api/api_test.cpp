@@ -37,6 +37,8 @@ struct CallbackCounts {
   std::string assertion_path;
   std::uint32_t assertion_line{};
   std::uint32_t assertion_column{};
+  std::string first_assertion_code;
+  fsim_severity_t first_assertion_severity{FSIM_SEVERITY_NOTE};
   int detailed_safe_points{};
   int scheduler_safe_points{};
   int statement_safe_points{};
@@ -158,6 +160,11 @@ void assertion(
     const fsim_diagnostic_t* diagnostic,
     void* user_data) {
   auto& state = *static_cast<CallbackCounts*>(user_data);
+  if (state.assertions == 0) {
+    state.first_assertion_code.assign(
+        diagnostic->code.data, diagnostic->code.size);
+    state.first_assertion_severity = diagnostic->severity;
+  }
   ++state.assertions;
   state.assertion_process = process;
   state.assertion_severity = diagnostic->severity;
@@ -284,6 +291,7 @@ architecture rtl of assertion_test is
 begin
   check: process(trigger)
   begin
+    report "api warning" severity warning;
     assert 0 = 1 report "api mismatch" severity failure;
   end process;
 end architecture;
@@ -1385,7 +1393,9 @@ max_deltas = 1000
   assert(fsim_session_check(session) == FSIM_STATUS_OK);
   assert(fsim_session_build(session) == FSIM_STATUS_OK);
   assert(fsim_session_run(session, 10) == FSIM_STATUS_RUNTIME_ERROR);
-  assert(counts.assertions == 1);
+  assert(counts.assertions == 2);
+  assert(counts.first_assertion_code == "FSIM-API-REPORT-0001");
+  assert(counts.first_assertion_severity == FSIM_SEVERITY_WARNING);
   assert(counts.assertion_process != FSIM_INVALID_OBJECT);
   assert(counts.assertion_severity == FSIM_SEVERITY_FATAL);
   assert(counts.assertion_code == "FSIM-API-ASSERT-0001");
@@ -1393,14 +1403,14 @@ max_deltas = 1000
       counts.assertion_message.find("api mismatch")
       != std::string::npos);
   assert(counts.assertion_path == (directory / "assertion.vhd").string());
-  assert(counts.assertion_line == 9);
+  assert(counts.assertion_line == 10);
   assert(counts.assertion_column == 5);
   assert(counts.assertion_safe_points > 0);
 
   assert(
       fsim_session_diagnostic_count(session, &diagnostic_count)
       == FSIM_STATUS_OK);
-  assert(diagnostic_count == 1);
+  assert(diagnostic_count == 2);
   struct FutureDiagnostic {
     fsim_diagnostic_t value;
     std::uint64_t future_tail;
@@ -1411,7 +1421,7 @@ max_deltas = 1000
   future_diagnostic.future_tail = UINT64_C(0x0123456789abcdef);
   assert(
       fsim_session_get_diagnostic(
-          session, 0, &future_diagnostic.value)
+          session, 1, &future_diagnostic.value)
       == FSIM_STATUS_OK);
   assert(
       std::string(
