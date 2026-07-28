@@ -45,6 +45,10 @@ int main() {
             "-c",
             "puts [fsim::version]",
             "-c",
+            "if {[info tclversion] ne \"9.0\" || "
+            "[package vcompare [info patchlevel] 9.0.4] < 0} "
+            "{error \"unsupported Tcl [info patchlevel]\"}",
+            "-c",
             "if {$argc != 0 || $tcl_interactive} {error bad-arguments}",
         },
         input,

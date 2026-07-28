@@ -25,6 +25,19 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckDiagnosticCatalog.cmake"
 )
 
+add_test(
+  NAME fsim.tcl.version-selection
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/tcl-version-selection"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckTclVersionSelection.cmake"
+)
+set_tests_properties(
+  fsim.tcl.version-selection
+  PROPERTIES LABELS "fast;tcl;cmake"
+)
+
 add_executable(
   fsim_jit_runtime_c_tests
   compiler/jit_runtime_c_test.c

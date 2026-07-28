@@ -36,6 +36,26 @@ constexpr int kUnavailable = 3;
 
 #if defined(FSIM_HAS_TCL)
 
+static_assert(
+    TCL_MAJOR_VERSION == 9 && TCL_MINOR_VERSION == 0,
+    "fsim requires Tcl 9.0");
+
+Tcl_Size tcl_size(const std::size_t value) {
+  if (value > static_cast<std::size_t>(TCL_SIZE_MAX)) {
+    throw std::length_error{"value exceeds Tcl_Size"};
+  }
+  return static_cast<Tcl_Size>(value);
+}
+
+Tcl_WideInt tcl_wide_size(const std::size_t value) {
+  if (value
+      > static_cast<std::size_t>(
+          std::numeric_limits<Tcl_WideInt>::max())) {
+    throw std::length_error{"value exceeds Tcl_WideInt"};
+  }
+  return static_cast<Tcl_WideInt>(value);
+}
+
 struct TclInterpreterDeleter {
   void operator()(Tcl_Interp* interpreter) const noexcept {
     if (interpreter != nullptr) {
@@ -78,7 +98,7 @@ struct TclChannelState {
   std::ostream* output{};
 };
 
-int channel_close(void*, Tcl_Interp*) noexcept {
+int channel_close(void*, Tcl_Interp*, int) noexcept {
   return 0;
 }
 
@@ -162,8 +182,8 @@ int channel_get_handle(void*, int, void**) noexcept {
 
 const Tcl_ChannelType kStreamChannelType{
     "fsim-stream",
-    TCL_CHANNEL_VERSION_2,
-    channel_close,
+    TCL_CHANNEL_VERSION_5,
+    nullptr,
     channel_input,
     channel_output,
     nullptr,
@@ -171,7 +191,7 @@ const Tcl_ChannelType kStreamChannelType{
     nullptr,
     channel_watch,
     channel_get_handle,
-    nullptr,
+    channel_close,
     nullptr,
     channel_flush,
     nullptr,
@@ -327,15 +347,14 @@ void configure_tcl_library(Tcl_Interp* interpreter) {
 int set_result(Tcl_Interp* interpreter, const std::string_view value) {
   Tcl_SetObjResult(
       interpreter,
-      Tcl_NewStringObj(
-          value.data(), static_cast<int>(value.size())));
+      Tcl_NewStringObj(value.data(), tcl_size(value.size())));
   return TCL_OK;
 }
 
 int version_command(
     void*,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) noexcept {
   try {
     if (argument_count != 1) {
@@ -358,8 +377,7 @@ int command_error(
     const std::string_view message) {
   Tcl_SetObjResult(
       interpreter,
-      Tcl_NewStringObj(
-          message.data(), static_cast<int>(message.size())));
+      Tcl_NewStringObj(message.data(), tcl_size(message.size())));
   return TCL_ERROR;
 }
 
@@ -382,8 +400,7 @@ void dict_put(
   if (Tcl_DictObjPut(
           interpreter,
           dictionary,
-          Tcl_NewStringObj(
-              key.data(), static_cast<int>(key.size())),
+          Tcl_NewStringObj(key.data(), tcl_size(key.size())),
           value)
       != TCL_OK) {
     throw std::runtime_error{"failed to construct a Tcl dictionary"};
@@ -391,8 +408,7 @@ void dict_put(
 }
 
 Tcl_Obj* string_object(const std::string_view value) {
-  return Tcl_NewStringObj(
-      value.data(), static_cast<int>(value.size()));
+  return Tcl_NewStringObj(value.data(), tcl_size(value.size()));
 }
 
 Tcl_Obj* unsigned_object(const std::uint64_t value) {
@@ -468,7 +484,7 @@ bool invoke_callback(
     ++context.callback_depth;
     const int result = Tcl_EvalObjv(
         context.interpreter,
-        static_cast<int>(objects.size()),
+        tcl_size(objects.size()),
         objects.data(),
         TCL_EVAL_GLOBAL);
     --context.callback_depth;
@@ -658,7 +674,7 @@ const elaboration::ElaboratedDesign* current_design(
 int project_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count == 3
       && std::string_view{Tcl_GetString(arguments[1])} == "load") {
@@ -714,7 +730,7 @@ int project_command(
 int check_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 1) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
@@ -743,7 +759,7 @@ int check_command(
 int build_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 1) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
@@ -784,7 +800,7 @@ int build_command(
 int signals_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 1) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
@@ -825,7 +841,7 @@ std::optional<runtime::simir::SignalId> command_signal(
 int read_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 2) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, "signal");
@@ -844,7 +860,7 @@ int read_command(
 int mutate_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[],
     const std::string_view operation) {
   const bool release = operation == "release";
@@ -887,7 +903,7 @@ int mutate_command(
 int status_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 1) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
@@ -918,7 +934,7 @@ int status_command(
 int diagnostics_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count == 2
       && std::string_view{Tcl_GetString(arguments[1])} == "clear") {
@@ -964,7 +980,7 @@ int diagnostics_command(
 int on_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 3) {
     Tcl_WrongNumArgs(
@@ -979,7 +995,7 @@ int on_command(
         "callback event must be safe_point, value_change, assertion, or "
         "lifecycle");
   }
-  int word_count{};
+  Tcl_Size word_count{};
   Tcl_Obj** words{};
   if (Tcl_ListObjGetElements(
           interpreter, arguments[2], &word_count, &words)
@@ -994,7 +1010,7 @@ int on_command(
       context.callbacks.at(static_cast<std::size_t>(*kind));
   callback.clear();
   callback.reserve(static_cast<std::size_t>(word_count));
-  for (int index = 0; index < word_count; ++index) {
+  for (Tcl_Size index = 0; index < word_count; ++index) {
     callback.emplace_back(Tcl_GetString(words[index]));
   }
   attach_callbacks(context);
@@ -1004,7 +1020,7 @@ int on_command(
 int off_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 2) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, "EVENT");
@@ -1025,7 +1041,7 @@ int off_command(
 int callbacks_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 1) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
@@ -1056,7 +1072,7 @@ int callbacks_command(
 int stop_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count != 1) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
@@ -1144,7 +1160,7 @@ int report_assertion(
 int run_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count < 1 || argument_count > 2) {
     Tcl_WrongNumArgs(interpreter, 1, arguments, "?until?");
@@ -1261,7 +1277,7 @@ int execute_debug_command(
 int debug_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count < 2) {
     Tcl_WrongNumArgs(
@@ -1270,7 +1286,7 @@ int debug_command(
   }
   std::vector<std::string> command;
   command.reserve(static_cast<std::size_t>(argument_count - 1));
-  for (int index = 1; index < argument_count; ++index) {
+  for (Tcl_Size index = 1; index < argument_count; ++index) {
     command.emplace_back(Tcl_GetString(arguments[index]));
   }
   return execute_debug_command(context, interpreter, command);
@@ -1279,7 +1295,7 @@ int debug_command(
 int trace_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) {
   if (argument_count < 2) {
     Tcl_WrongNumArgs(
@@ -1304,7 +1320,7 @@ int trace_command(
     }
     context.config.run.trace_file = path.lexically_normal();
     context.config.run.trace_filters.clear();
-    for (int index = 3; index < argument_count; ++index) {
+    for (Tcl_Size index = 3; index < argument_count; ++index) {
       context.config.run.trace_filters.emplace_back(
           Tcl_GetString(arguments[index]));
     }
@@ -1346,7 +1362,7 @@ int trace_command(
   }
   std::vector<std::string> command{"trace"};
   command.reserve(static_cast<std::size_t>(argument_count));
-  for (int index = 1; index < argument_count; ++index) {
+  for (Tcl_Size index = 1; index < argument_count; ++index) {
     command.emplace_back(Tcl_GetString(arguments[index]));
   }
   return execute_debug_command(context, interpreter, command);
@@ -1355,7 +1371,7 @@ int trace_command(
 int fsim_command(
     void* client_data,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) noexcept {
   auto& context = *static_cast<TclContext*>(client_data);
   try {
@@ -1471,7 +1487,7 @@ int fsim_command(
 int exit_command(
     void* client_data,
     Tcl_Interp* interpreter,
-    const int argument_count,
+    const Tcl_Size argument_count,
     Tcl_Obj* const arguments[]) noexcept {
   auto& context = *static_cast<TclContext*>(client_data);
   try {
@@ -1520,7 +1536,7 @@ bool initialize_arguments(
             interpreter,
             arguments,
             Tcl_NewStringObj(
-                argument.data(), static_cast<int>(argument.size())))
+                argument.data(), tcl_size(argument.size())))
         != TCL_OK) {
       Tcl_DecrRefCount(arguments);
       return false;
@@ -1539,8 +1555,8 @@ bool initialize_arguments(
       && set_global(
           interpreter,
           "argc",
-          Tcl_NewIntObj(
-              static_cast<int>(invocation.tcl_arguments.size())))
+          Tcl_NewWideIntObj(
+              tcl_wide_size(invocation.tcl_arguments.size())))
       && set_global(
           interpreter,
           "tcl_interactive",
@@ -1601,7 +1617,7 @@ int evaluate_batch(
     const int result = Tcl_EvalEx(
         interpreter,
         command.data(),
-        static_cast<int>(command.size()),
+        tcl_size(command.size()),
         TCL_EVAL_GLOBAL);
     if (context.exit_requested) {
       return context.exit_code;
@@ -1646,7 +1662,7 @@ int evaluate_interactive(
     const int result = Tcl_EvalEx(
         interpreter,
         command.data(),
-        static_cast<int>(command.size()),
+        tcl_size(command.size()),
         TCL_EVAL_GLOBAL);
     if (context.exit_requested) {
       break;
@@ -1771,7 +1787,7 @@ int handle_tcl(
       "::fsim::debug"};
   bool commands_ok = true;
   for (const char* command : fsim_commands) {
-    if (Tcl_CreateObjCommand(
+    if (Tcl_CreateObjCommand2(
             interpreter.get(),
             command,
             fsim_command,
@@ -1782,14 +1798,14 @@ int handle_tcl(
       break;
     }
   }
-  if (Tcl_CreateObjCommand(
+  if (Tcl_CreateObjCommand2(
           interpreter.get(),
           "::fsim::version",
           version_command,
           &context,
           nullptr)
           == nullptr
-      || Tcl_CreateObjCommand(
+      || Tcl_CreateObjCommand2(
              interpreter.get(),
              "exit",
              exit_command,

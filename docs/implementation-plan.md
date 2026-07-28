@@ -48,10 +48,11 @@ interfaces or test scaffolding exist.
   commands must wrap the same project, session, debugger, and callback model
   as the CLI and native C API; they do not own a separate simulation kernel.
 - The bundled Tcl dependency tracks the latest stable Tcl release available
-  when its reproducible source pin is reviewed. The next dependency update
-  will move the fallback from legacy Tcl 8.6.18 to Tcl 9.0.4, the latest
-  stable release as of 2026-07-28; implementation must recheck the upstream
-  stable release before changing the pin.
+  when its reproducible source pin is reviewed. The fallback is pinned to Tcl
+  9.0.4, which the official Tcl site identified as the recommended stable
+  release when reviewed on 2026-07-28. Discovery accepts patchlevel 9.0.4 or
+  newer within the 9.0 release series; release-candidate work must recheck the
+  upstream recommendation and pin.
 - Python automation follows later, after the Tcl command model and opaque
   native session/object ABI are stable. It must reuse those semantics rather
   than introduce a second control path.
@@ -73,6 +74,10 @@ The following foundation is implemented:
   mutation, run control, breakpoints, all four stepping modes, structured
   diagnostics, live VCD selection, and synchronous safe-point/value/lifecycle
   callbacks with callback-safe stop/resume;
+- Tcl 9.0 discovery/fallback policy with a checksum-pinned 9.0.4 source
+  archive, derived Unix/MSVC static-library names for both Windows CRT modes,
+  legacy/older/other-series rejection, `Tcl_Size` object-command APIs, channel
+  version 5 streams, and relocatable installed standard-library discovery;
 - composable scheduler safe-point observers that preserve Tcl callbacks while
   the debugger or Ctrl-C control hook is replaced, transactional Tcl project
   replacement, runtime trace configuration, and assertion
@@ -443,8 +448,11 @@ Completed:
   configuration checks;
 - exact LLVM 22.1.8 discovery behind a narrow adapter target;
 - central version policy for CLI11 2.6.2, toml++ 3.4.0, Boost.Context 1.91.0,
-  Tcl 8.6.18, and Catch2 3.15.2, with installed-or-pinned-source
+  Tcl 9.0.4, and Catch2 3.15.2, with installed-or-pinned-source
   Boost.Context and Tcl consumption;
+- Tcl discovery that rejects installed Tcl 8.6, pre-9.0.4, malformed, and
+  non-9.0 headers, plus a pinned 9.0.4 fallback using version-derived Linux
+  and MSVC library names and a Tcl 9 `Tcl_Size` embedding boundary;
 - source spans, structured diagnostics, schema-1 manifest loading, glob/order
   handling, and a diagnostic catalog consistency test;
 - versioned C API and SystemC plug-in ABI skeletons;
@@ -457,12 +465,10 @@ Completed:
 
 Remaining before completion:
 
-- migrate the Tcl embedding and fetched-dependency adapter to the reviewed
-  latest stable release (currently Tcl 9.0.4), including `Tcl_Size`-correct
-  C API usage, version-derived Linux/MSVC library paths, a checksum-pinned
-  source archive, bundled standard-library relocation, and Linux/Windows
-  interactive/batch regression evidence; an installed legacy Tcl 8.6 package
-  must not silently prevent the selected Tcl 9 fallback from being used;
+- validate the migrated Tcl 9 fallback and its interactive/batch behavior on
+  Windows runners when CI inspection is next requested; the forced fallback,
+  staged and installed relocation, callback/debugger/failure paths, native C
+  API linkage, and exact LLVM 22.1.8 build pass locally on Linux;
 - consume the planned support dependencies where their corresponding features
   are implemented, instead of only pinning version policy;
 - complete cross-platform Unicode/path and console-interrupt validation.
@@ -901,30 +907,36 @@ regression passed all 21 tests in 141.45 seconds on 2026-07-28, including the
 141.44-second broad application integration test. The batch ends at feature
 commit `65ce752`; the gate-record commit is pushed with the batch.
 
-Development is paused at the completed batch boundary before the twenty-first
-post-gate batch begins, as requested by the user.
+Development resumed after the completed batch boundary with the Tcl dependency
+migration checkpoint below. The twenty-first feature batch has not yet begun.
 
-### Planned Tcl dependency update — Not started
+### Tcl 9 dependency migration checkpoint — Linux complete
 
-The first action after development resumes is a dependency migration, not a
-Tcl command-surface redesign:
+The dependency migration is implementation-complete and locally validated:
 
-1. Recheck the official Tcl stable-download channel and select its latest
-   stable release; the recorded baseline on 2026-07-28 is Tcl 9.0.4.
-2. Replace the 8.6.18 version and SHA-256 source pin and derive native library
-   and standard-library paths from the selected Tcl major/minor version rather
-   than hardcoding `tcl86tsx.lib` and `libtcl8.6.a`.
-3. Audit the embedding boundary for Tcl 9 API changes, especially
-   `Tcl_Size`, channel callbacks, object/string lengths, and Windows builds;
-   do not use narrowing compatibility casts to preserve the old signatures.
-4. Require CMake discovery to verify a compatible selected Tcl 9 development
-   package. If Tcl is absent or only legacy Tcl 8.6 is detected, download and
-   build the checksum-pinned selected stable release.
-5. Re-run the forced-fetch, staged-relocation, interactive, batch, callback,
-   debugger, and failure-exit tests on Linux and Windows before treating the
-   migration as complete.
+1. The official Tcl download and version-selection pages were rechecked on
+   2026-07-28 and identify Tcl 9.0.4 as the recommended stable release.
+2. The fallback pin is Tcl 9.0.4 with SHA-256
+   `d0aed49230bc02a65c1e0229e65f34590a4b037ec40d546f32573b467f7551ea`.
+3. Release-series parsing derives `libtcl9.0.a`, dynamic-CRT `tcl90s.lib`,
+   static-CRT `tcl90sx.lib`, and `share/fsim/tcl9.0`; a CMake script test
+   covers those names and accepted/rejected headers.
+4. The embedding uses `Tcl_CreateObjCommand2`, `Tcl_Size` for command/list/
+   string/script/callback counts, a wide `argc`, channel version 5, and
+   `close2Proc`, with a compile-time Tcl 9.0 requirement and no legacy-size
+   compatibility casts.
+5. The host's installed Tcl 8.6.14 was rejected, the official archive was
+   downloaded and checksum-verified, the native static fallback built, and
+   the exact LLVM 22.1.8 warnings-as-errors Tcl application, version
+   selection, and staged relocation tests passed.
+6. A real temporary-prefix install ran without `FSIM_TCL_LIBRARY`, discovered
+   its executable-relative `share/fsim/tcl9.0`, and reported patchlevel 9.0.4.
+7. The strict native C API and C-header tests pass while linked through the
+   Tcl 9 application build.
 
-No implementation work for this migration has started.
+Windows compile/runtime evidence remains required before this checkpoint is
+fully cross-platform; CI runs are not inspected unless the user explicitly
+requests it.
 
 ## v1 release condition
 

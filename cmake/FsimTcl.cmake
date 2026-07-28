@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 include(ExternalProject)
+include("${CMAKE_CURRENT_LIST_DIR}/FsimTclVersion.cmake")
 
 # Build the pinned Tcl release outside fsim's CMake graph when a system
 # development package is unavailable. Tcl's native Unix and MSVC builds are
@@ -11,11 +12,9 @@ function(fsim_add_fetched_tcl)
     return()
   endif()
 
-  string(
-    REGEX MATCH
-    "^[0-9]+\\.[0-9]+"
-    tcl_library_version
+  fsim_tcl_release_series(
     "${FSIM_TCL_VERSION}"
+    tcl_library_version
   )
   set(tcl_install "${CMAKE_BINARY_DIR}/_deps/fsim_tcl-install")
   set(
@@ -26,7 +25,7 @@ function(fsim_add_fetched_tcl)
 
   set(
     tcl_url
-    "https://downloads.sourceforge.net/project/tcl/Tcl/${FSIM_TCL_VERSION}/tcl${FSIM_TCL_VERSION}-src.tar.gz"
+    "https://prdownloads.sourceforge.net/tcl/tcl${FSIM_TCL_VERSION}-src.tar.gz"
   )
 
   if(WIN32)
@@ -36,11 +35,22 @@ function(fsim_add_fetched_tcl)
       AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL"
     )
       set(tcl_options "OPTS=static,nomsvcrt")
-      set(tcl_library "${tcl_install}/lib/tcl86ts.lib")
+      fsim_tcl_static_library_name(
+        "${FSIM_TCL_VERSION}"
+        WINDOWS
+        OFF
+        tcl_library_name
+      )
     else()
       set(tcl_options "OPTS=static,msvcrt")
-      set(tcl_library "${tcl_install}/lib/tcl86tsx.lib")
+      fsim_tcl_static_library_name(
+        "${FSIM_TCL_VERSION}"
+        WINDOWS
+        ON
+        tcl_library_name
+      )
     endif()
+    set(tcl_library "${tcl_install}/lib/${tcl_library_name}")
     set(tcl_optimization "OPTIMIZATIONS=/O2 /GS /GL-")
     ExternalProject_Add(
       fsim_tcl_external
@@ -67,7 +77,13 @@ function(fsim_add_fetched_tcl)
     find_program(FSIM_MAKE_EXECUTABLE NAMES gmake make REQUIRED)
     find_package(Threads REQUIRED)
     find_package(ZLIB REQUIRED)
-    set(tcl_library "${tcl_install}/lib/libtcl8.6.a")
+    fsim_tcl_static_library_name(
+      "${FSIM_TCL_VERSION}"
+      UNIX
+      OFF
+      tcl_library_name
+    )
+    set(tcl_library "${tcl_install}/lib/${tcl_library_name}")
     ExternalProject_Add(
       fsim_tcl_external
       URL "${tcl_url}"
@@ -78,7 +94,6 @@ function(fsim_add_fetched_tcl)
         "<SOURCE_DIR>/unix/configure"
         "--prefix=<INSTALL_DIR>"
         --disable-shared
-        --enable-threads
         --enable-64bit
       BUILD_COMMAND "${FSIM_MAKE_EXECUTABLE}" -j4 binaries
       INSTALL_COMMAND

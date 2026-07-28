@@ -851,17 +851,22 @@ The namespace exposes version and project metadata, check/build, lexical
 signal enumeration and packed reads, deposit/force/release, absolute-time or
 completion runs, and lifecycle status. These commands own a lazily built
 `BuiltProject`/`Simulation` pair and call the same application methods as the
-CLI; they do not create another kernel. Breakpoint, stepping, trace-selection,
-diagnostic-query, and callback commands remain milestone-four work.
+CLI; they do not create another kernel. The same stateful adapter also exposes
+breakpoint, stepping, trace-selection, diagnostic-query, mutation, and
+synchronous callback commands over the common debugger and scheduler.
 
-CMake first discovers a Tcl development package. If none is present, the Tcl
-adapter downloads the pinned 8.6.18 source archive with SHA-256 verification,
-builds only the native static core, and installs its headers and script
-library into the build tree. Installation copies the runtime script library to
-`share/fsim/tcl8.6`; the embedded interpreter locates it relative to the fsim
-executable so a staged installation remains relocatable. `FSIM_TCL_LIBRARY`
-overrides that location for custom package layouts. `FSIM_TCL_MODE=OFF` is the
-explicit opt-out.
+CMake accepts a Tcl 9.0 development package at patchlevel 9.0.4 or newer.
+Older Tcl 8.6 packages, older Tcl 9.0 patchlevels, and other release series are
+ignored. When no compatible package is present, the Tcl adapter downloads the
+checksum-pinned 9.0.4 source archive, builds only the native static core, and
+installs its headers and script library into the build tree. Installation
+copies the runtime script library to `share/fsim/tcl9.0`; the embedded
+interpreter locates it relative to the fsim executable so a staged
+installation remains relocatable. The C++ boundary uses Tcl 9
+`Tcl_Size`-bearing object commands and channel version 5 without legacy
+integer-length narrowing. `FSIM_TCL_LIBRARY` overrides the standard-library
+location for custom package layouts. `FSIM_TCL_MODE=OFF` is the explicit
+opt-out.
 
 ## Platform boundary
 

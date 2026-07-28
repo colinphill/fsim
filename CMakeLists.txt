@@ -187,7 +187,25 @@ set(FSIM_WITH_TCL OFF)
 set(FSIM_WITH_BUNDLED_TCL OFF)
 if(NOT FSIM_TCL_MODE_NORMALIZED STREQUAL "OFF")
   find_package(TCL QUIET)
+  set(FSIM_SYSTEM_TCL_SUPPORTED OFF)
+  set(FSIM_SYSTEM_TCL_VERSION "")
   if(TCL_FOUND)
+    list(GET TCL_INCLUDE_PATH 0 FSIM_SYSTEM_TCL_INCLUDE_PATH)
+    fsim_tcl_version_is_supported(
+      "${FSIM_SYSTEM_TCL_INCLUDE_PATH}"
+      FSIM_SYSTEM_TCL_SUPPORTED
+      FSIM_SYSTEM_TCL_VERSION
+    )
+    if(NOT FSIM_SYSTEM_TCL_SUPPORTED)
+      message(
+        STATUS
+        "Ignoring incompatible system Tcl "
+        "${FSIM_SYSTEM_TCL_VERSION}; fsim requires Tcl "
+        "${FSIM_TCL_VERSION} or newer in the 9.0 release series"
+      )
+    endif()
+  endif()
+  if(TCL_FOUND AND FSIM_SYSTEM_TCL_SUPPORTED)
     add_library(fsim_tcl_dependency UNKNOWN IMPORTED GLOBAL)
     set_target_properties(
       fsim_tcl_dependency
@@ -195,11 +213,15 @@ if(NOT FSIM_TCL_MODE_NORMALIZED STREQUAL "OFF")
         IMPORTED_LOCATION "${TCL_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES "${TCL_INCLUDE_PATH}"
     )
-    message(STATUS "fsim Tcl interface: ${TCL_LIBRARY}")
+    message(
+      STATUS
+      "fsim Tcl interface: ${TCL_LIBRARY} "
+      "(Tcl ${FSIM_SYSTEM_TCL_VERSION})"
+    )
   else()
     message(
       STATUS
-      "Tcl development files were not found; fetching Tcl "
+      "A compatible Tcl development package was not found; fetching Tcl "
       "${FSIM_TCL_VERSION}"
     )
     fsim_add_fetched_tcl()

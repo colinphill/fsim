@@ -303,7 +303,8 @@ syntax is diagnosed rather than silently accepted.
 - CMake 3.28 or newer
 - LLVM **22.1.8** for the supported compiled-code configuration
 - Boost.Context **1.91.0** for executable SystemC threads
-- Tcl development files, or network access for CMake's pinned fallback
+- Tcl **9.0.4 or newer in the 9.0 release series**, or network access for
+  CMake's pinned fallback
 
 LLVM is isolated behind one adapter. Frontend, interpreter, and most unit tests
 can be developed without LLVM by configuring `FSIM_LLVM_MODE=OFF`. The
@@ -325,10 +326,11 @@ source archive with SHA-256 verification. Set
 `FSIM_SYSTEMC_FIBER_MODE=OFF` only for a dependency-free build that
 intentionally diagnoses `SC_THREAD`/`SC_CTHREAD` as non-executable.
 
-CMake also prefers an installed Tcl development package and otherwise
-downloads the pinned Tcl 8.6.18 source archive, verifies its SHA-256 digest,
-builds the static core with Tcl's native Linux or MSVC build, and installs the
-Tcl standard-library scripts in a relocatable fsim data directory. Set
+CMake accepts an installed Tcl 9.0 development package at patchlevel 9.0.4 or
+newer. An older or different Tcl release is ignored and CMake downloads the
+pinned Tcl 9.0.4 source archive, verifies its SHA-256 digest, builds the static
+core with Tcl's native Linux or MSVC build, and installs the Tcl
+standard-library scripts in a relocatable fsim data directory. Set
 `FSIM_TCL_LIBRARY` to an alternate standard-library directory when packaging
 with a custom layout. Set `FSIM_TCL_MODE=OFF` only when intentionally building
 without the Tcl command.
