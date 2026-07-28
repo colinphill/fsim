@@ -116,7 +116,8 @@ The following foundation is implemented:
   alias ranges, packed enums with explicit/implicit enumerators and legality
   checks, non-nested parameterized packed structs and equal-width packed
   unions with executable member reads/writes and one-level constant member
-  bit/part-selects, and precise source/cache provenance;
+  bit/part-selects whose specialized parameter/package-constant bounds use the
+  checked constant evaluator, and precise source/cache provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization

@@ -394,7 +394,7 @@ endpackage : derived_values
             "systemverilog_package_user.sv",
             R"(
 import derived_values::NEXT, derived_values::result_t;
-import base_values::ACTIVE, base_values::packet_t,
+import base_values::ACTIVE, base_values::WIDTH, base_values::packet_t,
        base_values::overlay_t;
 module systemverilog_package_user #(
   parameter result_t INITIAL = ACTIVE
@@ -418,14 +418,14 @@ module systemverilog_package_user #(
     local_packet.payload[1:0] = 2'b10;
     packet = local_packet;
     overlay.payload = INITIAL;
-    overlay.mirror[3:2] = packet.payload[3:2];
+    overlay.mirror[WIDTH-1:2] = packet.payload[WIDTH-1:2];
   end
   packet_passthrough u_passthrough(
     .packet(packet),
     .payload(struct_payload)
   );
   assign observed = {
-    overlay.mirror[3:1],
+    overlay.mirror[base_values::WIDTH-1:1],
     packet.payload[0]
   };
 endmodule
@@ -621,7 +621,7 @@ module invalid_systemverilog_package_user;
   cycle_a cyclic_value;
   invalid_packet_t invalid_packet;
   valid_packet_t valid_packet;
-  initial valid_packet.field[4] = 1'b0;
+  initial valid_packet.field[2+2] = 1'b0;
   assign value = first_values::second_values::VALUE;
   assign value = invalid_packet.payload;
 endmodule

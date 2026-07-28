@@ -5125,7 +5125,7 @@ endpackage : derived_values
         systemverilog_package_user_source);
     output << R"(
 import derived_values::NEXT, derived_values::result_t;
-import base_values::ACTIVE, base_values::packet_t,
+import base_values::ACTIVE, base_values::WIDTH, base_values::packet_t,
        base_values::overlay_t;
 module systemverilog_package_user(
   output result_t observed
@@ -5137,10 +5137,14 @@ module systemverilog_package_user(
     packet.valid = 1'b1;
     overlay.payload = ACTIVE;
     packet.payload[0] = 1'b0;
-    overlay.mirror[3:1] = packet.payload[3:1];
+    overlay.mirror[WIDTH-1:1] =
+      packet.payload[base_values::WIDTH-1:1];
     overlay.payload[0] = packet.payload[0];
   end
-  assign observed = overlay.mirror;
+  assign observed = {
+    overlay.mirror[WIDTH-1:1],
+    packet.payload[0]
+  };
 endmodule
 )";
   }

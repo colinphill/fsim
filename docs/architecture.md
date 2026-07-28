@@ -92,8 +92,10 @@ width and all map to offset zero, so writes through one member are immediately
 visible through every other member. Member reads/writes lower to the common
 SimIR `Extract`/`Insert` and sliced-write operations, retaining
 interpreter/LLVM semantic equivalence without a backend-specific aggregate ABI.
-One constant bit- or part-select may follow a member name; its member-relative
-offset is composed with the aggregate layout offset before lowering.
+One constant bit- or part-select may follow a member name. Parameter and
+imported-package-constant bounds are folded after specialization, then the
+member-relative offset is composed with the aggregate layout offset before
+lowering.
 Compilation-unit and unit-local `import package::*` or
 `import package::name` clauses inject case-sensitive direct constants and
 types, while `package::name` remains explicitly scoped. Alias chains resolve

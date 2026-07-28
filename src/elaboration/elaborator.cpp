@@ -29,6 +29,14 @@ using runtime::Logic4;
 using runtime::PackedLogic4;
 using namespace runtime::simir;
 
+using ConstantEnvironment =
+    std::unordered_map<std::string, std::int64_t>;
+
+std::optional<std::int64_t> evaluate_constant_expression(
+    const Expression& expression,
+    const ConstantEnvironment& environment,
+    std::string& error);
+
 struct LoweredLiteral {
     PackedLogic4 value;
     frontend::ValueDomain domain{frontend::ValueDomain::Bit2};
@@ -89,6 +97,13 @@ std::optional<std::int64_t> constant_index(
             return std::nullopt;
         }
         return -*value;
+    }
+    if (expression.kind == ExpressionKind::Binary
+        || (expression.kind == ExpressionKind::Call
+            && expression.text == "?:")) {
+        std::string error;
+        return evaluate_constant_expression(
+            expression, {}, error);
     }
     return std::nullopt;
 }
@@ -268,8 +283,6 @@ std::optional<LoweredLiteral> literal_value(
         : std::nullopt;
 }
 
-using ConstantEnvironment =
-    std::unordered_map<std::string, std::int64_t>;
 using ConstantDomainEnvironment =
     std::unordered_map<std::string, frontend::ValueDomain>;
 
