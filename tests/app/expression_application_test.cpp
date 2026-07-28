@@ -766,13 +766,15 @@ void test_vhdl_falling_edge(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 6> signal_paths{
+  const std::array<std::string, 8> signal_paths{
       "falling_edge_app.hit",
       "falling_edge_app.legacy_hit",
       "falling_edge_app.falling_previous",
       "falling_edge_app.elapsed",
       "falling_edge_app.stable_during_event",
-      "falling_edge_app.stable_after_event"};
+      "falling_edge_app.stable_after_event",
+      "falling_edge_app.redundant_active",
+      "falling_edge_app.redundant_event"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -795,7 +797,9 @@ void test_vhdl_falling_edge(
           "1",
           "0000000000000000000000000000000000000000000000000000000000000001",
           "1",
-          "1"}));
+          "1",
+          "1",
+          "0"}));
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 4);
   assert(compiled.compiled_modules == 1);
@@ -1367,12 +1371,17 @@ architecture rtl of falling_edge_app is
   signal elapsed : signed(63 downto 0);
   signal stable_during_event : boolean;
   signal stable_after_event : boolean;
+  signal redundant : std_logic;
+  signal redundant_active : boolean;
+  signal redundant_event : boolean;
 begin
   stimulus: process
   begin
     clk <= '1';
+    redundant <= '0';
     wait for 1 ns;
     clk <= '0';
+    redundant <= '0';
     wait for 1 ns;
     wait;
   end process;
@@ -1382,6 +1391,16 @@ begin
     if falling_edge(clk) then
       hit <= '1';
       falling_previous <= clk'last_value;
+      if redundant'active then
+        redundant_active <= true;
+      else
+        redundant_active <= false;
+      end if;
+      if redundant'event then
+        redundant_event <= true;
+      else
+        redundant_event <= false;
+      end if;
     end if;
   end process;
 

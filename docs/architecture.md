@@ -296,7 +296,8 @@ callbacks are not yet complete.
 SimIR processes are explicit state machines. The current operation set includes:
 
 - constant loads, signal reads, delta-scoped signal-event queries,
-  previous-effective-value reads, and elapsed-since-event queries;
+  transaction-activity queries, previous-effective-value reads, and
+  elapsed-since-event queries;
 - unary/logical/reduction operations plus typed bitwise, fixed-width
   arithmetic, shift, conditional-select, and comparison operations;
 - whole and normalized partial blocking writes, update-phase writes, and
@@ -556,12 +557,13 @@ Supported compiled builds use LLVM 22.1.8, ORC, and LLJIT. The adapter public
 header exposes no LLVM class. Generated functions receive a versioned C table
 containing opaque context plus signal-read, blocking-write, assertion,
 update-write, delayed-write, and signal-event callbacks. The `write_update`,
-`write_after`, `signal_event`, `signal_last_value`, and `signal_last_event`
-callbacks are append-only extensions of the v1 table: original field offsets
-remain fixed, and each compiled process checks `struct_size` only for the
-callback tail it actually uses. A process using only an earlier operation set
-therefore remains valid with the corresponding v1 prefix. `SignalEvent` and
-`SignalLastEvent` consult the kernel-owned `(time, delta)` change stamp, while
+`write_after`, `signal_event`, `signal_last_value`, `signal_last_event`, and
+`signal_active` callbacks are append-only extensions of the v1 table: original
+field offsets remain fixed, and each compiled process checks `struct_size`
+only for the callback tail it actually uses. A process using only an earlier
+operation set therefore remains valid with the corresponding v1 prefix.
+`SignalEvent` and `SignalLastEvent` consult the kernel-owned value-change
+stamp, `SignalActive` consults the separate transaction stamp, and
 `SignalLastValue` reads the previous effective packed value retained at commit;
 none copies scheduler-owned state into generated code. CMake requires
 the exact supported LLVM package when `FSIM_LLVM_MODE=ON`; the checked-in Linux
@@ -576,8 +578,8 @@ meaningful only for `WAIT_FOR`.
 The current adapter compiles control-flow graphs containing loads, reads,
 common operations, blocking writes, assertions, jumps, branches, timed waits,
 dynamic-signal waits, static-sensitivity and permanent waits, next-delta yields,
-update-phase writes, delayed writes, signal-event, previous-value, and
-elapsed-event-time queries, design stop, and halt.
+update-phase writes, delayed writes, signal-event, transaction-activity,
+previous-value, and elapsed-event-time queries, design stop, and halt.
 A versioned caller-owned plain-C frame holds the process PC plus separate
 `aval`/`bval` register planes; a versioned result reports completion, assertion
 failure, timed/dynamic/static/permanent wait, yield, or stop. Generated

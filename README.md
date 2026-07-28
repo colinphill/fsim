@@ -118,6 +118,8 @@ The current tree contains:
   `TIME'HIGH` before the first event;
 - zero-duration VHDL signal `'stable`, tested both during and after an event
   delta;
+- VHDL signal `'active` with transaction semantics distinct from
+  value-changing `'event`;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and

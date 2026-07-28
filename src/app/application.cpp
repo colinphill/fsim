@@ -160,6 +160,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.signal_event = signal_event;
     runtime.signal_last_value = signal_last_value;
     runtime.signal_last_event = signal_last_event;
+    runtime.signal_active = signal_active;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -604,6 +605,22 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     } catch (...) {
       capture_failure(state);
       return std::numeric_limits<std::uint64_t>::max();
+    }
+  }
+
+  static std::uint32_t signal_active(
+      void* context,
+      const std::uint32_t signal) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure || state.context == nullptr
+        || signal >= state.signal_widths.size()) {
+      return 0;
+    }
+    try {
+      return state.context->signal_active(signal) ? 1U : 0U;
+    } catch (...) {
+      capture_failure(state);
+      return 0;
     }
   }
 

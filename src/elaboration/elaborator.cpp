@@ -4847,6 +4847,33 @@ private:
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'active") {
+            if (expression.operands.size() != 1
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-098",
+                    "'active requires one signal name and no duration",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-098",
+                    "'active object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                SignalActive{destination, signal->second});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
             && (expression.text == "'left"
                 || expression.text == "'right"
                 || expression.text == "'low"
@@ -5944,6 +5971,11 @@ private:
             return std::size_t{1};
         }
         if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'active") {
+            return std::size_t{1};
+        }
+        if (expression.kind == ExpressionKind::Call
             && (expression.text == "$left"
                 || expression.text == "$right"
                 || expression.text == "$low"
@@ -6124,6 +6156,10 @@ private:
             }
             if (language_ == frontend::Language::Vhdl2008
                 && expression.text == "'stable") {
+                return false;
+            }
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.text == "'active") {
                 return false;
             }
             if (language_ != frontend::Language::Vhdl2008

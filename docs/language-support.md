@@ -34,7 +34,9 @@ signal's committed effective-value change. The same signal may use
 value-changing event. `'last_event` returns elapsed global-resolution ticks
 since that event, or `TIME'HIGH` if the signal has never changed. The
 zero-duration form of `'stable` is false in the signal's event delta and true
-otherwise; explicit duration arguments are not yet lowered.
+otherwise; explicit duration arguments are not yet lowered. `'active` is true
+for any committed signal transaction in the current delta, including a
+same-value transaction for which `'event` remains false.
 
 VHDL identifiers are canonicalized case-insensitively. Verilog and
 SystemVerilog identifiers remain case-sensitive. VHDL nine-state scalar and

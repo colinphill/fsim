@@ -51,6 +51,12 @@ struct SignalLastEvent {
   SignalId signal{};
 };
 
+/// True during the delta following any committed signal transaction.
+struct SignalActive {
+  RegisterId destination{};
+  SignalId signal{};
+};
+
 struct CopyRegister {
   RegisterId destination{};
   RegisterId source{};
@@ -358,9 +364,9 @@ struct Halt {};
 
 using Operation =
     std::variant<LoadConstant, ReadSignal, SignalEvent, SignalLastValue,
-                 SignalLastEvent, CopyRegister, UnaryNot, LogicalNot,
-                 LogicalBinary, Reduction, CountOnes, CountBits, Shift,
-                 Extract, Concatenate, Binary, Insert,
+                 SignalLastEvent, SignalActive, CopyRegister, UnaryNot,
+                 LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
+                 Shift, Extract, Concatenate, Binary, Insert,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
@@ -536,6 +542,13 @@ public:
   /// or the maximum tick value if the signal has never changed.
   [[nodiscard]] virtual SimulationTick signal_last_event(SignalId) const {
     return std::numeric_limits<SimulationTick>::max();
+  }
+
+  /// True in the evaluation delta caused by the signal's most recent
+  /// committed transaction, including a transaction that did not change its
+  /// effective value.
+  [[nodiscard]] virtual bool signal_active(SignalId) const {
+    return false;
   }
 
   /// Request one alternate-language primitive-channel update. `channel` is a

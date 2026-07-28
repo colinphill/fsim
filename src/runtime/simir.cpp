@@ -869,6 +869,8 @@ struct Interpreter::Impl {
   std::vector<EventState> event_states;
   std::vector<std::optional<std::pair<
       SimulationTick, std::uint64_t>>> signal_events;
+  std::vector<std::optional<std::pair<
+      SimulationTick, std::uint64_t>>> signal_transactions;
   std::vector<PendingUpdate> pending_updates;
   std::unordered_set<std::uint64_t> pending_channel_updates;
   SignalChangeHook signal_change_hook;
@@ -1305,6 +1307,8 @@ struct Interpreter::Impl {
     if (signal.initial_value.width() != value.width()) {
       throw std::invalid_argument("SimIR signal assignment width mismatch");
     }
+    signal_transactions[signal_id] =
+        std::pair{scheduler.now(), scheduler.delta() + 1};
     if (signal.initial_value == value) {
       return;
     }
@@ -1627,6 +1631,15 @@ struct Interpreter::Impl::ExecutionContext final
     return event
         ? owner.scheduler.now() - event->first
         : std::numeric_limits<SimulationTick>::max();
+  }
+
+  [[nodiscard]] bool
+  signal_active(const SignalId signal) const override {
+    (void)owner.get_signal(signal);
+    const auto& transaction = owner.signal_transactions[signal];
+    return transaction
+        && transaction->first == owner.scheduler.now()
+        && transaction->second == owner.scheduler.delta();
   }
 
   void request_channel_update(
@@ -2085,6 +2098,18 @@ void Interpreter::Impl::execute(ProcessId id) {
                   PackedLogic4::from_aval_bval(64, elapsed, 0);
               ++process.pc;
             },
+            [&](const SignalActive& op) {
+              (void)get_signal(op.signal);
+              const auto& transaction = signal_transactions[op.signal];
+              const auto active =
+                  transaction
+                  && transaction->first == scheduler.now()
+                  && transaction->second == scheduler.delta();
+              get_register(process, op.destination) =
+                  PackedLogic4(
+                      1, active ? Logic4::one : Logic4::zero);
+              ++process.pc;
+            },
             [&](const CopyRegister& op) {
               get_register(process, op.destination) =
                   get_register(process, op.source);
@@ -2348,6 +2373,7 @@ SignalId Interpreter::add_signal(Signal signal) {
   impl_->dynamic_fanout.emplace_back();
   impl_->event_states.emplace_back();
   impl_->signal_events.emplace_back();
+  impl_->signal_transactions.emplace_back();
   return id;
 }
 

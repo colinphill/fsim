@@ -226,6 +226,11 @@ extern "C" std::uint64_t signal_last_event(
   return 0;
 }
 
+extern "C" std::uint32_t signal_active(
+    void*, const std::uint32_t) {
+  return 0;
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -244,6 +249,7 @@ extern "C" std::uint64_t signal_last_event(
       &signal_event,
       &signal_last_value,
       &signal_last_event,
+      &signal_active,
   };
 }
 

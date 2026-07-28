@@ -1388,6 +1388,7 @@ begin
     result <= descending'last_value;
     result <= descending'last_event;
     direction <= descending'stable;
+    direction <= descending'active;
     wait;
   end process;
 end architecture;
@@ -1396,11 +1397,11 @@ end architecture;
   require(result.ok(), "bounded VHDL array attributes must parse");
   const auto& statements =
       result.design.units.back().processes.front().statements;
-  const std::array<std::string_view, 10> attributes{
+  const std::array<std::string_view, 11> attributes{
       "'left", "'right", "'low", "'high", "'length",
       "'ascending", "'event", "'last_value", "'last_event",
-      "'stable"};
-  require(statements.size() == 11, "VHDL attribute statement count");
+      "'stable", "'active"};
+  require(statements.size() == 12, "VHDL attribute statement count");
   for (std::size_t index = 0; index < attributes.size(); ++index) {
     require(
         statements[index].value.kind == ExpressionKind::Call
