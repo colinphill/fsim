@@ -2505,6 +2505,10 @@ public:
             + (source.name.empty()
                    ? "process_" + std::to_string(process_.id)
                    : source.name);
+        process_.final = source.kind == ProcessKind::Final;
+        if (process_.final) {
+            process_.initialize = false;
+        }
         initialize_variables(source.variables);
         bool wildcard_sensitivity = false;
         for (const auto& sensitivity : source.sensitivities) {
@@ -2586,7 +2590,8 @@ public:
         } else {
             lower_statements(source.statements);
         }
-        if (source.kind == ProcessKind::Initial) {
+        if (source.kind == ProcessKind::Initial
+            || source.kind == ProcessKind::Final) {
             process_.operations.emplace_back(Halt{});
         } else if (waits_before_first_execution) {
             // Event-controlled processes wait before their first execution.

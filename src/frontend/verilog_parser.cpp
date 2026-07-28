@@ -720,6 +720,12 @@ class VerilogParser final : private detail::ParserBase {
         parse_typedef(unit, previous());
       } else if (match_keyword("genvar")) {
         parse_genvar_declaration(unit);
+      } else if (
+          keyword("final")
+          || (language_ == Language::Verilog2005
+              && at(TokenKind::Identifier)
+              && current().text == "final")) {
+        unit.processes.push_back(parse_final());
       } else if (is_declaration_start()) {
         parse_declaration(unit);
       } else if (is_gate_primitive()) {
@@ -959,6 +965,15 @@ class VerilogParser final : private detail::ParserBase {
             direct_local_names,
             true,
             previous());
+        continue;
+      }
+      if (
+          keyword("final")
+          || (language_ == Language::Verilog2005
+              && at(TokenKind::Identifier)
+              && current().text == "final")) {
+        direct_region.then_body.processes.push_back(
+            parse_final());
         continue;
       }
       if (is_declaration_start()) {
@@ -1268,7 +1283,13 @@ class VerilogParser final : private detail::ParserBase {
     scope = label.text;
     std::vector<std::string> local_names;
     while (!at_end() && !keyword("end")) {
-      if (is_declaration_start()) {
+      if (
+          keyword("final")
+          || (language_ == Language::Verilog2005
+              && at(TokenKind::Identifier)
+              && current().text == "final")) {
+        body.processes.push_back(parse_final());
+      } else if (is_declaration_start()) {
         parse_generate_declaration(body, local_names);
       } else if (match_keyword("parameter")) {
         parse_generated_parameter_group(
@@ -2803,6 +2824,87 @@ class VerilogParser final : private detail::ParserBase {
       } else {
         process.statements.push_back(std::move(*body));
       }
+    }
+    process.span = span_from(start, previous());
+    current_procedural_names_.clear();
+    return process;
+  }
+
+  Process parse_final() {
+    const auto start =
+        keyword("final")
+            || (language_ == Language::Verilog2005
+                && at(TokenKind::Identifier)
+                && current().text == "final")
+        ? advance()
+        : expect_keyword("final", false, "FSIM-SV-PARSE-111");
+    current_procedural_names_.clear();
+    Process process;
+    process.kind = ProcessKind::Final;
+    if (language_ == Language::Verilog2005) {
+      error(
+          start,
+          "FSIM-VERILOG-SEM-006",
+          "final procedures require SystemVerilog");
+    }
+    auto body = parse_statement();
+    if (body) {
+      if (body->kind == StatementKind::Block) {
+        process.variables = std::move(body->declarations);
+        process.statements = std::move(body->statements);
+      } else {
+        process.statements.push_back(std::move(*body));
+      }
+    }
+
+    const auto inspect =
+        [&](const auto& self,
+            const std::vector<Statement>& statements,
+            bool& has_suspension,
+            bool& has_nonblocking) -> void {
+      for (const auto& statement : statements) {
+        has_suspension =
+            has_suspension
+            || statement.kind == StatementKind::Delay
+            || statement.kind == StatementKind::WaitOn
+            || statement.kind == StatementKind::WaitUntil
+            || statement.kind == StatementKind::Finish;
+        has_nonblocking =
+            has_nonblocking
+            || (statement.kind == StatementKind::Assignment
+                && statement.assignment_kind
+                    == AssignmentKind::NonBlocking);
+        self(
+            self, statement.statements,
+            has_suspension, has_nonblocking);
+        self(
+            self, statement.else_statements,
+            has_suspension, has_nonblocking);
+        for (const auto& alternative :
+             statement.case_alternatives) {
+          self(
+              self, alternative.statements,
+              has_suspension, has_nonblocking);
+        }
+      }
+    };
+    bool has_suspension = false;
+    bool has_nonblocking = false;
+    inspect(
+        inspect, process.statements,
+        has_suspension, has_nonblocking);
+    if (has_suspension) {
+      error(
+          start,
+          "FSIM-SV-SEM-032",
+          "a final procedure cannot contain a timing control, wait, "
+          "or $finish");
+    }
+    if (has_nonblocking) {
+      error(
+          start,
+          "FSIM-SV-SEM-033",
+          "a final procedure cannot contain a nonblocking assignment");
     }
     process.span = span_from(start, previous());
     current_procedural_names_.clear();

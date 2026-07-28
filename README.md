@@ -113,6 +113,8 @@ The current tree contains:
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and
   standalone prefix/postfix increment/decrement, including constant-selected
   packed targets;
+- SystemVerilog `final` procedures executed exactly once after quiescence or
+  `$finish`, with interpreter/LLVM lifecycle equivalence;
 - vector-aware SystemVerilog logical negation and unsigned
   equality/relational comparisons with four-state unknown propagation, plus
   exact known-result `===`/`!==` comparison of `0`/`1`/`X`/`Z`;

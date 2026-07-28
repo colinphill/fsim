@@ -390,6 +390,7 @@ therefore excluded.
 | `FSIM-SV-PARSE-108` | error | Expected `;` after a SystemVerilog do-while statement. |
 | `FSIM-SV-PARSE-109` | error | Expected `(` after a Verilog/SystemVerilog `wait`. |
 | `FSIM-SV-PARSE-110` | error | Expected `)` after a Verilog/SystemVerilog wait condition. |
+| `FSIM-SV-PARSE-111` | error | Expected `final` at the start of a SystemVerilog final procedure. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -405,6 +406,7 @@ therefore excluded.
 | `FSIM-VERILOG-SEM-003` | error | `always_latch` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-004` | error | A SystemVerilog-only wildcard equality operator was used in Verilog-2005. |
 | `FSIM-VERILOG-SEM-005` | error | Compound assignments or standalone increment/decrement were used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-006` | error | A `final` procedure was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal integer literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |
@@ -435,6 +437,8 @@ therefore excluded.
 | `FSIM-SV-SEM-029` | error | A bounded procedural loop update is not a unit step toward its comparison bound. |
 | `FSIM-SV-SEM-030` | error | A bounded `forever` body has no timing control and therefore cannot suspend its process. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
+| `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
+| `FSIM-SV-SEM-033` | error | A SystemVerilog `final` procedure contains a nonblocking assignment. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

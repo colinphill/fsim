@@ -1158,6 +1158,75 @@ endmodule
       "procedural compound assignments must remain SystemVerilog-only");
 }
 
+void test_systemverilog_final_procedures() {
+  const auto result = parse_text(
+      "final_procedure.sv",
+      R"(
+module final_procedure;
+  logic [7:0] value;
+  initial value = 8'h12;
+  final begin
+    value += 8'h03;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(result.ok(), "SystemVerilog final procedures must parse");
+  const auto& processes = result.design.units.front().processes;
+  require(
+      processes.size() == 2
+          && processes[0].kind == ProcessKind::Initial
+          && processes[1].kind == ProcessKind::Final
+          && processes[1].statements.size() == 1
+          && processes[1].statements.front().value.text == "+",
+      "final procedure kind and normalized statement body");
+
+  const auto suspending = parse_text(
+      "invalid_final.sv",
+      R"(
+module invalid_final;
+  logic value;
+  final begin
+    #1;
+    value <= 1'b1;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !suspending.ok()
+          && std::ranges::any_of(
+              suspending.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-032";
+              })
+          && std::ranges::any_of(
+              suspending.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-033";
+              }),
+      "suspending and nonblocking final-procedure statements are rejected");
+
+  const auto verilog = parse_text(
+      "verilog_final.v",
+      R"(
+module verilog_final;
+  reg value;
+  final value = 1'b1;
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      !verilog.ok()
+          && std::ranges::any_of(
+              verilog.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-006";
+              }),
+      "final procedures must remain SystemVerilog-only");
+}
+
 void test_vhdl_conditional_assignments() {
   const auto result = parse_text(
       "conditional_assignment.vhd",
@@ -4948,6 +5017,7 @@ int main() {
     test_signed_type_and_expression_nodes();
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
+    test_systemverilog_final_procedures();
     test_vhdl_conditional_assignments();
     test_vhdl_selected_assignments();
     test_vhdl_case_statements();

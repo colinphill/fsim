@@ -371,6 +371,9 @@ struct Process {
   std::vector<Sensitivity> static_sensitivity;
   std::vector<Operation> operations;
   bool initialize{true};
+  // A SystemVerilog final process is excluded from ordinary initialization
+  // and queued exactly once when ordinary simulation terminates.
+  bool final{};
 };
 
 /// Narrow signal/update surface available to an alternate process executor.

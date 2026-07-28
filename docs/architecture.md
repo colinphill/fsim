@@ -367,6 +367,16 @@ also participate defensively, although the supported source form expects
 locally static exact choices. A final `others` is required by the bounded form
 to guarantee that every evaluation schedules exactly one alternative.
 
+SystemVerilog final procedures lower to ordinary resumable SimIR processes
+marked `final` and `initialize = false`. When ordinary scheduling becomes
+quiescent, or a SimIR `Stop` records a design `$finish`, the interpreter queues
+all final processes once in stable process-ID order at the current timestamp.
+Their blocking writes and update phase complete before the run result is
+returned. An external debugger stop does not trigger finals, and a design
+stop remains distinguishable after finals complete. The frontend rejects
+timing controls, waits, `$finish`, and NBAs in a final body, preventing a final
+procedure from suspending or scheduling future time.
+
 SystemVerilog logical negation reduces a packed operand using four-state truth
 semantics: any known `1` makes `!` false, an otherwise unknown-containing
 operand produces `X`, and an all-zero operand produces true. Unsigned

@@ -444,7 +444,7 @@ void test_systemverilog_signedness_casts(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 61> signal_paths{
+  const std::array<std::string, 62> signal_paths{
       "signedness_cast_app.signed_less",
       "signedness_cast_app.unsigned_less",
       "signedness_cast_app.signed_shift",
@@ -491,6 +491,7 @@ void test_systemverilog_signedness_casts(
       "signedness_cast_app.postfix_decrement",
       "signedness_cast_app.compound_selected",
       "signedness_cast_app.compound_unknown",
+      "signedness_cast_app.final_value",
       "signedness_cast_app.onehot_zero",
       "signedness_cast_app.onehot_single",
       "signedness_cast_app.onehot_multiple",
@@ -569,6 +570,7 @@ void test_systemverilog_signedness_casts(
           "11111111",
           "10100110",
           "XXXXXXXX",
+          "00010101",
           "0",
           "1",
           "0",
@@ -585,7 +587,7 @@ void test_systemverilog_signedness_casts(
           "00000000000000000000000000000010",
           "00000000000000000000000000000010"}));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 1);
+  assert(compiled.compiled_processes == 2);
   assert(compiled.compiled_modules == 1);
 #else
   assert(compiled.compiled_processes == 0);
@@ -929,6 +931,7 @@ module signedness_cast_app #(
   logic [7:0] postfix_decrement;
   logic [7:0] compound_selected;
   logic [7:0] compound_unknown;
+  logic [7:0] final_value;
   logic onehot_zero;
   logic onehot_single;
   logic onehot_multiple;
@@ -1029,6 +1032,9 @@ module signedness_cast_app #(
     countbits_unknown = $countbits(4'b10xz, 1'bx, 1'bz);
     countbits_zero_x = $countbits(4'b10xz, 1'b0, 1'bx);
     $finish;
+  end
+  final begin
+    final_value = 8'h15;
   end
 endmodule
 )";

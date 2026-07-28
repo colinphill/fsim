@@ -337,6 +337,7 @@ enum class ProcessKind {
   SystemVerilogAlwaysComb,
   SystemVerilogAlwaysLatch,
   Initial,
+  Final,
 };
 
 struct Process {

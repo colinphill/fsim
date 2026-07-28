@@ -875,6 +875,7 @@ struct Interpreter::Impl {
   bool update_commit_scheduled{};
   bool started{};
   bool stopped_by_design{};
+  bool finals_ran{};
 
   [[nodiscard]] Signal &get_signal(SignalId id) {
     if (id >= signals.size()) {
@@ -2302,6 +2303,10 @@ ProcessId Interpreter::add_process(Process process) {
   if (process.id != id) {
     throw std::invalid_argument("SimIR process IDs must be dense and ordered");
   }
+  if (process.final && process.initialize) {
+    throw std::invalid_argument(
+        "a SimIR final process cannot initialize at time zero");
+  }
   for (const auto signal : process.static_sensitivity) {
     if (signal.signal >= impl_->signals.size()) {
       throw std::invalid_argument("process sensitivity references invalid signal");
@@ -2356,7 +2361,8 @@ void Interpreter::start() {
   }
   impl_->started = true;
   for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-    if (impl_->processes[id].program.initialize) {
+    if (impl_->processes[id].program.initialize
+        && !impl_->processes[id].program.final) {
       impl_->queue_at(id, impl_->scheduler.now());
     }
   }
@@ -2364,7 +2370,43 @@ void Interpreter::start() {
 
 RunResult Interpreter::run(std::optional<SimulationTick> until) {
   start();
-  return impl_->scheduler.run(until);
+  auto ordinary = impl_->scheduler.run(until);
+  const bool design_stop =
+      ordinary.status == RunStatus::stopped
+      && impl_->stopped_by_design;
+  if (impl_->finals_ran
+      || (ordinary.status != RunStatus::completed
+          && !design_stop)) {
+    return ordinary;
+  }
+
+  impl_->finals_ran = true;
+  if (design_stop) {
+    impl_->scheduler.clear_stop();
+  }
+  for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+    if (impl_->processes[id].program.final) {
+      impl_->queue_at(id, impl_->scheduler.now());
+    }
+  }
+  if (!impl_->scheduler.has_pending()) {
+    if (design_stop) {
+      impl_->scheduler.request_stop();
+    }
+    return ordinary;
+  }
+
+  const auto final_result = impl_->scheduler.run();
+  ordinary.time = final_result.time;
+  ordinary.delta = final_result.delta;
+  ordinary.callbacks_executed += final_result.callbacks_executed;
+  if (design_stop) {
+    ordinary.status = RunStatus::stopped;
+    impl_->scheduler.request_stop();
+  } else {
+    ordinary.status = final_result.status;
+  }
+  return ordinary;
 }
 
 void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value) {

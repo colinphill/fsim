@@ -1206,6 +1206,89 @@ void test_simir_design_stop_identity() {
       "external stop must not masquerade as language-level completion");
 }
 
+void test_simir_final_process_lifecycle() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter natural;
+  const auto value = natural.add_signal(
+      {"top.value", PackedLogic4::from_msb_string("00000000")});
+  Process initial;
+  initial.id = 0;
+  initial.name = "initial";
+  initial.register_count = 1;
+  initial.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("00000001")},
+      WriteUpdate{value, 0},
+      Halt{}};
+  (void)natural.add_process(std::move(initial));
+
+  Process final;
+  final.id = 1;
+  final.name = "final";
+  final.register_count = 3;
+  final.initialize = false;
+  final.final = true;
+  final.operations = {
+      ReadSignal{0, value},
+      LoadConstant{1, PackedLogic4::from_msb_string("00000001")},
+      Binary{BinaryOperator::add_unsigned, 2, 0, 1},
+      WriteBlocking{value, 2},
+      Halt{}};
+  (void)natural.add_process(std::move(final));
+
+  const auto natural_result = natural.run();
+  require(
+      natural_result.status == RunStatus::completed
+          && natural.signal_value(value).to_msb_string() == "00000010",
+      "final process must run once after ordinary updates quiesce");
+  require(
+      natural.run().status == RunStatus::completed
+          && natural.signal_value(value).to_msb_string() == "00000010",
+      "a final process must not run again on a later run call");
+
+  Interpreter design_stop;
+  const auto stopped_value = design_stop.add_signal(
+      {"top.stopped_value", PackedLogic4::from_msb_string("0")});
+  Process stopper;
+  stopper.id = 0;
+  stopper.name = "stopper";
+  stopper.operations = {Stop{}};
+  (void)design_stop.add_process(std::move(stopper));
+  Process stop_final;
+  stop_final.id = 1;
+  stop_final.name = "stop_final";
+  stop_final.register_count = 1;
+  stop_final.initialize = false;
+  stop_final.final = true;
+  stop_final.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteBlocking{stopped_value, 0},
+      Halt{}};
+  (void)design_stop.add_process(std::move(stop_final));
+  const auto stopped_result = design_stop.run();
+  require(
+      stopped_result.status == RunStatus::stopped
+          && design_stop.stopped_by_design()
+          && design_stop.signal_value(stopped_value).to_msb_string() == "1",
+      "design Stop must execute finals while preserving stopped identity");
+
+  Interpreter invalid;
+  Process invalid_final;
+  invalid_final.id = 0;
+  invalid_final.name = "invalid_final";
+  invalid_final.final = true;
+  bool rejected = false;
+  try {
+    (void)invalid.add_process(std::move(invalid_final));
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  require(
+      rejected,
+      "a final SimIR process must be excluded from time-zero initialization");
+}
+
 void test_simir_alternate_executor_context_and_boundaries() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2717,6 +2800,7 @@ int main() {
     test_simir_insert_and_partial_writes();
     test_simir_force_release();
     test_simir_design_stop_identity();
+    test_simir_final_process_lifecycle();
     test_simir_alternate_executor_context_and_boundaries();
     test_simir_alternate_executor_dynamic_wait();
     test_simir_timed_dynamic_wait_rearm();
