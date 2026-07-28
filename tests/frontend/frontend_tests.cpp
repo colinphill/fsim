@@ -1702,6 +1702,27 @@ endmodule
           && !top->instances[1].parameter_overrides[0].name,
       "named and positional parameter overrides are represented");
 
+  const auto verilog = parse_text(
+      "clog2.v",
+      R"(
+module clog2 #(
+  parameter WIDTH = 9
+) ();
+  localparam CLOG_WIDTH = $clog2(WIDTH);
+endmodule
+)",
+      Language::Verilog2005);
+  require(verilog.ok(), "Verilog-2005 $clog2 call must parse");
+  const auto* clog2 =
+      verilog.design.find(UnitKind::VerilogModule, "clog2");
+  require(
+      clog2 != nullptr && clog2->parameters.size() == 2
+          && clog2->parameters[1].default_value.kind
+              == ExpressionKind::Call
+          && clog2->parameters[1].default_value.text == "$clog2"
+          && clog2->parameters[1].default_value.operands.size() == 1,
+      "Verilog-2005 $clog2 parameter-call HIR");
+
   const auto invalid = parse_text(
       "invalid-parameters.sv",
       R"(

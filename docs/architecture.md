@@ -121,9 +121,9 @@ import packages; elaboration detects package cycles, typedef cycles, missing
 types, and ambiguous wildcard names. Only recursively referenced package
 sources enter specialization and native-cache provenance.
 
-The SystemVerilog constant evaluator folds `$clog2` with exactly one
-nonnegative integral argument. Zero and one produce zero; larger values use
-the ceiling of the base-two logarithm without floating-point arithmetic.
+The Verilog-2005/SystemVerilog constant evaluator folds `$clog2` with exactly
+one nonnegative integral argument. Zero and one produce zero; larger values
+use the ceiling of the base-two logarithm without floating-point arithmetic.
 Evaluation occurs after ordered parameter substitution, so a derived
 localparam can size ports, signals, generated declarations, and cache-distinct
 specializations. Arbitrary vector-valued and negative arguments remain

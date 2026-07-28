@@ -383,6 +383,32 @@ endmodule
               {"RESULT", std::string{expected}}}));
     }
 
+    const auto verilog_clog2 = fsim::frontend::parse_text(
+        "verilog-clog2.v",
+        R"(
+module verilog_clog2 #(
+  parameter VALUE = 9
+) ();
+  localparam RESULT = $clog2(VALUE);
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(verilog_clog2.ok());
+    const auto elaborated_verilog_clog2 =
+        fsim::elaboration::elaborate(
+            verilog_clog2.design,
+            "verilog:work.verilog_clog2");
+    assert(elaborated_verilog_clog2.ok());
+    assert(
+        elaborated_verilog_clog2.design
+            ->specializations().size()
+        == 1);
+    assert((
+        elaborated_verilog_clog2.design
+            ->specializations().front().parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"VALUE", "9"}, {"RESULT", "4"}}));
+
     const auto invalid_parameters = fsim::frontend::parse_text(
         "invalid-parameter-elaboration.sv",
         R"(
