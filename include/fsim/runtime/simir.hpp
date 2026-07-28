@@ -336,6 +336,7 @@ struct SourceLocation {
 
 enum class DebugPointKind : std::uint8_t {
   statement,
+  call,
   wait,
   assertion,
   process_entry,
@@ -610,6 +611,7 @@ struct ProcessResumeResult {
 
 enum class ExecutionPointKind : std::uint8_t {
   statement,
+  call,
   wait,
   assertion,
   process_entry,

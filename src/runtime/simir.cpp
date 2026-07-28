@@ -1713,6 +1713,9 @@ void Interpreter::Impl::handle_boundary(
     case DebugPointKind::statement:
       kind = ExecutionPointKind::statement;
       break;
+    case DebugPointKind::call:
+      kind = ExecutionPointKind::call;
+      break;
     case DebugPointKind::wait:
       kind = ExecutionPointKind::wait;
       break;

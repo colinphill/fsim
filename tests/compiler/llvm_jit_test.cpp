@@ -2105,19 +2105,22 @@ void test_initialized_bval_slot(const JitOptimizationLevel optimization,
 }
 
 void test_debug_point_instrumentation() {
-  Process process;
-  process.id = 0;
-  process.name = "debug_point";
-  process.operations = {
-      DebugPoint{
-          DebugPointKind::statement,
-          SourceLocation{"debug_point.sv", 7, 3}},
-      Halt{},
-  };
   const std::array<std::uint32_t, 0> no_signals{};
-  const auto run =
-      [&](const JitOptimizationLevel optimization,
-          const std::string_view symbol) {
+  const auto check_kind =
+      [&](const DebugPointKind kind,
+          const std::string_view kind_name) {
+    Process process;
+    process.id = 0;
+    process.name = "debug_point";
+    process.operations = {
+        DebugPoint{
+            kind,
+            SourceLocation{"debug_point.sv", 7, 3}},
+        Halt{},
+    };
+    const auto run =
+        [&](const JitOptimizationLevel optimization,
+            const std::string& symbol) {
         LlvmJit jit{LlvmJitOptions{optimization, {}}};
         jit.add_process(symbol, process, no_signals);
         const auto handle = jit.lookup(symbol);
@@ -2172,9 +2175,16 @@ void test_debug_point_instrumentation() {
               jit.resume(handle, descriptor, frame, result)
               == JitResumeStatus::completed);
         }
-      };
-  run(JitOptimizationLevel::o0, "debug_point_o0");
-  run(JitOptimizationLevel::o2, "debug_point_o2");
+        };
+    run(
+        JitOptimizationLevel::o0,
+        "debug_point_" + std::string{kind_name} + "_o0");
+    run(
+        JitOptimizationLevel::o2,
+        "debug_point_" + std::string{kind_name} + "_o2");
+  };
+  check_kind(DebugPointKind::statement, "statement");
+  check_kind(DebugPointKind::call, "call");
 }
 
 [[nodiscard]] Process make_cached_process(const std::string_view value) {

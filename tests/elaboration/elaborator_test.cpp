@@ -4229,6 +4229,44 @@ endmodule
     assert(has_diagnostic(
         rejected_duplicate_scoped, "FSIM-ELAB-053"));
 
+    const auto vhdl_call_point = fsim::frontend::parse_text(
+        "vhdl_call_point.vhd",
+        R"(
+entity vhdl_call_point is end entity;
+architecture rtl of vhdl_call_point is
+  signal input_value : std_logic;
+  signal result : boolean;
+begin
+  observe: process
+  begin
+    result <= input_value'stable;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_call_point.ok());
+    const auto elaborated_vhdl_call_point =
+        fsim::elaboration::elaborate(
+            vhdl_call_point.design,
+            "vhdl:work.vhdl_call_point(rtl)");
+    assert(elaborated_vhdl_call_point.ok());
+    assert(std::any_of(
+        elaborated_vhdl_call_point.design->processes().front()
+            .operations.begin(),
+        elaborated_vhdl_call_point.design->processes().front()
+            .operations.end(),
+        [](const fsim::runtime::simir::Operation& operation) {
+          const auto* point =
+              std::get_if<fsim::runtime::simir::DebugPoint>(
+                  &operation);
+          return point != nullptr
+              && point->kind
+                  == fsim::runtime::simir::DebugPointKind::call
+              && point->source.path == "vhdl_call_point.vhd"
+              && point->source.line == 9;
+        }));
+
     const auto vhdl_local_variables = fsim::frontend::parse_text(
         "local_variables.vhd",
         R"(
@@ -5622,6 +5660,26 @@ endmodule
     assert(std::ranges::all_of(
         signedness_cast_outputs,
         [](const auto signal) { return signal.has_value(); }));
+    const auto& signedness_operations =
+        elaborated_signedness_casts.design->processes().front()
+            .operations;
+    assert(
+        std::count_if(
+            signedness_operations.begin(),
+            signedness_operations.end(),
+            [](const fsim::runtime::simir::Operation& operation) {
+              const auto* point =
+                  std::get_if<
+                      fsim::runtime::simir::DebugPoint>(
+                      &operation);
+              return point != nullptr
+                  && point->kind
+                      == fsim::runtime::simir::DebugPointKind::call
+                  && point->source.path == "signedness_casts.sv"
+                  && point->source.line != 0
+                  && point->source.column != 0;
+            })
+        == 23);
     auto signedness_cast_interpreter =
         elaborated_signedness_casts.design
             ->create_interpreter();

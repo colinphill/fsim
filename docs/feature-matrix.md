@@ -254,6 +254,7 @@ assignment compatibility.
 | CM-071 | Tcl-controlled assertion failures produce stable diagnostics, stopped lifecycle notification, CLI rendering, and poisoned-session state | execute | [assertion diagnostic/lifecycle test](../tests/app/tcl_application_test.cpp) | [post-failure poisoned-state test](../tests/app/tcl_application_test.cpp) | [common diagnostic engine and simulation lifecycle](../src/app/tcl.cpp) | [caught Tcl error plus retained diagnostic test](../tests/app/tcl_application_test.cpp) |
 | CM-072 | LLVM native-object cache startup applies best-effort LRU age/count/byte limits, reports removed entry/byte/failure telemetry, and remains usable when maintenance fails | execute | [LLVM pruning integration test](../tests/compiler/llvm_jit_test.cpp) | [unusable cache-root telemetry test](../tests/compiler/llvm_jit_test.cpp) | [adapter prune options and default policy](../src/compiler/llvm_jit.cpp) | [seeded-entry removal and nonfatal failure test](../tests/compiler/llvm_jit_test.cpp) |
 | CM-073 | Native C debug-variable objects use generation-safe handles, process-child enumeration, stable full-path lookup, parent/name/type/width metadata, and canonical retained-value reads; never-entered locals report unavailable identically in interpreter and LLVM modes | execute | [C API hierarchy and read test](../tests/api/api_test.cpp) | [uninitialized and stale-handle tests](../tests/api/api_test.cpp) | [flattened per-design variable-object adapter](../src/api/api.cpp), [append-only JIT frame initialization storage](../include/fsim/compiler/jit_runtime.h) | [C API compiled-process test](../tests/api/api_test.cpp), [interpreter/LLVM O0/O2 inactive-local differential](../tests/app/scoped_local_application_test.cpp), [LLVM frame-bit tests](../tests/compiler/llvm_jit_test.cpp) |
+| CM-074 | Source-bearing executable call safe points for supported SystemVerilog built-ins and VHDL attribute calls, including nested-call order, statement stepping, synchronous hooks, interpreter execution, unconditional O0 lowering, and flag-gated O2 lowering | execute | [SV/VHDL call-point lowering tests](../tests/elaboration/elaborator_test.cpp) | — | [typed SimIR/LLVM execution-point mapping](../src/runtime/simir.cpp), [debugger and C API statement-step classification](../src/app/application.cpp) | [runtime ordering test](../tests/runtime/runtime_tests.cpp), [LLVM O0/O2 instrumentation test](../tests/compiler/llvm_jit_test.cpp), [interpreter/O0/O2 nested-call differential](../tests/app/call_safe_point_application_test.cpp), [C API call-step test](../tests/api/api_test.cpp) |
 
 CM-015 is a bounded compiled-engine slice. `WaitFor`, `WaitOn`,
 `WaitSensitivity`, `WaitForever`, `Yield`, `Stop`, and loops cut by those
@@ -279,8 +280,7 @@ differential evidence, including an identical interpreter/O0 debugger
 transcript and the exact tick-0/tick-1-delta-1/tick-2 positive-edge case with
 two of two processes compiled, plus source-level dynamic and periodic timed
 waits, but do not satisfy CM-016 or complete HDL event-control/debug
-requirements: expression-derived sensitivities, named events, call
-instrumentation, native-C scoped-local enumeration, the full semantic fixture set,
+requirements: expression-derived sensitivities, named events, the full semantic fixture set,
 exhaustive assertion/trace fixtures, O0 application wait coverage, and Windows
 execution evidence remain open. The
 release build must use LLVM 22.1.8; a test compiled against another LLVM

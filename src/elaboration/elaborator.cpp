@@ -4303,6 +4303,10 @@ private:
                     expression.span},
                 expected_width);
         }
+        if (expression.kind == ExpressionKind::Call) {
+            emit_debug_point(
+                DebugPointKind::call, expression.span);
+        }
         if (expression.kind == ExpressionKind::Index
             && expression.operands.size() == 2) {
             const auto source_width =

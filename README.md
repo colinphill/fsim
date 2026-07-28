@@ -418,13 +418,13 @@ statement/process/delta/time stepping, source/time/signal-change breakpoints,
 scope/signal navigation, value inspection, and deposit/force/release. With LLVM
 enabled, `fsim debug` forces O0 compilation for eligible processes and retains
 per-process interpreter fallback; builds without LLVM use the interpreter.
-SimIR retains source-bearing statement, wait, assertion, process-entry, and
-process-suspension points. O0 generated code always exposes those points, while
-O2 tests one size-gated runtime flag so ordinary runs continue through them.
+SimIR retains source-bearing statement, call, wait, assertion, process-entry,
+and process-suspension points. O0 generated code always exposes those points,
+while O2 tests one size-gated runtime flag so ordinary runs continue through
+them.
 Signal breakpoints accept exact-state `==`/`!=` conditions. When a debug VCD is
 configured, `trace add`, `trace remove`, `trace all`, `trace clear`, and
-`trace list` change the live committed-value selection. Call instrumentation
-and native-C local-object lookup remain future work. Bounded packed process
+`trace list` change the live committed-value selection. Bounded packed process
 variables in nested SystemVerilog lexical blocks retain shadowing and
 block-entry initialization semantics and are shown with stable hierarchical
 names by `locals` through interpreter or compiled frames. A design
@@ -481,10 +481,10 @@ crosses the generated ABI; edge-qualified sensitivities require scalar
 signals. Builds without LLVM execute entirely through the reference evaluator.
 The bounded O0 debug path is differentially tested against the interpreter for
 source breakpoints and statement/process/scheduler stepping.
-Value-bearing operations wider than 64 bits, call instrumentation and complete
-local-variable scope/type semantics, complete parameter/generic type and sizing
-rules, reusable code-specialization deduplication, and broader differential
-coverage remain work in progress.
+Value-bearing operations wider than 64 bits, complete local-variable
+scope/type semantics, complete parameter/generic type and sizing rules,
+reusable code-specialization deduplication, and broader differential coverage
+remain work in progress.
 
 The application suite also compares a bounded scheduled-write design exactly
 between the interpreter and O2 hybrid engine. It checks an update commit at

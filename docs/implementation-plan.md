@@ -95,6 +95,9 @@ The following foundation is implemented:
   lowering for update-phase/delayed writes plus dynamic/static sensitivity
   waits, integrated as a hybrid per-process engine for `build`/`run` and a
   forced-O0 hybrid engine for the bounded `debug` path;
+- source-bearing call safe points for executable SystemVerilog built-ins and
+  VHDL attribute calls, including nested-call ordering, interpreter/O0/O2
+  hooks, and shared debugger/native-C statement stepping;
 - dense bounded specialization records and one LLVM module/native cache object
   per specialization's eligible process group, with per-process interpreter
   fallback;
@@ -489,10 +492,10 @@ Completed:
 
 Remaining before the architecture gate passes:
 
-- add call safe points and complete source metadata to the current O0 hybrid
-  debugger; bounded nested/scoped SystemVerilog packed locals and native-C
-  variable objects now have interpreter/LLVM O0/O2 and cache-differential
-  evidence;
+- complete source metadata for remaining executable constructs in the current
+  O0 hybrid debugger; bounded calls, nested/scoped SystemVerilog packed locals,
+  and native-C variable objects now have interpreter/LLVM O0/O2 and
+  cache-differential evidence;
 - run every supported semantic test through interpreter and JIT and compare
   final state, assertions, scheduler observations, and trace events;
 - extend the bounded mixed-language differential to O0 and mixed-language
@@ -656,8 +659,7 @@ Planned implementation sequence:
 4. Complete Windows execution evidence and broader event/list/error tests for
    the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
    timed, delta, and static-wait execution is implemented.
-5. Add call safe points and complete the native C metadata for remaining
-   object kinds.
+5. Complete source metadata and native C metadata for remaining object kinds.
 6. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
    process, severity, source location, and message.
@@ -700,9 +702,9 @@ Remaining before v1 release:
 
 The next development iterations should occur in this order:
 
-1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   call instrumentation, add remaining VHDL generic and SystemVerilog
-   parameter semantics, and broaden the interpreter/JIT differential harness.
+1. **Close the architecture gate:** add remaining VHDL generic and
+   SystemVerilog parameter semantics, complete remaining executable-source
+   metadata, and broaden the interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.
 3. **Expand synthesizable coverage:** packages/parameters/generics, generates,
@@ -737,27 +739,23 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The eighth post-gate batch is implementation-complete:
+The ninth post-gate batch is implementation-complete:
 
-1. native C variable handles use a dedicated object tag and design generation;
-2. each successful build creates a deterministic flattened variable-object
-   index with stable full names;
-3. exact full-path lookup resolves debug-visible variables;
-4. process-child enumeration returns its variables in debug-frame order;
-5. variable metadata reports process parent, leaf/full name, source type, and
-   packed width;
-6. canonical value reads accept variable objects as well as signals;
-7. variables whose lexical declaration has never executed return
-   `FSIM_STATUS_UNAVAILABLE`;
-8. rebuilds invalidate stale process-variable handles and child enumeration;
-9. the append-only plain-C JIT frame records per-register initialization
-   without exposing C++ layouts; and
-10. interpreter, LLVM O0, and LLVM O2 agree on retained active-local values
-    and unavailable never-entered locals.
+1. SimIR distinguishes call safe points from statement/wait/assertion points;
+2. the interpreter preserves call kind, process, instruction, and source;
+3. supported SystemVerilog runtime built-ins emit pre-call points;
+4. supported VHDL attribute calls emit the same common points;
+5. nested calls retain deterministic outer-before-inner point ordering;
+6. LLVM O0 returns unconditionally at call points;
+7. LLVM O2 keeps call points behind the existing size-gated debug flag;
+8. CLI/Tcl debugger statement stepping treats calls as executable stops;
+9. native C statement stepping and synchronous callbacks observe calls; and
+10. interpreter, LLVM O0, and LLVM O2 agree on pre-call state, source
+    locations, resume behavior, and final values.
 
-Focused C API, LLVM adapter, scoped-local application, and diagnostic-catalog
-tests pass. The interval LLVM 22 Debug regression passed all 17 tests in
-132.75 seconds. This batch is ready to commit and push.
+Focused elaboration, runtime, LLVM adapter, C API, and call-safe-point
+application tests pass. The interval LLVM 22 Debug regression passed all 18
+tests in 139.89 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 

@@ -1009,6 +1009,8 @@ fsim_status_t fsim_session_step(
                   point.kind
                       == fsim::runtime::simir::ExecutionPointKind::statement
                   || point.kind
+                      == fsim::runtime::simir::ExecutionPointKind::call
+                  || point.kind
                       == fsim::runtime::simir::ExecutionPointKind::wait
                   || point.kind
                       == fsim::runtime::simir::ExecutionPointKind::assertion;

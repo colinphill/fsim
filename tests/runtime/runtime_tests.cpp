@@ -2775,6 +2775,12 @@ void test_simir_execution_point_ordering() {
                 "execution_points.sv",
                 static_cast<std::uint32_t>(10 + id),
                 3}},
+        DebugPoint{
+            DebugPointKind::call,
+            SourceLocation{
+                "execution_points.sv",
+                static_cast<std::uint32_t>(20 + id),
+                7}},
         LoadConstant{
             0,
             PackedLogic4::from_msb_string(id == 0 ? "0" : "1")},
@@ -2784,8 +2790,10 @@ void test_simir_execution_point_ordering() {
     (void)interpreter.add_process(std::move(process));
   }
   std::vector<ProcessId> points;
+  std::vector<ExecutionPoint> all_points;
   interpreter.set_execution_point_hook(
       [&](Scheduler& scheduler, const ExecutionPoint& point) {
+        all_points.push_back(point);
         if (point.kind == ExecutionPointKind::statement) {
           points.push_back(point.process);
           scheduler.request_stop();
@@ -2813,6 +2821,23 @@ void test_simir_execution_point_ordering() {
           "the later process must resume after the earlier process");
   require(points == std::vector<ProcessId>{0, 1},
           "execution-point process ordering");
+  std::vector<ExecutionPoint> source_points;
+  for (const auto& point : all_points) {
+    if (point.kind == ExecutionPointKind::statement
+        || point.kind == ExecutionPointKind::call) {
+      source_points.push_back(point);
+    }
+  }
+  require(
+      source_points.size() == 4
+          && source_points[0].kind == ExecutionPointKind::statement
+          && source_points[1].kind == ExecutionPointKind::call
+          && source_points[1].source.line == 20
+          && source_points[1].source.column == 7
+          && source_points[2].kind == ExecutionPointKind::statement
+          && source_points[3].kind == ExecutionPointKind::call
+          && source_points[3].source.line == 21,
+      "call execution-point kind and source ordering");
 }
 
 void test_vcd() {

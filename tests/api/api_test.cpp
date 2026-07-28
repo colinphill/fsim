@@ -133,6 +133,7 @@ int main() {
     source << R"(
 module tb;
   logic q;
+  logic call_result;
   initial begin : control
     logic state = 1'b0;
     begin : inner
@@ -140,6 +141,7 @@ module tb;
       q = state;
     end : inner
     q = state;
+    call_result = $isunknown(q);
     #2 begin : timed
       logic later = 1'b1;
       q = later;
@@ -254,7 +256,7 @@ max_deltas = 1000
   assert(
       fsim_session_visit_children(session, root, visit, &children)
       == FSIM_STATUS_OK);
-  assert(children == 2);
+  assert(children == 3);
 
   fsim_object_t process = FSIM_INVALID_OBJECT;
   assert(
@@ -470,6 +472,49 @@ max_deltas = 1000
   assert(
       fsim_session_read_value(
           session, rebuilt_q, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "0");
+
+  // A statement step must stop at the call point after first stopping at the
+  // containing assignment. The result remains unwritten until the following
+  // statement step executes the call and reaches the delay statement.
+  assert(fsim_session_build(session) == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(session, text("q"), &rebuilt_q)
+      == FSIM_STATUS_OK);
+  fsim_object_t call_result = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session, text("call_result"), &call_result)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_step(session, FSIM_STEP_STATEMENT)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_step(session, FSIM_STEP_STATEMENT)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_step(session, FSIM_STEP_STATEMENT)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, call_result, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "X");
+  assert(
+      fsim_session_step(session, FSIM_STEP_STATEMENT)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, call_result, value, sizeof(value), &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "X");
+  assert(
+      fsim_session_step(session, FSIM_STEP_STATEMENT)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, call_result, value, sizeof(value), &required)
       == FSIM_STATUS_OK);
   assert(std::string(value) == "0");
 

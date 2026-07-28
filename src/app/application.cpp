@@ -2869,6 +2869,7 @@ class DebuggerSession final {
   [[nodiscard]] static bool is_statement_point(
       const runtime::simir::ExecutionPointKind kind) noexcept {
     return kind == runtime::simir::ExecutionPointKind::statement
+        || kind == runtime::simir::ExecutionPointKind::call
         || kind == runtime::simir::ExecutionPointKind::wait
         || kind == runtime::simir::ExecutionPointKind::assertion;
   }
