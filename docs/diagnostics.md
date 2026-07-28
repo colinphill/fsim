@@ -458,6 +458,7 @@ therefore excluded.
 | `FSIM-SV-SEM-033` | error | A SystemVerilog `final` procedure contains a nonblocking assignment. |
 | `FSIM-SV-SEM-034` | error | A procedural block closing label has no opening label or does not match it. |
 | `FSIM-SV-SEM-035` | error | A named event conflicts with another event, signal, or port declaration. |
+| `FSIM-SV-SEM-036` | error | A delayed named-event trigger uses immediate `->` rather than nonblocking `->>` syntax. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

@@ -289,7 +289,8 @@ internal event bit and toggle it with an active-phase blocking write. Existing
 any-change sensitivity fanout therefore wakes static or dynamically suspended
 event waiters in the next deterministic delta. SystemVerilog nonblocking
 `->>` uses the same toggle value but publishes it with `WriteUpdate` in the
-common update phase; affected waiters resume in the following delta.
+common update phase; an attached integer delay selects `WriteAfter` and a
+future timestamp. Affected waiters resume in the following delta.
 
 The four queues are the implementation spine for the more detailed
 cross-language lattice in

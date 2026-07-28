@@ -2919,8 +2919,16 @@ private:
             UnaryNot{toggled, current});
         if (statement.assignment_kind
             == AssignmentKind::NonBlocking) {
-            process_.operations.emplace_back(
-                WriteUpdate{found->second, toggled});
+            if (statement.delay) {
+                process_.operations.emplace_back(
+                    WriteAfter{
+                        found->second,
+                        toggled,
+                        statement.delay->magnitude});
+            } else {
+                process_.operations.emplace_back(
+                    WriteUpdate{found->second, toggled});
+            }
         } else {
             process_.operations.emplace_back(
                 WriteBlocking{found->second, toggled});

@@ -120,13 +120,13 @@ void test_named_events(
     assert(
         capture->result.status
         == fsim::runtime::RunStatus::stopped);
-    assert(capture->result.time == 3);
+    assert(capture->result.time == 4);
     assert(capture->event == "0");
     assert(capture->observed == "10");
     assert(capture->event_changes.size() == 2);
     assert(capture->event_changes[0].time == 1);
     assert(capture->event_changes[0].value == "1");
-    assert(capture->event_changes[1].time == 2);
+    assert(capture->event_changes[1].time == 3);
     assert(capture->event_changes[1].value == "0");
     assert(capture->observed_changes.size() == 3);
     assert(capture->observed_changes[0].time == 0);
@@ -136,7 +136,7 @@ void test_named_events(
     assert(
         capture->observed_changes[1].delta
         > capture->event_changes[0].delta);
-    assert(capture->observed_changes[2].time == 2);
+    assert(capture->observed_changes[2].time == 3);
     assert(capture->observed_changes[2].value == "10");
     assert(
         capture->observed_changes[2].delta
@@ -164,8 +164,8 @@ module named_event_test;
   logic [1:0] observed;
   initial begin
     #1 -> fired;
-    #1 ->> fired;
-    #1 $finish;
+    #1 ->> #1 fired;
+    #2 $finish;
   end
   initial begin
     observed = 2'b00;

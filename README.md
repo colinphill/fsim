@@ -77,8 +77,8 @@ The current tree contains:
   integer-delay, any-change, `posedge`, and `negedge` procedural event
   controls;
 - Verilog/SystemVerilog named-event declarations, immediate `->` triggers,
-  SystemVerilog update-phase `->>` triggers, and repeated static/dynamic
-  event-control wakeups;
+  SystemVerilog update-phase or delayed `->>` triggers, and repeated
+  static/dynamic event-control wakeups;
 - deterministic simple-expression sensitivity inference for `always @*`,
   time-zero `always_comb`/`always_latch`, and dynamic `@*`;
 - ordered Verilog/SystemVerilog `case`/`casez`/`casex`/`default` lowering

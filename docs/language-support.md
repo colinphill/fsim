@@ -27,8 +27,8 @@ silently discarded.
 Named-event status update: Verilog-2005/SystemVerilog module-level `event`
 declarations, comma groups, immediate `->` triggers, static `@event`, dynamic
 `@(event)`, and repeated wakeups now execute. SystemVerilog `->>` publishes
-through the common update phase; event arguments, delayed nonblocking
-publication, and general event expressions remain deferred. This update
+through the common update phase and `->> #delay` publishes at a future
+timestamp; event arguments and general event expressions remain deferred. This update
 supersedes the older broad “named events” limitation in the compact table.
 
 The VHDL expression slice also executes one-dimensional packed-object

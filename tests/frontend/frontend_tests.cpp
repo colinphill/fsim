@@ -5325,6 +5325,7 @@ endmodule
 module nonblocking_event;
   event fired;
   initial ->> fired;
+  initial ->> #2 fired;
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -5345,7 +5346,15 @@ endmodule
           && nonblocking.design.units.front()
                  .processes.front().statements.front()
                  .assignment_kind
-              == AssignmentKind::NonBlocking,
+              == AssignmentKind::NonBlocking
+          && !nonblocking.design.units.front()
+                  .processes.front().statements.front().delay
+          && nonblocking.design.units.front().processes.size() == 2
+          && nonblocking.design.units.front()
+                 .processes[1].statements.front().delay
+          && nonblocking.design.units.front()
+                 .processes[1].statements.front().delay->magnitude
+              == 2,
       "nonblocking event trigger HIR");
 
   const auto verilog_nonblocking = parse_text(
@@ -5361,6 +5370,19 @@ endmodule
       has_code(
           verilog_nonblocking, "FSIM-VERILOG-SEM-008"),
       "nonblocking event trigger language diagnostic");
+
+  const auto invalid_immediate_delay = parse_text(
+      "immediate_delay.sv",
+      R"(
+module immediate_delay;
+  event fired;
+  initial -> #1 fired;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      has_code(invalid_immediate_delay, "FSIM-SV-SEM-036"),
+      "delayed immediate event trigger diagnostic");
 
   const auto duplicate = parse_text(
       "duplicate_event.sv",

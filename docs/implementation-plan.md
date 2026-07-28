@@ -320,7 +320,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 20/20 tests pass after the seventeenth post-gate batch, including exact immediate/update-phase named-event ordering across interpreter and LLVM O0/O2 (137.72 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 20/20 tests pass after the eighteenth post-gate batch, including exact delayed named-event timestamps and next-delta wakeups across interpreter and LLVM O0/O2 (141.16 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -645,7 +645,7 @@ Completed groundwork:
 Planned implementation sequence:
 
 1. Complete procedural SV/VHDL testbench data, files, random facilities,
-   expression/wildcard, delayed/general named events, fork/join, remaining waits,
+   expression/wildcard, general event expressions, fork/join, remaining waits,
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
@@ -743,24 +743,22 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The seventeenth post-gate batch is implementation-complete:
+The eighteenth post-gate batch is implementation-complete:
 
-1. the lexer/parser recognizes the two-token SystemVerilog `->>` form;
-2. HIR distinguishes blocking and nonblocking event triggers;
-3. Verilog-2005 receives a targeted language-version diagnostic;
-4. nonblocking triggers retain the same source and target metadata;
-5. target resolution and event-type checking are shared with immediate
-   triggers;
-6. nonblocking toggles are computed from the current event state;
-7. publication lowers to typed `WriteUpdate` rather than active-phase write;
-8. event changes occur in the common update phase;
-9. suspended waiters resume in a later delta and observe both immediate and
-   nonblocking triggers in source order; and
-10. interpreter, LLVM O0, and LLVM O2 agree on event/observer values,
-    timestamps, deltas, final state, and compiled-process counts.
+1. nonblocking named-event triggers accept an optional integer delay;
+2. the existing timescale-aware delay parser supplies normalized metadata;
+3. HIR retains the delayed trigger on the event statement itself;
+4. delayed immediate `->` syntax receives a targeted diagnostic;
+5. target resolution and event-type checks remain shared across trigger forms;
+6. the future event value is computed from current event state;
+7. delayed publication lowers to typed `WriteAfter`;
+8. the event changes at the exact requested future timestamp;
+9. waiters resume in the following delta before later `$finish`; and
+10. interpreter, LLVM O0, and LLVM O2 agree on operation kind, delay,
+    event/observer timestamps, deltas, values, and compiled-process counts.
 
 Focused frontend, elaboration, and named-event application tests pass. The
-interval LLVM 22 Debug regression passed all 20 tests in 137.72 seconds. This
+interval LLVM 22 Debug regression passed all 20 tests in 141.16 seconds. This
 batch is ready to commit and push.
 
 ## v1 release condition

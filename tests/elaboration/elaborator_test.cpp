@@ -8367,7 +8367,8 @@ module named_event;
   initial begin
     #1 -> fired;
     #1 ->> fired;
-    #1 $finish;
+    #1 ->> #2 fired;
+    #3 $finish;
   end
   initial begin
     @(fired);
@@ -8399,6 +8400,17 @@ endmodule
             [](const fsim::runtime::simir::Operation& operation) {
               return std::holds_alternative<
                   fsim::runtime::simir::WriteBlocking>(operation);
+            })
+        == 1);
+    assert(
+        std::count_if(
+            trigger_process.operations.begin(),
+            trigger_process.operations.end(),
+            [](const fsim::runtime::simir::Operation& operation) {
+              const auto* delayed =
+                  std::get_if<fsim::runtime::simir::WriteAfter>(
+                      &operation);
+              return delayed != nullptr && delayed->delay == 2;
             })
         == 1);
     assert(

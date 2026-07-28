@@ -3366,6 +3366,18 @@ class VerilogParser final : private detail::ParserBase {
               "SystemVerilog");
         }
       }
+      if (match(TokenKind::Hash)) {
+        const auto delay_start = previous();
+        statement.delay = parse_verilog_delay(delay_start);
+        if (statement.assignment_kind
+            != AssignmentKind::NonBlocking) {
+          error(
+              delay_start,
+              "FSIM-SV-SEM-036",
+              "a delayed named-event trigger requires nonblocking "
+              "'->>' syntax");
+        }
+      }
       const auto event = expect_identifier("named event after '->'");
       statement.target = Expression{
           ExpressionKind::Identifier,
