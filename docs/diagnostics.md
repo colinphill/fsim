@@ -487,7 +487,7 @@ therefore excluded.
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
-| `FSIM-ELAB-SVSTRUCT-002` | error | A packed-struct member read/write has no executable normalized layout. |
+| `FSIM-ELAB-SVSTRUCT-002` | error | A packed-aggregate member read/write has no executable normalized layout. |
 | `FSIM-ELAB-SVUNION-001` | error | Packed-union members do not specialize to one common nonzero supported width. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |

@@ -415,14 +415,19 @@ module systemverilog_package_user #(
     packet_t local_packet;
     local_packet.payload = INITIAL;
     local_packet.valid = 1'b1;
+    local_packet.payload[1:0] = 2'b10;
     packet = local_packet;
     overlay.payload = INITIAL;
+    overlay.mirror[3:2] = packet.payload[3:2];
   end
   packet_passthrough u_passthrough(
     .packet(packet),
     .payload(struct_payload)
   );
-  assign observed = overlay.mirror;
+  assign observed = {
+    overlay.mirror[3:1],
+    packet.payload[0]
+  };
 endmodule
 
 module packet_passthrough(
@@ -605,6 +610,9 @@ import invalid_enum_values::*;
 import invalid_struct_layout::invalid_packet_t;
 import invalid_union_layout::*;
 module invalid_systemverilog_package_user;
+  typedef struct packed {
+    logic [3:0] field;
+  } valid_packet_t;
   logic value;
   missing_t missing_value;
   shared_t ambiguous_value;
@@ -612,6 +620,8 @@ module invalid_systemverilog_package_user;
   typedef cycle_a cycle_b;
   cycle_a cyclic_value;
   invalid_packet_t invalid_packet;
+  valid_packet_t valid_packet;
+  initial valid_packet.field[4] = 1'b0;
   assign value = first_values::second_values::VALUE;
   assign value = invalid_packet.payload;
 endmodule
@@ -637,7 +647,8 @@ endmodule
              "FSIM-ELAB-SVENUM-002",
              "FSIM-ELAB-SVSTRUCT-001",
              "FSIM-ELAB-SVSTRUCT-002",
-             "FSIM-ELAB-SVUNION-001"}) {
+             "FSIM-ELAB-SVUNION-001",
+             "FSIM-ELAB-068"}) {
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));
     }

@@ -115,8 +115,8 @@ The following foundation is implemented:
   case-sensitive visibility, direct scoped constants/types, parameterized
   alias ranges, packed enums with explicit/implicit enumerators and legality
   checks, non-nested parameterized packed structs and equal-width packed
-  unions with executable member reads/writes, and precise source/cache
-  provenance;
+  unions with executable member reads/writes and one-level constant member
+  bit/part-selects, and precise source/cache provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -410,7 +410,8 @@ Early groundwork:
 - SV modules, common declarations, simple hierarchy, basic procedural and
   continuous statements, bounded integral parameter specialization and
   bounded integral packages/imports/packed typedef aliases, enums,
-  non-nested packed structs, and equal-width packed unions,
+  non-nested packed structs, equal-width packed unions, and constant
+  aggregate-member bit/part-selects,
   executable explicit/implicit conditional, inline/module-genvar iterative,
   selection, and direct/named static generate bodies, and bounded
   `` `timescale`` handling;

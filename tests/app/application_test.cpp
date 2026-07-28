@@ -5136,6 +5136,9 @@ module systemverilog_package_user(
     packet.payload = ACTIVE;
     packet.valid = 1'b1;
     overlay.payload = ACTIVE;
+    packet.payload[0] = 1'b0;
+    overlay.mirror[3:1] = packet.payload[3:1];
+    overlay.payload[0] = packet.payload[0];
   end
   assign observed = overlay.mirror;
 endmodule

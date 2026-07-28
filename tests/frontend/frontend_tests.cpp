@@ -1599,6 +1599,8 @@ module package_user #(
     packet.payload = local_value;
     packet.valid = 1'b1;
     overlay.payload = local_value;
+    packet.payload[WIDTH-2:0] = local_value[WIDTH-2:0];
+    overlay.mirror[WIDTH-1] = local_value[WIDTH-1];
   end
   assign observed = staged;
 endmodule
@@ -1708,6 +1710,23 @@ endmodule
                  .value.text
               == "staged",
       "imported/scoped aliases survive port, signal, and local HIR parsing");
+  const auto& aggregate_statements =
+      parsed.design.units[2].processes.front().statements;
+  require(
+      aggregate_statements.size() == 6
+          && aggregate_statements[4].target.kind
+              == ExpressionKind::Slice
+          && aggregate_statements[4].target.operands.front().text
+              == "packet.payload"
+          && aggregate_statements[4].value.kind
+              == ExpressionKind::Slice
+          && aggregate_statements[5].target.kind
+              == ExpressionKind::Index
+          && aggregate_statements[5].target.operands.front().text
+              == "overlay.mirror"
+          && aggregate_statements[5].value.kind
+              == ExpressionKind::Index,
+      "packed aggregate members retain chained bit/part selects");
 
   const auto invalid = parse_text(
       "invalid_packages.sv",

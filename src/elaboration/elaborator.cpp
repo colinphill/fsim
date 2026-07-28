@@ -2914,8 +2914,7 @@ private:
         }
 
         auto target_name = base->text;
-        if (statement.target.kind == ExpressionKind::Identifier
-            && !locals_.contains(target_name)
+        if (!locals_.contains(target_name)
             && !signals_.contains(target_name)) {
             if (const auto selected =
                     packed_member_reference(target_name)) {
@@ -2927,7 +2926,7 @@ private:
                         > std::numeric_limits<std::uint32_t>::max()) {
                     report(
                         "FSIM-ELAB-SVSTRUCT-002",
-                        "packed struct member '" + target_name
+                        "packed aggregate member '" + target_name
                             + "' has no executable layout",
                         statement.target.span);
                     return;
@@ -2952,16 +2951,22 @@ private:
             local != locals_.end()
                 ? register_width(local->second)
                 : design_.signal_info_[signal->second].width;
+        const auto selection_source_width =
+            selected_width.value_or(whole_width);
 
         if (statement.target.kind == ExpressionKind::Index) {
             const auto index =
                 constant_index(statement.target.operands[1]);
             const auto offset =
                 index
-                    ? select_offset(*base, *index, whole_width)
+                    ? select_offset(
+                          *base, *index, selection_source_width)
                     : std::nullopt;
+            const auto base_offset =
+                static_cast<std::uint64_t>(
+                    selected_offset.value_or(0));
             if (!index || !offset
-                || *offset
+                || base_offset + *offset
                     > std::numeric_limits<std::uint32_t>::max()) {
                 report(
                     "FSIM-ELAB-068",
@@ -2971,7 +2976,7 @@ private:
                 return;
             }
             selected_offset =
-                static_cast<std::uint32_t>(*offset);
+                static_cast<std::uint32_t>(base_offset + *offset);
             selected_width = 1;
         } else if (statement.target.kind == ExpressionKind::Slice) {
             const auto left =
@@ -2986,12 +2991,18 @@ private:
                     statement.target.span);
                 return;
             }
-            const auto range = expression_range(*base, whole_width);
+            const auto range =
+                expression_range(*base, selection_source_width);
             const auto offset =
-                select_offset(*base, *right, whole_width);
+                select_offset(
+                    *base, *right, selection_source_width);
             const auto left_offset =
-                select_offset(*base, *left, whole_width);
+                select_offset(
+                    *base, *left, selection_source_width);
             const auto width = index_distance(*left, *right) + 1;
+            const auto base_offset =
+                static_cast<std::uint64_t>(
+                    selected_offset.value_or(0));
             const bool selected_descending = *left >= *right;
             const bool direction_matches =
                 *left == *right
@@ -2999,7 +3010,7 @@ private:
                     && selected_descending
                         == (range->left >= range->right));
             if (!offset || !left_offset || !direction_matches
-                || *offset
+                || base_offset + *offset
                     > std::numeric_limits<std::uint32_t>::max()
                 || width
                     > std::numeric_limits<std::uint32_t>::max()) {
@@ -3014,7 +3025,7 @@ private:
                 return;
             }
             selected_offset =
-                static_cast<std::uint32_t>(*offset);
+                static_cast<std::uint32_t>(base_offset + *offset);
             selected_width = static_cast<std::size_t>(width);
         }
 
@@ -3342,7 +3353,7 @@ private:
                         > std::numeric_limits<std::uint32_t>::max()) {
                     report(
                         "FSIM-ELAB-SVSTRUCT-002",
-                        "packed struct member '" + expression.text
+                        "packed aggregate member '" + expression.text
                             + "' has no executable layout",
                         expression.span);
                     return std::nullopt;
