@@ -93,6 +93,9 @@ The following foundation is implemented:
   static contents in explicit SystemVerilog generate regions, sharing
   generated-body scoping, interpreter/JIT execution, VCD visibility, and
   native-cache identity;
+- declaration-ordered bounded generated VHDL constants and SystemVerilog
+  parameters/localparams, including parent-specialization, prior-constant,
+  and loop-index dependencies folded before SimIR;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -217,7 +220,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 457 unique current production diagnostic codes.
+- a stable catalog covering 463 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -236,6 +239,7 @@ Current Linux validation:
 | Selection instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for labeled VHDL/SV multi-choice/default alternatives, mixed selected paths, interpreter/JIT equivalence, and cold/warm native cache |
 | Executable generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for selected and per-iteration local signals, concurrent/process behavior, scoped debug/VCD names, interpreter/JIT equivalence, and specialization-level native cache |
 | Static/implicit generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for unguarded VHDL blocks, all three bounded implicit SV generate forms, direct explicit-generate contents, and named static SV blocks with exact conditional/static interpreter/JIT/VCD/cache behavior |
+| Generated constants/parameters | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for declaration-order, parent-scope, and loop-index folding, targeted evaluation/type failures, and exact interpreter/JIT/VCD/cache results |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -362,7 +366,8 @@ Remaining before the architecture gate passes:
   explicit VHDL/SystemVerilog bindings. Conditional, bounded iterative, and
   bounded selection generate plus local signals, assignments, processes, and
   instances are implemented. Unguarded VHDL blocks, all three bounded implicit
-  SV generate forms, and direct/named static SV generate contents also execute;
+  SV generate forms, direct/named static SV generate contents, and bounded
+  generated constants/parameters also execute;
   guarded VHDL blocks, broader SV loop syntax, VHDL range choices, and
   additional generated declarative/module items remain.
 

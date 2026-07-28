@@ -62,10 +62,16 @@ that content into the owning unit while qualifying only locally declared names
 with the generated scope. Parent references remain unchanged, process-local
 variables shadow generated signals correctly, and unselected body content
 never receives a signal or process ID.
+Generated bodies may also declare bounded scalar/integral constants. Each
+body extends its parent's constant environment in declaration order before
+signal types, behavior, child actuals, and nested generate controls are
+substituted. Constants therefore consume no runtime storage, while a loop body
+reevaluates index-dependent declarations independently for every iteration.
 An unguarded VHDL block or named SystemVerilog `begin : label` static region
 contributes its label as a stable hierarchy component. Direct items inside an
-explicit SystemVerilog `generate` region use an empty static scope, so they
-retain module-scope names while sharing the same body-expansion path.
+explicit SystemVerilog `generate` region use one empty static parent scope, so
+they retain module-scope names while their nested generated regions inherit
+the parent's constant and object environments.
 Same-language children resolve within the parsed units. A manifest
 binding may override an instance with a language-qualified VHDL or SV target;
 the builder then connects named or positional whole-signal actuals by aliasing

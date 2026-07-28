@@ -510,7 +510,8 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   void parse_signal_declaration(
-      std::vector<SignalDeclaration>& signals) {
+      std::vector<SignalDeclaration>& signals,
+      const std::vector<ParameterDeclaration>* constants = nullptr) {
     const auto start = previous();
     std::vector<Token> names;
     names.push_back(expect_identifier("signal name"));
@@ -539,7 +540,21 @@ class VhdlParser final : private detail::ParserBase {
           [&](const SignalDeclaration& signal) {
             return signal.name == canonical;
           });
-      if (duplicate != signals.end()) {
+      const bool constant_conflict =
+          constants != nullptr
+          && std::any_of(
+              constants->begin(),
+              constants->end(),
+              [&](const ParameterDeclaration& constant) {
+                return constant.name == canonical;
+              });
+      if (constant_conflict) {
+        error(
+            name,
+            "FSIM-VHDL-SEM-019",
+            "generated object '" + canonical
+                + "' is declared as both a signal and a constant");
+      } else if (duplicate != signals.end()) {
         error(
             name,
             "FSIM-VHDL-SEM-003",
@@ -850,8 +865,75 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   void parse_vhdl_generate_declarations(GenerateBody& body) {
-    while (match_keyword("signal", true)) {
-      parse_signal_declaration(body.signals);
+    for (;;) {
+      if (match_keyword("signal", true)) {
+        parse_signal_declaration(
+            body.signals, &body.constants);
+        continue;
+      }
+      if (match_keyword("constant", true)) {
+        parse_vhdl_generate_constant(
+            body, previous());
+        continue;
+      }
+      break;
+    }
+  }
+
+  void parse_vhdl_generate_constant(
+      GenerateBody& body, const Token& start) {
+    std::vector<Token> names;
+    names.push_back(expect_identifier("constant name"));
+    while (match(TokenKind::Comma)) {
+      names.push_back(expect_identifier("constant name"));
+    }
+    expect(
+        TokenKind::Colon,
+        "':' after constant names",
+        "FSIM-VHDL-PARSE-083");
+    const auto type = parse_vhdl_type(true);
+    Expression value;
+    if (match(TokenKind::ColonEqual)) {
+      value = parse_expression();
+    } else {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-084",
+          "a generated constant requires a default expression");
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after constant declaration",
+        "FSIM-VHDL-PARSE-085");
+    for (const auto& name : names) {
+      const auto canonical = vhdl_name(name.text);
+      const bool duplicate =
+          std::any_of(
+              body.constants.begin(),
+              body.constants.end(),
+              [&](const ParameterDeclaration& constant) {
+                return constant.name == canonical;
+              })
+          || std::any_of(
+              body.signals.begin(),
+              body.signals.end(),
+              [&](const SignalDeclaration& signal) {
+                return signal.name == canonical;
+              });
+      if (duplicate) {
+        error(
+            name,
+            "FSIM-VHDL-SEM-019",
+            "duplicate or conflicting generated constant declaration '"
+                + canonical + "'");
+        continue;
+      }
+      body.constants.push_back(ParameterDeclaration{
+          canonical,
+          type,
+          value,
+          true,
+          span_from(start, previous())});
     }
   }
 

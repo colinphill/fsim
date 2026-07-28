@@ -271,6 +271,10 @@ enum class GenerateKind {
 struct GenerateRegion;
 
 struct GenerateBody {
+  // Locally static VHDL constants and SystemVerilog parameters/localparams.
+  // These are evaluated in declaration order during generate expansion and
+  // are not externally overridable specialization parameters.
+  std::vector<ParameterDeclaration> constants;
   std::vector<SignalDeclaration> signals;
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;

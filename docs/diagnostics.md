@@ -146,6 +146,9 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-080` | error | Expected `block` after the block-statement `end`. |
 | `FSIM-VHDL-PARSE-081` | error | A block-statement end label does not match its opening label. |
 | `FSIM-VHDL-PARSE-082` | error | Expected `;` after a VHDL block statement. |
+| `FSIM-VHDL-PARSE-083` | error | Expected `:` after generated constant names. |
+| `FSIM-VHDL-PARSE-084` | error | A generated constant lacks its required `:=` default expression. |
+| `FSIM-VHDL-PARSE-085` | error | Expected `;` after a generated constant declaration. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -162,6 +165,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-016` | error | A positional generic actual follows a named actual. |
 | `FSIM-VHDL-SEM-017` | error | A case generate contains more than one `others` alternative. |
 | `FSIM-VHDL-SEM-018` | error | An `others` case-generate alternative is not last. |
+| `FSIM-VHDL-SEM-019` | error | A generated constant is duplicated or conflicts with a generated signal. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -179,7 +183,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |
-| `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded local-signal, assignment, process, instance, and nested-generate subset. |
+| `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
 | `FSIM-VHDL-UNSUPPORTED-021` | error | Guarded VHDL block statements are not executable yet. |
 
 ## Verilog and SystemVerilog frontend
@@ -334,10 +338,10 @@ therefore excluded.
 | `FSIM-SV-SEM-014` | error | A `case` statement contains more than one `default` item. |
 | `FSIM-SV-SEM-015` | error | An undeclared implicit net is forbidden by `` `default_nettype none``. |
 | `FSIM-SV-SEM-016` | error | An untyped ANSI or non-ANSI port is forbidden by `` `default_nettype none``. |
-| `FSIM-SV-SEM-017` | error | A parameter name is declared more than once in a module. |
+| `FSIM-SV-SEM-017` | error | A parameter name is declared more than once in its module or generate scope. |
 | `FSIM-SV-SEM-018` | error | A named parameter override is repeated on one instance. |
 | `FSIM-SV-SEM-019` | error | Named and positional parameter overrides are mixed on one instance. |
-| `FSIM-SV-SEM-020` | error | A parameter conflicts with a port or signal declaration in the same module namespace. |
+| `FSIM-SV-SEM-020` | error | A parameter conflicts with a port or signal declaration in the same module or generate namespace. |
 | `FSIM-SV-SEM-021` | error | A generate case contains more than one `default` item. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
@@ -357,7 +361,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
 | `FSIM-SV-UNSUPPORTED-020` | error | A parameter data type is outside the supported integral subset. |
-| `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded local-signal, continuous assignment, process, instance, and nested-generate subset. |
+| `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded integral-parameter, local-signal, continuous assignment, process, instance, and nested-generate subset. |
 | `FSIM-SV-UNSUPPORTED-022` | error | A generated local declaration incorrectly uses a module-port direction. |
 
 ## Elaboration and SimIR lowering
@@ -420,6 +424,8 @@ therefore excluded.
 | `FSIM-ELAB-GEN-008` | error | A selection-generate selector cannot be evaluated for its specialization. |
 | `FSIM-ELAB-GEN-009` | error | A selection-generate choice cannot be evaluated. |
 | `FSIM-ELAB-GEN-010` | error | Selection-generate alternatives overlap or contain duplicate defaults. |
+| `FSIM-ELAB-GEN-011` | error | A generated constant or parameter cannot be evaluated in its declaration-order environment. |
+| `FSIM-ELAB-GEN-012` | error | A generated constant/parameter violates a bounded scalar subtype or exceeds the 64-bit integral width. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

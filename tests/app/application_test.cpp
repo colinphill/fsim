@@ -885,8 +885,10 @@ module generated_behavior_sv #(parameter ENABLED = 1) (
 );
   generate
     if (ENABLED) begin : selected
+      localparam int BASE_VALUE = 4;
+      localparam int LOCAL_VALUE = BASE_VALUE + 1;
       logic [3:0] generated_value;
-      assign generated_value = 4'd5;
+      assign generated_value = LOCAL_VALUE;
       always_comb observed = generated_value + 1;
     end else begin : fallback
       assign observed = 4'd1;
@@ -912,9 +914,11 @@ end entity;
 architecture rtl of generated_behavior_vhdl is
 begin
   chosen: if enabled generate
+    constant base_value : natural := 5;
+    constant local_value : natural := base_value + 1;
     signal generated_value : unsigned(3 downto 0);
   begin
-    generated_value <= 6;
+    generated_value <= local_value;
     worker: process(generated_value)
     begin
       observed <= generated_value + 1;
@@ -934,11 +938,13 @@ module generated_static_behavior_sv (
   output logic [3:0] observed
 );
   generate
+    localparam int DIRECT_BASE = 1;
     logic [3:0] direct_value;
-    assign direct_value = 4'd2;
+    assign direct_value = DIRECT_BASE + 1;
     begin : named_scope
+      localparam int NESTED_OFFSET = DIRECT_BASE;
       logic [3:0] nested_value;
-      assign nested_value = direct_value + 1;
+      assign nested_value = direct_value + NESTED_OFFSET;
       always_comb observed = nested_value + 1;
     end
   endgenerate
@@ -956,8 +962,10 @@ module generated_implicit_behavior_sv #(
   output logic [3:0] observed
 );
   if (ENABLED) begin : implicit_scope
+    localparam int BASE_VALUE = 5;
+    parameter int LOCAL_VALUE = BASE_VALUE + 1;
     logic [3:0] generated_value;
-    assign generated_value = 4'd6;
+    assign generated_value = LOCAL_VALUE;
     always_comb observed = generated_value + 1;
   end
 endmodule
@@ -977,9 +985,11 @@ end entity;
 architecture rtl of generated_block_behavior_vhdl is
 begin
   static_scope: block is
+    constant base_value : natural := 6;
+    constant local_value : natural := base_value + 1;
     signal generated_value : unsigned(3 downto 0);
   begin
-    generated_value <= 7;
+    generated_value <= local_value;
     worker: process(generated_value)
     begin
       observed <= generated_value + 1;

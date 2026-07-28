@@ -149,6 +149,9 @@ Selected generated bodies can execute local packed signals, concurrent
 assignments, and processes. Their local names are scope-qualified for
 debug/VCD visibility, including independent `label[index]` objects for each
 realized loop iteration.
+Bounded scalar/integral VHDL constants and SystemVerilog
+parameters/localparams in generated bodies are evaluated in declaration order
+after specialization and loop-index substitution, then folded before SimIR.
 Unguarded labeled VHDL block statements always elaborate their body into the
 declared block scope. SystemVerilog conditional/iterative/selection generates
 may use their standard implicit module-item forms, while direct declarations and

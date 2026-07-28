@@ -860,8 +860,9 @@ endmodule
 module generated_sv_loop_behavior #(parameter COUNT = 3);
   generate
     for (genvar i = 0; i < COUNT; i = i + 1) begin : lane
+      localparam int LOCAL_VALUE = i + 1;
       logic [3:0] generated_value;
-      initial generated_value = i + 1;
+      initial generated_value = LOCAL_VALUE;
     end
   endgenerate
 endmodule
@@ -872,8 +873,10 @@ module generated_sv_implicit_behavior #(
   output logic [3:0] observed
 );
   if (ENABLED) begin : implicit_scope
+    localparam int BASE_VALUE = 5;
+    parameter int GENERATED_VALUE = BASE_VALUE + 1;
     logic [3:0] generated_value;
-    assign generated_value = 4'd6;
+    assign generated_value = GENERATED_VALUE;
     always_comb observed = generated_value + 1;
   end
 endmodule
@@ -882,12 +885,30 @@ module generated_sv_direct_behavior (
   output logic [3:0] observed
 );
   generate
+    localparam int DIRECT_BASE = 1;
     logic [3:0] direct_value;
-    assign direct_value = 4'd2;
+    assign direct_value = DIRECT_BASE + 1;
     begin : named_scope
+      localparam int NESTED_OFFSET = DIRECT_BASE;
       logic [3:0] nested_value;
-      assign nested_value = direct_value + 1;
+      assign nested_value = direct_value + NESTED_OFFSET;
       always_comb observed = nested_value + 1;
+    end
+  endgenerate
+endmodule
+
+module generated_sv_bad_constant;
+  generate
+    if (1) begin : selected
+      localparam int BAD_VALUE = 1 / 0;
+    end
+  endgenerate
+endmodule
+
+module generated_sv_wide_constant;
+  generate
+    if (1) begin : selected
+      localparam logic [64:0] WIDE_VALUE = 0;
     end
   endgenerate
 endmodule
@@ -1032,9 +1053,10 @@ end entity;
 architecture rtl of generated_vhdl_loop_behavior is
 begin
   lanes: for i in 0 to 2 generate
+    constant local_value : natural := i + 4;
     signal generated_value : unsigned(3 downto 0);
   begin
-    generated_value <= i + 4;
+    generated_value <= local_value;
   end generate lanes;
 end architecture;
 
@@ -1046,14 +1068,26 @@ end entity;
 architecture rtl of generated_vhdl_block_behavior is
 begin
   static_scope: block is
+    constant base_value : natural := 6;
+    constant local_value : natural := base_value + 1;
     signal generated_value : unsigned(3 downto 0);
   begin
-    generated_value <= 7;
+    generated_value <= local_value;
     worker: process(generated_value)
     begin
       observed <= generated_value + 1;
     end process;
   end block static_scope;
+end architecture;
+
+entity generated_vhdl_bad_constant is
+end entity;
+architecture rtl of generated_vhdl_bad_constant is
+begin
+  invalid_scope: block
+    constant bad_value : positive := 0;
+  begin
+  end block invalid_scope;
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -1594,6 +1628,42 @@ end architecture;
             ->signal_value(*generated_vhdl_block_observed)
             .to_msb_string()
         == "1000");
+
+    const auto generated_sv_bad_constant =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_bad_constant");
+    assert(!generated_sv_bad_constant.ok());
+    assert(std::any_of(
+        generated_sv_bad_constant.diagnostics.begin(),
+        generated_sv_bad_constant.diagnostics.end(),
+        [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-ELAB-GEN-011";
+        }));
+
+    const auto generated_sv_wide_constant =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_wide_constant");
+    assert(!generated_sv_wide_constant.ok());
+    assert(std::any_of(
+        generated_sv_wide_constant.diagnostics.begin(),
+        generated_sv_wide_constant.diagnostics.end(),
+        [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-ELAB-GEN-012";
+        }));
+
+    const auto generated_vhdl_bad_constant =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_bad_constant(rtl)");
+    assert(!generated_vhdl_bad_constant.ok());
+    assert(std::any_of(
+        generated_vhdl_bad_constant.diagnostics.begin(),
+        generated_vhdl_bad_constant.diagnostics.end(),
+        [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-ELAB-GEN-012";
+        }));
 
     auto unevaluable_generate_design = generated_design;
     const auto unevaluable_unit = std::find_if(

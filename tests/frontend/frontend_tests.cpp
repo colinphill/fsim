@@ -2233,8 +2233,10 @@ endmodule
 
 module implicit_generated #(parameter ENABLED = 1);
   if (ENABLED) begin : implicit_scope
+    localparam int BASE = 5;
+    parameter int NEXT_VALUE = BASE + 1;
     logic [3:0] generated_value;
-    initial generated_value = 4'd6;
+    initial generated_value = NEXT_VALUE;
   end
 endmodule
 
@@ -2258,11 +2260,13 @@ endmodule
 
 module direct_generated;
   generate
+    localparam int DIRECT_BASE = 3;
     logic [3:0] direct_value;
     initial direct_value = 4'd2;
     begin : named_scope
+      localparam int NESTED_VALUE = DIRECT_BASE;
       logic [3:0] nested_value;
-      initial nested_value = 4'd3;
+      initial nested_value = NESTED_VALUE;
     end
   endgenerate
 endmodule
@@ -2358,6 +2362,9 @@ endmodule
                  .then_scope
               == "implicit_scope"
           && sv_implicit_unit->generate_regions.front()
+                 .then_body.constants.size()
+              == 2
+          && sv_implicit_unit->generate_regions.front()
                  .then_body.signals.size()
               == 1,
       "implicit SystemVerilog generate-if body");
@@ -2392,16 +2399,28 @@ endmodule
           UnitKind::VerilogModule, "direct_generated");
   require(
       sv_direct_unit != nullptr
-          && sv_direct_unit->generate_regions.size() == 2
+          && sv_direct_unit->generate_regions.size() == 1
           && sv_direct_unit->generate_regions[0].kind
               == GenerateKind::StaticBlock
           && sv_direct_unit->generate_regions[0]
+                 .then_body.constants.size()
+              == 1
+          && sv_direct_unit->generate_regions[0]
                  .then_body.signals.size()
               == 1
-          && sv_direct_unit->generate_regions[1].kind
+          && sv_direct_unit->generate_regions[0]
+                 .then_body.generate_regions.size()
+              == 1
+          && sv_direct_unit->generate_regions[0]
+                 .then_body.generate_regions[0].kind
               == GenerateKind::StaticBlock
-          && sv_direct_unit->generate_regions[1].then_scope
-              == "named_scope",
+          && sv_direct_unit->generate_regions[0]
+                 .then_body.generate_regions[0].then_scope
+              == "named_scope"
+          && sv_direct_unit->generate_regions[0]
+                 .then_body.generate_regions[0]
+                 .then_body.constants.size()
+              == 1,
       "direct and named SystemVerilog generate blocks");
 
   const auto vhdl = parse_text(
@@ -2488,9 +2507,11 @@ end entity;
 architecture rtl of block_generated is
 begin
   static_scope: block is
+    constant base_value : natural := 4;
+    constant generated_constant : natural := base_value + 1;
     signal generated_value : unsigned(3 downto 0);
   begin
-    generated_value <= 5;
+    generated_value <= generated_constant;
     worker: process(generated_value)
     begin
       observed <= generated_value + 1;
@@ -2586,6 +2607,9 @@ end architecture;
               == GenerateKind::StaticBlock
           && vhdl_block_unit->generate_regions.front().then_scope
               == "static_scope"
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.constants.size()
+              == 2
           && vhdl_block_unit->generate_regions.front()
                  .then_body.signals.size()
               == 1
@@ -2813,6 +2837,38 @@ end architecture;
                     == "FSIM-VHDL-PARSE-081";
               }),
       "VHDL block end-label mismatch is targeted");
+
+  const auto invalid_generated_constants = parse_text(
+      "invalid_generated_constants.vhd",
+      R"(
+architecture rtl of invalid_constants is
+begin
+  invalid_scope: block
+    constant missing_value : natural;
+    constant duplicate_name : natural := 1;
+    signal duplicate_name : bit;
+  begin
+  end block invalid_scope;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_generated_constants.ok()
+          && std::any_of(
+              invalid_generated_constants.diagnostics.begin(),
+              invalid_generated_constants.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-084";
+              })
+          && std::any_of(
+              invalid_generated_constants.diagnostics.begin(),
+              invalid_generated_constants.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-019";
+              }),
+      "invalid VHDL generated constants are targeted");
 }
 
 }  // namespace

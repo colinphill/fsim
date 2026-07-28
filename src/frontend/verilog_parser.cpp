@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
@@ -739,45 +740,41 @@ class VerilogParser final : private detail::ParserBase {
     GenerateRegion direct_region;
     direct_region.kind = GenerateKind::StaticBlock;
     std::vector<std::string> direct_local_names;
-    const auto flush_direct_region = [&]() {
-      const bool empty =
-          direct_region.then_body.signals.empty()
-          && direct_region.then_body.concurrent_statements.empty()
-          && direct_region.then_body.processes.empty()
-          && direct_region.then_body.instances.empty()
-          && direct_region.then_body.generate_regions.empty();
-      if (!empty) {
-        direct_region.span =
-            span_from(generate_token, previous());
-        unit.generate_regions.push_back(
-            std::move(direct_region));
-        direct_region = GenerateRegion{};
-        direct_region.kind = GenerateKind::StaticBlock;
-      }
-    };
     while (!at_end() && !keyword("endgenerate")) {
       if (match_keyword("if")) {
-        flush_direct_region();
-        unit.generate_regions.push_back(
+        direct_region.then_body.generate_regions.push_back(
             parse_conditional_generate(previous()));
         continue;
       }
       if (match_keyword("for")) {
-        flush_direct_region();
-        unit.generate_regions.push_back(
+        direct_region.then_body.generate_regions.push_back(
             parse_iterative_generate(previous()));
         continue;
       }
       if (match_keyword("case")) {
-        flush_direct_region();
-        unit.generate_regions.push_back(
+        direct_region.then_body.generate_regions.push_back(
             parse_selection_generate(previous()));
         continue;
       }
       if (keyword("begin")) {
-        flush_direct_region();
-        unit.generate_regions.push_back(
+        direct_region.then_body.generate_regions.push_back(
             parse_static_generate_block());
+        continue;
+      }
+      if (match_keyword("parameter")) {
+        parse_generated_parameter_group(
+            direct_region.then_body,
+            direct_local_names,
+            false,
+            previous());
+        continue;
+      }
+      if (match_keyword("localparam")) {
+        parse_generated_parameter_group(
+            direct_region.then_body,
+            direct_local_names,
+            true,
+            previous());
         continue;
       }
       if (is_declaration_start()) {
@@ -828,9 +825,27 @@ class VerilogParser final : private detail::ParserBase {
         advance();
       }
     }
-    flush_direct_region();
     expect_keyword(
         "endgenerate", false, "FSIM-SV-PARSE-064");
+    direct_region.span =
+        span_from(generate_token, previous());
+    const bool has_direct_items =
+        !direct_region.then_body.constants.empty()
+        || !direct_region.then_body.signals.empty()
+        || !direct_region.then_body.concurrent_statements.empty()
+        || !direct_region.then_body.processes.empty()
+        || !direct_region.then_body.instances.empty();
+    if (has_direct_items) {
+      unit.generate_regions.push_back(
+          std::move(direct_region));
+    } else {
+      auto& nested =
+          direct_region.then_body.generate_regions;
+      unit.generate_regions.insert(
+          unit.generate_regions.end(),
+          std::make_move_iterator(nested.begin()),
+          std::make_move_iterator(nested.end()));
+    }
     for (const auto& local_name : direct_local_names) {
       const auto found = current_generate_names_.find(local_name);
       if (found != current_generate_names_.end()
@@ -838,7 +853,6 @@ class VerilogParser final : private detail::ParserBase {
         current_generate_names_.erase(found);
       }
     }
-    (void)generate_token;
   }
 
   GenerateRegion parse_static_generate_block() {
@@ -998,6 +1012,12 @@ class VerilogParser final : private detail::ParserBase {
     while (!at_end() && !keyword("end")) {
       if (is_declaration_start()) {
         parse_generate_declaration(body, local_names);
+      } else if (match_keyword("parameter")) {
+        parse_generated_parameter_group(
+            body, local_names, false, previous());
+      } else if (match_keyword("localparam")) {
+        parse_generated_parameter_group(
+            body, local_names, true, previous());
       } else if (match_keyword("assign")) {
         if (auto assignment =
                 parse_continuous_assignment(previous())) {
@@ -1099,7 +1119,20 @@ class VerilogParser final : private detail::ParserBase {
           [&](const SignalDeclaration& signal) {
             return signal.name == name.text;
           });
-      if (duplicate != body.signals.end()) {
+      const bool parameter_conflict =
+          std::any_of(
+              body.constants.begin(),
+              body.constants.end(),
+              [&](const ParameterDeclaration& parameter) {
+                return parameter.name == name.text;
+              });
+      if (parameter_conflict) {
+        error(
+            name,
+            "FSIM-SV-SEM-020",
+            "generated signal '" + name.text
+                + "' conflicts with a parameter declaration");
+      } else if (duplicate != body.signals.end()) {
         error(
             name,
             "FSIM-SV-SEM-006",
@@ -1123,6 +1156,72 @@ class VerilogParser final : private detail::ParserBase {
         TokenKind::Semicolon,
         "';' after generated declaration",
         "FSIM-SV-PARSE-008");
+  }
+
+  void parse_generated_parameter_group(
+      GenerateBody& body,
+      std::vector<std::string>& local_names,
+      const bool local,
+      const Token& start) {
+    const auto type = parse_parameter_type();
+    for (;;) {
+      const auto name = expect_identifier(
+          local
+              ? "generated localparam name"
+              : "generated parameter name");
+      Expression value;
+      if (match(TokenKind::Assign)) {
+        value = parse_expression();
+      } else {
+        error(
+            current(),
+            "FSIM-SV-PARSE-050",
+            "value parameters require a default constant expression");
+      }
+      const bool signal_conflict =
+          std::any_of(
+              body.signals.begin(),
+              body.signals.end(),
+              [&](const SignalDeclaration& signal) {
+                return signal.name == name.text;
+              });
+      const bool duplicate =
+          std::any_of(
+              body.constants.begin(),
+              body.constants.end(),
+              [&](const ParameterDeclaration& parameter) {
+                return parameter.name == name.text;
+              });
+      if (signal_conflict) {
+        error(
+            name,
+            "FSIM-SV-SEM-020",
+            "generated parameter '" + name.text
+                + "' conflicts with a signal declaration");
+      } else if (duplicate) {
+        error(
+            name,
+            "FSIM-SV-SEM-017",
+            "duplicate generated parameter declaration '"
+                + name.text + "'");
+      } else {
+        body.constants.push_back(ParameterDeclaration{
+            name.text,
+            type,
+            std::move(value),
+            true,
+            cover(start.span, previous().span)});
+        ++current_generate_names_[name.text];
+        local_names.push_back(name.text);
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after generated parameter declaration",
+        "FSIM-SV-PARSE-051");
   }
 
   Type parse_parameter_type() {

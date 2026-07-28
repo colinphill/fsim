@@ -806,6 +806,15 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     const frontend::Language language,
     std::vector<Diagnostic>& diagnostics) {
+    for (auto& constant : body.constants) {
+        substitute_parameters(
+            constant.type, environment, diagnostics, language);
+        substitute_parameters(
+            constant.default_value,
+            environment,
+            domains,
+            language);
+    }
     for (auto& signal : body.signals) {
         substitute_parameters(
             signal.type, environment, diagnostics, language);
@@ -1013,6 +1022,76 @@ void expand_generate_regions(
     DesignUnit& unit,
     std::vector<Diagnostic>& diagnostics);
 
+void evaluate_generated_constants(
+    frontend::GenerateBody& body,
+    ConstantEnvironment& environment,
+    ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    std::vector<Diagnostic>& diagnostics) {
+    for (auto& constant : body.constants) {
+        substitute_parameters(
+            constant.type, environment, diagnostics, language);
+        substitute_parameters(
+            constant.default_value,
+            environment,
+            domains,
+            language);
+        std::string error;
+        auto value = evaluate_constant_expression(
+            constant.default_value, environment, error);
+        if (!value) {
+            diagnostics.push_back({
+                "FSIM-ELAB-GEN-011",
+                "cannot evaluate generated "
+                    + std::string{
+                        language == frontend::Language::Vhdl2008
+                            ? "constant"
+                            : "parameter"}
+                    + " '" + constant.name + "': " + error,
+                constant.span});
+            value = 0;
+        }
+        const bool exceeds_word =
+            constant.type.packed_range
+            && constant.type.packed_range->width() > 64;
+        if (exceeds_word) {
+            diagnostics.push_back({
+                "FSIM-ELAB-GEN-012",
+                "generated "
+                    + std::string{
+                        language == frontend::Language::Vhdl2008
+                            ? "constant"
+                            : "parameter"}
+                    + " '" + constant.name
+                    + "' exceeds the bounded 64-bit integral width",
+                constant.span});
+        } else if (language == frontend::Language::Vhdl2008) {
+            const auto& spelling = constant.type.spelling;
+            const bool violates_natural =
+                spelling == "natural" && *value < 0;
+            const bool violates_positive =
+                spelling == "positive" && *value <= 0;
+            const bool violates_boolean =
+                constant.type.domain == frontend::ValueDomain::Boolean
+                && *value != 0 && *value != 1;
+            const bool violates_bit =
+                constant.type.domain == frontend::ValueDomain::Bit2
+                && *value != 0 && *value != 1;
+            if (violates_natural || violates_positive
+                || violates_boolean || violates_bit) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-012",
+                    "generated constant '" + constant.name
+                        + "' value is outside subtype '"
+                        + constant.type.spelling + "'",
+                    constant.span});
+            }
+        }
+        environment[constant.name] = *value;
+        domains[constant.name] = constant.type.domain;
+    }
+}
+
 void append_generated_body(
     frontend::GenerateBody body,
     const ConstantEnvironment& environment,
@@ -1022,6 +1101,20 @@ void append_generated_body(
     const GeneratedNameEnvironment& visible_names,
     DesignUnit& unit,
     std::vector<Diagnostic>& diagnostics) {
+    auto body_environment = environment;
+    auto body_domains = domains;
+    evaluate_generated_constants(
+        body,
+        body_environment,
+        body_domains,
+        language,
+        diagnostics);
+    substitute_parameters(
+        body,
+        body_environment,
+        body_domains,
+        language,
+        diagnostics);
     auto body_names = visible_names;
     for (auto& signal : body.signals) {
         const auto local_name = signal.name;
@@ -1043,8 +1136,8 @@ void append_generated_body(
     }
     expand_generate_regions(
         body.generate_regions,
-        environment,
-        domains,
+        body_environment,
+        body_domains,
         language,
         scope,
         body_names,
