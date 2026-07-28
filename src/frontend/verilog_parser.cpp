@@ -4701,18 +4701,17 @@ class VerilogParser final : private detail::ParserBase {
         denominator / divisor};
   }
 
-  Delay parse_verilog_delay(const Token& start) {
-    Delay delay;
-    bool parenthesized = match(TokenKind::LeftParen);
+  DelayAlternative parse_verilog_delay_alternative() {
+    DelayAlternative alternative;
     const auto magnitude =
         expect(TokenKind::Number, "delay magnitude", "FSIM-SV-PARSE-023");
     if (const auto parsed = decimal_ratio(magnitude.text)) {
-      delay.magnitude = parsed->numerator;
-      delay.divisor = parsed->denominator;
+      alternative.magnitude = parsed->numerator;
+      alternative.divisor = parsed->denominator;
       if (at(TokenKind::Identifier)
           && time_unit_femtoseconds(current().text)) {
         const auto explicit_unit = advance();
-        delay.unit = explicit_unit.text;
+        alternative.unit = explicit_unit.text;
         if (language_ != Language::SystemVerilog2017) {
           error(
               explicit_unit,
@@ -4721,7 +4720,7 @@ class VerilogParser final : private detail::ParserBase {
               "SystemVerilog-2017");
         }
       } else if (!module_time_unit_.empty()) {
-        if (delay.magnitude
+        if (alternative.magnitude
             > std::numeric_limits<std::uint64_t>::max()
                 / module_time_unit_magnitude_) {
           error(
@@ -4730,10 +4729,10 @@ class VerilogParser final : private detail::ParserBase {
               "delay magnitude overflows after applying "
               "SystemVerilog timeunit");
         } else {
-          delay.magnitude *= module_time_unit_magnitude_;
-          delay.unit = module_time_unit_;
+          alternative.magnitude *= module_time_unit_magnitude_;
+          alternative.unit = module_time_unit_;
         }
-      } else if (delay.divisor != 1) {
+      } else if (alternative.divisor != 1) {
         error(
             magnitude,
             "FSIM-SV-SEM-050",
@@ -4750,6 +4749,41 @@ class VerilogParser final : private detail::ParserBase {
               ? "delay magnitude must be a decimal literal"
               : "delay magnitude must be a representable nonnegative "
                 "decimal literal");
+    }
+    alternative.span = span_from(magnitude, previous());
+    return alternative;
+  }
+
+  static void set_selected_delay(
+      Delay& delay,
+      const DelayAlternative& alternative) {
+    delay.magnitude = alternative.magnitude;
+    delay.divisor = alternative.divisor;
+    delay.unit = alternative.unit;
+  }
+
+  Delay parse_verilog_delay(const Token& start) {
+    Delay delay;
+    const bool parenthesized = match(TokenKind::LeftParen);
+    auto first = parse_verilog_delay_alternative();
+    set_selected_delay(delay, first);
+    if (match(TokenKind::Colon)) {
+      if (!parenthesized) {
+        error(
+            previous(),
+            "FSIM-SV-SEM-052",
+            "a min:typ:max delay triple must be parenthesized");
+      }
+      auto typical = parse_verilog_delay_alternative();
+      expect(
+          TokenKind::Colon,
+          "second ':' in min:typ:max delay",
+          "FSIM-SV-PARSE-134");
+      auto maximum = parse_verilog_delay_alternative();
+      delay.minimum = std::move(first);
+      delay.typical = std::move(typical);
+      delay.maximum = std::move(maximum);
+      set_selected_delay(delay, *delay.typical);
     }
     if (parenthesized) {
       expect(TokenKind::RightParen, "')' after delay",

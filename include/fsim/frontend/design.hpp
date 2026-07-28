@@ -223,6 +223,13 @@ enum class AssignmentKind {
   Continuous,
 };
 
+struct DelayAlternative {
+  std::uint64_t magnitude{};
+  std::uint64_t divisor{1};
+  std::string unit;
+  SourceSpan span;
+};
+
 struct Delay {
   std::uint64_t magnitude{};
   // Exact decimal denominator retained until project time normalization.
@@ -230,6 +237,10 @@ struct Delay {
   std::uint64_t divisor{1};
   // Empty when the source supplies no physical unit or active `timescale.
   std::string unit;
+  // Present together only for a parenthesized min:typ:max delay triple.
+  std::optional<DelayAlternative> minimum;
+  std::optional<DelayAlternative> typical;
+  std::optional<DelayAlternative> maximum;
   SourceSpan span;
 };
 

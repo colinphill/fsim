@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/project/project.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -81,6 +82,7 @@ cache_path = "cache"
 [run]
 duration = "20ns"
 max_deltas = 999
+delay_mode = "max"
 trace_file = "waves/out.vcd"
 trace_filters = ["tb.*"]
 
@@ -125,6 +127,9 @@ libraries = ["m"]
         config->build.optimization == fsim::project::Optimization::o3,
         "optimization is parsed");
     check(config->run.max_deltas == 999, "maximum delta count is parsed");
+    check(
+        config->run.delay_mode == fsim::project::DelayMode::maximum,
+        "maximum delay selection mode is parsed");
     check(
         config->build.cache_path == (workspace / "cache").lexically_normal(),
         "cache path is resolved relative to the manifest");
@@ -208,6 +213,52 @@ files = ["top.sv"]
   std::filesystem::remove_all(workspace, ignored);
 }
 
+void test_delay_mode_values() {
+  check(
+      fsim::project::RunSection{}.delay_mode
+          == fsim::project::DelayMode::typical,
+      "typical is the deterministic default delay mode");
+  check(
+      fsim::project::parse_delay_mode("minimum")
+          == fsim::project::DelayMode::minimum
+          && fsim::project::parse_delay_mode("TYP")
+              == fsim::project::DelayMode::typical
+          && fsim::project::parse_delay_mode("maximum")
+              == fsim::project::DelayMode::maximum
+          && fsim::project::to_string(
+                 fsim::project::DelayMode::minimum)
+              == "min"
+          && fsim::project::to_string(
+                 fsim::project::DelayMode::typical)
+              == "typ"
+          && fsim::project::to_string(
+                 fsim::project::DelayMode::maximum)
+              == "max",
+      "delay-mode aliases parse and serialize canonically");
+
+  fsim::diagnostic::Engine diagnostics;
+  const auto config = fsim::project::parse(
+      R"(schema = 1
+[project]
+top = "top"
+[run]
+delay_mode = "slow"
+)",
+      "bad-delay-mode.toml",
+      ".",
+      diagnostics);
+  check(!config.has_value(), "invalid manifest delay mode is rejected");
+  check(
+      std::ranges::any_of(
+          diagnostics.diagnostics(),
+          [](const fsim::diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0007"
+                && diagnostic.message.find("delay_mode")
+                    != std::string::npos;
+          }),
+      "invalid manifest delay mode has a stable targeted diagnostic");
+}
+
 }  // namespace
 
 int main() {
@@ -215,6 +266,7 @@ int main() {
   test_schema_and_unknown_key_errors();
   test_json_diagnostics_are_escaped();
   test_zero_time_resolution_is_rejected();
+  test_delay_mode_values();
   if (failures != 0) {
     std::cerr << failures << " test(s) failed\n";
     return 1;

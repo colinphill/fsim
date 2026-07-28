@@ -28,6 +28,12 @@ enum class Optimization : std::uint8_t {
   o3,
 };
 
+enum class DelayMode : std::uint8_t {
+  minimum,
+  typical,
+  maximum,
+};
+
 struct ProjectSection {
   std::string name;
   std::string top;
@@ -62,6 +68,7 @@ struct BuildSection {
 struct RunSection {
   std::optional<std::string> duration;
   std::uint64_t max_deltas{100'000};
+  DelayMode delay_mode{DelayMode::typical};
   std::optional<std::filesystem::path> trace_file;
   std::vector<std::string> trace_filters;
 };
@@ -89,7 +96,10 @@ struct Config {
 
 [[nodiscard]] std::string_view to_string(Language language) noexcept;
 [[nodiscard]] std::string_view to_string(Optimization optimization) noexcept;
+[[nodiscard]] std::string_view to_string(DelayMode mode) noexcept;
 [[nodiscard]] std::optional<Language> parse_language(std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<DelayMode> parse_delay_mode(
+    std::string_view spelling) noexcept;
 
 // Parses, validates, and resolves a schema-1 fsim.toml. Relative paths are
 // resolved against the manifest directory. Source globs are expanded in listed

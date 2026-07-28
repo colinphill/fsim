@@ -895,6 +895,20 @@ class Parser {
       }
       return;
     }
+    if (key == "delay_mode") {
+      if (require_kind(value, Value::Kind::string, key, "a string")) {
+        const auto mode = parse_delay_mode(value.text);
+        if (mode) {
+          config_.run.delay_mode = *mode;
+        } else {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "[run].delay_mode must be min, typ, or max",
+              value.span);
+        }
+      }
+      return;
+    }
     if (key == "trace_file") {
       if (require_kind(value, Value::Kind::string, key, "a string")) {
         config_.run.trace_file = std::filesystem::path(value.text);
@@ -1331,6 +1345,18 @@ std::string_view to_string(const Optimization optimization) noexcept {
   return "O2";
 }
 
+std::string_view to_string(const DelayMode mode) noexcept {
+  switch (mode) {
+    case DelayMode::minimum:
+      return "min";
+    case DelayMode::typical:
+      return "typ";
+    case DelayMode::maximum:
+      return "max";
+  }
+  return "typ";
+}
+
 std::optional<Language> parse_language(const std::string_view spelling) noexcept {
   const auto normalized = lowercase(spelling);
   if (normalized == "vhdl" || normalized == "vhdl-2008") {
@@ -1346,6 +1372,21 @@ std::optional<Language> parse_language(const std::string_view spelling) noexcept
   }
   if (normalized == "systemc" || normalized == "sc") {
     return Language::systemc;
+  }
+  return std::nullopt;
+}
+
+std::optional<DelayMode> parse_delay_mode(
+    const std::string_view spelling) noexcept {
+  const auto normalized = lowercase(spelling);
+  if (normalized == "min" || normalized == "minimum") {
+    return DelayMode::minimum;
+  }
+  if (normalized == "typ" || normalized == "typical") {
+    return DelayMode::typical;
+  }
+  if (normalized == "max" || normalized == "maximum") {
+    return DelayMode::maximum;
   }
   return std::nullopt;
 }

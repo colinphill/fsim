@@ -42,5 +42,6 @@ cache_path = ".fsim-cache"
 [run]
 duration = "10ns"
 max_deltas = 100000
+delay_mode = "typ"
 trace_file = "vertical_slice.vcd"
 trace_filters = ["tb.*"]

@@ -257,10 +257,15 @@ units. SystemVerilog compilation-unit and module-local
 Decimal/scientific delays retain an exact bounded rational representation,
 optional explicit physical-unit suffixes override the module unit, and
 conversion rounds to the declared precision before converting exactly to
-global ticks. Half steps round upward. Inexact, overflowing, malformed,
-late/duplicate, or coarser-than-unit declarations are rejected. Delay
-triplets, parameterized/nonconstant delay expressions, and SystemC
-participation in automatic resolution selection are not complete.
+global ticks. Half steps round upward. Parenthesized `min:typ:max` delay
+triples retain all branches; schema-1 `[run].delay_mode` or `--delay-mode`
+selects `min`, `typ`, or `max` before precision rounding and automatic global
+resolution, with `typ` as the deterministic default. The selected mode is part
+of whole-design and specialization native-cache identity. Inexact,
+overflowing, malformed, late/duplicate, or coarser-than-unit declarations are
+rejected. Parameterized/nonconstant delay expressions, multiple
+rise/fall/turnoff delays, and SystemC participation in automatic resolution
+selection are not complete.
 
 The same ordered token stream carries Verilog compiler state across shared
 roots. `` `default_nettype`` selects scalar implicit-net and untyped-port net

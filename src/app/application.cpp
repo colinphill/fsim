@@ -1905,6 +1905,7 @@ std::string make_cache_key(
   key.add("target", target_name());
   key.add("top", top);
   key.add("time-resolution", resolution);
+  key.add("delay-mode", project::to_string(config.run.delay_mode));
   key.add("optimization", project::to_string(config.build.optimization));
   key.add("llvm", production_llvm_version);
   key.add("standard-library", standard_library_cache_version);
@@ -2062,6 +2063,7 @@ make_specialization_cache_keys(
         "fsim-specialization-provenance-v3");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
+    key.add("delay-mode", project::to_string(config.run.delay_mode));
     key.add(
         "verilog-preprocessor",
         frontend::verilog_preprocessor_cache_version);
@@ -3872,6 +3874,40 @@ bool normalize_delays(
   return valid;
 }
 
+void select_delay_alternatives(
+    frontend::ParsedDesign& parsed,
+    const project::DelayMode mode) {
+  for (auto& unit : parsed.units) {
+    const auto select = [mode](frontend::Delay& delay) {
+      const frontend::DelayAlternative* alternative = nullptr;
+      switch (mode) {
+        case project::DelayMode::minimum:
+          alternative =
+              delay.minimum ? &*delay.minimum : nullptr;
+          break;
+        case project::DelayMode::typical:
+          alternative =
+              delay.typical ? &*delay.typical : nullptr;
+          break;
+        case project::DelayMode::maximum:
+          alternative =
+              delay.maximum ? &*delay.maximum : nullptr;
+          break;
+      }
+      if (alternative == nullptr) {
+        return;
+      }
+      delay.magnitude = alternative->magnitude;
+      delay.divisor = alternative->divisor;
+      delay.unit = alternative->unit;
+    };
+    visit_delays(unit.concurrent_statements, select);
+    for (auto& process : unit.processes) {
+      visit_delays(process.statements, select);
+    }
+  }
+}
+
 bool validate_declared_time_precisions(
     const frontend::ParsedDesign& parsed,
     const std::string_view resolution,
@@ -4199,6 +4235,8 @@ std::optional<BuiltProject> build_project(
     systemc_plugin_key = compiled.cache_key;
     systemc_plugins.push_back(std::move(compiled.library_path));
   }
+  select_delay_alternatives(
+      checked->parsed, config.run.delay_mode);
   const auto resolution = effective_resolution(config, checked->parsed);
   if (systemc_hierarchy) {
     const auto parsed_resolution = magnitude_and_unit(resolution);

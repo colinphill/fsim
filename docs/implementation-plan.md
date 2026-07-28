@@ -1104,6 +1104,33 @@ fibers and installed Tcl 9.0.4. The fetched-Tcl relocation companion also
 passed. The batch ends at feature commit `3ad94ef`; GitHub Actions state was
 not queried for this local gate.
 
+### Twenty-sixth feature batch — min/typ/max delay selection
+
+The planned ten implementation features are:
+
+1. Preserve parenthesized Verilog/SystemVerilog
+   `minimum:typical:maximum` delay triples in typed HIR.
+2. Apply triples to standalone procedural delay controls.
+3. Apply triples to supported blocking/NBA and continuous assignment delays.
+4. Apply triples to supported built-in gate primitive delays.
+5. Apply triples to delayed nonblocking named-event notifications.
+6. Add schema-1 `[run].delay_mode = "min" | "typ" | "max"` with `typ` as
+   the deterministic default.
+7. Add a `--delay-mode` CLI override with targeted invalid-value diagnostics.
+8. Select one branch before SystemVerilog precision rounding and global-tick
+   normalization.
+9. Support exact fractional/scientific and explicitly unit-suffixed values in
+   every branch, with targeted malformed-triple diagnostics.
+10. Require manifest/CLI, interpreter, LLVM O0/O2, timestamp, VCD, and
+    cold/warm/selection-invalidated cache evidence.
+
+All ten implementation features are complete. Focused frontend, project,
+diagnostic-catalog, existing time/named-event, manifest/CLI, interpreter, LLVM
+O0/O2, callback/timestamp, VCD, branch-specific automatic-resolution, and
+cold/warm mode-distinct native-cache tests pass. The full local regression,
+feature commit, checkpoint commit, and push remain pending. GitHub Actions
+will not be queried.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

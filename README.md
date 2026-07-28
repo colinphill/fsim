@@ -463,7 +463,10 @@ analysis units.
 
 `--diagnostics=json` selects structured diagnostics. Manifest values can be
 overridden with options such as `--top`, `--duration`, `--max-deltas`,
-`--trace`, `--seed`, `-O`, and `-j`.
+`--delay-mode`, `--trace`, `--seed`, `-O`, and `-j`. Parenthesized Verilog or
+SystemVerilog `min:typ:max` delays use schema-1
+`[run].delay_mode = "min" | "typ" | "max"`; `typ` is the deterministic
+default and `--delay-mode` overrides it.
 
 Random facilities use deterministic per-process streams and default to project
 seed `1`. A numeric `seed`/`--seed` value reproduces a run. Explicit

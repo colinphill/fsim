@@ -42,6 +42,7 @@ struct Invocation {
   std::vector<std::string> defines;
   std::optional<std::string> duration;
   std::optional<std::uint64_t> max_deltas;
+  std::optional<project::DelayMode> delay_mode;
   std::optional<std::filesystem::path> trace_file;
   std::optional<std::uint64_t> seed;
   bool random_seed{false};

@@ -2570,6 +2570,114 @@ endmodule
       "syntax is not a declaration");
 }
 
+void test_systemverilog_delay_triples() {
+  const auto parsed = parse_text(
+      "delay-triples.sv",
+      R"(timeunit 1ns / 1ps;
+module delay_triples;
+  logic source;
+  logic continuous_result;
+  logic gate_result;
+  event fired;
+
+  assign #(1e-3:2e-3:3e-3) continuous_result = source;
+  buf #(1ps:2ps:3ps) (gate_result, source);
+
+  initial begin
+    #(0.1:0.2:0.3) source = 1'b1;
+    source = #(4ps:5ps:6ps) 1'b0;
+    source <= #(7ps:8ps:9ps) 1'b1;
+    ->> #(10ps:11ps:12ps) fired;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "SystemVerilog delay triples must parse");
+  const auto& unit = parsed.design.units.front();
+  require(
+      unit.concurrent_statements.size() == 2,
+      "continuous and gate delay triples are retained");
+  const auto& process = unit.processes.front().statements;
+  require(
+      process.size() == 4
+          && process[0].kind == StatementKind::Delay
+          && process[0].statements.size() == 1
+          && process[1].kind == StatementKind::Assignment
+          && process[1].assignment_kind == AssignmentKind::Blocking
+          && process[2].kind == StatementKind::Assignment
+          && process[2].assignment_kind == AssignmentKind::NonBlocking
+          && process[3].kind == StatementKind::EventTrigger
+          && process[3].assignment_kind == AssignmentKind::NonBlocking,
+      "procedural, assignment, and named-event triple forms");
+
+  const auto verify =
+      [](const Delay& delay,
+         const std::array<std::uint64_t, 3>& magnitudes,
+         const std::array<std::uint64_t, 3>& divisors,
+         const std::string_view unit_name) {
+        require(
+            delay.minimum && delay.typical && delay.maximum,
+            "all min:typ:max HIR branches are present");
+        require(
+            delay.minimum->magnitude == magnitudes[0]
+                && delay.typical->magnitude == magnitudes[1]
+                && delay.maximum->magnitude == magnitudes[2]
+                && delay.minimum->divisor == divisors[0]
+                && delay.typical->divisor == divisors[1]
+                && delay.maximum->divisor == divisors[2]
+                && delay.minimum->unit == unit_name
+                && delay.typical->unit == unit_name
+                && delay.maximum->unit == unit_name,
+            "delay triple values retain exact magnitudes, divisors, and units");
+        require(
+            delay.magnitude == magnitudes[1]
+                && delay.divisor == divisors[1]
+                && delay.unit == unit_name,
+            "typed HIR defaults a delay triple to its typical branch");
+      };
+
+  verify(
+      *unit.concurrent_statements[0].delay,
+      {1, 1, 3},
+      {1000, 500, 1000},
+      "ns");
+  verify(
+      *unit.concurrent_statements[1].delay,
+      {1, 2, 3},
+      {1, 1, 1},
+      "ps");
+  verify(*process[0].delay, {1, 1, 3}, {10, 5, 10}, "ns");
+  verify(*process[1].delay, {4, 5, 6}, {1, 1, 1}, "ps");
+  verify(*process[2].delay, {7, 8, 9}, {1, 1, 1}, "ps");
+  verify(*process[3].delay, {10, 11, 12}, {1, 1, 1}, "ps");
+
+  const auto malformed = parse_text(
+      "bad-delay-triples.sv",
+      R"(module bad_delay_triples;
+  initial begin
+    #1:2:3;
+    #(1:2);
+    #(1::3);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            malformed.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !malformed.ok()
+          && has_code("FSIM-SV-SEM-052")
+          && has_code("FSIM-SV-PARSE-134")
+          && has_code("FSIM-SV-PARSE-023"),
+      "unparenthesized, truncated, and empty delay triples are targeted");
+}
+
 void test_systemverilog_compiler_directives() {
   const auto directives = parse_text(
       "directives.sv",
@@ -6490,6 +6598,7 @@ int main() {
     test_duplicate_declarations_are_rejected();
     test_systemverilog_timescale_context();
     test_systemverilog_time_declarations();
+    test_systemverilog_delay_triples();
     test_systemverilog_compiler_directives();
     test_systemverilog_parameters();
     test_systemverilog_packages();

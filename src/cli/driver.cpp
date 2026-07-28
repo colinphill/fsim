@@ -268,6 +268,9 @@ std::optional<project::Config> make_direct_config(
   if (invocation.max_deltas.has_value()) {
     config.run.max_deltas = *invocation.max_deltas;
   }
+  if (invocation.delay_mode.has_value()) {
+    config.run.delay_mode = *invocation.delay_mode;
+  }
   if (invocation.trace_file.has_value()) {
     config.run.trace_file = absolute_normalized(*invocation.trace_file);
   }
@@ -297,6 +300,9 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
   }
   if (invocation.max_deltas.has_value()) {
     config.run.max_deltas = *invocation.max_deltas;
+  }
+  if (invocation.delay_mode.has_value()) {
+    config.run.delay_mode = *invocation.delay_mode;
   }
   if (invocation.trace_file.has_value()) {
     config.run.trace_file = absolute_normalized(*invocation.trace_file);
@@ -341,6 +347,7 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "  -j, --jobs COUNT\n"
       << "      --duration TIME\n"
       << "      --max-deltas COUNT\n"
+      << "      --delay-mode min|typ|max\n"
       << "      --trace PATH\n"
       << "      --seed COUNT|random\n"
       << "      --diagnostics text|json\n"
@@ -577,6 +584,18 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.max_deltas = number;
+      } else if (is_option(argument, "", "--delay-mode")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--delay-mode", diagnostics);
+        if (!value.has_value()) {
+          return std::nullopt;
+        }
+        invocation.delay_mode = project::parse_delay_mode(*value);
+        if (!invocation.delay_mode) {
+          argument_error(
+              diagnostics, "delay-mode must be min, typ, or max");
+          return std::nullopt;
+        }
       } else if (is_option(argument, "", "--trace")) {
         const auto value = take_value(index, argc, argv, argument, "--trace", diagnostics);
         if (!value.has_value()) {

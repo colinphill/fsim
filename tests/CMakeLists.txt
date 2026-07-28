@@ -305,6 +305,26 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;time"
   )
 
+  add_executable(
+    fsim_delay_mode_application_tests
+    app/delay_mode_application_test.cpp
+  )
+  fsim_configure_test(fsim_delay_mode_application_tests)
+  target_link_libraries(
+    fsim_delay_mode_application_tests
+    PRIVATE
+      fsim_application
+      fsim_cli
+  )
+  add_test(
+    NAME fsim.application.delay_modes
+    COMMAND fsim_delay_mode_application_tests
+  )
+  set_tests_properties(
+    fsim.application.delay_modes
+    PROPERTIES LABELS "fast;delay-modes"
+  )
+
   add_executable(fsim_application_tests app/application_test.cpp)
   fsim_configure_test(fsim_application_tests)
   target_compile_definitions(
