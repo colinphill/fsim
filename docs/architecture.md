@@ -704,7 +704,8 @@ layout and no exception may cross it. Every structure field is read or written
 only when covered by the caller-advertised size; the original v1 object-info
 prefix remains accepted and unknown future tails are preserved. Sessions can
 currently load, check, and build projects; enumerate signals, ports, processes,
-and packed procedural variables; look up their hierarchical paths; read,
+lexical scopes, and packed procedural variables; look up their hierarchical
+paths; read,
 deposit, force, and release values; run; step
 by statement, process, delta, or time; request stop; and receive lifecycle,
 safe-point, and value-change callbacks. Executable safe-point callbacks include
@@ -712,9 +713,11 @@ a valid process handle. Object handles carry a build generation so a rebuild
 invalidates stale hierarchy handles, and mutating/rebuilding re-entry from a
 synchronous callback is rejected. False assertions invoke the assertion
 callback with the originating process handle plus severity, source
-path/line/column, and message. Process, variable, signal, and port object
-metadata also carry retained declaration source locations. Explicit scope and
-driver objects and source metadata for those deferred kinds are not yet wired.
+path/line/column, and message. Process, lexical-scope, variable, signal, and
+port object metadata also carry retained declaration source locations. Scope
+and local flags distinguish never-entered/uninitialized state from retained
+runtime values. Instance scopes, driver objects, and source metadata for those
+deferred kinds are not yet wired.
 
 Optimized `run` and instrumented `debug` are required to have identical
 simulation semantics. Bounded debug code uses addressable process frames and
@@ -748,7 +751,7 @@ previous handler on every exit path. Tests raise SIGINT through the real handler
 and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
 to terminal completion, and restore a preinstalled handler. The `locals`
 command reads declared packed process variables through an engine-neutral
-interface; richer types and explicit scope objects remain planned.
+interface; richer local types and instance scopes remain planned.
 
 ## Tcl automation
 

@@ -320,7 +320,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the tenth post-gate batch, including strict C11/native-C prefix compatibility and object source metadata (146.81 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the eleventh post-gate batch, including native-C lexical scope hierarchy and runtime debug-state metadata (135.65 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -659,9 +659,9 @@ Planned implementation sequence:
 4. Complete Windows execution evidence and broader event/list/error tests for
    the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
    timed, delta, and static-wait execution is implemented.
-5. Complete source metadata for explicit scope/driver objects and remaining
-   executable constructs. Native C process, packed-variable, signal, and port
-   objects now carry declaration source metadata.
+5. Complete source metadata for instance/driver objects and remaining
+   executable constructs. Native C process, lexical-scope, packed-variable,
+   signal, and port objects now carry retained source metadata.
 6. Complete remaining public C API object kinds and richer value metadata.
    Append-only input/output prefixes, legacy/current/future structure sizes,
    strict C11 use, and assertion diagnostic metadata now have automated
@@ -742,23 +742,23 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The tenth post-gate batch is implementation-complete:
+The eleventh post-gate batch is implementation-complete:
 
-1. native input structures accept the stable header-only prefix;
-2. session-option fields are read only when individually advertised;
-3. callback fields are copied only when individually advertised;
-4. the original v1 object-info prefix remains accepted unchanged;
-5. appended source fields support intermediate member-level prefixes;
-6. unknown future object and diagnostic tails remain untouched;
-7. packed procedural-variable objects expose declaration source metadata;
-8. process objects expose their retained entry source metadata;
-9. signal and port objects retain and expose declaration source metadata; and
-10. a strict C11 compile/link/run test covers the public header, constants,
-    prefix sizes, session creation, and destruction.
+1. lexical scopes receive a dedicated collision-free v1 handle encoding;
+2. nested scope objects are derived deterministically from debug-local paths;
+3. stable full-path lookup resolves each explicit scope;
+4. process enumeration returns only direct scopes and unscoped locals;
+5. scope enumeration returns only direct child scopes and locals;
+6. nested scope/local parent handles reflect lexical ownership;
+7. scope metadata exposes kind, name, full path, type, width, and source;
+8. callback-directed early termination is preserved during scope traversal;
+9. scope/local metadata reports entered/initialized runtime state; and
+10. scope value reads are rejected and rebuilds invalidate stale scope
+    handles just like every other hierarchy object.
 
-Focused native-C API and C/C++ compatibility tests pass. The interval LLVM 22
-Debug regression passed all 19 tests in 146.81 seconds. This batch is ready to
-commit and push.
+Focused native-C API and strict C11 compatibility tests pass. The interval
+LLVM 22 Debug regression passed all 19 tests in 135.65 seconds. This batch is
+ready to commit and push.
 
 ## v1 release condition
 

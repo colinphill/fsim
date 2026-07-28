@@ -107,6 +107,11 @@ int visit(fsim_session_t, fsim_object_t, void* user_data) {
   return 1;
 }
 
+int visit_one(fsim_session_t, fsim_object_t, void* user_data) {
+  ++*static_cast<int*>(user_data);
+  return 0;
+}
+
 int collect_object(
     fsim_session_t,
     const fsim_object_t object,
@@ -307,13 +312,42 @@ max_deltas = 1000
       fsim_session_visit_children(
           session, process, collect_object, &process_children)
       == FSIM_STATUS_OK);
-  assert(process_children.size() == 5);
+  assert(process_children.size() == 1);
 
+  fsim_object_t control_scope = FSIM_INVALID_OBJECT;
+  fsim_object_t inner_scope = FSIM_INVALID_OBJECT;
+  fsim_object_t selected_scope = FSIM_INVALID_OBJECT;
+  fsim_object_t unselected_scope = FSIM_INVALID_OBJECT;
   fsim_object_t control_state = FSIM_INVALID_OBJECT;
   fsim_object_t inner_state = FSIM_INVALID_OBJECT;
   fsim_object_t timed_later = FSIM_INVALID_OBJECT;
   fsim_object_t selected_chosen = FSIM_INVALID_OBJECT;
   fsim_object_t unselected_local = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control"),
+          &control_scope)
+      == FSIM_STATUS_OK);
+  assert(process_children.front() == control_scope);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control.inner"),
+          &inner_scope)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control.selected"),
+          &selected_scope)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control.unselected"),
+          &unselected_scope)
+      == FSIM_STATUS_OK);
   assert(
       fsim_session_find_object(
           session,
@@ -352,7 +386,7 @@ max_deltas = 1000
           session, inner_state, &local_info)
       == FSIM_STATUS_OK);
   assert(local_info.kind == FSIM_OBJECT_VARIABLE);
-  assert(local_info.parent == process);
+  assert(local_info.parent == inner_scope);
   assert(local_info.width == 1);
   assert(
       std::string(local_info.name.data, local_info.name.size)
@@ -379,6 +413,91 @@ max_deltas = 1000
       == "tb.sv");
   assert(local_info.source_line == 8);
   assert(local_info.source_column > 0);
+  assert(
+      (local_info.flags & FSIM_OBJECT_FLAG_INITIALIZED) == 0);
+
+  fsim_object_info_t control_scope_info{};
+  control_scope_info.struct_size = sizeof(control_scope_info);
+  control_scope_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, control_scope, &control_scope_info)
+      == FSIM_STATUS_OK);
+  assert(control_scope_info.kind == FSIM_OBJECT_SCOPE);
+  assert(control_scope_info.parent == process);
+  assert(control_scope_info.width == 0);
+  assert(
+      std::string(
+          control_scope_info.name.data,
+          control_scope_info.name.size)
+      == "control");
+  assert(
+      std::string(
+          control_scope_info.full_name.data,
+          control_scope_info.full_name.size)
+      == "tb.process_0.control");
+  assert(
+      std::string(
+          control_scope_info.type_name.data,
+          control_scope_info.type_name.size)
+      == "scope");
+  assert(
+      (control_scope_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
+      == FSIM_OBJECT_FLAG_HAS_SOURCE);
+  assert(control_scope_info.source_line == 6);
+  assert(
+      (control_scope_info.flags & FSIM_OBJECT_FLAG_ENTERED) == 0);
+
+  fsim_object_info_t inner_scope_info{};
+  inner_scope_info.struct_size = sizeof(inner_scope_info);
+  inner_scope_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, inner_scope, &inner_scope_info)
+      == FSIM_STATUS_OK);
+  assert(inner_scope_info.kind == FSIM_OBJECT_SCOPE);
+  assert(inner_scope_info.parent == control_scope);
+  assert(inner_scope_info.source_line == 8);
+
+  std::vector<fsim_object_t> control_children;
+  assert(
+      fsim_session_visit_children(
+          session,
+          control_scope,
+          collect_object,
+          &control_children)
+      == FSIM_STATUS_OK);
+  assert(control_children.size() == 5);
+  int stopped_children = 0;
+  assert(
+      fsim_session_visit_children(
+          session,
+          control_scope,
+          visit_one,
+          &stopped_children)
+      == FSIM_STATUS_OK);
+  assert(stopped_children == 1);
+  std::vector<fsim_object_t> inner_children;
+  assert(
+      fsim_session_visit_children(
+          session,
+          inner_scope,
+          collect_object,
+          &inner_children)
+      == FSIM_STATUS_OK);
+  assert(inner_children.size() == 1);
+  assert(inner_children.front() == inner_state);
+
+  std::size_t scope_required = 123;
+  assert(
+      fsim_session_read_value(
+          session,
+          control_scope,
+          nullptr,
+          0,
+          &scope_required)
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(scope_required == 0);
 
   // The original v1 object-info prefix remains accepted. Appended fields and
   // their capability flag are not touched when the caller advertises only the
@@ -572,6 +691,44 @@ max_deltas = 1000
           &required)
       == FSIM_STATUS_UNAVAILABLE);
   assert(required == 0);
+
+  local_info.struct_size = sizeof(local_info);
+  local_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, inner_state, &local_info)
+      == FSIM_STATUS_OK);
+  assert(
+      (local_info.flags & FSIM_OBJECT_FLAG_INITIALIZED)
+      == FSIM_OBJECT_FLAG_INITIALIZED);
+  control_scope_info.struct_size = sizeof(control_scope_info);
+  control_scope_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, control_scope, &control_scope_info)
+      == FSIM_STATUS_OK);
+  assert(
+      (control_scope_info.flags & FSIM_OBJECT_FLAG_ENTERED)
+      == FSIM_OBJECT_FLAG_ENTERED);
+  fsim_object_info_t selected_scope_info{};
+  selected_scope_info.struct_size = sizeof(selected_scope_info);
+  selected_scope_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, selected_scope, &selected_scope_info)
+      == FSIM_STATUS_OK);
+  assert(
+      (selected_scope_info.flags & FSIM_OBJECT_FLAG_ENTERED)
+      == FSIM_OBJECT_FLAG_ENTERED);
+  fsim_object_info_t unselected_scope_info{};
+  unselected_scope_info.struct_size = sizeof(unselected_scope_info);
+  unselected_scope_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, unselected_scope, &unselected_scope_info)
+      == FSIM_STATUS_OK);
+  assert(
+      (unselected_scope_info.flags & FSIM_OBJECT_FLAG_ENTERED) == 0);
   assert(counts.values >= 3);
   assert(counts.safe_points > 0);
   assert(counts.reentry_attempted);
@@ -588,6 +745,7 @@ max_deltas = 1000
   const auto old_root = root;
   const auto old_q = q;
   const auto old_process = process;
+  const auto old_control_scope = control_scope;
   const auto old_control_state = control_state;
   assert(fsim_session_build(session) == FSIM_STATUS_OK);
   assert(
@@ -602,6 +760,10 @@ max_deltas = 1000
   assert(
       fsim_session_visit_children(
           session, old_process, visit, &stale_children)
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_visit_children(
+          session, old_control_scope, visit, &stale_children)
       == FSIM_STATUS_INVALID_HANDLE);
   assert(
       fsim_session_read_value(

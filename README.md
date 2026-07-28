@@ -335,6 +335,8 @@ The native C API accepts append-only structure prefixes and never reads or
 writes fields beyond the caller-advertised size. Its hierarchy includes
 generation-checked signal, port, process, and packed procedural-variable
 objects with source metadata where a declaration location is available.
+Nested procedural blocks are explicit lexical-scope objects, and metadata
+distinguishes never-entered scopes and uninitialized locals.
 
 ## Build and test
 

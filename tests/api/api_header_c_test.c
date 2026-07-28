@@ -13,6 +13,9 @@ _Static_assert(
 _Static_assert(
     FSIM_OBJECT_FLAG_FORCED != FSIM_OBJECT_FLAG_HAS_SOURCE,
     "C ABI object flags overlap");
+_Static_assert(
+    FSIM_OBJECT_FLAG_INITIALIZED != FSIM_OBJECT_FLAG_ENTERED,
+    "C ABI debug-state flags overlap");
 
 int main(void) {
   fsim_session_options_t options = {0};

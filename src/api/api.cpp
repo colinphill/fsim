@@ -25,6 +25,7 @@
 namespace {
 
 constexpr std::uint32_t kRootPayload = 1;
+constexpr std::uint32_t kScopePayloadBase = 2;
 constexpr std::uint32_t kSignalPayload = UINT32_C(0x40000000);
 constexpr std::uint32_t kProcessPayload = UINT32_C(0x80000000);
 constexpr std::uint32_t kVariablePayload = UINT32_C(0xc0000000);
@@ -33,7 +34,15 @@ constexpr std::uint32_t kObjectIndexMask = UINT32_C(0x3fffffff);
 struct VariableObject {
   std::size_t process{};
   std::size_t local{};
+  std::optional<std::size_t> parent_scope;
   std::string full_name;
+};
+
+struct ScopeObject {
+  std::size_t process{};
+  std::optional<std::size_t> parent_scope;
+  std::string full_name;
+  fsim::runtime::simir::SourceLocation source;
 };
 
 struct Session {
@@ -55,6 +64,7 @@ struct Session {
   std::uint64_t seed{1};
   std::optional<fsim::runtime::simir::ProcessId>
       current_execution_process;
+  std::vector<ScopeObject> scopes;
   std::vector<VariableObject> variables;
   bool finished{};
 };
@@ -280,7 +290,59 @@ std::optional<std::size_t> object_variable(
   return index;
 }
 
-bool rebuild_variable_objects(Session& session) {
+fsim_object_t scope_handle(
+    const Session& session, const std::size_t scope) {
+  if (scope > kObjectIndexMask - kScopePayloadBase) {
+    return FSIM_INVALID_OBJECT;
+  }
+  return object_handle(
+      session,
+      kScopePayloadBase + static_cast<std::uint32_t>(scope));
+}
+
+std::optional<std::size_t> object_scope(
+    const Session& session,
+    const fsim_object_t object) {
+  if (!session.simulation || !current_object(session, object)) {
+    return std::nullopt;
+  }
+  const auto payload = object_payload(object);
+  if ((payload & ~kObjectIndexMask) != 0
+      || payload < kScopePayloadBase) {
+    return std::nullopt;
+  }
+  const auto index =
+      static_cast<std::size_t>(payload - kScopePayloadBase);
+  if (index >= session.scopes.size()) {
+    return std::nullopt;
+  }
+  return index;
+}
+
+std::optional<std::size_t> ensure_scope(
+    Session& session,
+    const std::size_t process,
+    const std::optional<std::size_t> parent_scope,
+    const std::string& full_name,
+    const fsim::runtime::simir::SourceLocation& source) {
+  for (std::size_t index = 0; index < session.scopes.size(); ++index) {
+    const auto& candidate = session.scopes[index];
+    if (candidate.process == process
+        && candidate.full_name == full_name) {
+      return index;
+    }
+  }
+  if (session.scopes.size()
+      > kObjectIndexMask - kScopePayloadBase) {
+    return std::nullopt;
+  }
+  session.scopes.push_back(
+      ScopeObject{process, parent_scope, full_name, source});
+  return session.scopes.size() - 1;
+}
+
+bool rebuild_debug_objects(Session& session) {
+  session.scopes.clear();
   session.variables.clear();
   if (!session.simulation) {
     return true;
@@ -290,14 +352,50 @@ bool rebuild_variable_objects(Session& session) {
     const auto& program = processes[process];
     for (std::size_t local = 0;
          local < program.debug_locals.size(); ++local) {
+      const auto& debug_local = program.debug_locals[local];
+      std::optional<std::size_t> parent_scope;
+      const auto leaf_separator = debug_local.name.find_last_of('.');
+      if (leaf_separator != std::string::npos) {
+        const auto scope_path =
+            std::string_view{debug_local.name}.substr(0, leaf_separator);
+        std::size_t segment_begin = 0;
+        while (segment_begin < scope_path.size()) {
+          const auto segment_end =
+              scope_path.find('.', segment_begin);
+          const auto prefix_end =
+              segment_end == std::string_view::npos
+              ? scope_path.size()
+              : segment_end;
+          const auto full_name =
+              program.name + "."
+              + std::string(scope_path.substr(0, prefix_end));
+          parent_scope = ensure_scope(
+              session,
+              process,
+              parent_scope,
+              full_name,
+              debug_local.source);
+          if (!parent_scope) {
+            session.scopes.clear();
+            session.variables.clear();
+            return false;
+          }
+          if (segment_end == std::string_view::npos) {
+            break;
+          }
+          segment_begin = segment_end + 1;
+        }
+      }
       if (session.variables.size() > kObjectIndexMask) {
+        session.scopes.clear();
         session.variables.clear();
         return false;
       }
       session.variables.push_back({
           process,
           local,
-          program.name + "." + program.debug_locals[local].name});
+          parent_scope,
+          program.name + "." + debug_local.name});
     }
   }
   return true;
@@ -306,6 +404,31 @@ bool rebuild_variable_objects(Session& session) {
 std::string_view leaf_name(const std::string_view name) {
   const auto separator = name.find_last_of('.');
   return separator == std::string_view::npos ? name : name.substr(separator + 1);
+}
+
+bool variable_initialized(
+    Session& session, const VariableObject& variable) {
+  try {
+    (void)session.simulation->read_process_local(
+        static_cast<fsim::runtime::simir::ProcessId>(
+            variable.process),
+        variable.local);
+    return true;
+  } catch (const std::logic_error&) {
+    return false;
+  }
+}
+
+bool scope_entered(Session& session, const ScopeObject& scope) {
+  const auto prefix = scope.full_name + ".";
+  for (const auto& variable : session.variables) {
+    if (variable.process == scope.process
+        && variable.full_name.starts_with(prefix)
+        && variable_initialized(session, variable)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void lifecycle(Session& session, const fsim_lifecycle_event_t event) {
@@ -618,6 +741,7 @@ fsim_status_t fsim_session_load_project(
     value.diagnostics.clear();
     value.project.reset();
     value.simulation.reset();
+    value.scopes.clear();
     value.variables.clear();
     advance_design_generation(value);
     value.finished = false;
@@ -660,6 +784,7 @@ fsim_status_t fsim_session_build(const fsim_session_t session) {
     }
     value.diagnostics.clear();
     value.simulation.reset();
+    value.scopes.clear();
     value.variables.clear();
     advance_design_generation(value);
     value.finished = false;
@@ -676,12 +801,12 @@ fsim_status_t fsim_session_build(const fsim_session_t session) {
     }
     value.simulation = std::make_unique<fsim::app::Simulation>(
         std::move(*built), value.max_deltas);
-    if (!rebuild_variable_objects(value)) {
+    if (!rebuild_debug_objects(value)) {
       value.simulation.reset();
       value.diagnostics.error(
           "FSIM-API-0004",
-          "the design contains too many debug-visible local variables for "
-          "the version-1 object handle encoding");
+          "the design contains too many debug-visible scopes or local "
+          "variables for the version-1 object handle encoding");
       return FSIM_STATUS_INTERNAL_ERROR;
     }
     const auto native_cache =
@@ -750,6 +875,13 @@ fsim_status_t fsim_session_find_object(
       }
     }
     for (std::size_t index = 0;
+         index < value.scopes.size(); ++index) {
+      if (value.scopes[index].full_name == requested) {
+        *out_object = scope_handle(value, index);
+        return FSIM_STATUS_OK;
+      }
+    }
+    for (std::size_t index = 0;
          index < value.variables.size(); ++index) {
       if (value.variables[index].full_name == requested) {
         *out_object = variable_handle(value, index);
@@ -779,8 +911,56 @@ fsim_status_t fsim_session_visit_children(
       }
       if (const auto process = object_process(value, parent)) {
         for (std::size_t index = 0;
+             index < value.scopes.size(); ++index) {
+          const auto& scope = value.scopes[index];
+          if (scope.process != *process || scope.parent_scope) {
+            continue;
+          }
+          CallbackGuard guard{value};
+          if (callback(
+                  value.handle,
+                  scope_handle(value, index),
+                  user_data)
+              == 0) {
+            return FSIM_STATUS_OK;
+          }
+        }
+        for (std::size_t index = 0;
              index < value.variables.size(); ++index) {
-          if (value.variables[index].process != *process) {
+          if (value.variables[index].process != *process
+              || value.variables[index].parent_scope) {
+            continue;
+          }
+          CallbackGuard guard{value};
+          if (callback(
+                  value.handle,
+                  variable_handle(value, index),
+                  user_data)
+              == 0) {
+            break;
+          }
+        }
+        return FSIM_STATUS_OK;
+      }
+      if (const auto scope_index = object_scope(value, parent)) {
+        for (std::size_t index = 0;
+             index < value.scopes.size(); ++index) {
+          const auto& scope = value.scopes[index];
+          if (scope.parent_scope != scope_index) {
+            continue;
+          }
+          CallbackGuard guard{value};
+          if (callback(
+                  value.handle,
+                  scope_handle(value, index),
+                  user_data)
+              == 0) {
+            return FSIM_STATUS_OK;
+          }
+        }
+        for (std::size_t index = 0;
+             index < value.variables.size(); ++index) {
+          if (value.variables[index].parent_scope != scope_index) {
             continue;
           }
           CallbackGuard guard{value};
@@ -915,6 +1095,23 @@ fsim_status_t fsim_session_get_object_info(
       }
       return FSIM_STATUS_OK;
     }
+    if (const auto scope = object_scope(value, object)) {
+      const auto& info = value.scopes[*scope];
+      out_info->parent =
+          info.parent_scope
+          ? scope_handle(value, *info.parent_scope)
+          : process_handle(value, info.process);
+      out_info->kind = FSIM_OBJECT_SCOPE;
+      out_info->width = 0;
+      out_info->name = view(leaf_name(info.full_name));
+      out_info->full_name = view(info.full_name);
+      out_info->type_name = view("scope");
+      if (scope_entered(value, info)) {
+        out_info->flags |= FSIM_OBJECT_FLAG_ENTERED;
+      }
+      set_source(info.source);
+      return FSIM_STATUS_OK;
+    }
     if (const auto variable = object_variable(value, object)) {
       const auto& reference = value.variables[*variable];
       const auto& process =
@@ -923,12 +1120,17 @@ fsim_status_t fsim_session_get_object_info(
       const auto& info =
           process.debug_locals.at(reference.local);
       out_info->parent =
-          process_handle(value, reference.process);
+          reference.parent_scope
+          ? scope_handle(value, *reference.parent_scope)
+          : process_handle(value, reference.process);
       out_info->kind = FSIM_OBJECT_VARIABLE;
       out_info->width = info.width;
       out_info->name = view(leaf_name(info.name));
       out_info->full_name = view(reference.full_name);
       out_info->type_name = view(info.type_name);
+      if (variable_initialized(value, reference)) {
+        out_info->flags |= FSIM_OBJECT_FLAG_INITIALIZED;
+      }
       set_source(info.source);
       return FSIM_STATUS_OK;
     }
