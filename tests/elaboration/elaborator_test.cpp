@@ -6203,6 +6203,146 @@ endmodule
                 rejected_repeat_statements, code));
     }
 
+    const auto runtime_loop_statements =
+        fsim::frontend::parse_text(
+            "runtime_loop_statements.sv",
+            R"(
+module runtime_loop_statements;
+  logic [2:0] observed;
+  logic unknown_body;
+  logic clock;
+  initial begin
+    observed = 3'b000;
+    unknown_body = 1'b0;
+    while (observed < 3) observed = observed + 1;
+    while (1'bx) unknown_body = 1'b1;
+  end
+  initial begin
+    clock = 1'b0;
+    forever #1 clock = ~clock;
+  end
+  initial #3 $finish;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(runtime_loop_statements.ok());
+    const auto elaborated_runtime_loop_statements =
+        fsim::elaboration::elaborate(
+            runtime_loop_statements.design,
+            "sv:work.runtime_loop_statements");
+    if (!elaborated_runtime_loop_statements.ok()) {
+        for (const auto& diagnostic :
+             elaborated_runtime_loop_statements.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_runtime_loop_statements.ok());
+    auto runtime_loop_interpreter =
+        elaborated_runtime_loop_statements.design
+            ->create_interpreter();
+    const auto runtime_loop_result =
+        runtime_loop_interpreter->run();
+    assert(
+        runtime_loop_result.status
+        == fsim::runtime::RunStatus::stopped);
+    assert(runtime_loop_result.time == 3);
+    const auto runtime_loop_observed =
+        elaborated_runtime_loop_statements.design
+            ->find_signal("observed");
+    const auto runtime_loop_unknown_body =
+        elaborated_runtime_loop_statements.design
+            ->find_signal("unknown_body");
+    assert(runtime_loop_observed && runtime_loop_unknown_body);
+    assert(
+        runtime_loop_interpreter
+            ->signal_value(*runtime_loop_observed)
+            .to_msb_string()
+        == "011");
+    assert(
+        runtime_loop_interpreter
+            ->signal_value(*runtime_loop_unknown_body)
+            .to_msb_string()
+        == "0");
+
+    const auto vhdl_runtime_loop =
+        fsim::frontend::parse_text(
+            "vhdl_runtime_loop.vhd",
+            R"(
+entity vhdl_runtime_loop is
+  port (
+    trigger : in std_logic;
+    observed : out boolean
+  );
+end entity;
+architecture rtl of vhdl_runtime_loop is
+begin
+  execute: process(trigger)
+    variable keep_going : boolean := true;
+    variable result : boolean := false;
+  begin
+    while keep_going loop
+      result := true;
+      keep_going := false;
+    end loop;
+    observed <= result;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_runtime_loop.ok());
+    const auto elaborated_vhdl_runtime_loop =
+        fsim::elaboration::elaborate(
+            vhdl_runtime_loop.design,
+            "vhdl:work.vhdl_runtime_loop(rtl)");
+    assert(elaborated_vhdl_runtime_loop.ok());
+    auto vhdl_runtime_loop_interpreter =
+        elaborated_vhdl_runtime_loop.design
+            ->create_interpreter();
+    const auto vhdl_runtime_loop_result =
+        vhdl_runtime_loop_interpreter->run();
+    assert(
+        vhdl_runtime_loop_result.status
+        == fsim::runtime::RunStatus::completed);
+    const auto vhdl_runtime_loop_observed =
+        elaborated_vhdl_runtime_loop.design
+            ->find_signal("observed");
+    assert(vhdl_runtime_loop_observed);
+    assert(
+        vhdl_runtime_loop_interpreter
+            ->signal_value(*vhdl_runtime_loop_observed)
+            .to_msb_string()
+        == "1");
+
+    const auto invalid_vhdl_runtime_loop =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_runtime_loop.vhd",
+            R"(
+entity invalid_vhdl_runtime_loop is
+  port (condition : in std_logic);
+end entity;
+architecture rtl of invalid_vhdl_runtime_loop is
+begin
+  execute: process(condition)
+  begin
+    while condition loop
+      null;
+    end loop;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_runtime_loop.ok());
+    const auto rejected_vhdl_runtime_loop =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_runtime_loop.design,
+            "vhdl:work.invalid_vhdl_runtime_loop(rtl)");
+    assert(!rejected_vhdl_runtime_loop.ok());
+    assert(
+        has_diagnostic(
+            rejected_vhdl_runtime_loop,
+            "FSIM-ELAB-077"));
+
     const auto invalid_vhdl_condition =
         fsim::frontend::parse_text(
             "invalid_condition.vhd",

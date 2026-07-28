@@ -505,6 +505,8 @@ module conditional_statement_app;
   logic [3:0] sequential_loop_result;
   logic [1:0] null_loop_result;
   logic [2:0] repeat_result;
+  logic [2:0] runtime_loop_result;
+  logic forever_clock;
   always_comb begin
     if (selector) begin
       if (selector[3])
@@ -527,6 +529,9 @@ module conditional_statement_app;
     repeat_result = 3'b000;
     repeat (3) repeat_result = repeat_result + 1;
     repeat (0) repeat_result = 3'b111;
+    runtime_loop_result = 3'b000;
+    while (runtime_loop_result < 3)
+      runtime_loop_result = runtime_loop_result + 1;
     if (4'b0000)
       zero_case = 1'b1;
     else
@@ -543,6 +548,10 @@ module conditional_statement_app;
     #1 selector = 4'b0010;
     #1 selector = 4'b1000;
     #1 $finish;
+  end
+  initial begin
+    forever_clock = 1'b0;
+    forever #1 forever_clock = ~forever_clock;
   end
 endmodule
 )";
@@ -564,10 +573,13 @@ architecture rtl of vhdl_conditional_statement_app is
   signal sequential_case_result : std_logic_vector(1 downto 0);
   signal sequential_loop_result : std_logic_vector(3 downto 0);
   signal null_loop_result : std_logic_vector(1 downto 0);
+  signal runtime_while_result : boolean;
 begin
   choose: process(trigger)
     variable assembled : std_logic_vector(3 downto 0) := "0000";
     variable untouched : std_logic_vector(1 downto 0) := "00";
+    variable keep_going : boolean := true;
+    variable while_result : boolean := false;
   begin
     if true then
       true_case <= true;
@@ -614,8 +626,13 @@ begin
     for lane in 2 to 1 loop
       untouched(0) := '1';
     end loop;
+    while keep_going loop
+      while_result := true;
+      keep_going := false;
+    end loop;
     sequential_loop_result <= assembled;
     null_loop_result <= untouched;
+    runtime_while_result <= while_result;
   end process;
 end architecture;
 )";
@@ -4287,16 +4304,16 @@ end architecture rtl;
         conditional_statement_hybrid.result.status
         == fsim::runtime::RunStatus::stopped);
     assert(conditional_statement_hybrid.result.time == 3);
-    assert(conditional_statement_hybrid.process_count == 2);
+    assert(conditional_statement_hybrid.process_count == 3);
 #if defined(FSIM_HAS_LLVM)
-    assert(conditional_statement_hybrid.compiled_processes == 2);
+    assert(conditional_statement_hybrid.compiled_processes == 3);
     assert(conditional_statement_hybrid.compiled_modules == 1);
 #endif
     assert((
         conditional_statement_hybrid.final_values
         == std::vector<std::string>{
             "1000", "0", "1", "0", "0001",
-            "0011", "00", "011"}));
+            "0011", "00", "011", "011", "0"}));
   }
 
   auto vhdl_conditional_statement_config = config;
@@ -4360,7 +4377,7 @@ end architecture rtl;
         vhdl_conditional_statement_hybrid.final_values
         == std::vector<std::string>{
             "X", "1", "1", "1", "1", "01",
-            "0011", "00"}));
+            "0011", "00", "1"}));
   }
 
   auto partial_group_config = config;

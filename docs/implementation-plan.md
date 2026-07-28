@@ -208,6 +208,11 @@ The following foundation is implemented:
   ranges, and the same common deterministic unrolling path;
 - locally static nonnegative Verilog/SystemVerilog `repeat` counts with
   zero-count semantics and the same bounded common-loop path;
+- runtime VHDL/Verilog/SystemVerilog `while` and suspending Verilog/
+  SystemVerilog `forever` statements lowered to cyclic SimIR CFGs with
+  language-specific condition rules, per-iteration debug-safe points, and
+  resumable backedges accepted by LLVM while raw zero-time cycles remain
+  rejected;
 - nested VHDL `if`/`elsif`/`else` with Boolean literals and typed Boolean
   operators, plus nested SystemVerilog `if`/`else` and immediate assertions
   using packed four-state truth conversion, with O0/O2 differential evidence;
@@ -261,7 +266,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 565 unique current production diagnostic codes.
+- a stable catalog covering 573 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -493,6 +498,9 @@ Completed groundwork:
   comparison bounds, and unit-step updates through the common loop HIR;
 - bounded Verilog/SystemVerilog `repeat` statements with locally static
   nonnegative counts and deterministic zero-count behavior;
+- executable multi-language `while` and timing-controlled
+  Verilog/SystemVerilog `forever` loops through suspension-safe SimIR
+  backedges;
 - bounded nested VHDL and SystemVerilog conditional statements, including
   language-specific Boolean/four-state condition rules;
 - deterministic project seed handling;

@@ -3070,6 +3070,30 @@ void test_rejections() {
       [&] { jit.add_process("reachable_cycle", reachable_cycle, no_signals); },
       "cycle has no suspension safe point");
 
+  Process debug_safe_cycle;
+  debug_safe_cycle.id = 0;
+  debug_safe_cycle.name = "debug_safe_cycle";
+  debug_safe_cycle.register_count = 1;
+  debug_safe_cycle.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      DebugPoint{
+          DebugPointKind::statement,
+          SourceLocation{"runtime_loop.sv", 4, 5}},
+      Branch{0, 3, 5, UnknownBranchPolicy::when_false},
+      LoadConstant{0, PackedLogic4::from_msb_string("0")},
+      Jump{1},
+      Halt{},
+  };
+  jit.add_process(
+      "debug_safe_cycle", debug_safe_cycle, no_signals);
+  TestRuntime debug_safe_runtime;
+  auto debug_safe_descriptor = abi(debug_safe_runtime);
+  assert(
+      jit.execute(
+          jit.lookup("debug_safe_cycle"),
+          debug_safe_descriptor)
+      == JitExecutionStatus::completed);
+
   expect_error(
       [&] {
         const std::array<std::uint32_t, 8> valid_widths{8, 8, 8, 8,

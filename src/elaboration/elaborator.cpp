@@ -2727,7 +2727,9 @@ private:
                 "this slice",
                 statement.span);
         }
-        if (statement.kind != StatementKind::Block) {
+        if (statement.kind != StatementKind::Block
+            && !(statement.kind == StatementKind::Loop
+                 && statement.loop_runtime)) {
             auto kind = DebugPointKind::statement;
             if (statement.kind == StatementKind::Assert) {
                 kind = DebugPointKind::assertion;
@@ -3387,6 +3389,10 @@ private:
     }
 
     void lower_loop(const Statement& statement) {
+        if (statement.loop_runtime) {
+            lower_runtime_loop(statement);
+            return;
+        }
         const auto assigns_loop_parameter =
             [&](const auto& self,
                 const std::vector<Statement>& statements) -> bool {
@@ -3541,6 +3547,38 @@ private:
             }
             value += statement.loop_descending ? -1 : 1;
         }
+    }
+
+    void lower_runtime_loop(const Statement& statement) {
+        const auto loop_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        emit_debug_point(
+            DebugPointKind::statement, statement.span);
+        const auto condition = lower_condition(
+            statement.condition, "FSIM-ELAB-077", "while");
+        if (!condition) {
+            return;
+        }
+        const auto branch_index =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        const auto unknown_policy =
+            language_ == frontend::Language::Vhdl2008
+                ? UnknownBranchPolicy::error
+                : UnknownBranchPolicy::when_false;
+        process_.operations.emplace_back(
+            Branch{*condition, 0, 0, unknown_policy});
+        const auto body_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        lower_statements(statement.statements);
+        process_.operations.emplace_back(Jump{loop_start});
+        const auto end =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        process_.operations[branch_index] = Branch{
+            *condition, body_start, end, unknown_policy};
     }
 
     struct PackedMemberReference {
@@ -4900,8 +4938,15 @@ private:
                 }
                 break;
             case StatementKind::Loop:
-                collect_identifiers(statement.loop_initial, output);
-                collect_identifiers(statement.loop_limit, output);
+                if (statement.loop_runtime) {
+                    collect_identifiers(
+                        statement.condition, output);
+                } else {
+                    collect_identifiers(
+                        statement.loop_initial, output);
+                    collect_identifiers(
+                        statement.loop_limit, output);
+                }
                 break;
             case StatementKind::Delay:
             case StatementKind::WaitOn:

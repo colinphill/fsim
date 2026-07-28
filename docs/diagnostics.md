@@ -169,6 +169,10 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-103` | error | Expected `end` for a sequential VHDL for loop. |
 | `FSIM-VHDL-PARSE-104` | error | Expected `loop` after the sequential for-loop body. |
 | `FSIM-VHDL-PARSE-105` | error | Expected `;` after a sequential VHDL for loop. |
+| `FSIM-VHDL-PARSE-106` | error | Expected `loop` after a VHDL while condition. |
+| `FSIM-VHDL-PARSE-107` | error | Expected `end` for a sequential VHDL while loop. |
+| `FSIM-VHDL-PARSE-108` | error | Expected `loop` after a sequential VHDL while-loop body. |
+| `FSIM-VHDL-PARSE-109` | error | Expected `;` after a sequential VHDL while loop. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -362,6 +366,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-099` | error | Expected `)` after a procedural loop header. |
 | `FSIM-SV-PARSE-100` | error | Expected `(` after a procedural `repeat`. |
 | `FSIM-SV-PARSE-101` | error | Expected `)` after a procedural repeat count. |
+| `FSIM-SV-PARSE-102` | error | Expected `(` after a procedural `while`. |
+| `FSIM-SV-PARSE-103` | error | Expected `)` after a procedural while condition. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -403,6 +409,7 @@ therefore excluded.
 | `FSIM-SV-SEM-027` | error | A bounded procedural loop condition is not a canonical comparison of its loop variable and a locally static bound. |
 | `FSIM-SV-SEM-028` | error | A bounded procedural loop iteration updates a name other than its loop variable. |
 | `FSIM-SV-SEM-029` | error | A bounded procedural loop update is not a unit step toward its comparison bound. |
+| `FSIM-SV-SEM-030` | error | A bounded `forever` body has no timing control and therefore cannot suspend its process. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -487,6 +494,7 @@ therefore excluded.
 | `FSIM-ELAB-074` | error | A sequential for-loop body assigns its VHDL implicit constant or statically substituted SystemVerilog index. |
 | `FSIM-ELAB-075` | error | A Verilog/SystemVerilog repeat count is not locally static. |
 | `FSIM-ELAB-076` | error | A Verilog/SystemVerilog repeat count is negative. |
+| `FSIM-ELAB-077` | error | A VHDL while condition is not scalar Boolean. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

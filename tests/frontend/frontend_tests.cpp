@@ -899,6 +899,9 @@ begin
     for lane in 3 downto 1 loop
       descending(lane) <= '0';
     end loop;
+    while false loop
+      null;
+    end loop;
     wait for 1 ns;
   end process;
 end architecture;
@@ -910,7 +913,7 @@ end architecture;
   require(
       architecture != nullptr
           && architecture->processes.size() == 1
-          && architecture->processes.front().statements.size() == 3,
+          && architecture->processes.front().statements.size() == 4,
       "VHDL sequential for-loop process");
   const auto& ascending =
       architecture->processes.front().statements[0];
@@ -926,7 +929,17 @@ end architecture;
           && descending.kind == StatementKind::Loop
           && descending.loop_descending
           && descending.loop_initial.text == "3"
-          && descending.loop_limit.text == "1",
+          && descending.loop_limit.text == "1"
+          && architecture->processes.front()
+                 .statements[2]
+                 .kind == StatementKind::Loop
+          && architecture->processes.front()
+                 .statements[2]
+                 .loop_runtime
+          && architecture->processes.front()
+                 .statements[2]
+                 .condition.kind
+              == ExpressionKind::BooleanLiteral,
       "VHDL sequential for-loop ranges and bodies are retained");
 
   const auto labeled_end = parse_text(
@@ -2619,6 +2632,94 @@ endmodule
       "malformed repeat delimiters receive stable diagnostics");
 }
 
+void test_runtime_loop_statements() {
+  const auto systemverilog = parse_text(
+      "runtime_loops.sv",
+      R"(
+module runtime_loops;
+  logic flag;
+  logic [2:0] count;
+  initial begin
+    count = 3'b000;
+    while (count < 3) count = count + 1;
+    forever #1 flag = ~flag;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "SystemVerilog while and timed forever loops must parse");
+  const auto& statements =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements;
+  require(
+      statements.size() == 3
+          && statements[1].kind == StatementKind::Loop
+          && statements[1].loop_runtime
+          && statements[1].condition.kind
+              == ExpressionKind::Binary
+          && statements[1].condition.text == "<"
+          && statements[2].kind == StatementKind::Loop
+          && statements[2].loop_runtime
+          && statements[2].condition.kind
+              == ExpressionKind::LogicLiteral
+          && statements[2].statements.size() == 1
+          && statements[2].statements.front().kind
+              == StatementKind::Delay,
+      "runtime loop conditions and suspension body HIR");
+
+  const auto verilog = parse_text(
+      "runtime_loops.v",
+      R"(
+module runtime_loops;
+  reg flag;
+  initial begin
+    flag = 1'b1;
+    while (flag) flag = 1'b0;
+    forever #1 flag = ~flag;
+  end
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      verilog.ok()
+          && verilog.design.units.front()
+                 .processes.front()
+                 .statements[1]
+                 .loop_runtime
+          && verilog.design.units.front()
+                 .processes.front()
+                 .statements[2]
+                 .loop_runtime,
+      "Verilog-2005 runtime loops share the common HIR");
+
+  const auto invalid = parse_text(
+      "bad_runtime_loops.sv",
+      R"(
+module bad_runtime_loops;
+  logic flag;
+  initial while flag;
+  initial forever flag = ~flag;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid.ok(), "malformed or nonsuspending loops must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-PARSE-102"},
+           std::string_view{"FSIM-SV-PARSE-103"},
+           std::string_view{"FSIM-SV-SEM-030"}}) {
+    require(
+        std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted runtime-loop diagnostic");
+  }
+}
+
 void test_systemverilog_conditional_expression() {
   const auto result = parse_text(
       "conditional.sv",
@@ -3889,6 +3990,7 @@ int main() {
     test_systemverilog_case_statements();
     test_systemverilog_procedural_for_loops();
     test_verilog_repeat_statements();
+    test_runtime_loop_statements();
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
     test_systemverilog_arithmetic_expressions();

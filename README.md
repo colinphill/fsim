@@ -112,11 +112,15 @@ The current tree contains:
   bounds, and the same deterministic common-loop lowering;
 - locally static Verilog/SystemVerilog `repeat (COUNT)` statements with
   explicit zero-count behavior and bounded common-loop lowering;
+- executable VHDL/Verilog/SystemVerilog `while` backedges plus suspending
+  Verilog/SystemVerilog `forever` loops, with language-specific condition
+  truth rules and statement safe points on every iteration;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,
-  yields, design stop, loops containing suspension points, update-phase and
-  delayed writes, and a shared checked allocation-free single-word `Logic4`
+  yields, design stop, loops containing suspension points or per-iteration
+  source safe points, update-phase and delayed writes, and a shared checked
+  allocation-free single-word `Logic4`
   `aval`/`bval` path into the simulation kernel; eligible processes owned by
   one bounded elaborated specialization are lowered and optimized together in
   one LLVM module while capability misses retain per-process fallback;

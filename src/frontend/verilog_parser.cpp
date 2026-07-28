@@ -3088,6 +3088,91 @@ class VerilogParser final : private detail::ParserBase {
     return statement;
   }
 
+  Statement parse_while_statement(const Token& start) {
+    Statement statement;
+    statement.kind = StatementKind::Loop;
+    statement.loop_runtime = true;
+    expect(
+        TokenKind::LeftParen,
+        "'(' after while",
+        "FSIM-SV-PARSE-102");
+    statement.condition = parse_expression();
+    expect(
+        TokenKind::RightParen,
+        "')' after while condition",
+        "FSIM-SV-PARSE-103");
+    if (auto body = parse_statement()) {
+      if (body->kind == StatementKind::Block) {
+        if (!body->declarations.empty()) {
+          error(
+              start,
+              "FSIM-SV-UNSUPPORTED-015",
+              "nested procedural block declarations are not implemented "
+              "in this frontend slice");
+        }
+        statement.statements = std::move(body->statements);
+      } else {
+        statement.statements.push_back(std::move(*body));
+      }
+    }
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
+  Statement parse_forever_statement(const Token& start) {
+    Statement statement;
+    statement.kind = StatementKind::Loop;
+    statement.loop_runtime = true;
+    statement.condition = Expression{
+        ExpressionKind::LogicLiteral,
+        "1'b1",
+        {},
+        start.span};
+    if (auto body = parse_statement()) {
+      if (body->kind == StatementKind::Block) {
+        if (!body->declarations.empty()) {
+          error(
+              start,
+              "FSIM-SV-UNSUPPORTED-015",
+              "nested procedural block declarations are not implemented "
+              "in this frontend slice");
+        }
+        statement.statements = std::move(body->statements);
+      } else {
+        statement.statements.push_back(std::move(*body));
+      }
+    }
+    const auto contains_timing =
+        [&](const auto& self,
+            const std::vector<Statement>& statements) -> bool {
+      for (const auto& child : statements) {
+        if (child.kind == StatementKind::Delay
+            || child.kind == StatementKind::WaitOn
+            || self(self, child.statements)
+            || self(self, child.else_statements)) {
+          return true;
+        }
+        for (const auto& alternative :
+             child.case_alternatives) {
+          if (self(self, alternative.statements)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    if (!contains_timing(
+            contains_timing, statement.statements)) {
+      error(
+          start,
+          "FSIM-SV-SEM-030",
+          "a bounded forever loop requires a timing control so it can "
+          "suspend the simulation process");
+    }
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   std::optional<Statement> parse_statement() {
     if (language_ == Language::SystemVerilog2017
         && (keyword("unique") || keyword("unique0")
@@ -3115,6 +3200,12 @@ class VerilogParser final : private detail::ParserBase {
     }
     if (match_keyword("repeat")) {
       return parse_repeat_statement(previous());
+    }
+    if (match_keyword("while")) {
+      return parse_while_statement(previous());
+    }
+    if (match_keyword("forever")) {
+      return parse_forever_statement(previous());
     }
     if (language_ == Language::SystemVerilog2017
         && match_keyword("assert")) {

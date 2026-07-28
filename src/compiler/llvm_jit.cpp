@@ -929,6 +929,11 @@ validate_process(const Process &process,
            std::holds_alternative<WaitSensitivity>(operation) ||
            std::holds_alternative<Yield>(operation);
   };
+  const auto is_cycle_safe_point =
+      [&](const Operation& operation) {
+        return is_suspension(operation)
+            || std::holds_alternative<DebugPoint>(operation);
+      };
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     if (reachable[index] && is_suspension(process.operations[index])) {
       result.requires_resume = true;
@@ -941,7 +946,7 @@ validate_process(const Process &process,
       process.operations.size());
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     if (!reachable[index] ||
-        is_suspension(process.operations[index]) ||
+        is_cycle_safe_point(process.operations[index]) ||
         std::holds_alternative<Stop>(process.operations[index]) ||
         std::holds_alternative<Halt>(process.operations[index])) {
       continue;
