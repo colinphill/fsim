@@ -8358,5 +8358,79 @@ endmodule
     assert(has_diagnostic(
         rejected_native_hierarchy, "FSIM-ELAB-BIND-047"));
 
+    const auto named_event_source = fsim::frontend::parse_text(
+        "named_event.sv",
+        R"(
+module named_event;
+  event fired;
+  logic observed;
+  initial begin
+    #1 -> fired;
+    #1 $finish;
+  end
+  initial begin
+    @(fired);
+    observed = 1'b1;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(named_event_source.ok());
+    const auto named_event_design =
+        fsim::elaboration::elaborate(
+            named_event_source.design, "sv:work.named_event");
+    assert(named_event_design.ok());
+    const auto event_signal =
+        named_event_design.design->find_signal("fired");
+    assert(event_signal);
+    const auto named_event_interpreter =
+        named_event_design.design->create_interpreter();
+    assert(
+        named_event_interpreter->signal_value(*event_signal)
+            .to_msb_string()
+        == "0");
+    const auto& trigger_process =
+        named_event_design.design->processes().front();
+    assert(
+        std::count_if(
+            trigger_process.operations.begin(),
+            trigger_process.operations.end(),
+            [](const fsim::runtime::simir::Operation& operation) {
+              return std::holds_alternative<
+                  fsim::runtime::simir::WriteBlocking>(operation);
+            })
+        == 1);
+    const auto& waiting_process =
+        named_event_design.design->processes().back();
+    assert(
+        std::count_if(
+            waiting_process.operations.begin(),
+            waiting_process.operations.end(),
+            [](const fsim::runtime::simir::Operation& operation) {
+              return std::holds_alternative<
+                  fsim::runtime::simir::WaitOn>(operation);
+            })
+        == 1);
+
+    const auto invalid_event_source = fsim::frontend::parse_text(
+        "invalid_event.sv",
+        R"(
+module invalid_event;
+  logic ordinary;
+  initial begin
+    -> missing;
+    -> ordinary;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_event_source.ok());
+    const auto invalid_event_design =
+        fsim::elaboration::elaborate(
+            invalid_event_source.design, "sv:work.invalid_event");
+    assert(!invalid_event_design.ok());
+    assert(has_diagnostic(invalid_event_design, "FSIM-ELAB-100"));
+    assert(has_diagnostic(invalid_event_design, "FSIM-ELAB-101"));
+
     std::cout << "elaborator tests passed\n";
 }

@@ -480,7 +480,9 @@ class Lexer {
         }
         return;
       case '-':
-        if (!is_vhdl() && consume_if(':')) {
+        if (!is_vhdl() && consume_if('>')) {
+          emit(TokenKind::ThinArrow, begin);
+        } else if (!is_vhdl() && consume_if(':')) {
           emit(TokenKind::MinusColon, begin);
         } else if (!is_vhdl() && consume_if('-')) {
           emit(TokenKind::MinusMinus, begin);
@@ -622,6 +624,8 @@ const char* to_string(TokenKind kind) noexcept {
       return "'!=?'";
     case TokenKind::Arrow:
       return "'=>'";
+    case TokenKind::ThinArrow:
+      return "'->'";
     case TokenKind::ColonEqual:
       return "':='";
     case TokenKind::Scope:

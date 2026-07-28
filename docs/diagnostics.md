@@ -404,6 +404,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-114` | error | Expected a literal message after a SystemVerilog `$fatal` finish argument. |
 | `FSIM-SV-PARSE-115` | error | Expected `)` after SystemVerilog `$fatal` arguments. |
 | `FSIM-SV-PARSE-116` | error | Expected `;` after a SystemVerilog `$fatal` task. |
+| `FSIM-SV-PARSE-117` | error | Expected `;` after a named-event declaration. |
+| `FSIM-SV-PARSE-118` | error | Expected `;` after an immediate named-event trigger. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -454,6 +456,7 @@ therefore excluded.
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
 | `FSIM-SV-SEM-033` | error | A SystemVerilog `final` procedure contains a nonblocking assignment. |
 | `FSIM-SV-SEM-034` | error | A procedural block closing label has no opening label or does not match it. |
+| `FSIM-SV-SEM-035` | error | A named event conflicts with another event, signal, or port declaration. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -481,6 +484,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-029` | error | A packed-struct member has an unpacked dimension or initializer. |
 | `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
 | `FSIM-SV-UNSUPPORTED-031` | error | A procedural `for` loop does not declare an inline `int` or `integer` index. |
+| `FSIM-SV-UNSUPPORTED-032` | error | A nonblocking named-event trigger (`->>`) is outside the immediate-trigger slice. |
 
 ## Elaboration and SimIR lowering
 
@@ -557,6 +561,9 @@ therefore excluded.
 | `FSIM-ELAB-096` | error | The VHDL `'last_event` attribute does not name one visible signal. |
 | `FSIM-ELAB-097` | error | The bounded zero-duration VHDL `'stable` attribute does not name one visible signal or supplies a duration. |
 | `FSIM-ELAB-098` | error | The VHDL `'active` attribute does not name one visible signal. |
+| `FSIM-ELAB-099` | error | A named-event trigger does not contain a simple event name. |
+| `FSIM-ELAB-100` | error | A named-event trigger references an unknown event. |
+| `FSIM-ELAB-101` | error | A named-event trigger targets an object not declared as an event. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

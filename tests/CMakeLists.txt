@@ -184,6 +184,24 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;call-safe-points"
   )
 
+  add_executable(
+    fsim_named_event_application_tests
+    app/named_event_application_test.cpp
+  )
+  fsim_configure_test(fsim_named_event_application_tests)
+  target_link_libraries(
+    fsim_named_event_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.named_events
+    COMMAND fsim_named_event_application_tests
+  )
+  set_tests_properties(
+    fsim.application.named_events
+    PROPERTIES LABELS "fast;named-events"
+  )
+
   add_executable(fsim_application_tests app/application_test.cpp)
   fsim_configure_test(fsim_application_tests)
   target_compile_definitions(

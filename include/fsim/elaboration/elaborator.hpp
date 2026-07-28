@@ -165,6 +165,7 @@ struct SignalInfo {
     runtime::simir::SignalId id{};
     std::string name;
     std::size_t width{};
+    std::string type_name;
     frontend::ValueDomain source_domain{frontend::ValueDomain::Unknown};
     bool is_signed{};
     std::optional<frontend::PackedRange> packed_range;

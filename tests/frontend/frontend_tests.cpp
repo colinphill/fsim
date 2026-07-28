@@ -5281,6 +5281,79 @@ end architecture;
 
 }  // namespace
 
+void test_systemverilog_named_events() {
+  const auto parsed = parse_text(
+      "named_events.sv",
+      R"(
+module named_events;
+  event fired, acknowledged;
+  logic observed;
+  initial begin
+    -> fired;
+    @(acknowledged);
+  end
+  always @(fired) observed = 1'b1;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "SystemVerilog named events must parse");
+  const auto& unit = parsed.design.units.front();
+  require(
+      unit.signals.size() == 3
+          && unit.signals[0].name == "fired"
+          && unit.signals[0].type.spelling == "event"
+          && unit.signals[1].name == "acknowledged"
+          && unit.signals[1].type.spelling == "event",
+      "named event declarations");
+  require(
+      unit.processes.size() == 2
+          && unit.processes[0].statements.size() == 2
+          && unit.processes[0].statements[0].kind
+              == StatementKind::EventTrigger
+          && unit.processes[0].statements[0].target.text == "fired"
+          && unit.processes[0].statements[1].kind
+              == StatementKind::WaitOn
+          && unit.processes[0].statements[1]
+                 .sensitivities.front().signal
+              == "acknowledged"
+          && unit.processes[1].sensitivities.front().signal == "fired",
+      "named event trigger and controls");
+
+  const auto nonblocking = parse_text(
+      "nonblocking_event.sv",
+      R"(
+module nonblocking_event;
+  event fired;
+  initial ->> fired;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto has_code = [](const auto& result, const std::string_view code) {
+    return std::any_of(
+        result.diagnostics.begin(),
+        result.diagnostics.end(),
+        [&](const auto& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      has_code(nonblocking, "FSIM-SV-UNSUPPORTED-032"),
+      "nonblocking event trigger diagnostic");
+
+  const auto duplicate = parse_text(
+      "duplicate_event.sv",
+      R"(
+module duplicate_event;
+  logic fired;
+  event fired;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      has_code(duplicate, "FSIM-SV-SEM-035"),
+      "duplicate named event diagnostic");
+}
+
 int main() {
   try {
     require(
@@ -5336,6 +5409,7 @@ int main() {
     test_systemverilog_select_and_concatenation_expressions();
     test_conditional_statement_trees();
     test_conditional_generate_hierarchy();
+    test_systemverilog_named_events();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

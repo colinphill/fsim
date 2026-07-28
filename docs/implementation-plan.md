@@ -320,7 +320,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the fifteenth post-gate batch, including append-only source-bearing detailed native-C safe-point callbacks (137.13 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 20/20 tests pass after the sixteenth post-gate batch, including repeated named-event interpreter/LLVM O0/O2 behavior (137.98 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -645,7 +645,7 @@ Completed groundwork:
 Planned implementation sequence:
 
 1. Complete procedural SV/VHDL testbench data, files, random facilities,
-   expression/wildcard and named events, fork/join, remaining waits,
+   expression/wildcard, nonblocking/general named events, fork/join, remaining waits,
    assertions, and display/report behavior.
 2. Complete inertial/transport/reject, NBA, named-event, and cross-language
    zero-delay scheduling semantics.
@@ -743,23 +743,24 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The fifteenth post-gate batch is implementation-complete:
+The sixteenth post-gate batch is implementation-complete:
 
-1. the callback structure has an append-only detailed safe-point field;
-2. detailed point structures carry size and API-version headers;
-3. scheduler points expose active/inactive/update/postponed phase identity;
-4. executable points distinguish statement, call, wait, assertion, process
-   entry, and process suspension;
-5. executable points carry generation-safe process handles;
-6. all points carry simulation time and delta;
-7. executable points carry the SimIR instruction index;
-8. executable points carry source path, line, and column;
-9. original and detailed callbacks coexist with identical dispatch counts;
-10. callers advertising the original v1 callback prefix neither read nor
-    invoke the appended callback, with strict C11 coverage.
+1. the lexer distinguishes immediate `->` from VHDL `=>`;
+2. module-level named-event declarations and comma groups enter typed HIR;
+3. duplicate event/object declarations receive a stable diagnostic;
+4. immediate event triggers retain source spans and target names;
+5. unknown and non-event trigger targets receive elaboration diagnostics;
+6. event storage starts at a known zero rather than four-state unknown;
+7. immediate triggers toggle event storage through existing typed SimIR;
+8. static and dynamic any-trigger controls reuse common sensitivity waits;
+9. repeated triggers wake a suspended process deterministically in successive
+   deltas with interpreter/LLVM O0/O2 equivalence; and
+10. nonblocking `->>` receives a targeted deferred-feature diagnostic instead
+    of being silently misparsed.
 
-Focused native-C callback tests pass. The interval LLVM 22 Debug regression
-passed all 19 tests in 137.13 seconds. This batch is ready to commit and push.
+Focused frontend, elaboration, and named-event application tests pass. The
+interval LLVM 22 Debug regression passed all 20 tests in 137.98 seconds. This
+batch is ready to commit and push.
 
 ## v1 release condition
 

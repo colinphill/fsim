@@ -284,6 +284,11 @@ Tasks inside a phase have a stable semantic order and an insertion order.
 Scheduling into an already completed phase defers the task to the next delta.
 The runtime records recently changed signals and pending stable orders so a
 `max_deltas` failure can identify the likely zero-time oscillation.
+Immediate Verilog/SystemVerilog named-event triggers use a zero-initialized
+internal event bit and toggle it with an active-phase blocking write. Existing
+any-change sensitivity fanout therefore wakes static or dynamically suspended
+event waiters in the next deterministic delta. Nonblocking `->>` publication
+is deferred until named-event NBA scheduling is represented explicitly.
 
 The four queues are the implementation spine for the more detailed
 cross-language lattice in
@@ -312,7 +317,9 @@ SimIR processes are explicit state machines. The current operation set includes:
 Bounded frontend lowering reaches these suspension operations from VHDL bare,
 `on`, `until`, and `for` wait clauses, SystemVerilog integer `#` delay and
 any-change/`posedge`/`negedge` `@(signal-list)` statements, and static process
-sensitivities. Dynamic and static edge waits share the same four-state edge
+sensitivities. Immediate named-event triggers lower to read/not/blocking-write
+operations while `@event` uses the same any-change wait. Dynamic and static
+edge waits share the same four-state edge
 predicate. VHDL condition waits suspend before their first condition test.
 Combined event/timeout waits retain one absolute deadline while false event
 wakeups rearm the sensitivity set; an internal scalar frame register records

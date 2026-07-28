@@ -720,6 +720,8 @@ class VerilogParser final : private detail::ParserBase {
         parse_typedef(unit, previous());
       } else if (match_keyword("genvar")) {
         parse_genvar_declaration(unit);
+      } else if (match_keyword("event")) {
+        parse_event_declaration(unit, previous());
       } else if (
           keyword("final")
           || (language_ == Language::Verilog2005
@@ -2348,6 +2350,53 @@ class VerilogParser final : private detail::ParserBase {
         || is_named_type_reference_start();
   }
 
+  void parse_event_declaration(
+      DesignUnit& unit, const Token& start) {
+    Type type = default_verilog_type();
+    type.spelling = "event";
+    type.domain = ValueDomain::Logic4;
+    for (;;) {
+      const auto name = expect_identifier("named event");
+      const auto duplicate_signal = std::find_if(
+          unit.signals.begin(),
+          unit.signals.end(),
+          [&](const SignalDeclaration& signal) {
+            return signal.name == name.text;
+          });
+      const auto duplicate_port = std::find_if(
+          unit.ports.begin(),
+          unit.ports.end(),
+          [&](const SignalDeclaration& port) {
+            return port.name == name.text;
+          });
+      if (duplicate_signal != unit.signals.end()
+          || duplicate_port != unit.ports.end()) {
+        error(
+            name,
+            "FSIM-SV-SEM-035",
+            "duplicate named event or object declaration '"
+                + name.text + "'");
+      } else {
+        unit.signals.push_back(SignalDeclaration{
+            name.text,
+            type,
+            PortDirection::Unknown,
+            false,
+            name.span});
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after named event declaration",
+        "FSIM-SV-PARSE-117");
+    if (!unit.signals.empty()) {
+      unit.signals.back().span = span_from(start, previous());
+    }
+  }
+
   void parse_declaration(DesignUnit& unit) {
     const auto start = current();
     VerilogTypeSpec spec;
@@ -3303,6 +3352,29 @@ class VerilogParser final : private detail::ParserBase {
   }
 
   std::optional<Statement> parse_statement() {
+    if (match(TokenKind::ThinArrow)) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::EventTrigger;
+      const auto event = expect_identifier("named event after '->'");
+      statement.target = Expression{
+          ExpressionKind::Identifier,
+          event.text,
+          {},
+          event.span};
+      if (match(TokenKind::Greater)) {
+        error(
+            previous(),
+            "FSIM-SV-UNSUPPORTED-032",
+            "nonblocking named-event trigger '->>' is not implemented");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after named-event trigger",
+          "FSIM-SV-PARSE-118");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     if (language_ == Language::SystemVerilog2017
         && (keyword("unique") || keyword("unique0")
             || keyword("priority"))

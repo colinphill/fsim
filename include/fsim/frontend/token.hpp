@@ -49,6 +49,7 @@ enum class TokenKind {
   CaseNotEqual,
   WildcardNotEqual,
   Arrow,
+  ThinArrow,
   ColonEqual,
   Scope,
   ShiftLeft,

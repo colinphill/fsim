@@ -1461,7 +1461,8 @@ fsim_status_t fsim_session_get_object_info(
       out_info->width = info.width;
       out_info->name = view(leaf_name(info.name));
       out_info->full_name = view(info.name);
-      out_info->type_name = view("logic4");
+      out_info->type_name =
+          info.type_name.empty() ? view("logic4") : view(info.type_name);
       out_info->flags =
           value.simulation->signal_is_forced(*signal)
           ? FSIM_OBJECT_FLAG_FORCED

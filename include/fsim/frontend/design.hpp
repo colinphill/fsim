@@ -241,6 +241,7 @@ enum class StatementKind {
   Delay,
   WaitOn,
   WaitUntil,
+  EventTrigger,
   Pause,
   Finish,
   Block,

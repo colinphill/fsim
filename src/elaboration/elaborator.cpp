@@ -2884,6 +2884,43 @@ private:
         local_members_ = std::move(outer_members);
     }
 
+    void lower_event_trigger(const Statement& statement) {
+        if (statement.target.kind != ExpressionKind::Identifier) {
+            report(
+                "FSIM-ELAB-099",
+                "named-event trigger requires a simple event name",
+                statement.span);
+            return;
+        }
+        const auto found = signals_.find(statement.target.text);
+        if (found == signals_.end()) {
+            report(
+                "FSIM-ELAB-100",
+                "unknown named event '" + statement.target.text + "'",
+                statement.target.span);
+            return;
+        }
+        const auto& info = design_.signal_info_.at(found->second);
+        if (info.type_name != "event") {
+            report(
+                "FSIM-ELAB-101",
+                "event trigger target '" + statement.target.text
+                    + "' is not declared as an event",
+                statement.target.span);
+            return;
+        }
+        const auto current =
+            allocate_register(1, frontend::ValueDomain::Logic4);
+        const auto toggled =
+            allocate_register(1, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(
+            ReadSignal{current, found->second});
+        process_.operations.emplace_back(
+            UnaryNot{toggled, current});
+        process_.operations.emplace_back(
+            WriteBlocking{found->second, toggled});
+    }
+
     static const Statement* recognized_vhdl_edge_guard(
         const frontend::Process& source) {
         if (source.statements.empty()) {
@@ -2985,6 +3022,9 @@ private:
         }
         case StatementKind::WaitUntil:
             lower_wait_until(statement);
+            break;
+        case StatementKind::EventTrigger:
+            lower_event_trigger(statement);
             break;
         case StatementKind::Pause:
             process_.operations.emplace_back(Pause{});
@@ -6391,6 +6431,7 @@ private:
             case StatementKind::Continue:
             case StatementKind::Delay:
             case StatementKind::WaitOn:
+            case StatementKind::EventTrigger:
             case StatementKind::Pause:
             case StatementKind::Finish:
             case StatementKind::Block:
@@ -7872,6 +7913,7 @@ private:
             id,
             full_name,
             static_cast<std::size_t>(width),
+            declaration.type.spelling,
             declaration.type.domain,
             declaration.type.is_signed,
             declaration.type.packed_range,
@@ -7880,7 +7922,9 @@ private:
             declaration.direction,
             declaration.span});
         auto initial = Logic4::x;
-        if (declaration.type.spelling == "tri0") {
+        if (declaration.type.spelling == "event") {
+            initial = Logic4::zero;
+        } else if (declaration.type.spelling == "tri0") {
             initial = Logic4::zero;
         } else if (declaration.type.spelling == "tri1") {
             initial = Logic4::one;
