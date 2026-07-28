@@ -405,6 +405,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-027` | error | A bounded struct typedef omits the `packed` qualifier. |
 | `FSIM-SV-UNSUPPORTED-028` | error | A packed-struct member uses a nested aggregate or unsupported data type. |
 | `FSIM-SV-UNSUPPORTED-029` | error | A packed-struct member has an unpacked dimension or initializer. |
+| `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
 
 ## Elaboration and SimIR lowering
 

@@ -58,7 +58,8 @@ The current tree contains:
   reset/cell/keyword-version/unconnected-drive compiler state, including
   cell specialization metadata and pull initialization for omitted inputs;
 - bounded scalar `buf`/`not`/`and`/`nand`/`or`/`nor`/`xor`/`xnor` gate
-  primitives lowered through the common continuous-process path;
+  primitives with shared integer delays and comma-separated instances,
+  lowered through the common continuous-process path;
 - recursive VHDL/SV instance elaboration in both hierarchy directions with
   explicit cross-language bindings, whole-signal port aliasing, and boundary
   validation;

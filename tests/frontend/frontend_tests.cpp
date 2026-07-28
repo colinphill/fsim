@@ -2479,6 +2479,7 @@ module gates;
   logic b;
   logic c;
   logic y_buf;
+  logic y_buf_second;
   logic y_not;
   logic y_and;
   logic y_nand;
@@ -2486,7 +2487,7 @@ module gates;
   logic y_nor;
   logic y_xor;
   logic y_xnor;
-  buf (y_buf, a);
+  buf #2 (y_buf, a), named_buf (y_buf_second, b);
   not named_not (y_not, a);
   and (y_and, a, b, c);
   nand (y_nand, a, b, c);
@@ -2501,7 +2502,7 @@ endmodule
   const auto& statements =
       result.design.units.front().concurrent_statements;
   require(
-      statements.size() == 8
+      statements.size() == 9
           && std::ranges::all_of(
               statements,
               [](const Statement& statement) {
@@ -2509,10 +2510,14 @@ endmodule
                     && statement.assignment_kind
                         == AssignmentKind::Continuous;
               })
+          && statements[0].delay
+          && statements[0].delay->magnitude == 2
+          && statements[1].delay
+          && statements[1].delay->magnitude == 2
           && statements[0].value.kind == ExpressionKind::Identifier
-          && statements[1].value.kind == ExpressionKind::Unary
-          && statements[2].value.kind == ExpressionKind::Binary
-          && statements[3].value.kind == ExpressionKind::Unary,
+          && statements[2].value.kind == ExpressionKind::Unary
+          && statements[3].value.kind == ExpressionKind::Binary
+          && statements[4].value.kind == ExpressionKind::Unary,
       "gate primitives lower into continuous expression HIR");
 
   const auto invalid = parse_text(
@@ -2523,6 +2528,7 @@ module invalid_gate;
   logic y;
   and (y, a);
   not (y, a, a);
+  and (strong1, pull0) (y, a, a);
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -2535,6 +2541,13 @@ endmodule
                  })
               == 2,
       "invalid gate terminal counts are targeted");
+  require(
+      std::ranges::any_of(
+          invalid.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-UNSUPPORTED-030";
+          }),
+      "unsupported gate strengths are targeted");
 }
 
 void test_systemverilog_select_and_concatenation_expressions() {

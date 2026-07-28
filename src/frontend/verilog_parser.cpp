@@ -721,9 +721,7 @@ class VerilogParser final : private detail::ParserBase {
       } else if (is_declaration_start()) {
         parse_declaration(unit);
       } else if (is_gate_primitive()) {
-        if (auto gate = parse_gate_primitive()) {
-          unit.concurrent_statements.push_back(std::move(*gate));
-        }
+        parse_gate_primitive(unit.concurrent_statements);
       } else if (match_keyword("assign")) {
         if (auto assignment = parse_continuous_assignment(previous())) {
           unit.concurrent_statements.push_back(std::move(*assignment));
@@ -2555,95 +2553,127 @@ class VerilogParser final : private detail::ParserBase {
         || keyword("xor") || keyword("xnor");
   }
 
-  std::optional<Statement> parse_gate_primitive() {
+  void parse_gate_primitive(std::vector<Statement>& statements) {
     const auto start = advance();
     const auto operation = detail::ascii_lower(start.text);
-    if (at(TokenKind::Identifier)
-        && at(TokenKind::LeftParen, 1)) {
-      advance();  // Optional instance name.
-    }
-    expect(
-        TokenKind::LeftParen,
-        "'(' after gate primitive name",
-        "FSIM-SV-PARSE-091");
-    if (!at(TokenKind::Identifier)) {
+    const auto strength_keyword =
+        [](const std::string_view text) {
+          return text == "supply0" || text == "supply1"
+              || text == "strong0" || text == "strong1"
+              || text == "pull0" || text == "pull1"
+              || text == "weak0" || text == "weak1"
+              || text == "highz0" || text == "highz1";
+        };
+    if (at(TokenKind::LeftParen)
+        && at(TokenKind::Identifier, 1)
+        && strength_keyword(current(1).text)
+        && at(TokenKind::Comma, 2)
+        && at(TokenKind::Identifier, 3)
+        && strength_keyword(current(3).text)
+        && at(TokenKind::RightParen, 4)) {
       error(
           current(),
-          "FSIM-SV-PARSE-092",
-          "a gate primitive requires an output lvalue first");
+          "FSIM-SV-UNSUPPORTED-030",
+          "gate drive strengths are not implemented");
       skip_to_semicolon();
-      return std::nullopt;
+      return;
     }
-    auto target = parse_lvalue();
-    std::vector<Expression> inputs;
-    while (match(TokenKind::Comma)) {
-      inputs.push_back(parse_expression());
+    std::optional<Delay> delay;
+    if (match(TokenKind::Hash)) {
+      delay = parse_verilog_delay(previous());
     }
-    expect(
-        TokenKind::RightParen,
-        "')' after gate primitive terminals",
-        "FSIM-SV-PARSE-093");
+
+    const bool unary = operation == "buf" || operation == "not";
+    do {
+      const auto instance_start = current();
+      if (at(TokenKind::Identifier)
+          && at(TokenKind::LeftParen, 1)) {
+        advance();  // Optional instance name.
+      }
+      expect(
+          TokenKind::LeftParen,
+          "'(' after gate primitive name",
+          "FSIM-SV-PARSE-091");
+      if (!at(TokenKind::Identifier)) {
+        error(
+            current(),
+            "FSIM-SV-PARSE-092",
+            "a gate primitive requires an output lvalue first");
+        skip_to_semicolon();
+        return;
+      }
+      auto target = parse_lvalue();
+      std::vector<Expression> inputs;
+      while (match(TokenKind::Comma)) {
+        inputs.push_back(parse_expression());
+      }
+      expect(
+          TokenKind::RightParen,
+          "')' after gate primitive terminals",
+          "FSIM-SV-PARSE-093");
+
+      if ((unary && inputs.size() != 1)
+          || (!unary && inputs.size() < 2)) {
+        error(
+            instance_start,
+            "FSIM-SV-SEM-026",
+            unary
+                ? "buf/not primitives require exactly one input terminal"
+                : "logic gate primitives require at least two input terminals");
+        continue;
+      }
+
+      Expression value = std::move(inputs.front());
+      if (unary) {
+        if (operation == "not") {
+          const auto combined = cover(start.span, value.span);
+          value = Expression{
+              ExpressionKind::Unary,
+              "~",
+              {std::move(value)},
+              combined};
+        }
+      } else {
+        const auto binary_operation =
+            operation == "and" || operation == "nand"
+                ? "&"
+                : operation == "or" || operation == "nor"
+                    ? "|"
+                    : "^";
+        for (std::size_t index = 1;
+             index < inputs.size(); ++index) {
+          const auto combined =
+              cover(value.span, inputs[index].span);
+          value = Expression{
+              ExpressionKind::Binary,
+              binary_operation,
+              {std::move(value), std::move(inputs[index])},
+              combined};
+        }
+        if (operation == "nand" || operation == "nor"
+            || operation == "xnor") {
+          const auto combined = cover(start.span, value.span);
+          value = Expression{
+              ExpressionKind::Unary,
+              "~",
+              {std::move(value)},
+              combined};
+        }
+      }
+
+      Statement statement;
+      statement.kind = StatementKind::Assignment;
+      statement.assignment_kind = AssignmentKind::Continuous;
+      statement.target = std::move(target);
+      statement.value = std::move(value);
+      statement.delay = delay;
+      statement.span = cover(start.span, previous().span);
+      statements.push_back(std::move(statement));
+    } while (match(TokenKind::Comma));
     expect(
         TokenKind::Semicolon,
         "';' after gate primitive",
         "FSIM-SV-PARSE-094");
-
-    const bool unary = operation == "buf" || operation == "not";
-    if ((unary && inputs.size() != 1)
-        || (!unary && inputs.size() < 2)) {
-      error(
-          start,
-          "FSIM-SV-SEM-026",
-          unary
-              ? "buf/not primitives require exactly one input terminal"
-              : "logic gate primitives require at least two input terminals");
-      return std::nullopt;
-    }
-
-    Expression value = std::move(inputs.front());
-    if (unary) {
-      if (operation == "not") {
-        const auto combined = cover(start.span, value.span);
-        value = Expression{
-            ExpressionKind::Unary,
-            "~",
-            {std::move(value)},
-            combined};
-      }
-    } else {
-      const auto binary_operation =
-          operation == "and" || operation == "nand"
-              ? "&"
-              : operation == "or" || operation == "nor"
-                  ? "|"
-                  : "^";
-      for (std::size_t index = 1; index < inputs.size(); ++index) {
-        const auto combined =
-            cover(value.span, inputs[index].span);
-        value = Expression{
-            ExpressionKind::Binary,
-            binary_operation,
-            {std::move(value), std::move(inputs[index])},
-            combined};
-      }
-      if (operation == "nand" || operation == "nor"
-          || operation == "xnor") {
-        const auto combined = cover(start.span, value.span);
-        value = Expression{
-            ExpressionKind::Unary,
-            "~",
-            {std::move(value)},
-            combined};
-      }
-    }
-
-    Statement statement;
-    statement.kind = StatementKind::Assignment;
-    statement.assignment_kind = AssignmentKind::Continuous;
-    statement.target = std::move(target);
-    statement.value = std::move(value);
-    statement.span = span_from(start, previous());
-    return statement;
   }
 
   Process parse_always() {
