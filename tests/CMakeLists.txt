@@ -248,6 +248,12 @@ if(TARGET fsim_application)
       PROPERTIES LABELS "fast;tcl"
     )
     if(FSIM_WITH_BUNDLED_TCL)
+      set_tests_properties(
+        fsim.application.tcl
+        PROPERTIES
+          ENVIRONMENT
+            "FSIM_TCL_LIBRARY=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
+      )
       add_test(
         NAME fsim.tcl.fetched-relocation
         COMMAND
@@ -270,6 +276,17 @@ if(TARGET fsim_application)
   fsim_configure_test(fsim_api_tests)
   target_link_libraries(fsim_api_tests PRIVATE fsim_api)
   add_test(NAME fsim.api COMMAND fsim_api_tests)
+  if(WIN32)
+    add_custom_command(
+      TARGET fsim_api_tests
+      POST_BUILD
+      COMMAND
+        "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:fsim_api>"
+        "$<TARGET_FILE_DIR:fsim_api_tests>"
+      VERBATIM
+    )
+  endif()
 
   add_executable(fsim_api_header_c_test api/api_header_c_test.c)
   target_compile_features(fsim_api_header_c_test PRIVATE c_std_11)
@@ -279,4 +296,15 @@ if(TARGET fsim_application)
     PROPERTIES LINKER_LANGUAGE CXX
   )
   add_test(NAME fsim.api.c_header COMMAND fsim_api_header_c_test)
+  if(WIN32)
+    add_custom_command(
+      TARGET fsim_api_header_c_test
+      POST_BUILD
+      COMMAND
+        "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:fsim_api>"
+        "$<TARGET_FILE_DIR:fsim_api_header_c_test>"
+      VERBATIM
+    )
+  endif()
 endif()

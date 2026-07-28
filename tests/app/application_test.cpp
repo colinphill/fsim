@@ -2261,7 +2261,13 @@ end architecture rtl;
   assert(!first->cache_hit);
   auto second = fsim::app::build_project(config, diagnostics);
   assert(second);
+#if defined(_WIN32)
+  // The conservative MSVC dependency scanner intentionally disables
+  // persistent caching when the plug-in reaches implicit SDK headers.
+  assert(!second->cache_hit);
+#else
   assert(second->cache_hit);
+#endif
   assert(first->systemc_hierarchy == second->systemc_hierarchy);
   const auto child_q = first->design.find_signal("tb.u_child.value");
   assert(child_q);

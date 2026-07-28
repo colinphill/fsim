@@ -249,11 +249,10 @@ private:
       llvm::consumeError(parsed.takeError());
       return false;
     }
-    const auto object_triple = (*parsed)->makeTriple();
     return (*parsed)->isRelocatableObject() &&
            (*parsed)->getBytesInAddress() == sizeof(void *) &&
            (*parsed)->getArch() == target_triple_.getArch() &&
-           object_triple.getObjectFormat() ==
+           (*parsed)->getTripleObjectFormat() ==
                target_triple_.getObjectFormat();
   }
 
