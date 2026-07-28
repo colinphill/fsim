@@ -448,6 +448,7 @@ therefore excluded.
 | `FSIM-ELAB-067` | error | A VHDL arithmetic expression mixes explicitly signed and unsigned packed operands without conversion. |
 | `FSIM-ELAB-068` | error | A bit/part select does not have constant in-range bounds, a positive indexed width, or a direction compatible with its declared packed range. |
 | `FSIM-ELAB-069` | error | A concatenation is empty or has an operand/result width that cannot be inferred or represented. |
+| `FSIM-ELAB-070` | error | A VHDL packed shift count is negative or not locally static in the current executable slice. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

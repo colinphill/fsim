@@ -725,7 +725,10 @@ entity signed_ops is
     rhs : in signed(7 downto 0);
     quotient : out signed(7 downto 0);
     remainder : out signed(7 downto 0);
-    modulo : out signed(7 downto 0)
+    modulo : out signed(7 downto 0);
+    shifted_left : out signed(7 downto 0);
+    shifted_right : out signed(7 downto 0);
+    shifted_arithmetic : out signed(7 downto 0)
   );
 end entity;
 architecture rtl of signed_ops is
@@ -733,6 +736,9 @@ begin
   quotient <= lhs / rhs;
   remainder <= lhs rem rhs;
   modulo <= lhs mod rhs;
+  shifted_left <= lhs sll 1;
+  shifted_right <= lhs srl 1;
+  shifted_arithmetic <= lhs sra 1;
 end architecture;
 )",
       Language::Vhdl2008);
@@ -742,7 +748,7 @@ end architecture;
   const auto* architecture =
       vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(
-      entity != nullptr && entity->ports.size() == 5
+      entity != nullptr && entity->ports.size() == 8
           && std::ranges::all_of(
               entity->ports,
               [](const SignalDeclaration& port) {
@@ -751,13 +757,19 @@ end architecture;
       "VHDL signed subtype metadata");
   require(
       architecture != nullptr
-          && architecture->concurrent_statements.size() == 3
+          && architecture->concurrent_statements.size() == 6
           && architecture->concurrent_statements[0].value.text == "/"
           && architecture->concurrent_statements[1].value.text
               == "rem"
           && architecture->concurrent_statements[2].value.text
-              == "mod",
-      "VHDL signed division/remainder/modulo expression nodes");
+              == "mod"
+          && architecture->concurrent_statements[3].value.text
+              == "sll"
+          && architecture->concurrent_statements[4].value.text
+              == "srl"
+          && architecture->concurrent_statements[5].value.text
+              == "sra",
+      "VHDL signed arithmetic and shift expression nodes");
 
   const auto systemverilog = parse_text(
       "signed_ops.sv",

@@ -5087,7 +5087,10 @@ entity vhdl_signed_arithmetic is
     quotient : out signed(7 downto 0);
     remainder : out signed(7 downto 0);
     modulo : out signed(7 downto 0);
-    less : out std_logic
+    less : out std_logic;
+    shifted_left : out signed(7 downto 0);
+    shifted_right : out signed(7 downto 0);
+    shifted_arithmetic : out signed(7 downto 0)
   );
 end entity;
 
@@ -5102,6 +5105,9 @@ begin
     remainder <= lhs rem rhs;
     modulo <= lhs mod rhs;
     less <= lhs < rhs;
+    shifted_left <= lhs sll 1;
+    shifted_right <= lhs srl 1;
+    shifted_arithmetic <= lhs sra 1;
   end process;
 end architecture;
 )",
@@ -5139,7 +5145,13 @@ end architecture;
         elaborated_vhdl_signed_arithmetic.design->find_signal(
             "modulo"),
         elaborated_vhdl_signed_arithmetic.design->find_signal(
-            "less")};
+            "less"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "shifted_left"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "shifted_right"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "shifted_arithmetic")};
     assert(vhdl_signed_lhs && vhdl_signed_rhs);
     assert(std::ranges::all_of(
         vhdl_signed_outputs,
@@ -5158,7 +5170,7 @@ end architecture;
         fsim::runtime::PackedLogic4::from_msb_string(
             "00000011"));
     (void)vhdl_signed_interpreter->run();
-    const std::array<std::string_view, 7>
+    const std::array<std::string_view, 10>
         expected_vhdl_signed{
             "11111110",
             "11111000",
@@ -5166,7 +5178,10 @@ end architecture;
             "11111111",
             "11111110",
             "00000001",
-            "1"};
+            "1",
+            "11110110",
+            "01111101",
+            "11111101"};
     for (std::size_t index = 0;
          index < vhdl_signed_outputs.size(); ++index) {
       assert(
@@ -5175,6 +5190,48 @@ end architecture;
               .to_msb_string()
           == expected_vhdl_signed[index]);
     }
+    vhdl_signed_interpreter->deposit_signal(
+        *vhdl_signed_lhs,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "10X01000"));
+    (void)vhdl_signed_interpreter->run();
+    const std::array<std::string_view, 3>
+        expected_unknown_shifts{
+            "0X010000", "010X0100", "110X0100"};
+    for (std::size_t index = 0;
+         index < expected_unknown_shifts.size(); ++index) {
+      assert(
+          vhdl_signed_interpreter
+              ->signal_value(*vhdl_signed_outputs[index + 7])
+              .to_msb_string()
+          == expected_unknown_shifts[index]);
+    }
+
+    const auto invalid_vhdl_shift =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_shift.vhd",
+            R"(
+entity invalid_vhdl_shift is
+  port (
+    lhs : in signed(7 downto 0);
+    result : out signed(7 downto 0)
+  );
+end entity;
+
+architecture rtl of invalid_vhdl_shift is
+begin
+  result <= lhs sll -1;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_shift.ok());
+    const auto rejected_vhdl_shift =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_shift.design,
+            "vhdl:work.invalid_vhdl_shift(rtl)");
+    assert(!rejected_vhdl_shift.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_shift, "FSIM-ELAB-070"));
 
     const auto mixed_vhdl_arithmetic =
         fsim::frontend::parse_text(

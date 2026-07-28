@@ -196,6 +196,8 @@ The following foundation is implemented:
   VHDL and SystemVerilog, including distinct signed remainder/modulo,
   arbitrary-width interpreter algorithms, guarded LLVM lowering, and
   differential source tests;
+- VHDL packed `sll`/`srl`/`sra` for locally static nonnegative counts through
+  the common four-state interpreter and LLVM shift kernels;
 - nested VHDL `if`/`elsif`/`else` with Boolean literals and typed Boolean
   operators, plus nested SystemVerilog `if`/`else` and immediate assertions
   using packed four-state truth conversion, with O0/O2 differential evidence;
@@ -249,7 +251,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 526 unique current production diagnostic codes.
+- a stable catalog covering 527 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -274,6 +276,7 @@ Current Linux validation:
 | VHDL reusable contexts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive cross-library context/package visibility, missing/malformed/cycle diagnostics, interpreter/JIT/VCD equality, and context-only native-cache invalidation |
 | SystemVerilog package constants and packed types | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive imports, direct scoped constants/types, alias chains, parameterized ranges, explicit/implicit enum values, non-nested packed-struct layouts/member reads/writes, targeted legality failures, interpreter/JIT/VCD equality, unrelated-package reuse, and transitive native-cache invalidation |
 | SystemVerilog expression semantics | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for four-state logical/reduction/shift/arithmetic operations, complemented reductions/XNOR, and exact `===`/`!==` X/Z comparison |
+| VHDL packed shifts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for `sll`/`srl`/`sra`, including X-containing data and arithmetic left-element fill |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |

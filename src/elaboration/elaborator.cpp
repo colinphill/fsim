@@ -560,14 +560,18 @@ std::optional<std::int64_t> evaluate_constant_expression(
     if (expression.text == "<<"
         || expression.text == ">>"
         || expression.text == "<<<"
-        || expression.text == ">>>") {
+        || expression.text == ">>>"
+        || expression.text == "sll"
+        || expression.text == "srl"
+        || expression.text == "sra") {
         if (*left < 0 || *right < 0 || *right >= 63) {
             error = "constant shifts require a nonnegative value and an "
                     "amount from 0 through 62";
             return std::nullopt;
         }
         if (expression.text == "<<"
-            || expression.text == "<<<") {
+            || expression.text == "<<<"
+            || expression.text == "sll") {
             if (*left
                 > (std::numeric_limits<std::int64_t>::max()
                    >> static_cast<unsigned>(*right))) {
@@ -4077,7 +4081,22 @@ private:
             && (expression.text == "<<"
                 || expression.text == ">>"
                 || expression.text == "<<<"
-                || expression.text == ">>>")) {
+                || expression.text == ">>>"
+                || expression.text == "sll"
+                || expression.text == "srl"
+                || expression.text == "sra")) {
+            if (language_ == frontend::Language::Vhdl2008) {
+                const auto count =
+                    constant_index(expression.operands[1]);
+                if (!count || *count < 0) {
+                    report(
+                        "FSIM-ELAB-070",
+                        "VHDL packed shifts currently require a locally "
+                        "static nonnegative count",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+            }
             const auto value_width =
                 infer_width(expression.operands[0])
                     .value_or(expected_width);
@@ -4108,11 +4127,13 @@ private:
                     register_width(*value), result_domain);
             process_.operations.emplace_back(Shift{
                 expression.text == ">>"
+                    || expression.text == "srl"
                     || (expression.text == ">>>"
                         && !is_signed_expression(
                             expression.operands[0]))
                     ? ShiftOperator::logical_right
                     : expression.text == ">>>"
+                            || expression.text == "sra"
                         ? ShiftOperator::arithmetic_right
                         : ShiftOperator::logical_left,
                 destination,
@@ -4637,7 +4658,10 @@ private:
             if (expression.text == "<<"
                 || expression.text == ">>"
                 || expression.text == "<<<"
-                || expression.text == ">>>") {
+                || expression.text == ">>>"
+                || expression.text == "sll"
+                || expression.text == "srl"
+                || expression.text == "sra") {
                 return is_signed_expression(expression.operands[0]);
             }
             if (expression.text == "=="

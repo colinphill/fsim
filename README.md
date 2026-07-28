@@ -90,6 +90,8 @@ The current tree contains:
   SystemVerilog, including distinct VHDL `rem`/`mod`, SystemVerilog
   mixed-signedness rules, deterministic `X/Z`/zero-divisor behavior, and
   fixed-width signed-overflow wrapping;
+- VHDL packed logical `sll`/`srl` and left-element-filling arithmetic `sra`
+  shifts for locally static nonnegative counts;
 - declared-range-aware SystemVerilog constant bit/part selects and packed
   concatenations, including ascending and non-zero-based source ranges;
 - declared-range-aware VHDL indexed names/slices and correct width-summing

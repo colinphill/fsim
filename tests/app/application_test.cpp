@@ -451,6 +451,9 @@ architecture rtl of vhdl_signed_app is
   signal remainder : signed(7 downto 0);
   signal modulo : signed(7 downto 0);
   signal less : std_logic;
+  signal shifted_left : signed(7 downto 0);
+  signal shifted_right : signed(7 downto 0);
+  signal shifted_arithmetic : signed(7 downto 0);
 begin
   lhs <= "11111011";
   rhs <= "00000011";
@@ -463,6 +466,9 @@ begin
     remainder <= lhs rem rhs;
     modulo <= lhs mod rhs;
     less <= lhs < rhs;
+    shifted_left <= lhs sll 1;
+    shifted_right <= lhs srl 1;
+    shifted_arithmetic <= lhs sra 1;
   end process;
 end architecture;
 )";
@@ -4174,7 +4180,7 @@ end architecture rtl;
       == std::vector<std::string>{
           "11111011", "00000011", "11111110", "11111000",
           "11110001", "11111111", "11111110", "00000001",
-          "1"}));
+          "1", "11110110", "01111101", "11111101"}));
 
   auto conditional_statement_config = config;
   conditional_statement_config.project.name =

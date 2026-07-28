@@ -1755,13 +1755,18 @@ class VhdlParser final : private detail::ParserBase {
         at(TokenKind::Greater) || at(TokenKind::GreaterEqual)) {
       return BinaryOperation{3, current().text};
     }
+    if (keyword("sll", 0, true) || keyword("srl", 0, true)
+        || keyword("sra", 0, true)) {
+      return BinaryOperation{
+          4, detail::ascii_lower(current().text)};
+    }
     if (at(TokenKind::Ampersand) || at(TokenKind::Plus) ||
         at(TokenKind::Minus)) {
-      return BinaryOperation{4, current().text};
+      return BinaryOperation{5, current().text};
     }
     if (at(TokenKind::Star) || at(TokenKind::Slash) ||
         keyword("mod", 0, true) || keyword("rem", 0, true)) {
-      return BinaryOperation{5, detail::ascii_lower(current().text)};
+      return BinaryOperation{6, detail::ascii_lower(current().text)};
     }
     return std::nullopt;
   }
