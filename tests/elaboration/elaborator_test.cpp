@@ -355,6 +355,7 @@ endmodule
 package base_values;
   parameter int WIDTH = 4;
   localparam int BASE = 5;
+  typedef logic [WIDTH-1:0] word_t;
 endpackage : base_values
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -365,6 +366,7 @@ endpackage : base_values
 import base_values::*;
 package derived_values;
   localparam int NEXT = BASE + 1;
+  typedef base_values::word_t result_t;
 endpackage : derived_values
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -372,11 +374,20 @@ endpackage : derived_values
         fsim::frontend::parse_text(
             "systemverilog_package_user.sv",
             R"(
-import derived_values::NEXT;
-module systemverilog_package_user(
-  output logic [base_values::WIDTH-1:0] observed
+import derived_values::NEXT, derived_values::result_t;
+module systemverilog_package_user #(
+  parameter result_t INITIAL = NEXT
+)(
+  output result_t observed
 );
-  assign observed = NEXT;
+  typedef result_t local_result_t;
+  generate
+    if (1) begin : typed
+      local_result_t staged;
+      assign staged = INITIAL;
+    end
+  endgenerate
+  assign observed = typed.staged;
 endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -412,6 +423,14 @@ endmodule
     assert(
         systemverilog_package_elaborated.design->signals()
             .at(*systemverilog_package_observed).width
+        == 4);
+    const auto systemverilog_package_staged =
+        systemverilog_package_elaborated.design->find_signal(
+            "systemverilog_package_user.typed.staged");
+    assert(systemverilog_package_staged);
+    assert(
+        systemverilog_package_elaborated.design->signals()
+            .at(*systemverilog_package_staged).width
         == 4);
     const auto& systemverilog_package_dependencies =
         systemverilog_package_elaborated.design
@@ -457,9 +476,11 @@ package duplicate_values;
 endpackage
 package alpha_values;
   localparam int SHARED = 3;
+  typedef logic shared_t;
 endpackage
 package beta_values;
   localparam int SHARED = 4;
+  typedef bit shared_t;
 endpackage
 package broken_values;
   localparam int BROKEN = 1 / 0;
@@ -471,6 +492,11 @@ import alpha_values::*, beta_values::*;
 import broken_values::*;
 module invalid_systemverilog_package_user;
   logic value;
+  missing_t missing_value;
+  shared_t ambiguous_value;
+  typedef cycle_b cycle_a;
+  typedef cycle_a cycle_b;
+  cycle_a cyclic_value;
   assign value = first_values::second_values::VALUE;
 endmodule
 )",
@@ -487,7 +513,10 @@ endmodule
              "FSIM-ELAB-SVPKG-003",
              "FSIM-ELAB-SVPKG-004",
              "FSIM-ELAB-SVPKG-005",
-             "FSIM-ELAB-SVPKG-006"}) {
+             "FSIM-ELAB-SVPKG-006",
+             "FSIM-ELAB-SVTYPE-001",
+             "FSIM-ELAB-SVTYPE-002",
+             "FSIM-ELAB-SVTYPE-003"}) {
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));
     }

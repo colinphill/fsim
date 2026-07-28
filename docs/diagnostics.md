@@ -327,6 +327,7 @@ therefore excluded.
 | `FSIM-SV-PARSE-079` | error | Expected `;` after a package import. |
 | `FSIM-SV-PARSE-080` | error | Expected `;` after a SystemVerilog package header. |
 | `FSIM-SV-PARSE-081` | error | Expected `endpackage` for a package declaration. |
+| `FSIM-SV-PARSE-082` | error | Expected `;` after a bounded SystemVerilog typedef declaration. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -362,6 +363,7 @@ therefore excluded.
 | `FSIM-SV-SEM-021` | error | A generate case contains more than one `default` item. |
 | `FSIM-SV-SEM-022` | error | A module-scope `genvar` declaration is duplicated or conflicts with another object. |
 | `FSIM-SV-SEM-023` | error | A package declaration end name does not match its opening name. |
+| `FSIM-SV-SEM-024` | error | A bounded scope declares the same typedef name more than once. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -383,6 +385,8 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded integral-parameter, local-signal, continuous assignment, process, instance, and nested-generate subset. |
 | `FSIM-SV-UNSUPPORTED-022` | error | A generated local declaration incorrectly uses a module-port direction. |
 | `FSIM-SV-UNSUPPORTED-023` | error | A package item is outside the bounded integral parameter/localparam and import subset. |
+| `FSIM-SV-UNSUPPORTED-024` | error | A bounded typedef target is not an integral built-in or user-defined type. |
+| `FSIM-SV-UNSUPPORTED-025` | error | An unpacked typedef dimension is outside the current packed alias subset. |
 
 ## Elaboration and SimIR lowering
 
@@ -459,12 +463,15 @@ therefore excluded.
 | `FSIM-ELAB-CTX-001` | error | A bounded context reference is not `library.context`. |
 | `FSIM-ELAB-CTX-002` | error | A project context referenced by a library unit or another context was not found. |
 | `FSIM-ELAB-CTX-003` | error | Reusable VHDL context visibility contains a dependency cycle. |
-| `FSIM-ELAB-SVPKG-001` | error | A SystemVerilog package named by an import or scoped constant was not found in the owning library. |
-| `FSIM-ELAB-SVPKG-002` | error | A selected or scoped constant does not exist in the resolved SystemVerilog package. |
+| `FSIM-ELAB-SVPKG-001` | error | A SystemVerilog package named by an import or scoped item was not found in the owning library. |
+| `FSIM-ELAB-SVPKG-002` | error | A selected or scoped item does not exist in the resolved SystemVerilog package. |
 | `FSIM-ELAB-SVPKG-003` | error | The same direct constant name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVPKG-004` | error | Recursive SystemVerilog package imports contain a visibility cycle. |
-| `FSIM-ELAB-SVPKG-005` | error | A package-scoped constant is not exactly `package::constant`. |
+| `FSIM-ELAB-SVPKG-005` | error | A package-scoped item is not exactly `package::name`. |
 | `FSIM-ELAB-SVPKG-006` | error | A SystemVerilog package constant default cannot be evaluated in declaration order. |
+| `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
+| `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
+| `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

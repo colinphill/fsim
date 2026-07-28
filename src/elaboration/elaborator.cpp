@@ -916,6 +916,14 @@ void substitute_parameters(
 using QualifiedIdentifierMap =
     std::unordered_map<std::string, frontend::SourceSpan>;
 
+struct SystemVerilogTypeBinding {
+    frontend::Type type;
+    std::string owner;
+};
+
+using SystemVerilogTypeEnvironment =
+    std::unordered_map<std::string, SystemVerilogTypeBinding>;
+
 void collect_qualified_identifiers(
     const Expression& expression,
     QualifiedIdentifierMap& identifiers) {
@@ -934,6 +942,11 @@ void collect_qualified_identifiers(
 void collect_qualified_identifiers(
     const frontend::Type& type,
     QualifiedIdentifierMap& identifiers) {
+    if (!type.named_type.empty()
+        && type.named_type.find("::") != std::string::npos) {
+        identifiers.try_emplace(
+            type.named_type, type.named_type_span);
+    }
     if (!type.packed_range_expression) {
         return;
     }
@@ -1055,6 +1068,9 @@ void collect_qualified_identifiers(
 QualifiedIdentifierMap qualified_identifiers(
     const DesignUnit& unit) {
     QualifiedIdentifierMap result;
+    for (const auto& alias : unit.type_aliases) {
+        collect_qualified_identifiers(alias.type, result);
+    }
     for (const auto& parameter : unit.parameters) {
         collect_qualified_identifiers(parameter.type, result);
         collect_qualified_identifiers(
@@ -1931,6 +1947,13 @@ SpecializedUnit specialize_unit(
             parameter.default_value,
             result.environment,
             domains,
+            source.language);
+    }
+    for (auto& alias : result.unit.type_aliases) {
+        substitute_parameters(
+            alias.type,
+            result.environment,
+            diagnostics,
             source.language);
     }
     for (auto& port : result.unit.ports) {
@@ -4866,10 +4889,13 @@ private:
         }
         import_stack.push_back(&package);
         auto effective_package = package;
-        import_systemverilog_package_constants(
-            effective_package, import_stack);
-        import_qualified_systemverilog_package_constants(
-            effective_package, import_stack);
+        SystemVerilogTypeEnvironment type_environment;
+        import_systemverilog_package_items(
+            effective_package, import_stack, type_environment);
+        import_qualified_systemverilog_package_items(
+            effective_package, import_stack, type_environment);
+        resolve_systemverilog_named_types(
+            effective_package, type_environment);
         auto specialized = specialize_unit(
             effective_package,
             {},
@@ -4926,9 +4952,10 @@ private:
         }
     }
 
-    void import_systemverilog_package_constants(
+    void import_systemverilog_package_items(
         DesignUnit& unit,
-        std::vector<const DesignUnit*>& import_stack) {
+        std::vector<const DesignUnit*>& import_stack,
+        SystemVerilogTypeEnvironment& type_environment) {
         std::vector<frontend::ParameterDeclaration> imports;
         std::unordered_map<std::string, std::string> owners;
         for (const auto& import_item :
@@ -5001,12 +5028,36 @@ private:
                     true,
                     declaration.span});
             }
+            for (const auto& alias :
+                 specialized_package->unit.type_aliases) {
+                if (!wildcard
+                    && alias.name != import_item.name) {
+                    continue;
+                }
+                found_selected = true;
+                const auto [existing, inserted] =
+                    type_environment.emplace(
+                        alias.name,
+                        SystemVerilogTypeBinding{
+                            alias.type,
+                            package->name});
+                if (!inserted
+                    && existing->second.owner
+                        != package->name) {
+                    report(
+                        "FSIM-ELAB-SVTYPE-002",
+                        "SystemVerilog type '" + alias.name
+                            + "' is imported from multiple "
+                              "packages",
+                        import_item.span);
+                }
+            }
             if (!found_selected) {
                 report(
                     "FSIM-ELAB-SVPKG-002",
                     "SystemVerilog package '"
                         + package->name
-                        + "' has no constant '"
+                        + "' has no exported item '"
                         + import_item.name + "'",
                     import_item.span);
             }
@@ -5020,9 +5071,10 @@ private:
         unit.parameters = std::move(imports);
     }
 
-    void import_qualified_systemverilog_package_constants(
+    void import_qualified_systemverilog_package_items(
         DesignUnit& unit,
-        std::vector<const DesignUnit*>& import_stack) {
+        std::vector<const DesignUnit*>& import_stack,
+        SystemVerilogTypeEnvironment& type_environment) {
         auto identifiers = qualified_identifiers(unit);
         std::vector<std::string> ordered;
         for (const auto& [identifier, span] : identifiers) {
@@ -5045,8 +5097,8 @@ private:
                 || separator + 2 >= identifier.size()) {
                 report(
                     "FSIM-ELAB-SVPKG-005",
-                    "a package-scoped constant must be "
-                    "package::constant",
+                    "a package-scoped item must be "
+                    "package::name",
                     reference_span);
                 continue;
             }
@@ -5077,14 +5129,33 @@ private:
                 [&](const auto& candidate) {
                     return candidate.name == constant_name;
                 });
-            if (declaration == package->parameters.end()) {
+            const auto alias = std::find_if(
+                specialized_package->unit.type_aliases.begin(),
+                specialized_package->unit.type_aliases.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == constant_name;
+                });
+            if (declaration == package->parameters.end()
+                && alias
+                    == specialized_package->unit.type_aliases.end()) {
                 report(
                     "FSIM-ELAB-SVPKG-002",
                     "SystemVerilog package '"
                         + package_name
-                        + "' has no constant '"
+                        + "' has no exported item '"
                         + constant_name + "'",
                     reference_span);
+                continue;
+            }
+            if (alias
+                != specialized_package->unit.type_aliases.end()) {
+                type_environment.insert_or_assign(
+                    identifier,
+                    SystemVerilogTypeBinding{
+                        alias->type,
+                        package->name});
+                append_package_dependencies(
+                    unit, *package, *specialized_package);
                 continue;
             }
             const auto value =
@@ -5115,15 +5186,164 @@ private:
         unit.parameters = std::move(imports);
     }
 
+    void resolve_systemverilog_named_types(
+        DesignUnit& unit,
+        const SystemVerilogTypeEnvironment& imported_types) {
+        std::unordered_map<std::string, std::size_t> local_types;
+        for (std::size_t index = 0;
+             index < unit.type_aliases.size(); ++index) {
+            local_types.emplace(
+                unit.type_aliases[index].name, index);
+        }
+        std::vector<unsigned char> states(
+            unit.type_aliases.size(), 0);
+        std::function<bool(frontend::Type&)> resolve_type;
+        std::function<bool(std::size_t)> resolve_alias;
+        resolve_alias = [&](const std::size_t index) {
+            if (states[index] == 2) {
+                return true;
+            }
+            if (states[index] == 3) {
+                return false;
+            }
+            if (states[index] == 1) {
+                report(
+                    "FSIM-ELAB-SVTYPE-003",
+                    "cyclic SystemVerilog typedef involving '"
+                        + unit.type_aliases[index].name + "'",
+                    unit.type_aliases[index].span);
+                return false;
+            }
+            states[index] = 1;
+            const bool resolved =
+                resolve_type(unit.type_aliases[index].type);
+            states[index] = resolved ? 2 : 3;
+            return resolved;
+        };
+        resolve_type = [&](frontend::Type& type) {
+            if (type.named_type.empty()) {
+                return true;
+            }
+            const auto name = type.named_type;
+            const auto use_span = type.named_type_span;
+            if (name.find("::") == std::string::npos) {
+                if (const auto local = local_types.find(name);
+                    local != local_types.end()) {
+                    if (!resolve_alias(local->second)) {
+                        return false;
+                    }
+                    type =
+                        unit.type_aliases[local->second].type;
+                    return true;
+                }
+            }
+            const auto imported = imported_types.find(name);
+            if (imported == imported_types.end()) {
+                report(
+                    "FSIM-ELAB-SVTYPE-001",
+                    "SystemVerilog type alias '" + name
+                        + "' is not visible in this unit",
+                    use_span);
+                return false;
+            }
+            type = imported->second.type;
+            return true;
+        };
+
+        for (std::size_t index = 0;
+             index < unit.type_aliases.size(); ++index) {
+            (void)resolve_alias(index);
+        }
+
+        const auto resolve_declaration =
+            [&](auto& declaration) {
+                (void)resolve_type(declaration.type);
+            };
+        std::function<void(std::vector<Statement>&)>
+            resolve_statements;
+        resolve_statements =
+            [&](std::vector<Statement>& statements) {
+                for (auto& statement : statements) {
+                    for (auto& declaration :
+                         statement.declarations) {
+                        resolve_declaration(declaration);
+                    }
+                    resolve_statements(statement.statements);
+                    resolve_statements(
+                        statement.else_statements);
+                    for (auto& alternative :
+                         statement.case_alternatives) {
+                        resolve_statements(
+                            alternative.statements);
+                    }
+                }
+            };
+        std::function<void(frontend::GenerateBody&)>
+            resolve_generate_body;
+        std::function<void(
+            std::vector<frontend::GenerateRegion>&)>
+            resolve_generate_regions;
+        resolve_generate_body =
+            [&](frontend::GenerateBody& body) {
+                for (auto& constant : body.constants) {
+                    resolve_declaration(constant);
+                }
+                for (auto& signal : body.signals) {
+                    resolve_declaration(signal);
+                }
+                for (auto& process : body.processes) {
+                    for (auto& variable : process.variables) {
+                        resolve_declaration(variable);
+                    }
+                    resolve_statements(process.statements);
+                }
+                resolve_generate_regions(
+                    body.generate_regions);
+            };
+        resolve_generate_regions =
+            [&](std::vector<frontend::GenerateRegion>&
+                    regions) {
+                for (auto& region : regions) {
+                    resolve_generate_body(region.then_body);
+                    resolve_generate_body(region.else_body);
+                    for (auto& alternative :
+                         region.alternatives) {
+                        resolve_generate_body(
+                            alternative.body);
+                    }
+                }
+            };
+
+        for (auto& parameter : unit.parameters) {
+            resolve_declaration(parameter);
+        }
+        for (auto& port : unit.ports) {
+            resolve_declaration(port);
+        }
+        for (auto& signal : unit.signals) {
+            resolve_declaration(signal);
+        }
+        for (auto& process : unit.processes) {
+            for (auto& variable : process.variables) {
+                resolve_declaration(variable);
+            }
+            resolve_statements(process.statements);
+        }
+        resolve_generate_regions(unit.generate_regions);
+    }
+
     DesignUnit effective_unit(const DesignUnit& selected) {
         auto result = selected;
         if (selected.kind
             == frontend::UnitKind::VerilogModule) {
             std::vector<const DesignUnit*> import_stack;
-            import_systemverilog_package_constants(
-                result, import_stack);
-            import_qualified_systemverilog_package_constants(
-                result, import_stack);
+            SystemVerilogTypeEnvironment type_environment;
+            import_systemverilog_package_items(
+                result, import_stack, type_environment);
+            import_qualified_systemverilog_package_items(
+                result, import_stack, type_environment);
+            resolve_systemverilog_named_types(
+                result, type_environment);
             return result;
         }
         if (selected.kind

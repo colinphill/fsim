@@ -5074,16 +5074,19 @@ end architecture rtl;
   const auto systemverilog_package_user_source =
       directory / "systemverilog_package_user.sv";
   const auto write_systemverilog_base_package =
-      [&](const std::uint64_t base_value) {
+      [&](const std::uint64_t base_value,
+          const std::uint64_t width) {
         std::ofstream output(
             systemverilog_base_package_source);
         output << "package base_values;\n"
-               << "  parameter int WIDTH = 4;\n"
+               << "  parameter int WIDTH = "
+               << width << ";\n"
                << "  localparam int BASE = "
                << base_value << ";\n"
+               << "  typedef logic [WIDTH-1:0] word_t;\n"
                << "endpackage : base_values\n";
       };
-  write_systemverilog_base_package(5);
+  write_systemverilog_base_package(5, 4);
   {
     std::ofstream output(
         systemverilog_derived_package_source);
@@ -5091,6 +5094,7 @@ end architecture rtl;
 import base_values::*;
 package derived_values;
   localparam int NEXT = BASE + 1;
+  typedef base_values::word_t result_t;
 endpackage : derived_values
 )";
   }
@@ -5108,9 +5112,9 @@ endpackage : derived_values
     std::ofstream output(
         systemverilog_package_user_source);
     output << R"(
-import derived_values::NEXT;
+import derived_values::NEXT, derived_values::result_t;
 module systemverilog_package_user(
-  output logic [base_values::WIDTH-1:0] observed
+  output result_t observed
 );
   assign observed = NEXT;
 endmodule
@@ -5233,7 +5237,7 @@ endmodule
       == 1);
 #endif
 
-  write_systemverilog_base_package(9);
+  write_systemverilog_base_package(9, 5);
   const auto systemverilog_package_changed_reference =
       run_systemverilog_packages(
           fsim::app::SimulationEngine::interpreter);
@@ -5248,7 +5252,7 @@ endmodule
       != systemverilog_package_cold.specialization_key);
   assert((
       systemverilog_package_changed.simulation.final_values
-      == std::vector<std::string>{"1010"}));
+      == std::vector<std::string>{"01010"}));
 #if defined(FSIM_HAS_LLVM)
   assert(
       systemverilog_package_changed.simulation.native_cache.misses

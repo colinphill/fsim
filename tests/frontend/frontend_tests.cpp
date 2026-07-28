@@ -1550,16 +1550,32 @@ void test_systemverilog_packages() {
 package base_values;
   parameter int WIDTH = 4;
   localparam int BASE = 5;
+  typedef logic [WIDTH-1:0] word_t;
 endpackage : base_values
 
 import base_values::*;
 package derived_values;
   localparam int NEXT = BASE + 1;
+  typedef base_values::word_t derived_word_t;
 endpackage : derived_values
 
 import base_values::WIDTH, derived_values::NEXT;
-module package_user(output logic [base_values::WIDTH-1:0] observed);
-  assign observed = derived_values::NEXT;
+import derived_values::derived_word_t;
+module package_user #(
+  parameter derived_word_t INITIAL = NEXT
+)(output derived_word_t observed);
+  typedef derived_word_t local_word_t;
+  local_word_t staged;
+  generate
+    if (WIDTH) begin : typed
+      base_values::word_t generated;
+    end
+  endgenerate
+  initial begin
+    derived_word_t local_value = NEXT;
+    staged = local_value;
+  end
+  assign observed = staged;
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -1581,31 +1597,59 @@ endmodule
               == "BASE",
       "package parameters are immutable declaration-ordered constants");
   require(
+      parsed.design.units[0].type_aliases.size() == 1
+          && parsed.design.units[0].type_aliases.front()
+                 .name
+              == "word_t"
+          && parsed.design.units[0].type_aliases.front()
+                 .type.packed_range_expression
+          && parsed.design.units[1].type_aliases.size() == 1
+          && parsed.design.units[1].type_aliases.front()
+                 .type.named_type
+              == "base_values::word_t",
+      "package typedef targets and parameterized ranges survive parsing");
+  require(
       parsed.design.units[1].systemverilog_imports.size() == 1
           && parsed.design.units[1]
                  .systemverilog_imports.front()
                  .name.empty()
           && parsed.design.units[2]
                  .systemverilog_imports.size()
-              == 3,
+              == 4,
       "compilation-unit wildcard and selected imports reach later units");
   require(
-      parsed.design.units[2].ports.front()
-              .type.packed_range_expression->left
-              .operands.front().text
-          == "base_values::WIDTH"
-          && parsed.design.units[2].signals.empty()
+      parsed.design.units[2].ports.front().type.named_type
+              == "derived_word_t"
+          && parsed.design.units[2].type_aliases.front()
+                 .type.named_type
+              == "derived_word_t"
+          && parsed.design.units[2].parameters.back()
+                 .type.named_type
+              == "derived_word_t"
+          && parsed.design.units[2].signals.front()
+                 .type.named_type
+              == "local_word_t"
+          && parsed.design.units[2].generate_regions.front()
+                 .then_body.signals.front().type.named_type
+              == "base_values::word_t"
+          && parsed.design.units[2].processes.front()
+                 .variables.front().type.named_type
+              == "derived_word_t"
           && parsed.design.units[2]
                  .concurrent_statements.front()
                  .value.text
-              == "derived_values::NEXT",
-      "package-scoped expressions survive typed HIR parsing");
+              == "staged",
+      "imported/scoped aliases survive port, signal, and local HIR parsing");
 
   const auto invalid = parse_text(
       "invalid_packages.sv",
       R"(
 package invalid_values;
   logic unsupported;
+  typedef struct packed { logic value; } unsupported_t;
+  typedef logic duplicate_t;
+  typedef bit duplicate_t;
+  typedef logic unpacked_t [2];
 endpackage : wrong_name
 import invalid_values;
 module recovered;
@@ -1623,7 +1667,10 @@ endmodule
   require(
       !invalid.ok()
           && has_code("FSIM-SV-UNSUPPORTED-023")
+          && has_code("FSIM-SV-UNSUPPORTED-024")
+          && has_code("FSIM-SV-UNSUPPORTED-025")
           && has_code("FSIM-SV-SEM-023")
+          && has_code("FSIM-SV-SEM-024")
           && has_code("FSIM-SV-PARSE-078"),
       "invalid package items, end names, and imports are targeted");
 }

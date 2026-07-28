@@ -93,6 +93,11 @@ struct Type {
   // Retained until elaboration even when packed_range is already known, so a
   // parameterized unit can be specialized independently at every instance.
   std::optional<PackedRangeExpression> packed_range_expression;
+  // Non-empty for a SystemVerilog user-defined type reference. Package
+  // qualification is retained verbatim (for example `values::word_t`) until
+  // elaboration resolves the alias in the owning specialization.
+  std::string named_type;
+  SourceSpan named_type_span;
 
   Type() = default;
   Type(
@@ -108,6 +113,12 @@ struct Type {
         packed_range_expression(std::move(range_expression)) {}
 
   [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
+};
+
+struct TypeAliasDeclaration {
+  std::string name;
+  Type type;
+  SourceSpan span;
 };
 
 struct SignalDeclaration {
@@ -361,6 +372,8 @@ struct DesignUnit {
   std::vector<VhdlContextItem> vhdl_context;
   // Compilation-unit or unit-local SystemVerilog package imports.
   std::vector<SystemVerilogImport> systemverilog_imports;
+  // Bounded SystemVerilog packed integral typedef declarations.
+  std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<ParameterDeclaration> parameters;
   std::vector<SignalDeclaration> ports;
   std::vector<SignalDeclaration> signals;

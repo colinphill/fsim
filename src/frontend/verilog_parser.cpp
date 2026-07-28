@@ -714,6 +714,8 @@ class VerilogParser final : private detail::ParserBase {
             unit.systemverilog_imports, previous());
         active_package_imports_ =
             unit.systemverilog_imports;
+      } else if (match_keyword("typedef")) {
+        parse_typedef(unit, previous());
       } else if (match_keyword("genvar")) {
         parse_genvar_declaration(unit);
       } else if (is_declaration_start()) {
@@ -842,6 +844,8 @@ class VerilogParser final : private detail::ParserBase {
             unit.systemverilog_imports, previous());
         active_package_imports_ =
             unit.systemverilog_imports;
+      } else if (match_keyword("typedef")) {
+        parse_typedef(unit, previous());
       } else {
         const auto unsupported = advance();
         error(
@@ -1341,9 +1345,13 @@ class VerilogParser final : private detail::ParserBase {
           "declarations");
       (void)parse_direction();
     }
-    parse_optional_net_type(type);
-    parse_optional_signedness(type);
-    parse_optional_range(type);
+    if (is_named_type_reference_start()) {
+      type = parse_named_type();
+    } else {
+      parse_optional_net_type(type);
+      parse_optional_signedness(type);
+      parse_optional_range(type);
+    }
     for (;;) {
       const auto name = expect_identifier(
           "generated local signal name");
@@ -1519,6 +1527,8 @@ class VerilogParser final : private detail::ParserBase {
       type.spelling = "logic";
       type.domain = ValueDomain::Logic4;
       type.is_signed = false;
+    } else if (is_named_type_reference_start()) {
+      return parse_named_type();
     }
     parse_optional_signedness(type);
     parse_optional_range(type);
@@ -1767,11 +1777,19 @@ class VerilogParser final : private detail::ParserBase {
           spec.direction = parse_direction();
           spec.type = default_port_net_type();
           declared_here = true;
-          const bool explicit_type = is_net_type_keyword();
-          parse_optional_net_type(spec.type);
+          const bool explicit_type =
+              is_net_type_keyword()
+              || is_named_type_reference_start();
+          if (is_named_type_reference_start()) {
+            spec.type = parse_named_type();
+          } else {
+            parse_optional_net_type(spec.type);
+          }
           require_default_port_net_type(current(), explicit_type);
-          parse_optional_signedness(spec.type);
-          parse_optional_range(spec.type);
+          if (spec.type.named_type.empty()) {
+            parse_optional_signedness(spec.type);
+            parse_optional_range(spec.type);
+          }
           inherited = spec;
           have_inherited_type = true;
         } else if (!have_inherited_type) {
@@ -1904,6 +1922,112 @@ class VerilogParser final : private detail::ParserBase {
     return any_keyword({"wire", "reg", "logic", "bit", "integer"});
   }
 
+  [[nodiscard]] bool is_named_type_reference_start(
+      const std::size_t offset = 0) const {
+    if (!at(TokenKind::Identifier, offset)
+        || keyword_reserved(keyword_set_, current(offset).text)) {
+      return false;
+    }
+    if (contains_word(
+            {"always_ff", "always_comb", "always_latch"},
+            current(offset).text)) {
+      return false;
+    }
+    if (at(TokenKind::Scope, offset + 1)) {
+      return at(TokenKind::Identifier, offset + 2)
+          && at(TokenKind::Identifier, offset + 3);
+    }
+    return at(TokenKind::Identifier, offset + 1)
+        && !at(TokenKind::LeftParen, offset + 2)
+        && !at(TokenKind::Hash, offset + 2);
+  }
+
+  Type parse_named_type() {
+    const auto first =
+        expect_identifier("SystemVerilog type name");
+    std::string name = first.text;
+    auto span = first.span;
+    if (match(TokenKind::Scope)) {
+      const auto selected =
+          expect_identifier("package type name");
+      name += "::";
+      name += selected.text;
+      span = cover(span, selected.span);
+    }
+    Type type{
+        ValueDomain::Unknown,
+        name,
+        std::nullopt,
+        false};
+    type.named_type = name;
+    type.named_type_span = span;
+    return type;
+  }
+
+  void parse_typedef(
+      DesignUnit& unit,
+      const Token& start) {
+    Type type;
+    if (keyword("logic") || keyword("reg")
+        || keyword("bit") || keyword("integer")
+        || keyword("int")) {
+      const auto type_token = advance();
+      type.spelling = type_token.text;
+      if (type_token.text == "bit") {
+        type.domain = ValueDomain::Bit2;
+      } else if (
+          type_token.text == "integer"
+          || type_token.text == "int") {
+        type.domain = ValueDomain::Integer;
+        type.is_signed = true;
+      } else {
+        type.domain = ValueDomain::Logic4;
+      }
+      parse_optional_signedness(type);
+      parse_optional_range(type);
+    } else if (is_named_type_reference_start()) {
+      type = parse_named_type();
+    } else {
+      error(
+          current(),
+          "FSIM-SV-UNSUPPORTED-024",
+          "bounded typedef declarations require an integral built-in "
+          "or previously declared user type");
+      skip_to_semicolon();
+      return;
+    }
+    const auto name = expect_identifier("typedef name");
+    if (at(TokenKind::LeftBracket)) {
+      error(
+          current(),
+          "FSIM-SV-UNSUPPORTED-025",
+          "unpacked typedef dimensions are not implemented");
+      skip_balanced(
+          TokenKind::LeftBracket, TokenKind::RightBracket);
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after typedef declaration",
+        "FSIM-SV-PARSE-082");
+    const bool duplicate = std::any_of(
+        unit.type_aliases.begin(),
+        unit.type_aliases.end(),
+        [&](const TypeAliasDeclaration& alias) {
+          return alias.name == name.text;
+        });
+    if (duplicate) {
+      error(
+          name,
+          "FSIM-SV-SEM-024",
+          "duplicate typedef declaration '" + name.text + "'");
+      return;
+    }
+    unit.type_aliases.push_back({
+        name.text,
+        std::move(type),
+        cover(start.span, previous().span)});
+  }
+
   void parse_optional_net_type(Type& type) {
     if (!is_net_type_keyword()) {
       return;
@@ -1956,7 +2080,8 @@ class VerilogParser final : private detail::ParserBase {
   }
 
   [[nodiscard]] bool is_declaration_start() const {
-    return is_direction_keyword() || is_net_type_keyword();
+    return is_direction_keyword() || is_net_type_keyword()
+        || is_named_type_reference_start();
   }
 
   void parse_declaration(DesignUnit& unit) {
@@ -1966,14 +2091,24 @@ class VerilogParser final : private detail::ParserBase {
     if (is_direction_keyword()) {
       spec.direction = parse_direction();
       spec.type = default_port_net_type();
-      const bool explicit_type = is_net_type_keyword();
-      parse_optional_net_type(spec.type);
+      const bool explicit_type =
+          is_net_type_keyword()
+          || is_named_type_reference_start();
+      if (is_named_type_reference_start()) {
+        spec.type = parse_named_type();
+      } else {
+        parse_optional_net_type(spec.type);
+      }
       require_default_port_net_type(current(), explicit_type);
+    } else if (is_named_type_reference_start()) {
+      spec.type = parse_named_type();
     } else {
       parse_optional_net_type(spec.type);
     }
-    parse_optional_signedness(spec.type);
-    parse_optional_range(spec.type);
+    if (spec.type.named_type.empty()) {
+      parse_optional_signedness(spec.type);
+      parse_optional_range(spec.type);
+    }
 
     for (;;) {
       const auto name = expect_identifier("declared name");
@@ -2079,16 +2214,22 @@ class VerilogParser final : private detail::ParserBase {
   void parse_procedural_declaration(Statement& block) {
     const auto start = current();
     Type type = default_verilog_type();
-    parse_optional_net_type(type);
-    if (type.spelling == "wire") {
+    if (is_named_type_reference_start()) {
+      type = parse_named_type();
+    } else {
+      parse_optional_net_type(type);
+    }
+    if (type.named_type.empty() && type.spelling == "wire") {
       error(
           start,
           "FSIM-SV-UNSUPPORTED-014",
           "procedural wire declarations are not supported; use a variable "
           "type");
     }
-    parse_optional_signedness(type);
-    parse_optional_range(type);
+    if (type.named_type.empty()) {
+      parse_optional_signedness(type);
+      parse_optional_range(type);
+    }
 
     for (;;) {
       const auto name = expect_identifier("local variable name");
@@ -2453,7 +2594,7 @@ class VerilogParser final : private detail::ParserBase {
       block.kind = StatementKind::Block;
       while (!at_end() && !keyword("end")) {
         const auto before = position();
-        if (is_net_type_keyword()) {
+        if (is_declaration_start()) {
           parse_procedural_declaration(block);
         } else if (auto child = parse_statement()) {
           block.statements.push_back(std::move(*child));
