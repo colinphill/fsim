@@ -84,6 +84,8 @@ The current tree contains:
   semantics, decoded control/quote/backslash/octal escapes, and
   interpreter/LLVM O0/O2 equivalence;
 - literal-only `$monitor` initial publication in the postponed phase;
+- decoded Verilog/SystemVerilog literal escapes in `$fatal` and immediate
+  assertion `$error` diagnostics;
 - VHDL-2008 literal `report` statements at default/explicit `note` severity
   routed through the same interpreter/LLVM and embedding output path;
 - deterministic simple-expression sensitivity inference for `always @*`,

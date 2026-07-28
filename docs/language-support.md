@@ -54,6 +54,10 @@ Literal `$monitor("text")` and empty `$monitor` forms publish once in the
 postponed phase. Value operands, formatting substitutions, monitor-list
 replacement, `$monitoron`, and `$monitoroff` remain deferred.
 
+Literal `$fatal` and immediate-assertion `$error` messages use the same
+Verilog/SystemVerilog escape decoding as output tasks, including byte-exact
+interpreter/LLVM diagnostic equivalence.
+
 The VHDL expression slice also executes one-dimensional packed-object
 `'left`, `'right`, `'low`, `'high`, `'length`, and `'ascending` attributes.
 An optional dimension must be the constant `1`; declared `to`/`downto`

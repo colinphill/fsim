@@ -3395,7 +3395,7 @@ class VerilogParser final : private detail::ParserBase {
     if (!at(TokenKind::RightParen)) {
       if (at(TokenKind::StringLiteral)) {
         statement.assertion_message =
-            string_literal_text(advance());
+            decoded_string_literal_text(advance());
       } else {
         // Accept and ignore the standard numeric finish control while
         // retaining one bounded literal display message.
@@ -3406,7 +3406,7 @@ class VerilogParser final : private detail::ParserBase {
               "literal message after the $fatal finish argument",
               "FSIM-SV-PARSE-114");
           statement.assertion_message =
-              string_literal_text(message);
+              decoded_string_literal_text(message);
         }
       }
     }
@@ -3552,7 +3552,8 @@ class VerilogParser final : private detail::ParserBase {
             const auto message = expect(
                 TokenKind::StringLiteral, "string literal passed to $error",
                 "FSIM-SV-PARSE-042");
-            statement.assertion_message = string_literal_text(message);
+            statement.assertion_message =
+                decoded_string_literal_text(message);
             expect(TokenKind::RightParen, "')' after $error message",
                    "FSIM-SV-PARSE-043");
           }

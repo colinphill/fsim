@@ -922,7 +922,7 @@ void test_systemverilog_fatal(
   assert(reference.message == compiled.message);
   assert(reference.line == compiled.line);
   assert(reference.column == compiled.column);
-  assert(reference.message.find("fatal source message")
+  assert(reference.message.find("fatal\nsource\tmessage \"quoted\"")
          != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
@@ -1449,7 +1449,7 @@ endmodule
     std::ofstream output(fatal_source);
     output << R"(
 module fatal_app;
-  initial $fatal(1, "fatal source message");
+  initial $fatal(1, "fatal\nsource\tmessage \"quoted\"");
 endmodule
 )";
   }

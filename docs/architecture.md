@@ -343,6 +343,8 @@ slices.
 Output-task literal spelling is decoded once in the frontend for newline, tab,
 quote, backslash, and one-byte octal escapes; SimIR and generated code retain
 the exact byte string, including embedded NUL bytes.
+The same decoder is used for bounded `$fatal` and immediate-assertion `$error`
+literal messages before assertion metadata enters SimIR.
 Bounded VHDL literal `report` statements at `note` severity reuse the same
 immediate typed operation and output hook. VHDL doubled quotes are decoded in
 the frontend. Higher report severities remain separate from this output-only
