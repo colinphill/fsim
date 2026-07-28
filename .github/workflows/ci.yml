@@ -200,8 +200,8 @@ jobs:
         uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
         with:
           version: "22.1.8"
-          force-url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-win64.exe
-          directory: ${{ runner.temp }}/llvm-22.1.8
+          force-url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang%2Bllvm-22.1.8-x86_64-pc-windows-msvc.tar.xz
+          directory: ${{ runner.temp }}/llvm-22.1.8-stage
           env: false
 
       - name: Validate LLVM 22.1.8 development installation
@@ -209,18 +209,42 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true
+          $llvmRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            "clang+llvm-22.1.8-x86_64-pc-windows-msvc"
           $llvmConfig = Join-Path `
-            $env:LLVM_PATH `
+            $llvmRoot `
+            "lib/cmake/llvm/LLVMConfig.cmake"
+          if (-not (Test-Path -PathType Leaf $llvmConfig)) {
+            $nestedArchive = Get-ChildItem `
+              -Path $env:LLVM_PATH `
+              -File `
+              -Recurse |
+                Sort-Object Length -Descending |
+                Select-Object -First 1
+            if ($null -eq $nestedArchive) {
+              throw "The LLVM action did not produce an archive to unpack"
+            }
+            tar -xf $nestedArchive.FullName -C $env:RUNNER_TEMP
+            if ($LASTEXITCODE -ne 0) {
+              throw "LLVM development archive extraction failed"
+            }
+            Remove-Item -Force $nestedArchive.FullName
+          }
+          $llvmConfig = Join-Path `
+            $llvmRoot `
             "lib/cmake/llvm/LLVMConfig.cmake"
           if (-not (Test-Path -PathType Leaf $llvmConfig)) {
             throw "LLVMConfig.cmake was not present in the development archive"
           }
           $installedVersion = (
-            & "$env:LLVM_PATH/bin/llvm-config.exe" --version
+            & "$llvmRoot/bin/llvm-config.exe" --version
           ).Trim()
           if ($installedVersion -ne "22.1.8") {
             throw "Expected LLVM 22.1.8, found $installedVersion"
           }
+          "LLVM_PATH=$llvmRoot" >> $env:GITHUB_ENV
+          (Join-Path $llvmRoot "bin") >> $env:GITHUB_PATH
 
       - name: Configure with required LLVM backend
         shell: pwsh

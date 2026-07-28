@@ -86,7 +86,10 @@ function(fsim_add_fetched_boost_context source_directory)
   target_compile_features(fsim_boost_context PUBLIC cxx_std_11)
   target_compile_definitions(
     fsim_boost_context
-    PUBLIC BOOST_CONTEXT_NO_LIB BOOST_CONTEXT_STATIC_LINK
+    PUBLIC
+      BOOST_CONTEXT_EXPORT=
+      BOOST_CONTEXT_NO_LIB
+      BOOST_CONTEXT_STATIC_LINK
     PRIVATE BOOST_CONTEXT_SOURCE
   )
   if(FSIM_BOOST_CONTEXT_IMPLEMENTATION STREQUAL "ucontext")
