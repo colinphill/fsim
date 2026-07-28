@@ -335,6 +335,7 @@ therefore excluded.
 | `FSIM-SV-PARSE-087` | error | Expected `}` after bounded packed-aggregate members. |
 | `FSIM-SV-PARSE-088` | error | Expected `;` after a packed-aggregate member declaration. |
 | `FSIM-SV-PARSE-089` | error | A bounded packed aggregate has no members. |
+| `FSIM-SV-PARSE-090` | error | A replication concatenation has no repeated operands. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -489,6 +490,7 @@ therefore excluded.
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
 | `FSIM-ELAB-SVSTRUCT-002` | error | A packed-aggregate member read/write has no executable normalized layout. |
 | `FSIM-ELAB-SVUNION-001` | error | Packed-union members do not specialize to one common nonzero supported width. |
+| `FSIM-ELAB-SVREPL-001` | error | A replication concatenation has a nonconstant/nonpositive count, no statically sized operands, or an overflowing expanded width. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

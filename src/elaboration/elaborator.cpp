@@ -3587,6 +3587,133 @@ private:
             return destination;
         }
         if (language_ != frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Replication) {
+            std::string count_error;
+            const auto count =
+                expression.operands.empty()
+                    ? std::nullopt
+                    : evaluate_constant_expression(
+                          expression.operands[0],
+                          {},
+                          count_error);
+            if (!count || *count <= 0
+                || expression.operands.size() < 2) {
+                report(
+                    "FSIM-ELAB-SVREPL-001",
+                    "a replication concatenation requires a positive "
+                    "constant count and at least one packed operand",
+                    expression.span);
+                return std::nullopt;
+            }
+            std::vector<RegisterId> group_operands;
+            group_operands.reserve(expression.operands.size() - 1);
+            std::size_t group_width = 0;
+            auto result_domain = frontend::ValueDomain::Bit2;
+            for (std::size_t index = 1;
+                 index < expression.operands.size();
+                 ++index) {
+                const auto& operand_expression =
+                    expression.operands[index];
+                const auto operand_width =
+                    infer_width(operand_expression);
+                if (!operand_width || *operand_width == 0
+                    || *operand_width
+                        > std::numeric_limits<std::uint32_t>::max()
+                    || *operand_width
+                        > std::numeric_limits<std::size_t>::max()
+                            - group_width) {
+                    report(
+                        "FSIM-ELAB-SVREPL-001",
+                        "a replication operand width is not statically "
+                        "inferable or the group width overflows",
+                        operand_expression.span);
+                    return std::nullopt;
+                }
+                const auto operand = lower_expression(
+                    operand_expression, *operand_width);
+                if (!operand) {
+                    return std::nullopt;
+                }
+                group_operands.push_back(*operand);
+                group_width += register_width(*operand);
+                const auto domain = register_domain(*operand);
+                if (domain == frontend::ValueDomain::Logic9) {
+                    result_domain = frontend::ValueDomain::Logic9;
+                } else if (
+                    domain != frontend::ValueDomain::Bit2
+                    && domain != frontend::ValueDomain::Boolean
+                    && result_domain
+                        != frontend::ValueDomain::Logic9) {
+                    result_domain = frontend::ValueDomain::Logic4;
+                }
+            }
+            const auto repetition_count =
+                static_cast<std::uint64_t>(*count);
+            if (group_width == 0
+                || repetition_count
+                    > std::numeric_limits<std::uint32_t>::max()
+                          / group_width) {
+                report(
+                    "FSIM-ELAB-SVREPL-001",
+                    "replication result width is outside the supported "
+                    "range",
+                    expression.span);
+                return std::nullopt;
+            }
+            RegisterId group = group_operands.front();
+            if (group_operands.size() > 1) {
+                group = allocate_register(
+                    group_width, result_domain);
+                process_.operations.emplace_back(Concatenate{
+                    group,
+                    std::move(group_operands),
+                    static_cast<std::uint32_t>(group_width)});
+            }
+
+            std::optional<RegisterId> result;
+            std::size_t result_width = 0;
+            auto block = group;
+            auto block_width = group_width;
+            auto remaining = repetition_count;
+            while (remaining != 0) {
+                if ((remaining & 1U) != 0) {
+                    if (!result) {
+                        result = block;
+                        result_width = block_width;
+                    } else {
+                        const auto combined_width =
+                            result_width + block_width;
+                        const auto combined = allocate_register(
+                            combined_width, result_domain);
+                        process_.operations.emplace_back(
+                            Concatenate{
+                                combined,
+                                {*result, block},
+                                static_cast<std::uint32_t>(
+                                    combined_width)});
+                        result = combined;
+                        result_width = combined_width;
+                    }
+                }
+                remaining >>= 1U;
+                if (remaining != 0) {
+                    const auto doubled_width =
+                        block_width * 2U;
+                    const auto doubled = allocate_register(
+                        doubled_width, result_domain);
+                    process_.operations.emplace_back(
+                        Concatenate{
+                            doubled,
+                            {block, block},
+                            static_cast<std::uint32_t>(
+                                doubled_width)});
+                    block = doubled;
+                    block_width = doubled_width;
+                }
+            }
+            return result;
+        }
+        if (language_ != frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Concatenation) {
             if (expression.operands.empty()) {
                 report(
@@ -4238,6 +4365,41 @@ private:
                 ? std::nullopt
                 : std::optional<std::size_t>{width};
         }
+        if (expression.kind == ExpressionKind::Replication) {
+            if (expression.operands.size() < 2) {
+                return std::nullopt;
+            }
+            std::string count_error;
+            const auto count = evaluate_constant_expression(
+                expression.operands[0], {}, count_error);
+            if (!count || *count <= 0) {
+                return std::nullopt;
+            }
+            std::size_t group_width = 0;
+            for (std::size_t index = 1;
+                 index < expression.operands.size();
+                 ++index) {
+                const auto operand_width =
+                    infer_width(expression.operands[index]);
+                if (!operand_width || *operand_width == 0
+                    || *operand_width
+                        > std::numeric_limits<std::size_t>::max()
+                            - group_width) {
+                    return std::nullopt;
+                }
+                group_width += *operand_width;
+            }
+            const auto repetitions =
+                static_cast<std::uint64_t>(*count);
+            if (group_width == 0
+                || repetitions
+                    > std::numeric_limits<std::size_t>::max()
+                          / group_width) {
+                return std::nullopt;
+            }
+            return static_cast<std::size_t>(
+                repetitions * group_width);
+        }
         if (language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Binary
             && expression.text == "&"
@@ -4391,6 +4553,7 @@ private:
                 || expression.text.find("'S") != std::string::npos;
         case ExpressionKind::StringLiteral:
         case ExpressionKind::Concatenation:
+        case ExpressionKind::Replication:
         case ExpressionKind::Invalid:
             return false;
         case ExpressionKind::Index:

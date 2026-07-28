@@ -1605,6 +1605,7 @@ module package_user #(
       local_value[0 +: WIDTH-1];
     overlay.mirror[WIDTH-1 -: 2] =
       local_value[WIDTH-1 -: 2];
+    overlay.payload = {WIDTH/2{2'b10}};
   end
   assign observed = staged;
 endmodule
@@ -1717,7 +1718,7 @@ endmodule
   const auto& aggregate_statements =
       parsed.design.units[2].processes.front().statements;
   require(
-      aggregate_statements.size() == 8
+      aggregate_statements.size() == 9
           && aggregate_statements[4].target.kind
               == ExpressionKind::Slice
           && aggregate_statements[4].target.operands.front().text
@@ -1737,8 +1738,14 @@ endmodule
           && aggregate_statements[7].target.kind
               == ExpressionKind::Slice
           && aggregate_statements[7].target.text == "-:"
-          && aggregate_statements[7].value.text == "-:",
-      "packed aggregate members retain fixed and indexed part-selects");
+          && aggregate_statements[7].value.text == "-:"
+          && aggregate_statements[8].value.kind
+              == ExpressionKind::Replication
+          && aggregate_statements[8].value.operands.size() == 2
+          && aggregate_statements[8].value.operands[0].kind
+              == ExpressionKind::Binary,
+      "packed aggregate members retain fixed/indexed selects and "
+      "replication concatenations");
 
   const auto invalid = parse_text(
       "invalid_packages.sv",
@@ -1769,6 +1776,8 @@ package invalid_values;
 endpackage : wrong_name
 import invalid_values;
 module recovered;
+  logic value;
+  initial value = {2{}};
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -1795,6 +1804,7 @@ endmodule
           && has_code("FSIM-SV-PARSE-086")
           && has_code("FSIM-SV-PARSE-088")
           && has_code("FSIM-SV-PARSE-089")
+          && has_code("FSIM-SV-PARSE-090")
           && has_code("FSIM-SV-SEM-023")
           && has_code("FSIM-SV-SEM-024")
           && has_code("FSIM-SV-SEM-025")

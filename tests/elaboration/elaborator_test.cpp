@@ -409,6 +409,7 @@ module systemverilog_package_user #(
   overlay_t overlay;
   ascending_packet_t ascending_packet;
   result_t struct_payload;
+  result_t replicated;
   generate
     if (1) begin : typed
       local_result_t staged;
@@ -428,6 +429,8 @@ module systemverilog_package_user #(
     ascending_packet.payload[0 +: 2] = 2'b01;
     ascending_packet.payload[3 -: 2] =
       ascending_packet.payload[0 +: 2];
+    replicated = {WIDTH/2{1'b1, 1'b0}};
+    replicated = {2'd2{2'b10}};
   end
   packet_passthrough u_passthrough(
     .packet(packet),
@@ -528,6 +531,10 @@ endmodule
         systemverilog_package_elaborated.design->find_signal(
             "systemverilog_package_user.ascending_packet");
     assert(systemverilog_ascending_packet);
+    const auto systemverilog_replicated =
+        systemverilog_package_elaborated.design->find_signal(
+            "systemverilog_package_user.replicated");
+    assert(systemverilog_replicated);
     const auto& systemverilog_package_dependencies =
         systemverilog_package_elaborated.design
             ->specializations()
@@ -574,6 +581,11 @@ endmodule
             ->signal_value(*systemverilog_ascending_packet)
             .to_msb_string()
         == "0101");
+    assert(
+        systemverilog_package_interpreter
+            ->signal_value(*systemverilog_replicated)
+            .to_msb_string()
+        == "1010");
 
     const auto invalid_systemverilog_packages =
         fsim::frontend::parse_text(
@@ -632,6 +644,7 @@ module invalid_systemverilog_package_user;
     logic [3:0] field;
   } valid_packet_t;
   logic value;
+  logic [3:0] invalid_replication;
   missing_t missing_value;
   shared_t ambiguous_value;
   typedef cycle_b cycle_a;
@@ -643,6 +656,9 @@ module invalid_systemverilog_package_user;
   initial valid_packet.field[0 +: 0] = 1'b0;
   initial valid_packet.field[3 +: 2] = 2'b00;
   initial valid_packet.field[0 -: 2] = 2'b00;
+  initial invalid_replication = {0{1'b0}};
+  initial invalid_replication = {value{1'b0}};
+  initial invalid_replication = {2147483648{2'b00}};
   assign value = first_values::second_values::VALUE;
   assign value = invalid_packet.payload;
 endmodule
@@ -669,6 +685,7 @@ endmodule
              "FSIM-ELAB-SVSTRUCT-001",
              "FSIM-ELAB-SVSTRUCT-002",
              "FSIM-ELAB-SVUNION-001",
+             "FSIM-ELAB-SVREPL-001",
              "FSIM-ELAB-068"}) {
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));

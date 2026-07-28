@@ -101,6 +101,11 @@ SystemVerilog constant indexed part-selects normalize `base +: width` and
 and descending declarations therefore reach the same contiguous SimIR
 extract/insert operations, while nonpositive widths and out-of-range endpoints
 are rejected before lowering.
+SystemVerilog replication concatenations require a positive specialized
+constant count and a statically sized nonempty operand group. The lowerer
+builds the repeated value with binary doubling, requiring logarithmically many
+two-operand `Concatenate` operations rather than materializing one operand per
+copy. Expanded widths are checked against the SimIR limit before allocation.
 Compilation-unit and unit-local `import package::*` or
 `import package::name` clauses inject case-sensitive direct constants and
 types, while `package::name` remains explicitly scoped. Alias chains resolve

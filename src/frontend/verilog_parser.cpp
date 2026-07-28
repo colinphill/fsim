@@ -3231,9 +3231,35 @@ class VerilogParser final : private detail::ParserBase {
       const auto open = previous();
       std::vector<Expression> elements;
       if (!at(TokenKind::RightBrace)) {
-        do {
+        Expression first = parse_expression();
+        if (match(TokenKind::LeftBrace)) {
+          elements.push_back(std::move(first));
+          if (at(TokenKind::RightBrace)) {
+            error(
+                current(),
+                "FSIM-SV-PARSE-090",
+                "replication concatenations require at least one operand");
+          } else {
+            do {
+              elements.push_back(parse_expression());
+            } while (match(TokenKind::Comma));
+          }
+          expect(TokenKind::RightBrace,
+                 "'}' after replication operands",
+                 "FSIM-SV-PARSE-030");
+          expect(TokenKind::RightBrace,
+                 "'}' after replication concatenation",
+                 "FSIM-SV-PARSE-030");
+          return Expression{
+              ExpressionKind::Replication,
+              "replicate",
+              std::move(elements),
+              span_from(open, previous())};
+        }
+        elements.push_back(std::move(first));
+        while (match(TokenKind::Comma)) {
           elements.push_back(parse_expression());
-        } while (match(TokenKind::Comma));
+        }
       }
       expect(TokenKind::RightBrace, "'}' after concatenation",
              "FSIM-SV-PARSE-030");

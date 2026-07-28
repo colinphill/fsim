@@ -118,7 +118,8 @@ The following foundation is implemented:
   unions with executable member reads/writes and one-level constant member
   bit/part-selects whose specialized parameter/package-constant bounds use the
   checked constant evaluator, plus normalized constant `+:`/`-:` indexed
-  selects for ascending and descending ranges, and precise source/cache
+  selects for ascending and descending ranges and checked constant replication
+  concatenations with logarithmic SimIR expansion, and precise source/cache
   provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
@@ -244,7 +245,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 524 unique current production diagnostic codes.
+- a stable catalog covering 526 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -414,7 +415,8 @@ Early groundwork:
   continuous statements, bounded integral parameter specialization and
   bounded integral packages/imports/packed typedef aliases, enums,
   non-nested packed structs, equal-width packed unions, constant
-  aggregate-member bit/part-selects, and constant indexed part-selects,
+  aggregate-member bit/part-selects, constant indexed part-selects, and
+  constant replication concatenations,
   executable explicit/implicit conditional, inline/module-genvar iterative,
   selection, and direct/named static generate bodies, and bounded
   `` `timescale`` handling;

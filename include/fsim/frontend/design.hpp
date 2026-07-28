@@ -60,6 +60,7 @@ enum class ExpressionKind {
   Index,
   Slice,
   Concatenation,
+  Replication,
 };
 
 // `text` contains the identifier/literal/operator/callee. Operands retain

@@ -5140,6 +5140,7 @@ module systemverilog_package_user(
     overlay.mirror[1 +: WIDTH-1] =
       packet.payload[base_values::WIDTH-1 -: WIDTH-1];
     overlay.payload[0] = packet.payload[0 +: 1];
+    overlay.payload = overlay.payload & {WIDTH{1'b1}};
   end
   assign observed = {
     overlay.mirror[WIDTH-1:1],
