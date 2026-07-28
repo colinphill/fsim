@@ -5633,6 +5633,52 @@ endmodule
             return diagnostic.code == "FSIM-SV-SEM-039";
           }),
       "formatted $strobe arguments need a targeted diagnostic");
+
+  const auto monitor = parse_text(
+      "monitor.sv",
+      R"(
+module monitor;
+  initial begin
+    $monitor("once");
+    $monitor();
+    $monitor;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(monitor.ok(), "literal $monitor tasks must parse");
+  const auto& monitor_statements =
+      monitor.design.units.front().processes.front().statements;
+  require(
+      monitor_statements.size() == 3
+          && std::all_of(
+              monitor_statements.begin(),
+              monitor_statements.end(),
+              [](const Statement& statement) {
+                return statement.kind == StatementKind::Display
+                    && statement.output_newline
+                    && statement.output_postponed;
+              })
+          && monitor_statements.front().output_text == "once",
+      "literal $monitor initial-publication HIR");
+
+  const auto unsupported_monitor = parse_text(
+      "formatted_monitor.sv",
+      R"(
+module formatted_monitor;
+  logic q;
+  initial $monitor("%b", q);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::any_of(
+          unsupported_monitor.diagnostics.begin(),
+          unsupported_monitor.diagnostics.end(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-041";
+          }),
+      "value-sensitive $monitor needs a targeted diagnostic");
 }
 
 int main() {

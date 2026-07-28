@@ -3692,23 +3692,28 @@ class VerilogParser final : private detail::ParserBase {
     }
 
     if (keyword("$display") || keyword("$write")
-        || keyword("$strobe")) {
-      const bool postponed = keyword("$strobe");
+        || keyword("$strobe") || keyword("$monitor")) {
+      const bool monitor = keyword("$monitor");
+      const bool postponed = keyword("$strobe") || monitor;
       const bool newline = !keyword("$write");
       const std::string_view task_name =
-          postponed ? "$strobe"
+          monitor ? "$monitor"
+          : postponed ? "$strobe"
           : newline ? "$display"
                     : "$write";
       const std::string semantic_code =
-          postponed ? "FSIM-SV-SEM-039"
+          monitor ? "FSIM-SV-SEM-041"
+          : postponed ? "FSIM-SV-SEM-039"
           : newline ? "FSIM-SV-SEM-037"
                     : "FSIM-SV-SEM-038";
       const std::string close_code =
-          postponed ? "FSIM-SV-PARSE-123"
+          monitor ? "FSIM-SV-PARSE-125"
+          : postponed ? "FSIM-SV-PARSE-123"
           : newline ? "FSIM-SV-PARSE-119"
                     : "FSIM-SV-PARSE-121";
       const std::string semicolon_code =
-          postponed ? "FSIM-SV-PARSE-124"
+          monitor ? "FSIM-SV-PARSE-126"
+          : postponed ? "FSIM-SV-PARSE-124"
           : newline ? "FSIM-SV-PARSE-120"
                     : "FSIM-SV-PARSE-122";
       const auto start = advance();

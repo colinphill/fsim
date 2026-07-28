@@ -37,8 +37,9 @@ append a newline through the CLI or Tcl-owned output stream; literal/empty
 `$write` uses the same path without appending a newline, while literal/empty
 `$strobe` appends a newline in the current timestamp's postponed phase.
 Interpreter, LLVM O0, and LLVM O2 preserve process/time/delta ordering. Format
-substitutions, additional arguments, and `$monitor` remain deferred. This
-update supersedes the compact table's broader display-task limitation.
+substitutions, additional arguments, and value-sensitive `$monitor` behavior
+remain deferred. This update supersedes the compact table's broader
+display-task limitation.
 Output string literals decode `\n`, `\t`, `\"`, `\\`, and one-to-three-digit
 octal byte escapes. Unsupported or out-of-range escapes are diagnosed instead
 of being silently rewritten.
@@ -48,6 +49,10 @@ VHDL report status update: literal `report "text";` and explicit
 VHDL doubled-quote decoding and interpreter/LLVM O0/O2 equivalence. General
 string expressions and `warning`/`error`/`failure` report severity behavior
 remain deferred and are diagnosed rather than downgraded.
+
+Literal `$monitor("text")` and empty `$monitor` forms publish once in the
+postponed phase. Value operands, formatting substitutions, monitor-list
+replacement, `$monitoron`, and `$monitoroff` remain deferred.
 
 The VHDL expression slice also executes one-dimensional packed-object
 `'left`, `'right`, `'low`, `'high`, `'length`, and `'ascending` attributes.

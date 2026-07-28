@@ -788,11 +788,14 @@ The nineteenth post-gate batch is in progress:
 6. VHDL-2008 literal `report` at default or explicit `note` severity now
    decodes doubled quotes and reuses the common typed immediate output path;
    higher severities are targeted until stop-threshold policy is implemented.
+7. Verilog-2005/SystemVerilog literal or empty `$monitor` now performs its one
+   initial postponed publication; value-sensitive monitor lists remain
+   targeted until formatting operands and monitor replacement are available.
 
 The forced no-system-Tcl dependency build and its isolated staged relocation
 probe pass; the ordinary installed-Tcl application regression also passes.
 Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and output
-application tests pass for the cross-language output slices. This is feature 6
+application tests pass for the cross-language output slices. This is feature 7
 of 10, so the interval full regression and remote push are not due yet.
 
 ## v1 release condition

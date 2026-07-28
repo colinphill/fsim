@@ -415,6 +415,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-122` | error | Expected `;` after a Verilog/SystemVerilog `$write` task. |
 | `FSIM-SV-PARSE-123` | error | Expected `)` after Verilog/SystemVerilog `$strobe` arguments. |
 | `FSIM-SV-PARSE-124` | error | Expected `;` after a Verilog/SystemVerilog `$strobe` task. |
+| `FSIM-SV-PARSE-125` | error | Expected `)` after Verilog/SystemVerilog `$monitor` arguments. |
+| `FSIM-SV-PARSE-126` | error | Expected `;` after a Verilog/SystemVerilog `$monitor` task. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -472,6 +474,7 @@ therefore excluded.
 | `FSIM-SV-SEM-038` | error | A `$write` call uses a nonliteral or formatting argument outside the current bounded output slice. |
 | `FSIM-SV-SEM-039` | error | A `$strobe` call uses a nonliteral or formatting argument outside the current bounded postponed-output slice. |
 | `FSIM-SV-SEM-040` | error | A Verilog/SystemVerilog output string uses an unsupported, incomplete, or out-of-byte-range escape. |
+| `FSIM-SV-SEM-041` | error | A `$monitor` call uses a value or formatting argument outside the literal-only initial-publication slice. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

@@ -338,7 +338,8 @@ metadata. Compiled O0/O2 code calls the same hook through an append-only
 plain-C runtime-table tail, so output ordering remains part of the common
 single-thread simulation semantics. `$strobe` publication is scheduled into
 the current timestamp's postponed phase through a second append-only callback.
-Formatting operands and `$monitor` remain subsequent slices.
+Formatting operands and value-sensitive `$monitor` behavior remain subsequent
+slices.
 Output-task literal spelling is decoded once in the frontend for newline, tab,
 quote, backslash, and one-byte octal escapes; SimIR and generated code retain
 the exact byte string, including embedded NUL bytes.
@@ -346,6 +347,10 @@ Bounded VHDL literal `report` statements at `note` severity reuse the same
 immediate typed operation and output hook. VHDL doubled quotes are decoded in
 the frontend. Higher report severities remain separate from this output-only
 slice so their future stop-threshold behavior is not silently discarded.
+The literal-only `$monitor` base case schedules one initial postponed
+publication. Because it has no value operands, it has no subsequent change
+trigger; monitor-list replacement and value-sensitive re-publication remain
+part of the formatting slice.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment
