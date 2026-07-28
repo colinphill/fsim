@@ -699,6 +699,15 @@ class VerilogParser final : private detail::ParserBase {
         unit.processes.push_back(parse_initial());
       } else if (match_keyword("generate")) {
         parse_generate_region(unit, previous());
+      } else if (match_keyword("if")) {
+        unit.generate_regions.push_back(
+            parse_conditional_generate(previous()));
+      } else if (match_keyword("for")) {
+        unit.generate_regions.push_back(
+            parse_iterative_generate(previous()));
+      } else if (match_keyword("case")) {
+        unit.generate_regions.push_back(
+            parse_selection_generate(previous()));
       } else if (
           at(TokenKind::Identifier)
           && ((at(TokenKind::Identifier, 1)
@@ -727,20 +736,84 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_generate_region(
       DesignUnit& unit, const Token& generate_token) {
+    GenerateRegion direct_region;
+    direct_region.kind = GenerateKind::StaticBlock;
+    std::vector<std::string> direct_local_names;
+    const auto flush_direct_region = [&]() {
+      const bool empty =
+          direct_region.then_body.signals.empty()
+          && direct_region.then_body.concurrent_statements.empty()
+          && direct_region.then_body.processes.empty()
+          && direct_region.then_body.instances.empty()
+          && direct_region.then_body.generate_regions.empty();
+      if (!empty) {
+        direct_region.span =
+            span_from(generate_token, previous());
+        unit.generate_regions.push_back(
+            std::move(direct_region));
+        direct_region = GenerateRegion{};
+        direct_region.kind = GenerateKind::StaticBlock;
+      }
+    };
     while (!at_end() && !keyword("endgenerate")) {
       if (match_keyword("if")) {
+        flush_direct_region();
         unit.generate_regions.push_back(
             parse_conditional_generate(previous()));
         continue;
       }
       if (match_keyword("for")) {
+        flush_direct_region();
         unit.generate_regions.push_back(
             parse_iterative_generate(previous()));
         continue;
       }
       if (match_keyword("case")) {
+        flush_direct_region();
         unit.generate_regions.push_back(
             parse_selection_generate(previous()));
+        continue;
+      }
+      if (keyword("begin")) {
+        flush_direct_region();
+        unit.generate_regions.push_back(
+            parse_static_generate_block());
+        continue;
+      }
+      if (is_declaration_start()) {
+        parse_generate_declaration(
+            direct_region.then_body,
+            direct_local_names);
+        continue;
+      }
+      if (match_keyword("assign")) {
+        if (auto assignment =
+                parse_continuous_assignment(previous())) {
+          direct_region.then_body.concurrent_statements.push_back(
+              std::move(*assignment));
+        }
+        continue;
+      }
+      if (
+          keyword("always") || keyword("always_ff")
+          || keyword("always_comb") || keyword("always_latch")) {
+        direct_region.then_body.processes.push_back(
+            parse_always());
+        continue;
+      }
+      if (keyword("initial")) {
+        direct_region.then_body.processes.push_back(
+            parse_initial());
+        continue;
+      }
+      if (
+          at(TokenKind::Identifier)
+          && ((at(TokenKind::Identifier, 1)
+               && at(TokenKind::LeftParen, 2))
+              || (at(TokenKind::Hash, 1)
+                  && at(TokenKind::LeftParen, 2)))) {
+        direct_region.then_body.instances.push_back(
+            parse_instance());
         continue;
       }
       const auto unsupported = advance();
@@ -755,9 +828,27 @@ class VerilogParser final : private detail::ParserBase {
         advance();
       }
     }
+    flush_direct_region();
     expect_keyword(
         "endgenerate", false, "FSIM-SV-PARSE-064");
+    for (const auto& local_name : direct_local_names) {
+      const auto found = current_generate_names_.find(local_name);
+      if (found != current_generate_names_.end()
+          && --found->second == 0) {
+        current_generate_names_.erase(found);
+      }
+    }
     (void)generate_token;
+  }
+
+  GenerateRegion parse_static_generate_block() {
+    GenerateRegion result;
+    result.kind = GenerateKind::StaticBlock;
+    const auto start = current();
+    parse_generate_branch(
+        result.then_scope, result.then_body);
+    result.span = span_from(start, previous());
+    return result;
   }
 
   GenerateRegion parse_conditional_generate(
@@ -928,6 +1019,9 @@ class VerilogParser final : private detail::ParserBase {
       } else if (match_keyword("case")) {
         body.generate_regions.push_back(
             parse_selection_generate(previous()));
+      } else if (keyword("begin")) {
+        body.generate_regions.push_back(
+            parse_static_generate_block());
       } else if (
           at(TokenKind::Identifier)
           && ((at(TokenKind::Identifier, 1)

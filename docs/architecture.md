@@ -45,8 +45,10 @@ and native-cache identity. Typed bounded scalar construction values also cross
 SystemC factory boundaries in both directions. Complete generic/parameter
 typing and reusable code-specialization deduplication remain planned.
 
-The current hierarchy builder recursively follows direct VHDL/SV instances
-and bounded conditional/iterative/selection generate regions.
+The current hierarchy builder recursively follows direct VHDL/SV instances,
+bounded conditional/iterative/selection generate regions, and always-selected
+static regions representing unguarded VHDL blocks or direct/named
+SystemVerilog generate contents.
 Generate conditions, loop controls, selectors, and choices are
 constant-evaluated after generic/parameter substitution for each occurrence.
 Only selected branches/alternatives and realized iterations enter DesignIR.
@@ -60,6 +62,10 @@ that content into the owning unit while qualifying only locally declared names
 with the generated scope. Parent references remain unchanged, process-local
 variables shadow generated signals correctly, and unselected body content
 never receives a signal or process ID.
+An unguarded VHDL block or named SystemVerilog `begin : label` static region
+contributes its label as a stable hierarchy component. Direct items inside an
+explicit SystemVerilog `generate` region use an empty static scope, so they
+retain module-scope names while sharing the same body-expansion path.
 Same-language children resolve within the parsed units. A manifest
 binding may override an instance with a language-qualified VHDL or SV target;
 the builder then connects named or positional whole-signal actuals by aliasing

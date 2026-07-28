@@ -43,8 +43,9 @@ The current tree contains:
   explicit cross-language bindings, whole-signal port aliasing, and boundary
   validation;
 - specialization-time VHDL and SystemVerilog conditional/iterative/selection
-  executable generate expansion with labeled and indexed generated scopes
-  retained in mixed binding paths;
+  executable generate expansion, unguarded VHDL block statements, and
+  explicit or implicit SystemVerilog generate forms with labeled and indexed
+  generated scopes retained in mixed binding paths;
 - lowering of scalar and common packed operations into SimIR;
 - bounded source-level VHDL `wait for`/`wait on` and Verilog/SystemVerilog
   integer-delay, any-change, `posedge`, and `negedge` procedural event
@@ -148,6 +149,11 @@ Selected generated bodies can execute local packed signals, concurrent
 assignments, and processes. Their local names are scope-qualified for
 debug/VCD visibility, including independent `label[index]` objects for each
 realized loop iteration.
+Unguarded labeled VHDL block statements always elaborate their body into the
+declared block scope. SystemVerilog conditional/iterative/selection generates
+may use their standard implicit module-item forms, while direct declarations and
+behavior plus named static `begin : label` blocks inside explicit
+`generate`/`endgenerate` regions elaborate through the same common hierarchy.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

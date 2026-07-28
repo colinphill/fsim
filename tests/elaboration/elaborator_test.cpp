@@ -865,6 +865,32 @@ module generated_sv_loop_behavior #(parameter COUNT = 3);
     end
   endgenerate
 endmodule
+
+module generated_sv_implicit_behavior #(
+  parameter ENABLED = 1
+) (
+  output logic [3:0] observed
+);
+  if (ENABLED) begin : implicit_scope
+    logic [3:0] generated_value;
+    assign generated_value = 4'd6;
+    always_comb observed = generated_value + 1;
+  end
+endmodule
+
+module generated_sv_direct_behavior (
+  output logic [3:0] observed
+);
+  generate
+    logic [3:0] direct_value;
+    assign direct_value = 4'd2;
+    begin : named_scope
+      logic [3:0] nested_value;
+      assign nested_value = direct_value + 1;
+      always_comb observed = nested_value + 1;
+    end
+  endgenerate
+endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     auto generated_vhdl = fsim::frontend::parse_text(
@@ -1010,6 +1036,24 @@ begin
   begin
     generated_value <= i + 4;
   end generate lanes;
+end architecture;
+
+entity generated_vhdl_block_behavior is
+  port (
+    observed : out unsigned(3 downto 0)
+  );
+end entity;
+architecture rtl of generated_vhdl_block_behavior is
+begin
+  static_scope: block is
+    signal generated_value : unsigned(3 downto 0);
+  begin
+    generated_value <= 7;
+    worker: process(generated_value)
+    begin
+      observed <= generated_value + 1;
+    end process;
+  end block static_scope;
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -1443,6 +1487,113 @@ end architecture;
               .to_msb_string()
           == generated_vhdl_loop_behavior_values[index]);
     }
+
+    const auto generated_sv_implicit_behavior =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_implicit_behavior");
+    assert(generated_sv_implicit_behavior.ok());
+    const auto generated_sv_implicit_local =
+        generated_sv_implicit_behavior.design->find_signal(
+            "implicit_scope.generated_value");
+    const auto generated_sv_implicit_observed =
+        generated_sv_implicit_behavior.design->find_signal(
+            "observed");
+    assert(
+        generated_sv_implicit_local
+        && generated_sv_implicit_observed);
+    assert(
+        generated_sv_implicit_behavior.design->processes().size()
+        == 2);
+    auto generated_sv_implicit_interpreter =
+        generated_sv_implicit_behavior.design->create_interpreter();
+    assert(
+        generated_sv_implicit_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_sv_implicit_interpreter
+            ->signal_value(*generated_sv_implicit_local)
+            .to_msb_string()
+        == "0110");
+    assert(
+        generated_sv_implicit_interpreter
+            ->signal_value(*generated_sv_implicit_observed)
+            .to_msb_string()
+        == "0111");
+
+    const auto generated_sv_direct_behavior =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_direct_behavior");
+    assert(generated_sv_direct_behavior.ok());
+    const auto generated_sv_direct =
+        generated_sv_direct_behavior.design->find_signal(
+            "direct_value");
+    const auto generated_sv_nested =
+        generated_sv_direct_behavior.design->find_signal(
+            "named_scope.nested_value");
+    const auto generated_sv_direct_observed =
+        generated_sv_direct_behavior.design->find_signal(
+            "observed");
+    assert(
+        generated_sv_direct && generated_sv_nested
+        && generated_sv_direct_observed);
+    assert(
+        generated_sv_direct_behavior.design->processes().size()
+        == 3);
+    auto generated_sv_direct_interpreter =
+        generated_sv_direct_behavior.design->create_interpreter();
+    assert(
+        generated_sv_direct_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_sv_direct_interpreter
+            ->signal_value(*generated_sv_direct)
+            .to_msb_string()
+        == "0010");
+    assert(
+        generated_sv_direct_interpreter
+            ->signal_value(*generated_sv_nested)
+            .to_msb_string()
+        == "0011");
+    assert(
+        generated_sv_direct_interpreter
+            ->signal_value(*generated_sv_direct_observed)
+            .to_msb_string()
+        == "0100");
+
+    const auto generated_vhdl_block_behavior =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_block_behavior(rtl)");
+    assert(generated_vhdl_block_behavior.ok());
+    const auto generated_vhdl_block_local =
+        generated_vhdl_block_behavior.design->find_signal(
+            "static_scope.generated_value");
+    const auto generated_vhdl_block_observed =
+        generated_vhdl_block_behavior.design->find_signal(
+            "observed");
+    assert(
+        generated_vhdl_block_local
+        && generated_vhdl_block_observed);
+    assert(
+        generated_vhdl_block_behavior.design->processes().size()
+        == 2);
+    auto generated_vhdl_block_interpreter =
+        generated_vhdl_block_behavior.design->create_interpreter();
+    assert(
+        generated_vhdl_block_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_vhdl_block_interpreter
+            ->signal_value(*generated_vhdl_block_local)
+            .to_msb_string()
+        == "0111");
+    assert(
+        generated_vhdl_block_interpreter
+            ->signal_value(*generated_vhdl_block_observed)
+            .to_msb_string()
+        == "1000");
 
     auto unevaluable_generate_design = generated_design;
     const auto unevaluable_unit = std::find_if(

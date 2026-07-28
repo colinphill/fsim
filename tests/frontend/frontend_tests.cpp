@@ -2230,6 +2230,42 @@ module generated_case #(parameter MODE = 1) (
     endcase
   endgenerate
 endmodule
+
+module implicit_generated #(parameter ENABLED = 1);
+  if (ENABLED) begin : implicit_scope
+    logic [3:0] generated_value;
+    initial generated_value = 4'd6;
+  end
+endmodule
+
+module implicit_loop_generated #(parameter COUNT = 2);
+  for (genvar i = 0; i < COUNT; i = i + 1) begin : lane
+    logic [3:0] generated_value;
+    initial generated_value = i;
+  end
+endmodule
+
+module implicit_case_generated #(parameter MODE = 1);
+  case (MODE)
+    1: begin : selected
+      logic generated_value;
+    end
+    default: begin : fallback
+      logic generated_value;
+    end
+  endcase
+endmodule
+
+module direct_generated;
+  generate
+    logic [3:0] direct_value;
+    initial direct_value = 4'd2;
+    begin : named_scope
+      logic [3:0] nested_value;
+      initial nested_value = 4'd3;
+    end
+  endgenerate
+endmodule
 )",
       Language::SystemVerilog2017);
   require(
@@ -2310,6 +2346,63 @@ endmodule
           && sv_case.alternatives[2].scope == "fallback"
           && sv_case.alternatives[2].is_default,
       "SystemVerilog case-generate alternatives");
+  const auto* sv_implicit_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule, "implicit_generated");
+  require(
+      sv_implicit_unit != nullptr
+          && sv_implicit_unit->generate_regions.size() == 1
+          && sv_implicit_unit->generate_regions.front().kind
+              == GenerateKind::Conditional
+          && sv_implicit_unit->generate_regions.front()
+                 .then_scope
+              == "implicit_scope"
+          && sv_implicit_unit->generate_regions.front()
+                 .then_body.signals.size()
+              == 1,
+      "implicit SystemVerilog generate-if body");
+  const auto* sv_implicit_loop_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule,
+          "implicit_loop_generated");
+  require(
+      sv_implicit_loop_unit != nullptr
+          && sv_implicit_loop_unit->generate_regions.size() == 1
+          && sv_implicit_loop_unit->generate_regions.front().kind
+              == GenerateKind::Iterative
+          && sv_implicit_loop_unit->generate_regions.front()
+                 .then_scope
+              == "lane",
+      "implicit SystemVerilog generate-for body");
+  const auto* sv_implicit_case_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule,
+          "implicit_case_generated");
+  require(
+      sv_implicit_case_unit != nullptr
+          && sv_implicit_case_unit->generate_regions.size() == 1
+          && sv_implicit_case_unit->generate_regions.front().kind
+              == GenerateKind::Selection
+          && sv_implicit_case_unit->generate_regions.front()
+                 .alternatives.size()
+              == 2,
+      "implicit SystemVerilog generate-case body");
+  const auto* sv_direct_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule, "direct_generated");
+  require(
+      sv_direct_unit != nullptr
+          && sv_direct_unit->generate_regions.size() == 2
+          && sv_direct_unit->generate_regions[0].kind
+              == GenerateKind::StaticBlock
+          && sv_direct_unit->generate_regions[0]
+                 .then_body.signals.size()
+              == 1
+          && sv_direct_unit->generate_regions[1].kind
+              == GenerateKind::StaticBlock
+          && sv_direct_unit->generate_regions[1].then_scope
+              == "named_scope",
+      "direct and named SystemVerilog generate blocks");
 
   const auto vhdl = parse_text(
       "generate.vhd",
@@ -2384,6 +2477,25 @@ begin
       child: entity work.leaf(rtl)
         port map (value => value, result => result);
   end generate selection;
+end architecture;
+
+entity block_generated is
+  port (
+    observed : out unsigned(3 downto 0)
+  );
+end entity;
+
+architecture rtl of block_generated is
+begin
+  static_scope: block is
+    signal generated_value : unsigned(3 downto 0);
+  begin
+    generated_value <= 5;
+    worker: process(generated_value)
+    begin
+      observed <= generated_value + 1;
+    end process;
+  end block static_scope;
 end architecture;
 )",
       Language::Vhdl2008);
@@ -2460,6 +2572,27 @@ end architecture;
           && vhdl_case.alternatives[2].scope == "fallback"
           && vhdl_case.alternatives[2].is_default,
       "VHDL case-generate alternatives");
+  const auto vhdl_block_unit = std::find_if(
+      vhdl.design.units.begin(),
+      vhdl.design.units.end(),
+      [](const auto& unit) {
+        return unit.kind == UnitKind::VhdlArchitecture
+            && unit.primary_name == "block_generated";
+      });
+  require(
+      vhdl_block_unit != vhdl.design.units.end()
+          && vhdl_block_unit->generate_regions.size() == 1
+          && vhdl_block_unit->generate_regions.front().kind
+              == GenerateKind::StaticBlock
+          && vhdl_block_unit->generate_regions.front().then_scope
+              == "static_scope"
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.signals.size()
+              == 1
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.processes.size()
+              == 1,
+      "VHDL unguarded static block body");
 
   const auto unlabeled_systemverilog = parse_text(
       "unlabeled_generate.sv",
@@ -2636,6 +2769,50 @@ end architecture;
                 return diagnostic.code == "FSIM-VHDL-SEM-018";
               }),
       "nonfinal VHDL case-generate others is targeted");
+
+  const auto guarded_vhdl_block = parse_text(
+      "guarded_block.vhd",
+      R"(
+architecture rtl of guarded is
+begin
+  guarded_scope: block (true)
+  begin
+  end block guarded_scope;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !guarded_vhdl_block.ok()
+          && std::any_of(
+              guarded_vhdl_block.diagnostics.begin(),
+              guarded_vhdl_block.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-021";
+              }),
+      "guarded VHDL block is targeted");
+
+  const auto mismatched_vhdl_block = parse_text(
+      "mismatched_block.vhd",
+      R"(
+architecture rtl of mismatched is
+begin
+  opening_name: block
+  begin
+  end block closing_name;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !mismatched_vhdl_block.ok()
+          && std::any_of(
+              mismatched_vhdl_block.diagnostics.begin(),
+              mismatched_vhdl_block.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-081";
+              }),
+      "VHDL block end-label mismatch is targeted");
 }
 
 }  // namespace

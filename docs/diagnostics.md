@@ -141,6 +141,11 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-075` | error | Expected `generate` after the case-generate `end`. |
 | `FSIM-VHDL-PARSE-076` | error | A case-generate end label does not match its opening label. |
 | `FSIM-VHDL-PARSE-077` | error | Expected `;` after a case generate. |
+| `FSIM-VHDL-PARSE-078` | error | Expected `begin` in a VHDL block statement. |
+| `FSIM-VHDL-PARSE-079` | error | Expected `end` for a VHDL block statement. |
+| `FSIM-VHDL-PARSE-080` | error | Expected `block` after the block-statement `end`. |
+| `FSIM-VHDL-PARSE-081` | error | A block-statement end label does not match its opening label. |
+| `FSIM-VHDL-PARSE-082` | error | Expected `;` after a VHDL block statement. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -175,6 +180,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded local-signal, assignment, process, instance, and nested-generate subset. |
+| `FSIM-VHDL-UNSUPPORTED-021` | error | Guarded VHDL block statements are not executable yet. |
 
 ## Verilog and SystemVerilog frontend
 

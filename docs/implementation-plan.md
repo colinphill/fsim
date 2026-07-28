@@ -88,6 +88,11 @@ The following foundation is implemented:
   loop-variable substitution, stable labeled/indexed/alternative hierarchy
   paths, and explicit mixed-language bindings through selected branches,
   realized iterations, and selected alternatives;
+- always-selected unguarded VHDL block statements, module-level implicit
+  SystemVerilog conditional/iterative/selection generates, and direct or named
+  static contents in explicit SystemVerilog generate regions, sharing
+  generated-body scoping, interpreter/JIT execution, VCD visibility, and
+  native-cache identity;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -212,7 +217,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 451 unique current production diagnostic codes.
+- a stable catalog covering 457 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -230,6 +235,7 @@ Current Linux validation:
 | Iterative instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL ascending/descending ranges and canonical SV inline-`genvar` loops, nested expansion, mixed indexed bindings, interpreter/JIT equivalence, and cold/warm native cache |
 | Selection instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for labeled VHDL/SV multi-choice/default alternatives, mixed selected paths, interpreter/JIT equivalence, and cold/warm native cache |
 | Executable generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for selected and per-iteration local signals, concurrent/process behavior, scoped debug/VCD names, interpreter/JIT equivalence, and specialization-level native cache |
+| Static/implicit generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for unguarded VHDL blocks, all three bounded implicit SV generate forms, direct explicit-generate contents, and named static SV blocks with exact conditional/static interpreter/JIT/VCD/cache behavior |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -355,7 +361,9 @@ Remaining before the architecture gate passes:
   already participate in per-specialization native-cache identity and cross
   explicit VHDL/SystemVerilog bindings. Conditional, bounded iterative, and
   bounded selection generate plus local signals, assignments, processes, and
-  instances are implemented; broader SV loop syntax, VHDL range choices, and
+  instances are implemented. Unguarded VHDL blocks, all three bounded implicit
+  SV generate forms, and direct/named static SV generate contents also execute;
+  guarded VHDL blocks, broader SV loop syntax, VHDL range choices, and
   additional generated declarative/module items remain.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
@@ -365,11 +373,12 @@ Early groundwork:
 - handwritten tokenization and recursive-descent/precedence parsing;
 - VHDL entity/architecture/port/signal/process nodes and represented
   library/use/context-reference clauses plus bounded generic specialization
-  and executable conditional/iterative/selection generate;
+  and executable conditional/iterative/selection generate and unguarded block
+  statements;
 - SV modules, common declarations, simple hierarchy, basic procedural and
   continuous statements, bounded integral parameter specialization,
-  executable conditional/canonical-genvar/selection generate, and bounded
-  `` `timescale`` handling;
+  executable explicit/implicit conditional, canonical-genvar, selection, and
+  direct/named static generate bodies, and bounded `` `timescale`` handling;
 - domain, width, signedness, duplicate-declaration, driver, and binding checks;
   and
 - a checked-in feature matrix with positive, negative, elaboration, and

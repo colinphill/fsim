@@ -925,6 +925,69 @@ begin
 end architecture;
 )";
   }
+  const auto generated_static_behavior_sv_source =
+      directory / "generated_static_behavior.sv";
+  {
+    std::ofstream output(generated_static_behavior_sv_source);
+    output << R"(
+module generated_static_behavior_sv (
+  output logic [3:0] observed
+);
+  generate
+    logic [3:0] direct_value;
+    assign direct_value = 4'd2;
+    begin : named_scope
+      logic [3:0] nested_value;
+      assign nested_value = direct_value + 1;
+      always_comb observed = nested_value + 1;
+    end
+  endgenerate
+endmodule
+)";
+  }
+  const auto generated_implicit_behavior_sv_source =
+      directory / "generated_implicit_behavior.sv";
+  {
+    std::ofstream output(generated_implicit_behavior_sv_source);
+    output << R"(
+module generated_implicit_behavior_sv #(
+  parameter ENABLED = 1
+) (
+  output logic [3:0] observed
+);
+  if (ENABLED) begin : implicit_scope
+    logic [3:0] generated_value;
+    assign generated_value = 4'd6;
+    always_comb observed = generated_value + 1;
+  end
+endmodule
+)";
+  }
+  const auto generated_block_behavior_vhdl_source =
+      directory / "generated_block_behavior.vhd";
+  {
+    std::ofstream output(generated_block_behavior_vhdl_source);
+    output << R"(
+entity generated_block_behavior_vhdl is
+  port (
+    observed : out unsigned(3 downto 0)
+  );
+end entity;
+
+architecture rtl of generated_block_behavior_vhdl is
+begin
+  static_scope: block is
+    signal generated_value : unsigned(3 downto 0);
+  begin
+    generated_value <= 7;
+    worker: process(generated_value)
+    begin
+      observed <= generated_value + 1;
+    end process;
+  end block static_scope;
+end architecture;
+)";
+  }
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -5335,10 +5398,28 @@ end architecture rtl;
           "vhdl:work.generated_behavior_vhdl(rtl)",
           fsim::project::Language::vhdl,
           generated_behavior_vhdl_source);
+  auto generated_static_behavior_sv_config =
+      make_generated_behavior_config(
+          "generated-static-behavior-sv-test",
+          "sv:work.generated_static_behavior_sv",
+          fsim::project::Language::system_verilog,
+          generated_static_behavior_sv_source);
+  auto generated_implicit_behavior_sv_config =
+      make_generated_behavior_config(
+          "generated-implicit-behavior-sv-test",
+          "sv:work.generated_implicit_behavior_sv",
+          fsim::project::Language::system_verilog,
+          generated_implicit_behavior_sv_source);
+  auto generated_block_behavior_vhdl_config =
+      make_generated_behavior_config(
+          "generated-block-behavior-vhdl-test",
+          "vhdl:work.generated_block_behavior_vhdl(rtl)",
+          fsim::project::Language::vhdl,
+          generated_block_behavior_vhdl_source);
   const auto run_generated_behavior =
       [&](const fsim::project::Config& behavior_config,
           const fsim::app::SimulationEngine engine,
-          const std::string_view local_path) {
+          const std::vector<std::string_view>& local_paths) {
         fsim::diagnostic::Engine run_diagnostics;
         auto project = fsim::app::build_project(
             behavior_config, run_diagnostics);
@@ -5350,7 +5431,9 @@ end architecture rtl;
         assert(project->design.specializations().size() == 1);
         assert(project->specialization_cache_keys.size() == 1);
         assert(project->design.find_signal("observed"));
-        assert(project->design.find_signal(local_path));
+        for (const auto local_path : local_paths) {
+          assert(project->design.find_signal(local_path));
+        }
         ParameterRun result;
         result.keys.emplace_back(
             project->design.specializations().front().instance,
@@ -5361,40 +5444,48 @@ end architecture rtl;
       };
   const auto verify_generated_behavior =
       [&](const fsim::project::Config& behavior_config,
-          const std::string_view local_path,
-          const std::vector<std::string>& expected_values) {
+          const std::vector<std::string_view>& local_paths,
+          const std::vector<std::string>& expected_values,
+          const std::size_t expected_processes) {
         const auto reference = run_generated_behavior(
             behavior_config,
             fsim::app::SimulationEngine::interpreter,
-            local_path);
+            local_paths);
         const auto cold = run_generated_behavior(
             behavior_config,
             fsim::app::SimulationEngine::compiled,
-            local_path);
+            local_paths);
         compare_captures(reference.simulation, cold.simulation);
         assert(
             cold.simulation.result.status
             == fsim::runtime::RunStatus::completed);
         assert(cold.simulation.result.time == 0);
         assert(cold.simulation.final_values == expected_values);
-        assert(cold.simulation.process_count == 2);
-        const auto local_separator = local_path.find_last_of('.');
-        assert(local_separator != std::string_view::npos);
-        const auto local_scope =
-            local_path.substr(0, local_separator);
-        const auto local_name =
-            local_path.substr(local_separator + 1);
-        assert(
-            cold.simulation.normalized_vcd.find(
-                "$scope module " + std::string{local_scope}
-                + " $end")
-            != std::string::npos);
-        assert(
-            cold.simulation.normalized_vcd.find(
-                " " + std::string{local_name} + " $end")
-            != std::string::npos);
+        assert(cold.simulation.process_count == expected_processes);
+        for (const auto local_path : local_paths) {
+          const auto local_separator = local_path.find_last_of('.');
+          if (local_separator != std::string_view::npos) {
+            const auto local_scope =
+                local_path.substr(0, local_separator);
+            assert(
+                cold.simulation.normalized_vcd.find(
+                    "$scope module " + std::string{local_scope}
+                    + " $end")
+                != std::string::npos);
+          }
+          const auto local_name =
+              local_separator == std::string_view::npos
+              ? local_path
+              : local_path.substr(local_separator + 1);
+          assert(
+              cold.simulation.normalized_vcd.find(
+                  " " + std::string{local_name} + " $end")
+              != std::string::npos);
+        }
 #if defined(FSIM_HAS_LLVM)
-        assert(cold.simulation.compiled_processes == 2);
+        assert(
+            cold.simulation.compiled_processes
+            == expected_processes);
         assert(cold.simulation.compiled_modules == 1);
         assert(cold.simulation.native_cache.hits == 0);
         assert(cold.simulation.native_cache.misses == 1);
@@ -5403,7 +5494,7 @@ end architecture rtl;
         const auto warm = run_generated_behavior(
             behavior_config,
             fsim::app::SimulationEngine::compiled,
-            local_path);
+            local_paths);
         assert(warm.keys == cold.keys);
 #if defined(FSIM_HAS_LLVM)
         assert(warm.simulation.native_cache.hits == 1);
@@ -5412,12 +5503,29 @@ end architecture rtl;
       };
   verify_generated_behavior(
       generated_behavior_sv_config,
-      "selected.generated_value",
-      {"0110", "0101"});
+      {"selected.generated_value"},
+      {"0110", "0101"},
+      2);
   verify_generated_behavior(
       generated_behavior_vhdl_config,
-      "chosen.generated_value",
-      {"0111", "0110"});
+      {"chosen.generated_value"},
+      {"0111", "0110"},
+      2);
+  verify_generated_behavior(
+      generated_static_behavior_sv_config,
+      {"direct_value", "named_scope.nested_value"},
+      {"0100", "0010", "0011"},
+      3);
+  verify_generated_behavior(
+      generated_implicit_behavior_sv_config,
+      {"implicit_scope.generated_value"},
+      {"0111", "0110"},
+      2);
+  verify_generated_behavior(
+      generated_block_behavior_vhdl_config,
+      {"static_scope.generated_value"},
+      {"1000", "0111"},
+      2);
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit
   // must invalidate both the analysis object and the owning specialization,

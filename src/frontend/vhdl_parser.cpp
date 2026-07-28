@@ -585,6 +585,12 @@ class VhdlParser final : private detail::ParserBase {
               *label_token, previous()));
       return;
     }
+    if (label_token && match_keyword("block", true)) {
+      unit.generate_regions.push_back(
+          parse_vhdl_static_block(
+              *label_token, previous()));
+      return;
+    }
     if (label_token &&
         (keyword("entity", 0, true) ||
          (at(TokenKind::Identifier) &&
@@ -804,6 +810,45 @@ class VhdlParser final : private detail::ParserBase {
     return result;
   }
 
+  GenerateRegion parse_vhdl_static_block(
+      const Token& label,
+      const Token& start) {
+    GenerateRegion result;
+    result.kind = GenerateKind::StaticBlock;
+    result.then_scope = vhdl_name(label.text);
+    if (at(TokenKind::LeftParen)) {
+      const auto guard = current();
+      skip_balanced(
+          TokenKind::LeftParen, TokenKind::RightParen);
+      error(
+          guard,
+          "FSIM-VHDL-UNSUPPORTED-021",
+          "guarded block statements are not executable yet");
+    }
+    (void)match_keyword("is", true);
+    parse_vhdl_generate_declarations(result.then_body);
+    expect_keyword("begin", true, "FSIM-VHDL-PARSE-078");
+    parse_vhdl_generate_branch(result.then_body);
+    expect_keyword("end", true, "FSIM-VHDL-PARSE-079");
+    expect_keyword("block", true, "FSIM-VHDL-PARSE-080");
+    if (at(TokenKind::Identifier)) {
+      const auto end_label = advance();
+      if (vhdl_name(end_label.text) != result.then_scope) {
+        error(
+            end_label,
+            "FSIM-VHDL-PARSE-081",
+            "block end label does not match '"
+                + result.then_scope + "'");
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after block statement",
+        "FSIM-VHDL-PARSE-082");
+    result.span = span_from(start, previous());
+    return result;
+  }
+
   void parse_vhdl_generate_declarations(GenerateBody& body) {
     while (match_keyword("signal", true)) {
       parse_signal_declaration(body.signals);
@@ -845,6 +890,12 @@ class VhdlParser final : private detail::ParserBase {
       if (label && match_keyword("case", true)) {
         body.generate_regions.push_back(
             parse_vhdl_selection_generate(
+                *label, previous()));
+        continue;
+      }
+      if (label && match_keyword("block", true)) {
+        body.generate_regions.push_back(
+            parse_vhdl_static_block(
                 *label, previous()));
         continue;
       }

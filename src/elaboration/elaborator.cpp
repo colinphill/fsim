@@ -1062,6 +1062,19 @@ void expand_generate_regions(
     DesignUnit& unit,
     std::vector<Diagnostic>& diagnostics) {
     for (const auto& generate : generates) {
+        if (generate.kind == frontend::GenerateKind::StaticBlock) {
+            append_generated_body(
+                generate.then_body,
+                environment,
+                domains,
+                language,
+                generated_scope(
+                    parent_scope, generate.then_scope),
+                visible_names,
+                unit,
+                diagnostics);
+            continue;
+        }
         if (generate.kind == frontend::GenerateKind::Selection) {
             std::string error;
             const auto selector = evaluate_constant_expression(
