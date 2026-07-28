@@ -5680,6 +5680,47 @@ endmodule
             return diagnostic.code == "FSIM-SV-SEM-041";
           }),
       "value-sensitive $monitor needs a targeted diagnostic");
+
+  const auto numeric = parse_text(
+      "numeric_output.sv",
+      R"(
+module numeric_output;
+  initial begin
+    $display(42);
+    $write(8'h2a);
+    $strobe(6'b10_1010);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(numeric.ok(), "constant numeric output tasks must parse");
+  const auto& numeric_statements =
+      numeric.design.units.front().processes.front().statements;
+  require(
+      numeric_statements.size() == 3
+          && numeric_statements[0].output_text == "42"
+          && numeric_statements[0].output_newline
+          && numeric_statements[1].output_text == "42"
+          && !numeric_statements[1].output_newline
+          && numeric_statements[2].output_text == "42"
+          && numeric_statements[2].output_postponed,
+      "unsigned numeric output literal folding");
+
+  const auto unknown_numeric = parse_text(
+      "unknown_numeric_output.sv",
+      R"(
+module unknown_numeric_output;
+  initial $display(4'bx001);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          unknown_numeric.diagnostics,
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-037";
+          }),
+      "unknown numeric output literals need a targeted diagnostic");
 }
 
 int main() {

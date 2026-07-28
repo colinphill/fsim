@@ -353,6 +353,9 @@ The literal-only `$monitor` base case schedules one initial postponed
 publication. Because it has no value operands, it has no subsequent change
 trigger; monitor-list replacement and value-sensitive re-publication remain
 part of the formatting slice.
+Known unsigned numeric literals used as the sole output-task argument are
+normalized to their width-truncated decimal value in typed HIR. Unknown-state,
+signed, dynamic, and additional operands remain targeted.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

@@ -84,6 +84,8 @@ The current tree contains:
   semantics, decoded control/quote/backslash/octal escapes, and
   interpreter/LLVM O0/O2 equivalence;
 - literal-only `$monitor` initial publication in the postponed phase;
+- constant unsigned decimal/binary/octal/hex numeric output arguments folded
+  to their default decimal text before SimIR lowering;
 - decoded Verilog/SystemVerilog literal escapes in `$fatal` and immediate
   assertion `$error` diagnostics;
 - VHDL-2008 literal `report` statements at default/explicit `note` severity

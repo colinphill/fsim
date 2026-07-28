@@ -794,11 +794,14 @@ The nineteenth post-gate batch is in progress:
 8. SystemVerilog `$fatal` and immediate-assertion `$error` literal messages
    now use the output-task escape decoder and retain identical decoded
    diagnostics through interpreter and LLVM O0/O2 execution.
+9. Verilog-2005/SystemVerilog output tasks now accept one known unsigned
+   numeric literal in decimal, binary, octal, or hexadecimal syntax, apply
+   declared-width truncation, and emit its default decimal representation.
 
 The forced no-system-Tcl dependency build and its isolated staged relocation
 probe pass; the ordinary installed-Tcl application regression also passes.
 Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and output
-application tests pass for the cross-language output slices. This is feature 8
+application tests pass for the cross-language output slices. This is feature 9
 of 10, so the interval full regression and remote push are not due yet.
 
 ## v1 release condition

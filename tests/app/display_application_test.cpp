@@ -127,7 +127,7 @@ void test_display(
   assert(reference.result.time == 2);
   assert(compiled.result.time == 2);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 7);
+  assert(reference.output.size() == 8);
   assert(reference.output[0].process == 0);
   assert(reference.output[0].text == "first\t");
   assert(!reference.output[0].newline);
@@ -136,23 +136,27 @@ void test_display(
   assert(reference.output[1].text == "+line\nembedded \"quote\" \\ A");
   assert(reference.output[1].newline);
   assert(reference.output[1].time == 0);
-  assert(reference.output[2].text == "postponed");
+  assert(reference.output[2].text == "42");
   assert(reference.output[2].newline);
   assert(reference.output[2].time == 0);
   assert(reference.output[2].delta == 0);
-  assert(reference.output[3].text == "monitored");
+  assert(reference.output[3].text == "postponed");
   assert(reference.output[3].newline);
   assert(reference.output[3].time == 0);
   assert(reference.output[3].delta == 0);
-  assert(reference.output[4].text == "second");
-  assert(!reference.output[4].newline);
-  assert(reference.output[4].time == 2);
-  assert(reference.output[5].text.empty());
+  assert(reference.output[4].text == "monitored");
+  assert(reference.output[4].newline);
+  assert(reference.output[4].time == 0);
+  assert(reference.output[4].delta == 0);
+  assert(reference.output[5].text == "second");
   assert(!reference.output[5].newline);
   assert(reference.output[5].time == 2);
   assert(reference.output[6].text.empty());
-  assert(reference.output[6].newline);
+  assert(!reference.output[6].newline);
   assert(reference.output[6].time == 2);
+  assert(reference.output[7].text.empty());
+  assert(reference.output[7].newline);
+  assert(reference.output[7].time == 2);
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 1);
 }
@@ -222,6 +226,7 @@ module display_test;
   initial begin
     $write("first\t");
     $display("+line\nembedded \"quote\" \\ \101");
+    $display(8'h2a);
     $strobe("postponed");
     $monitor("monitored");
     #2 $write("second");
@@ -285,7 +290,8 @@ end architecture;
     assert(
         output.str().find(
             "first\t+line\nembedded \"quote\" \\ A\n"
-            "postponed\nmonitored\nsecond\nsimulation stopped at tick 2")
+            "42\npostponed\nmonitored\nsecond\n"
+            "simulation stopped at tick 2")
         != std::string::npos);
   }
 

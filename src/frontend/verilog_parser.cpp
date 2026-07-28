@@ -26,6 +26,66 @@ struct VerilogTypeSpec {
   PortDirection direction{PortDirection::Unknown};
 };
 
+[[nodiscard]] std::optional<std::uint64_t>
+constant_output_number(const std::string_view spelling) {
+  const auto quote = spelling.find('\'');
+  if (quote == std::string_view::npos) {
+    return decimal_u64(spelling);
+  }
+  const auto width = decimal_u64(spelling.substr(0, quote));
+  if (!width || *width == 0) {
+    return std::nullopt;
+  }
+  auto digits = spelling.substr(quote + 1);
+  if (!digits.empty()
+      && (digits.front() == 's' || digits.front() == 'S')) {
+    return std::nullopt;
+  }
+  if (digits.size() < 2) {
+    return std::nullopt;
+  }
+  const char radix = detail::ascii_lower(digits.substr(0, 1)).front();
+  digits.remove_prefix(1);
+  int base{};
+  switch (radix) {
+  case 'b':
+    base = 2;
+    break;
+  case 'o':
+    base = 8;
+    break;
+  case 'd':
+    base = 10;
+    break;
+  case 'h':
+    base = 16;
+    break;
+  default:
+    return std::nullopt;
+  }
+  std::string cleaned;
+  cleaned.reserve(digits.size());
+  for (const char digit : digits) {
+    if (digit != '_') {
+      cleaned.push_back(digit);
+    }
+  }
+  std::uint64_t value{};
+  const auto [end, error] = std::from_chars(
+      cleaned.data(),
+      cleaned.data() + cleaned.size(),
+      value,
+      base);
+  if (error != std::errc{}
+      || end != cleaned.data() + cleaned.size()) {
+    return std::nullopt;
+  }
+  if (*width < 64) {
+    value &= (std::uint64_t{1} << *width) - 1U;
+  }
+  return value;
+}
+
 [[nodiscard]] std::optional<std::int64_t> simple_integer_constant(
     const Expression& expression) {
   if (expression.kind == ExpressionKind::IntegerLiteral) {
@@ -3727,12 +3787,27 @@ class VerilogParser final : private detail::ParserBase {
           if (at(TokenKind::StringLiteral)) {
             statement.output_text =
                 decoded_string_literal_text(advance());
+          } else if (at(TokenKind::Number)) {
+            const auto number = advance();
+            const auto value =
+                constant_output_number(number.text);
+            if (!value) {
+              error(
+                  number,
+                  semantic_code,
+                  "the current " + std::string{task_name}
+                      + " slice requires a known unsigned numeric "
+                        "literal");
+            } else {
+              statement.output_text = std::to_string(*value);
+            }
           } else {
             error(
                 current(),
                 semantic_code,
                 "the current " + std::string{task_name}
-                    + " slice requires a literal string argument");
+                    + " slice requires a literal string or unsigned "
+                      "numeric argument");
             while (!at_end() && !at(TokenKind::RightParen)
                    && !at(TokenKind::Semicolon)) {
               advance();
