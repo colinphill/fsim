@@ -420,6 +420,13 @@ VHDL numeric-vector form follows VHDL factor syntax: an unparenthesized factor
 contains at most one `**`, a leading sign applies outside that factor, and the
 exponent must be a locally static nonnegative integer. Integral constant
 folding uses checked signed 64-bit exponentiation and diagnoses overflow.
+SystemVerilog procedural compound assignments normalize in typed HIR to a
+blocking assignment whose value is the corresponding binary operation over a
+read of the target. Standalone prefix and postfix increment/decrement use the
+same representation with a contextual unit operand; because their values are
+not consumed as expressions in this bounded form, both placements have the
+same read-modify-write behavior. Constant bit, part, indexed-part, and packed
+member targets reuse the normal selected-read and selected-write lowering.
 Packed VHDL `abs` accepts a signed operand. It extracts the leftmost sign
 element, computes the same-width two's-complement negation, and selects the
 original or negated value through the common four-state conditional operation.

@@ -397,11 +397,19 @@ class Lexer {
         if (consume_if('=')) {
           emit(TokenKind::LessEqual, begin);
         } else if (consume_if('<')) {
-          emit(
-              !is_vhdl() && consume_if('<')
-                  ? TokenKind::ArithmeticShiftLeft
-                  : TokenKind::ShiftLeft,
-              begin);
+          if (!is_vhdl() && consume_if('<')) {
+            emit(
+                consume_if('=')
+                    ? TokenKind::ArithmeticShiftLeftAssign
+                    : TokenKind::ArithmeticShiftLeft,
+                begin);
+          } else {
+            emit(
+                !is_vhdl() && consume_if('=')
+                    ? TokenKind::ShiftLeftAssign
+                    : TokenKind::ShiftLeft,
+                begin);
+          }
         } else {
           emit(TokenKind::Less, begin);
         }
@@ -410,11 +418,19 @@ class Lexer {
         if (consume_if('=')) {
           emit(TokenKind::GreaterEqual, begin);
         } else if (consume_if('>')) {
-          emit(
-              !is_vhdl() && consume_if('>')
-                  ? TokenKind::ArithmeticShiftRight
-                  : TokenKind::ShiftRight,
-              begin);
+          if (!is_vhdl() && consume_if('>')) {
+            emit(
+                consume_if('=')
+                    ? TokenKind::ArithmeticShiftRightAssign
+                    : TokenKind::ArithmeticShiftRight,
+                begin);
+          } else {
+            emit(
+                !is_vhdl() && consume_if('=')
+                    ? TokenKind::ShiftRightAssign
+                    : TokenKind::ShiftRight,
+                begin);
+          }
         } else {
           emit(TokenKind::Greater, begin);
         }
@@ -437,6 +453,8 @@ class Lexer {
       case '&':
         if (consume_if('&')) {
           emit(TokenKind::AndAnd, begin);
+        } else if (!is_vhdl() && consume_if('=')) {
+          emit(TokenKind::AmpersandAssign, begin);
         } else {
           emit(TokenKind::Ampersand, begin);
         }
@@ -444,6 +462,8 @@ class Lexer {
       case '|':
         if (consume_if('|')) {
           emit(TokenKind::OrOr, begin);
+        } else if (!is_vhdl() && consume_if('=')) {
+          emit(TokenKind::PipeAssign, begin);
         } else {
           emit(TokenKind::Pipe, begin);
         }
@@ -471,23 +491,36 @@ class Lexer {
         }
         return;
       case '*':
-        emit(
-            consume_if('*') ? TokenKind::Power : TokenKind::Star,
-            begin);
+        if (consume_if('*')) {
+          emit(TokenKind::Power, begin);
+        } else if (!is_vhdl() && consume_if('=')) {
+          emit(TokenKind::StarAssign, begin);
+        } else {
+          emit(TokenKind::Star, begin);
+        }
         return;
       case '/':
         if (consume_if('=')) {
-          emit(TokenKind::NotEqual, begin);
+          emit(
+              is_vhdl() ? TokenKind::NotEqual
+                        : TokenKind::SlashAssign,
+              begin);
         } else {
           emit(TokenKind::Slash, begin);
         }
         return;
       case '%':
-        emit(TokenKind::Percent, begin);
+        emit(
+            !is_vhdl() && consume_if('=')
+                ? TokenKind::PercentAssign
+                : TokenKind::Percent,
+            begin);
         return;
       case '^':
         if (!is_vhdl() && consume_if('~')) {
           emit(TokenKind::CaretTilde, begin);
+        } else if (!is_vhdl() && consume_if('=')) {
+          emit(TokenKind::CaretAssign, begin);
         } else {
           emit(TokenKind::Caret, begin);
         }
@@ -595,12 +628,20 @@ const char* to_string(TokenKind kind) noexcept {
       return "'::'";
     case TokenKind::ShiftLeft:
       return "'<<'";
+    case TokenKind::ShiftLeftAssign:
+      return "'<<='";
     case TokenKind::ShiftRight:
       return "'>>'";
+    case TokenKind::ShiftRightAssign:
+      return "'>>='";
     case TokenKind::ArithmeticShiftLeft:
       return "'<<<'";
+    case TokenKind::ArithmeticShiftLeftAssign:
+      return "'<<<='";
     case TokenKind::ArithmeticShiftRight:
       return "'>>>'";
+    case TokenKind::ArithmeticShiftRightAssign:
+      return "'>>>='";
     case TokenKind::AndAnd:
       return "'&&'";
     case TokenKind::OrOr:
@@ -623,18 +664,30 @@ const char* to_string(TokenKind kind) noexcept {
       return "'-='";
     case TokenKind::Star:
       return "'*'";
+    case TokenKind::StarAssign:
+      return "'*='";
     case TokenKind::Power:
       return "'**'";
     case TokenKind::Slash:
       return "'/'";
+    case TokenKind::SlashAssign:
+      return "'/='";
     case TokenKind::Percent:
       return "'%'";
+    case TokenKind::PercentAssign:
+      return "'%='";
     case TokenKind::Ampersand:
       return "'&'";
+    case TokenKind::AmpersandAssign:
+      return "'&='";
     case TokenKind::Pipe:
       return "'|'";
+    case TokenKind::PipeAssign:
+      return "'|='";
     case TokenKind::Caret:
       return "'^'";
+    case TokenKind::CaretAssign:
+      return "'^='";
     case TokenKind::TildeAmpersand:
       return "'~&'";
     case TokenKind::TildePipe:

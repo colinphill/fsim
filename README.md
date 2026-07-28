@@ -106,6 +106,9 @@ The current tree contains:
   `others`, lowered through common exact case-equality branches;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
+- SystemVerilog procedural arithmetic/bitwise/shift compound assignments and
+  standalone prefix/postfix increment/decrement, including constant-selected
+  packed targets;
 - vector-aware SystemVerilog logical negation and unsigned
   equality/relational comparisons with four-state unknown propagation, plus
   exact known-result `===`/`!==` comparison of `0`/`1`/`X`/`Z`;

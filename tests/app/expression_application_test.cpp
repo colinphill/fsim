@@ -430,7 +430,7 @@ void test_systemverilog_signedness_casts(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 45> signal_paths{
+  const std::array<std::string, 61> signal_paths{
       "signedness_cast_app.signed_less",
       "signedness_cast_app.unsigned_less",
       "signedness_cast_app.signed_shift",
@@ -461,6 +461,22 @@ void test_systemverilog_signedness_casts(
       "signedness_cast_app.power_zero_negative",
       "signedness_cast_app.power_unknown",
       "signedness_cast_app.power_parameter",
+      "signedness_cast_app.compound_add",
+      "signedness_cast_app.compound_subtract",
+      "signedness_cast_app.compound_multiply",
+      "signedness_cast_app.compound_divide",
+      "signedness_cast_app.compound_remainder",
+      "signedness_cast_app.compound_and",
+      "signedness_cast_app.compound_or",
+      "signedness_cast_app.compound_xor",
+      "signedness_cast_app.compound_shift_left",
+      "signedness_cast_app.compound_shift_right",
+      "signedness_cast_app.compound_arithmetic_left",
+      "signedness_cast_app.compound_arithmetic_right",
+      "signedness_cast_app.prefix_increment",
+      "signedness_cast_app.postfix_decrement",
+      "signedness_cast_app.compound_selected",
+      "signedness_cast_app.compound_unknown",
       "signedness_cast_app.onehot_zero",
       "signedness_cast_app.onehot_single",
       "signedness_cast_app.onehot_multiple",
@@ -523,6 +539,22 @@ void test_systemverilog_signedness_casts(
           "XXXXXXXX",
           "XXXXXXXX",
           "01010001",
+          "00010101",
+          "00001101",
+          "00100110",
+          "00010001",
+          "00000010",
+          "10100000",
+          "10101111",
+          "01010101",
+          "00000010",
+          "01000000",
+          "00000010",
+          "11111100",
+          "11111111",
+          "11111111",
+          "10100110",
+          "XXXXXXXX",
           "0",
           "1",
           "0",
@@ -826,6 +858,22 @@ module signedness_cast_app #(
   logic signed [7:0] power_zero_negative;
   logic [7:0] power_unknown;
   logic [7:0] power_parameter;
+  logic [7:0] compound_add;
+  logic [7:0] compound_subtract;
+  logic [7:0] compound_multiply;
+  logic [7:0] compound_divide;
+  logic [7:0] compound_remainder;
+  logic [7:0] compound_and;
+  logic [7:0] compound_or;
+  logic [7:0] compound_xor;
+  logic [7:0] compound_shift_left;
+  logic [7:0] compound_shift_right;
+  logic [7:0] compound_arithmetic_left;
+  logic signed [7:0] compound_arithmetic_right;
+  logic [7:0] prefix_increment;
+  logic [7:0] postfix_decrement;
+  logic [7:0] compound_selected;
+  logic [7:0] compound_unknown;
   logic onehot_zero;
   logic onehot_single;
   logic onehot_multiple;
@@ -878,6 +926,38 @@ module signedness_cast_app #(
         $signed(8'h00) ** $signed(8'hff);
     power_unknown = 8'b000000x1 ** 8'd2;
     power_parameter = PARAMETER_POWER;
+    compound_add = 8'h12;
+    compound_add += 8'h03;
+    compound_subtract = 8'h12;
+    compound_subtract -= 8'h05;
+    compound_multiply = 8'h13;
+    compound_multiply *= 8'h02;
+    compound_divide = 8'h44;
+    compound_divide /= 8'h04;
+    compound_remainder = 8'h12;
+    compound_remainder %= 8'h04;
+    compound_and = 8'had;
+    compound_and &= 8'hf0;
+    compound_or = 8'ha0;
+    compound_or |= 8'h0f;
+    compound_xor = 8'hff;
+    compound_xor ^= 8'haa;
+    compound_shift_left = 8'h81;
+    compound_shift_left <<= 8'h01;
+    compound_shift_right = 8'h81;
+    compound_shift_right >>= 8'h01;
+    compound_arithmetic_left = 8'h81;
+    compound_arithmetic_left <<<= 8'h01;
+    compound_arithmetic_right = -8'sd16;
+    compound_arithmetic_right >>>= 8'sd2;
+    prefix_increment = 8'hfe;
+    ++prefix_increment;
+    postfix_decrement = 8'h00;
+    postfix_decrement--;
+    compound_selected = 8'ha5;
+    compound_selected[3:0] += 4'h1;
+    compound_unknown = 8'b000000x1;
+    compound_unknown *= 8'd2;
     onehot_zero = $onehot(4'b0000);
     onehot_single = $onehot(4'b0010);
     onehot_multiple = $onehot(4'b1010);

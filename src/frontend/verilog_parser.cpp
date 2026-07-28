@@ -3398,30 +3398,116 @@ class VerilogParser final : private detail::ParserBase {
       return statement;
     }
 
-    if (at(TokenKind::Identifier)) {
+    if (at(TokenKind::Identifier)
+        || at(TokenKind::PlusPlus)
+        || at(TokenKind::MinusMinus)) {
       const auto before = position();
       const auto start = current();
+      std::optional<Token> prefix_update;
+      if (match(TokenKind::PlusPlus)
+          || match(TokenKind::MinusMinus)) {
+        prefix_update = previous();
+      }
       Expression target = parse_lvalue();
-      AssignmentKind assignment_kind;
-      if (match(TokenKind::LessEqual)) {
+      AssignmentKind assignment_kind{AssignmentKind::Blocking};
+      std::optional<std::string> update_operation;
+      bool unit_update = prefix_update.has_value();
+      if (prefix_update) {
+        update_operation =
+            prefix_update->kind == TokenKind::PlusPlus ? "+" : "-";
+      } else if (match(TokenKind::PlusPlus)
+                 || match(TokenKind::MinusMinus)) {
+        update_operation =
+            previous().kind == TokenKind::PlusPlus ? "+" : "-";
+        unit_update = true;
+      } else if (match(TokenKind::LessEqual)) {
         assignment_kind = AssignmentKind::NonBlocking;
       } else if (match(TokenKind::Assign)) {
         assignment_kind = AssignmentKind::Blocking;
       } else {
-        rewind(before);
-        const auto unsupported = advance();
-        error(unsupported, "FSIM-SV-UNSUPPORTED-008",
-              "unsupported procedural statement starting with '" +
-                  unsupported.text + "'");
-        skip_to_semicolon();
-        return std::nullopt;
+        const auto compound_operation =
+            [](const TokenKind kind)
+                -> std::optional<std::string_view> {
+              switch (kind) {
+              case TokenKind::PlusAssign:
+                return "+";
+              case TokenKind::MinusAssign:
+                return "-";
+              case TokenKind::StarAssign:
+                return "*";
+              case TokenKind::SlashAssign:
+                return "/";
+              case TokenKind::PercentAssign:
+                return "%";
+              case TokenKind::AmpersandAssign:
+                return "&";
+              case TokenKind::PipeAssign:
+                return "|";
+              case TokenKind::CaretAssign:
+                return "^";
+              case TokenKind::ShiftLeftAssign:
+                return "<<";
+              case TokenKind::ShiftRightAssign:
+                return ">>";
+              case TokenKind::ArithmeticShiftLeftAssign:
+                return "<<<";
+              case TokenKind::ArithmeticShiftRightAssign:
+                return ">>>";
+              default:
+                return std::nullopt;
+              }
+            }(current().kind);
+        if (compound_operation) {
+          update_operation = *compound_operation;
+          advance();
+        } else {
+          rewind(before);
+          const auto unsupported = advance();
+          error(unsupported, "FSIM-SV-UNSUPPORTED-008",
+                "unsupported procedural statement starting with '" +
+                    unsupported.text + "'");
+          skip_to_semicolon();
+          return std::nullopt;
+        }
+      }
+      if (update_operation
+          && language_ == Language::Verilog2005) {
+        error(
+            start,
+            "FSIM-VERILOG-SEM-005",
+            "compound assignments and standalone increment/decrement "
+            "require SystemVerilog");
       }
 
       std::optional<Delay> delay;
-      if (match(TokenKind::Hash)) {
+      if (!prefix_update && !update_operation
+          && match(TokenKind::Hash)) {
         delay = parse_verilog_delay(previous());
       }
-      Expression value = parse_expression();
+      Expression value;
+      if (unit_update) {
+        value = Expression{
+            ExpressionKind::Binary,
+            *update_operation,
+            {
+                target,
+                Expression{
+                    ExpressionKind::IntegerLiteral,
+                    "1",
+                    {},
+                    previous().span}},
+            cover(target.span, previous().span)};
+      } else {
+        value = parse_expression();
+        if (update_operation) {
+          const auto value_span = value.span;
+          value = Expression{
+              ExpressionKind::Binary,
+              *update_operation,
+              {target, std::move(value)},
+              cover(target.span, value_span)};
+        }
+      }
       expect(TokenKind::Semicolon, "';' after assignment",
              "FSIM-SV-PARSE-022");
       Statement statement;

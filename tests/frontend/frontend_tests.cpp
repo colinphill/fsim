@@ -1062,6 +1062,102 @@ end architecture;
       "an unparenthesized signed VHDL exponent must be rejected");
 }
 
+void test_systemverilog_procedural_updates() {
+  const auto result = parse_text(
+      "procedural_updates.sv",
+      R"(
+module procedural_updates;
+  logic [7:0] value;
+  logic signed [7:0] signed_value;
+  initial begin
+    value += 8'd1;
+    value -= 8'd1;
+    value *= 8'd2;
+    value /= 8'd2;
+    value %= 8'd3;
+    value &= 8'hf0;
+    value |= 8'h0f;
+    value ^= 8'haa;
+    value <<= 8'd1;
+    value >>= 8'd1;
+    value <<<= 8'd1;
+    signed_value >>>= 8'sd1;
+    ++value;
+    --value;
+    value++;
+    value--;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "SystemVerilog procedural update statements must parse");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  const std::array<std::string_view, 16> operations{
+      "+", "-", "*", "/", "%", "&", "|", "^",
+      "<<", ">>", "<<<", ">>>", "+", "-", "+", "-"};
+  require(
+      statements.size() == operations.size(),
+      "all procedural update statements must be retained");
+  for (std::size_t index = 0; index < operations.size(); ++index) {
+    require(
+        statements[index].kind == StatementKind::Assignment
+            && statements[index].assignment_kind
+                == AssignmentKind::Blocking
+            && statements[index].value.kind
+                == ExpressionKind::Binary
+            && statements[index].value.text == operations[index]
+            && statements[index].value.operands.size() == 2,
+        "procedural updates must normalize to blocking binary assignments");
+  }
+  require(
+      statements[12].value.operands[1].kind
+              == ExpressionKind::IntegerLiteral
+          && statements[12].value.operands[1].text == "1"
+          && statements[15].value.operands[1].text == "1",
+      "standalone increment/decrement must use a contextual unit step");
+
+  const auto unsupported = parse_text(
+      "unsupported_update.sv",
+      R"(
+module unsupported_update;
+  logic [7:0] value;
+  initial value **= 8'd2;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !unsupported.ok()
+          && std::ranges::any_of(
+              unsupported.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-UNSUPPORTED-008";
+              }),
+      "an unsupported procedural update operator must be diagnosed");
+
+  const auto verilog = parse_text(
+      "verilog_update.v",
+      R"(
+module verilog_update;
+  reg [7:0] value;
+  initial value += 8'd1;
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      !verilog.ok()
+          && std::ranges::any_of(
+              verilog.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-005";
+              }),
+      "procedural compound assignments must remain SystemVerilog-only");
+}
+
 void test_vhdl_case_statements() {
   const auto result = parse_text(
       "case_statement.vhd",
@@ -4672,6 +4768,7 @@ int main() {
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
     test_exponentiation_expression_nodes();
+    test_systemverilog_procedural_updates();
     test_vhdl_case_statements();
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();
