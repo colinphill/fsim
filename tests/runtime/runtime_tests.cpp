@@ -600,6 +600,65 @@ void test_simir_wildcard_case_matching() {
   }
 }
 
+void test_simir_wildcard_equality() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  std::array<SignalId, 9> results{};
+  for (std::size_t index = 0; index < results.size(); ++index) {
+    results[index] = interpreter.add_signal(
+        {"top.wildcard_equality_" + std::to_string(index),
+         PackedLogic4::from_msb_string("0")});
+  }
+
+  struct Comparison {
+    BinaryOperator operation;
+    std::string_view lhs;
+    std::string_view rhs;
+  };
+  const std::array comparisons{
+      Comparison{BinaryOperator::wildcard_equal, "1001", "10X1"},
+      Comparison{BinaryOperator::wildcard_equal, "10Z1", "10Z1"},
+      Comparison{BinaryOperator::wildcard_equal, "10X1", "1011"},
+      Comparison{BinaryOperator::wildcard_equal, "10Z1", "1011"},
+      Comparison{BinaryOperator::wildcard_equal, "1101", "10Z1"},
+      Comparison{BinaryOperator::wildcard_equal, "X101", "0001"},
+      Comparison{BinaryOperator::wildcard_equal, "1001", "1001"},
+      Comparison{BinaryOperator::wildcard_equal, "1001", "1101"},
+      Comparison{BinaryOperator::equal, "X0", "X1"},
+  };
+  Process process;
+  process.id = 0;
+  process.name = "wildcard_equality";
+  process.register_count = 3;
+  for (std::size_t index = 0; index < comparisons.size(); ++index) {
+    process.operations.emplace_back(LoadConstant{
+        0,
+        PackedLogic4::from_msb_string(comparisons[index].lhs)});
+    process.operations.emplace_back(LoadConstant{
+        1,
+        PackedLogic4::from_msb_string(comparisons[index].rhs)});
+    process.operations.emplace_back(Binary{
+        comparisons[index].operation, 2, 0, 1});
+    process.operations.emplace_back(WriteBlocking{results[index], 2});
+  }
+  process.operations.emplace_back(Halt{});
+  (void)interpreter.add_process(std::move(process));
+
+  require(
+      interpreter.run().status == RunStatus::completed,
+      "wildcard equality process completes");
+  const std::array expected{
+      "1", "1", "X", "X", "0", "X", "1", "0", "X"};
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    require(
+        interpreter.signal_value(results[index]).to_msb_string()
+            == expected[index],
+        "one-sided wildcard equality truth table");
+  }
+}
+
 void test_simir_wide_reduction_and_shift() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2558,6 +2617,7 @@ int main() {
     test_simir_noninitializing_static_process();
     test_simir_wide_truth_and_comparison();
     test_simir_wildcard_case_matching();
+    test_simir_wildcard_equality();
     test_simir_wide_reduction_and_shift();
     test_simir_wide_unsigned_arithmetic();
     test_simir_wide_signed_arithmetic();

@@ -380,11 +380,15 @@ class Lexer {
         if (consume_if('>')) {
           emit(TokenKind::Arrow, begin);
         } else if (consume_if('=')) {
-          emit(
-              !is_vhdl() && consume_if('=')
-                  ? TokenKind::CaseEqual
-                  : TokenKind::EqualEqual,
-              begin);
+          if (!is_vhdl() && consume_if('?')) {
+            emit(TokenKind::WildcardEqual, begin);
+          } else {
+            emit(
+                !is_vhdl() && consume_if('=')
+                    ? TokenKind::CaseEqual
+                    : TokenKind::EqualEqual,
+                begin);
+          }
         } else {
           emit(TokenKind::Assign, begin);
         }
@@ -417,11 +421,15 @@ class Lexer {
         return;
       case '!':
         if (consume_if('=')) {
-          emit(
-              !is_vhdl() && consume_if('=')
-                  ? TokenKind::CaseNotEqual
-                  : TokenKind::NotEqual,
-              begin);
+          if (!is_vhdl() && consume_if('?')) {
+            emit(TokenKind::WildcardNotEqual, begin);
+          } else {
+            emit(
+                !is_vhdl() && consume_if('=')
+                    ? TokenKind::CaseNotEqual
+                    : TokenKind::NotEqual,
+                begin);
+          }
         } else {
           emit(TokenKind::Bang, begin);
         }
@@ -569,10 +577,14 @@ const char* to_string(TokenKind kind) noexcept {
       return "'=='";
     case TokenKind::CaseEqual:
       return "'==='";
+    case TokenKind::WildcardEqual:
+      return "'==?'";
     case TokenKind::NotEqual:
       return "'!='";
     case TokenKind::CaseNotEqual:
       return "'!=='";
+    case TokenKind::WildcardNotEqual:
+      return "'!=?'";
     case TokenKind::Arrow:
       return "'=>'";
     case TokenKind::ColonEqual:

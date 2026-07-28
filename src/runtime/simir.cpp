@@ -364,22 +364,23 @@ struct SignedDivision {
     throw std::invalid_argument("binary operands must not be empty");
   }
   if (operation == BinaryOperator::equal) {
-    auto result = PackedLogic4(1, Logic4::one);
+    bool unknown = false;
+    bool mismatch = false;
     for (std::size_t index = 0; index < lhs.width(); ++index) {
       const auto left = lhs.get(index);
       const auto right = rhs.get(index);
       const bool left_known = left == Logic4::zero || left == Logic4::one;
       const bool right_known = right == Logic4::zero || right == Logic4::one;
       if (!left_known || !right_known) {
-        result.set(0, Logic4::x);
-        return result;
-      }
-      if (left != right) {
-        result.set(0, Logic4::zero);
-        return result;
+        unknown = true;
+      } else if (left != right) {
+        mismatch = true;
       }
     }
-    return result;
+    return PackedLogic4(
+        1,
+        unknown ? Logic4::x
+                : mismatch ? Logic4::zero : Logic4::one);
   }
   if (operation == BinaryOperator::case_equal
       || operation == BinaryOperator::casez_equal
@@ -400,6 +401,26 @@ struct SignedDivision {
       }
     }
     return result;
+  }
+  if (operation == BinaryOperator::wildcard_equal) {
+    bool unknown = false;
+    bool mismatch = false;
+    for (std::size_t index = 0; index < lhs.width(); ++index) {
+      const auto left = lhs.get(index);
+      const auto right = rhs.get(index);
+      if (right == Logic4::x || right == Logic4::z) {
+        continue;
+      }
+      if (left == Logic4::x || left == Logic4::z) {
+        unknown = true;
+      } else if (left != right) {
+        mismatch = true;
+      }
+    }
+    return PackedLogic4(
+        1,
+        unknown ? Logic4::x
+                : mismatch ? Logic4::zero : Logic4::one);
   }
   if (operation == BinaryOperator::not_equal
       || operation == BinaryOperator::less_unsigned
@@ -482,6 +503,7 @@ struct SignedDivision {
     case BinaryOperator::case_equal:
     case BinaryOperator::casez_equal:
     case BinaryOperator::casex_equal:
+    case BinaryOperator::wildcard_equal:
       break;
     }
     return PackedLogic4(
@@ -569,6 +591,7 @@ struct SignedDivision {
     case BinaryOperator::case_equal:
     case BinaryOperator::casez_equal:
     case BinaryOperator::casex_equal:
+    case BinaryOperator::wildcard_equal:
     case BinaryOperator::not_equal:
     case BinaryOperator::less_unsigned:
     case BinaryOperator::less_equal_unsigned:

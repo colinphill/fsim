@@ -247,6 +247,8 @@ module comparison_app;
   logic logical_not;
   logic case_eq;
   logic case_neq;
+  logic wildcard_eq;
+  logic wildcard_neq;
   always_comb begin
     neq = lhs != rhs;
     lt = lhs < rhs;
@@ -256,6 +258,8 @@ module comparison_app;
     logical_not = !lhs;
     case_eq = lhs === rhs;
     case_neq = lhs !== rhs;
+    wildcard_eq = lhs ==? 4'b01?0;
+    wildcard_neq = lhs !=? rhs;
   end
   initial begin
     lhs = 4'b0010;
@@ -4152,7 +4156,7 @@ end architecture rtl;
       comparison_hybrid.final_values
       == std::vector<std::string>{
           "01Z0", "0011", "X", "X", "X", "X", "X", "0",
-          "0", "1"}));
+          "0", "1", "1", "X"}));
 
   auto logical_config = config;
   logical_config.project.name = "logical-expression-test";

@@ -3139,6 +3139,8 @@ module comparisons;
     result = lhs != rhs;
     result = lhs === rhs;
     result = lhs !== rhs;
+    result = lhs ==? rhs;
+    result = lhs !=? rhs;
     result = lhs < rhs;
     result = lhs <= rhs;
     result = lhs > rhs;
@@ -3165,12 +3167,12 @@ endmodule
   const auto& statements =
       result.design.units.front().processes.front().statements;
   require(
-      statements.size() == 21
+      statements.size() == 23
           && statements[0].value.kind == ExpressionKind::Unary
           && statements[0].value.text == "!",
       "logical-negation expression node");
-  const std::array<std::string_view, 7> operators{
-      "!=", "===", "!==", "<", "<=", ">", ">="};
+  const std::array<std::string_view, 9> operators{
+      "!=", "===", "!==", "==?", "!=?", "<", "<=", ">", ">="};
   for (std::size_t index = 0; index < operators.size(); ++index) {
     require(
         statements[index + 1].value.kind
@@ -3180,41 +3182,63 @@ endmodule
         "comparison expression node");
   }
   require(
-      statements[8].value.kind == ExpressionKind::Binary
-          && statements[8].value.text == "&&"
-          && statements[9].value.kind == ExpressionKind::Binary
-          && statements[9].value.text == "||",
+      statements[10].value.kind == ExpressionKind::Binary
+          && statements[10].value.text == "&&"
+          && statements[11].value.kind == ExpressionKind::Binary
+          && statements[11].value.text == "||",
       "logical binary expression nodes");
   require(
-      statements[10].value.kind == ExpressionKind::Unary
-          && statements[10].value.text == "&"
-          && statements[11].value.kind == ExpressionKind::Unary
-          && statements[11].value.text == "|"
-          && statements[12].value.kind == ExpressionKind::Unary
-          && statements[12].value.text == "^",
+      statements[12].value.kind == ExpressionKind::Unary
+          && statements[12].value.text == "&"
+          && statements[13].value.kind == ExpressionKind::Unary
+          && statements[13].value.text == "|"
+          && statements[14].value.kind == ExpressionKind::Unary
+          && statements[14].value.text == "^",
       "reduction expression nodes");
   require(
-      statements[13].value.kind == ExpressionKind::Unary
-          && statements[13].value.text == "~&"
-          && statements[14].value.kind == ExpressionKind::Unary
-          && statements[14].value.text == "~|"
-          && statements[15].value.kind == ExpressionKind::Unary
-          && statements[15].value.text == "~^"
+      statements[15].value.kind == ExpressionKind::Unary
+          && statements[15].value.text == "~&"
           && statements[16].value.kind == ExpressionKind::Unary
-          && statements[16].value.text == "^~",
+          && statements[16].value.text == "~|"
+          && statements[17].value.kind == ExpressionKind::Unary
+          && statements[17].value.text == "~^"
+          && statements[18].value.kind == ExpressionKind::Unary
+          && statements[18].value.text == "^~",
       "complemented reduction expression nodes");
   require(
-      statements[17].value.kind == ExpressionKind::Binary
-          && statements[17].value.text == "~^"
-          && statements[18].value.kind == ExpressionKind::Binary
-          && statements[18].value.text == "^~",
+      statements[19].value.kind == ExpressionKind::Binary
+          && statements[19].value.text == "~^"
+          && statements[20].value.kind == ExpressionKind::Binary
+          && statements[20].value.text == "^~",
       "binary XNOR expression nodes");
   require(
-      statements[19].value.kind == ExpressionKind::Binary
-          && statements[19].value.text == "<<"
-          && statements[20].value.kind == ExpressionKind::Binary
-          && statements[20].value.text == ">>",
+      statements[21].value.kind == ExpressionKind::Binary
+          && statements[21].value.text == "<<"
+          && statements[22].value.kind == ExpressionKind::Binary
+          && statements[22].value.text == ">>",
       "logical-shift expression nodes");
+
+  const auto verilog = parse_text(
+      "wildcard_equality.v",
+      R"(
+module wildcard_equality;
+  reg [3:0] lhs;
+  reg [3:0] rhs;
+  reg result;
+  always @* result = lhs ==? rhs;
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      !verilog.ok()
+          && std::any_of(
+              verilog.diagnostics.begin(),
+              verilog.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-004";
+              }),
+      "wildcard equality requires SystemVerilog");
 }
 
 void test_systemverilog_arithmetic_expressions() {

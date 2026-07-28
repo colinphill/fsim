@@ -1272,7 +1272,7 @@ void test_wildcard_case_matching_at_level(
   Process process;
   process.id = 0;
   process.name = std::string{symbol};
-  process.register_count = 4;
+  process.register_count = 5;
   process.operations = {
       ReadSignal{0, 0},
       ReadSignal{1, 1},
@@ -1280,9 +1280,11 @@ void test_wildcard_case_matching_at_level(
       WriteBlocking{2, 2},
       Binary{BinaryOperator::casex_equal, 3, 0, 1},
       WriteBlocking{3, 3},
+      Binary{BinaryOperator::wildcard_equal, 4, 0, 1},
+      WriteBlocking{4, 4},
       Halt{},
   };
-  const std::array<std::uint32_t, 4> widths{1, 1, 1, 1};
+  const std::array<std::uint32_t, 5> widths{1, 1, 1, 1, 1};
   jit.add_process(symbol, process, widths);
   const auto handle = jit.lookup(symbol);
 
@@ -1302,13 +1304,58 @@ void test_wildcard_case_matching_at_level(
       const auto casex_match =
           lhs == Logic4::x || lhs == Logic4::z
           || rhs == Logic4::x || rhs == Logic4::z || lhs == rhs;
+      const auto wildcard_match =
+          rhs == Logic4::x || rhs == Logic4::z
+              ? Logic4::one
+              : lhs == Logic4::x || lhs == Logic4::z
+                  ? Logic4::x
+                  : lhs == rhs ? Logic4::one : Logic4::zero;
       assert(
           runtime.signals[2]
           == encode(casez_match ? Logic4::one : Logic4::zero));
       assert(
           runtime.signals[3]
           == encode(casex_match ? Logic4::one : Logic4::zero));
+      assert(runtime.signals[4] == encode(wildcard_match));
     }
+  }
+
+  const auto vector_symbol = std::string{symbol} + "_vectors";
+  Process vector;
+  vector.id = 1;
+  vector.name = vector_symbol;
+  vector.register_count = 4;
+  vector.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      Binary{BinaryOperator::equal, 2, 0, 1},
+      WriteBlocking{2, 2},
+      Binary{BinaryOperator::wildcard_equal, 3, 0, 1},
+      WriteBlocking{3, 3},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 4> vector_widths{2, 2, 1, 1};
+  jit.add_process(vector_symbol, vector, vector_widths);
+  const auto vector_handle = jit.lookup(vector_symbol);
+  for (const auto& [lhs, rhs, wildcard_expected] :
+       std::array{
+           std::tuple{
+               std::string_view{"X0"},
+               std::string_view{"X1"},
+               Logic4::zero},
+           std::tuple{
+               std::string_view{"X0"},
+               std::string_view{"01"},
+               Logic4::x}}) {
+    TestRuntime runtime;
+    runtime.signals[0] = encode(PackedLogic4::from_msb_string(lhs));
+    runtime.signals[1] = encode(PackedLogic4::from_msb_string(rhs));
+    auto descriptor = abi(runtime);
+    assert(
+        jit.execute(vector_handle, descriptor)
+        == JitExecutionStatus::completed);
+    assert(runtime.signals[2] == encode(Logic4::x));
+    assert(runtime.signals[3] == encode(wildcard_expected));
   }
 }
 
@@ -2780,6 +2827,16 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     expect_cache_statistics(changed_operator, 0, 1, 1);
   }
   assert(cached_object_paths(cache_directory).size() == 21);
+  {
+    LlvmJit one_sided_wildcard{options};
+    one_sided_wildcard.add_process(
+        wildcard_symbol,
+        make_wildcard_process(BinaryOperator::wildcard_equal),
+        wildcard_widths);
+    run_wildcard_process(one_sided_wildcard, Logic4::x);
+    expect_cache_statistics(one_sided_wildcard, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 22);
 }
 
 void test_optimization_cache_invalidation(

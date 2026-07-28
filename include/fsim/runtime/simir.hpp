@@ -136,6 +136,9 @@ enum class BinaryOperator : std::uint8_t {
   // the result is always a known scalar.
   casez_equal,
   casex_equal,
+  // SystemVerilog ==? masks X/Z only in the right operand and may return X
+  // for an unmasked X/Z in the left operand.
+  wildcard_equal,
   not_equal,
   less_unsigned,
   less_equal_unsigned,

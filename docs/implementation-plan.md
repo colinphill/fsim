@@ -185,8 +185,9 @@ The following foundation is implemented:
   and interpreter/O0/O2 evidence;
 - vector-aware SystemVerilog logical negation and unsigned
   inequality/relational comparisons with exact four-state unknown
-  propagation, exact known-result `===`/`!==` X/Z comparison, and
-  interpreter/O0/O2 evidence;
+  propagation, exact known-result `===`/`!==` X/Z comparison, one-sided
+  right-pattern `==?`/`!=?` wildcard comparison, and interpreter/O0/O2
+  evidence;
 - mixed-width SystemVerilog logical conjunction/disjunction with controlling
   known-value truth tables and interpreter/O0/O2 evidence;
 - SystemVerilog unary reductions, including complemented
@@ -281,9 +282,10 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 590 unique current production diagnostic codes.
+- a stable catalog covering 591 unique current production diagnostic codes.
 
-Current Linux validation:
+Last aggregate Linux regression baseline, before the fast expression
+application target was added:
 
 | Gate | Result |
 |---|---|
@@ -306,6 +308,7 @@ Current Linux validation:
 | VHDL reusable contexts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive cross-library context/package visibility, missing/malformed/cycle diagnostics, interpreter/JIT/VCD equality, and context-only native-cache invalidation |
 | SystemVerilog package constants and packed types | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive imports, direct scoped constants/types, alias chains, parameterized ranges, explicit/implicit enum values, non-nested packed-struct layouts/member reads/writes, targeted legality failures, interpreter/JIT/VCD equality, unrelated-package reuse, and transitive native-cache invalidation |
 | SystemVerilog expression semantics | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for four-state logical/reduction/shift/arithmetic operations, complemented reductions/XNOR, and exact `===`/`!==` X/Z comparison |
+| SystemVerilog wildcard equality | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler tests plus the fast expression application target pass for SystemVerilog-only `==?`/`!=?`, right-side `X`/`Z` masks, unmasked left-side unknown propagation, known mismatch behavior, interpreter/LLVM equality alignment, O0/O2 scalar/vector tables, and operator-sensitive native-cache identity; focused ASan/UBSan passes with local leak detection disabled under ptrace |
 | SystemVerilog wildcard case semantics | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests for ordered `casez`/`casex`, selector- and choice-side wildcards, known-bit mismatch preservation, defensive HIR rejection, interpreter/JIT equivalence, LLVM O0/O2 truth tables, and operator-sensitive native-cache identity |
 | VHDL packed shifts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for `sll`/`srl`/`sra`, including X-containing data and arithmetic left-element fill |
 | Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional and labeled VHDL forms, named outer-loop transfers across static/runtime loops, opening/end label validation, guaranteed first execution, trailing-condition continue targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
@@ -317,6 +320,14 @@ Current Linux validation:
 LeakSanitizer remains enabled in CI. It was disabled only for local execution
 because the managed development environment runs under ptrace, which prevents
 LeakSanitizer from starting.
+
+Development checkpoints use the smallest relevant frontend, elaboration,
+runtime, LLVM, and fast application targets. The aggregate application and
+sanitizer suites are batched after several feature additions and before
+release-facing changes; this keeps feature feedback sub-second to a few
+seconds without weakening the periodic regression gate. Expression work can
+select its application gate with
+`ctest --test-dir <build> -L expressions --output-on-failure`.
 
 Windows Debug/Release CI and an exact LLVM 22.1.8 Windows ORC matrix are
 configured, but Windows execution has not been validated from this Linux

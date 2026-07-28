@@ -77,6 +77,8 @@ The current tree contains:
 - ordered Verilog/SystemVerilog `case`/`casez`/`casex`/`default` lowering
   with comma-separated choices, exact four-state matching, and distinct
   selector-or-choice `Z` versus `X`/`Z` wildcard policies;
+- SystemVerilog `==?`/`!=?` expression lowering with right-operand-only
+  `X`/`Z` masking and unmasked left-side unknown propagation;
 - nested VHDL `if`/`elsif`/`else` with Boolean typing and nested
   Verilog/SystemVerilog `if`/`else` with packed four-state truth conversion;
 - VHDL Boolean literals, equality/inequality, and `not`/`and`/`or`/`xor` plus

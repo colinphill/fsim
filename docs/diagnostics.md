@@ -394,6 +394,7 @@ therefore excluded.
 | `FSIM-VERILOG-SEM-001` | error | `always_ff` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-002` | error | `always_comb` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-003` | error | `always_latch` was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-004` | error | A SystemVerilog-only wildcard equality operator was used in Verilog-2005. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal integer literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |

@@ -4901,6 +4901,8 @@ module comparison_process;
   logic logical_not;
   logic case_eq;
   logic case_neq;
+  logic wildcard_eq;
+  logic wildcard_neq;
   always_comb begin
     neq = lhs != rhs;
     lt = lhs < rhs;
@@ -4910,6 +4912,8 @@ module comparison_process;
     logical_not = !lhs;
     case_eq = lhs === rhs;
     case_neq = lhs !== rhs;
+    wildcard_eq = lhs ==? rhs;
+    wildcard_neq = lhs !=? rhs;
   end
 endmodule
 )",
@@ -4940,17 +4944,35 @@ endmodule
         elaborated_comparisons.design->find_signal("case_eq");
     const auto comparison_case_neq =
         elaborated_comparisons.design->find_signal("case_neq");
+    const auto comparison_wildcard_eq =
+        elaborated_comparisons.design->find_signal("wildcard_eq");
+    const auto comparison_wildcard_neq =
+        elaborated_comparisons.design->find_signal("wildcard_neq");
     assert(
         comparison_lhs && comparison_rhs && comparison_neq
         && comparison_lt && comparison_le && comparison_gt
         && comparison_ge && comparison_not
-        && comparison_case_eq && comparison_case_neq);
+        && comparison_case_eq && comparison_case_neq
+        && comparison_wildcard_eq && comparison_wildcard_neq);
+    assert(std::any_of(
+        elaborated_comparisons.design->processes().front()
+            .operations.begin(),
+        elaborated_comparisons.design->processes().front()
+            .operations.end(),
+        [](const fsim::runtime::simir::Operation& operation) {
+          const auto* binary =
+              std::get_if<fsim::runtime::simir::Binary>(&operation);
+          return binary != nullptr
+              && binary->operation
+                  == fsim::runtime::simir::BinaryOperator::
+                      wildcard_equal;
+        }));
     auto comparison_interpreter =
         elaborated_comparisons.design->create_interpreter();
     const auto run_comparison =
         [&](const std::string_view lhs,
             const std::string_view rhs,
-            const std::array<std::string_view, 8>& expected) {
+            const std::array<std::string_view, 10>& expected) {
           comparison_interpreter->deposit_signal(
               *comparison_lhs,
               fsim::runtime::PackedLogic4::from_msb_string(lhs));
@@ -4966,7 +4988,9 @@ endmodule
               *comparison_ge,
               *comparison_not,
               *comparison_case_eq,
-              *comparison_case_neq};
+              *comparison_case_neq,
+              *comparison_wildcard_eq,
+              *comparison_wildcard_neq};
           for (std::size_t index = 0; index < signals.size();
                ++index) {
             assert(
@@ -4978,25 +5002,28 @@ endmodule
         };
     run_comparison(
         "0010", "0011",
-        {"1", "1", "1", "0", "0", "0", "0", "1"});
+        {"1", "1", "1", "0", "0", "0", "0", "1", "0", "1"});
     run_comparison(
         "0000", "0000",
-        {"0", "0", "1", "0", "1", "1", "1", "0"});
+        {"0", "0", "1", "0", "1", "1", "1", "0", "1", "0"});
     run_comparison(
         "00X0", "0011",
-        {"X", "X", "X", "X", "X", "X", "0", "1"});
+        {"X", "X", "X", "X", "X", "X", "0", "1", "X", "X"});
     run_comparison(
         "01X0", "0011",
-        {"X", "X", "X", "X", "X", "0", "0", "1"});
+        {"X", "X", "X", "X", "X", "0", "0", "1", "X", "X"});
     run_comparison(
         "00X0", "00X0",
-        {"X", "X", "X", "X", "X", "X", "1", "0"});
+        {"X", "X", "X", "X", "X", "X", "1", "0", "1", "0"});
     run_comparison(
         "01Z0", "01Z0",
-        {"X", "X", "X", "X", "X", "0", "1", "0"});
+        {"X", "X", "X", "X", "X", "0", "1", "0", "1", "0"});
     run_comparison(
         "00X0", "00Z0",
-        {"X", "X", "X", "X", "X", "X", "0", "1"});
+        {"X", "X", "X", "X", "X", "X", "0", "1", "1", "0"});
+    run_comparison(
+        "X101", "0001",
+        {"X", "X", "X", "X", "X", "0", "0", "1", "X", "X"});
 
     const auto signed_comparison = fsim::frontend::parse_text(
         "signed_comparison.sv",

@@ -4796,6 +4796,12 @@ private:
                 operation = BinaryOperator::case_equal;
                 invert_result = expression.text == "!==";
             } else if (
+                language_ == frontend::Language::SystemVerilog2017
+                && (expression.text == "==?"
+                    || expression.text == "!=?")) {
+                operation = BinaryOperator::wildcard_equal;
+                invert_result = expression.text == "!=?";
+            } else if (
                 language_ != frontend::Language::Vhdl2008
                 && expression.text == "!=") {
                 operation = BinaryOperator::not_equal;
@@ -4902,6 +4908,7 @@ private:
             const auto scalar_result =
                 *operation == BinaryOperator::equal
                 || *operation == BinaryOperator::case_equal
+                || *operation == BinaryOperator::wildcard_equal
                 || *operation == BinaryOperator::not_equal
                 || *operation == BinaryOperator::less_unsigned
                 || *operation

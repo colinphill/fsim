@@ -355,7 +355,10 @@ inequality and relational comparisons require equal operand widths and return
 Case equality `===` compares both packed value and unknown-state planes, so
 matching `X` and matching `Z` are equal while `X` and `Z` differ; it always
 returns a known scalar. Case inequality `!==` applies a known scalar inversion
-to that result.
+to that result. SystemVerilog wildcard equality `==?` masks `X` and `Z` bits
+only in its right operand. An unmasked left-side `X` or `Z` produces `X`;
+otherwise the remaining known bits determine equality. Wildcard inequality
+`!=?` applies four-state inversion, preserving an indeterminate result.
 The interpreter supports arbitrary packed widths while LLVM uses the common
 single-word fast path and falls back for wider value-bearing processes.
 

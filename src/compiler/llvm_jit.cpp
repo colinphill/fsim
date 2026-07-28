@@ -638,6 +638,7 @@ validate_process(const Process &process,
               case BinaryOperator::case_equal:
               case BinaryOperator::casez_equal:
               case BinaryOperator::casex_equal:
+              case BinaryOperator::wildcard_equal:
               case BinaryOperator::not_equal:
               case BinaryOperator::less_unsigned:
               case BinaryOperator::less_equal_unsigned:
@@ -660,6 +661,7 @@ validate_process(const Process &process,
                   || operation.operation == BinaryOperator::case_equal
                   || operation.operation == BinaryOperator::casez_equal
                   || operation.operation == BinaryOperator::casex_equal
+                  || operation.operation == BinaryOperator::wildcard_equal
                   || operation.operation == BinaryOperator::not_equal
                   || operation.operation
                       == BinaryOperator::less_unsigned
@@ -1861,6 +1863,25 @@ struct EncodedBit {
         constant_i64(context, 0),
         1};
   }
+  case BinaryOperator::wildcard_equal: {
+    auto* compared_mask =
+        builder.CreateAnd(builder.CreateNot(rhs.bval), mask);
+    auto* unknown_bits =
+        builder.CreateAnd(lhs.bval, compared_mask);
+    auto* unknown = builder.CreateICmpNE(
+        unknown_bits, constant_i64(context, 0));
+    auto* mismatch_bits = builder.CreateAnd(
+        builder.CreateXor(lhs.aval, rhs.aval), compared_mask);
+    auto* equal = builder.CreateICmpEQ(
+        mismatch_bits, constant_i64(context, 0));
+    return {
+        builder.CreateZExt(
+            builder.CreateOr(unknown, equal),
+            llvm::Type::getInt64Ty(context)),
+        builder.CreateZExt(
+            unknown, llvm::Type::getInt64Ty(context)),
+        1};
+  }
   case BinaryOperator::not_equal:
   case BinaryOperator::less_unsigned:
   case BinaryOperator::less_equal_unsigned:
@@ -1938,6 +1959,7 @@ struct EncodedBit {
     case BinaryOperator::case_equal:
     case BinaryOperator::casez_equal:
     case BinaryOperator::casex_equal:
+    case BinaryOperator::wildcard_equal:
       llvm_unreachable("not a comparison operator");
     }
     auto *compared = builder.CreateICmp(predicate, left, right);

@@ -3556,7 +3556,9 @@ class VerilogParser final : private detail::ParserBase {
       return BinaryOperation{5, "&"};
     }
     if (at(TokenKind::EqualEqual) || at(TokenKind::CaseEqual)
+        || at(TokenKind::WildcardEqual)
         || at(TokenKind::CaseNotEqual)
+        || at(TokenKind::WildcardNotEqual)
         || (at(TokenKind::NotEqual) && current().text == "!=")) {
       return BinaryOperation{6, current().text};
     }
@@ -3586,6 +3588,14 @@ class VerilogParser final : private detail::ParserBase {
       const auto operation = binary_operation();
       if (!operation || operation->precedence < minimum_precedence) {
         break;
+      }
+      if (language_ != Language::SystemVerilog2017
+          && (at(TokenKind::WildcardEqual)
+              || at(TokenKind::WildcardNotEqual))) {
+        error(
+            current(),
+            "FSIM-VERILOG-SEM-004",
+            "wildcard equality operators require SystemVerilog");
       }
       advance();
       Expression right = parse_expression(operation->precedence + 1);
