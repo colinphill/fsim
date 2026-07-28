@@ -337,6 +337,8 @@ generation-checked signal, port, process, and packed procedural-variable
 objects with source metadata where a declaration location is available.
 Nested procedural blocks are explicit lexical-scope objects, and metadata
 distinguishes never-entered scopes and uninitialized locals.
+Elaborated child specializations are explicit instance scopes whose direct
+signal/process children retain generation-safe hierarchy handles.
 
 ## Build and test
 

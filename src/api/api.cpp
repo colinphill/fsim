@@ -38,10 +38,17 @@ struct VariableObject {
   std::string full_name;
 };
 
+enum class ScopeObjectKind : std::uint8_t {
+  instance,
+  lexical,
+};
+
 struct ScopeObject {
-  std::size_t process{};
+  ScopeObjectKind kind{ScopeObjectKind::lexical};
+  std::optional<std::size_t> process;
   std::optional<std::size_t> parent_scope;
   std::string full_name;
+  std::string type_name;
   fsim::runtime::simir::SourceLocation source;
 };
 
@@ -327,7 +334,8 @@ std::optional<std::size_t> ensure_scope(
     const fsim::runtime::simir::SourceLocation& source) {
   for (std::size_t index = 0; index < session.scopes.size(); ++index) {
     const auto& candidate = session.scopes[index];
-    if (candidate.process == process
+    if (candidate.kind == ScopeObjectKind::lexical
+        && candidate.process == process
         && candidate.full_name == full_name) {
       return index;
     }
@@ -337,8 +345,38 @@ std::optional<std::size_t> ensure_scope(
     return std::nullopt;
   }
   session.scopes.push_back(
-      ScopeObject{process, parent_scope, full_name, source});
+      ScopeObject{
+          ScopeObjectKind::lexical,
+          process,
+          parent_scope,
+          full_name,
+          "scope",
+          source});
   return session.scopes.size() - 1;
+}
+
+bool path_is_within(
+    const std::string_view path,
+    const std::string_view scope) noexcept {
+  return path.size() > scope.size()
+      && path.starts_with(scope)
+      && path[scope.size()] == '.';
+}
+
+std::optional<std::size_t> owning_instance_scope(
+    const Session& session, const std::string_view path) {
+  std::optional<std::size_t> owner;
+  std::size_t owner_length = 0;
+  for (std::size_t index = 0; index < session.scopes.size(); ++index) {
+    const auto& scope = session.scopes[index];
+    if (scope.kind == ScopeObjectKind::instance
+        && path_is_within(path, scope.full_name)
+        && scope.full_name.size() > owner_length) {
+      owner = index;
+      owner_length = scope.full_name.size();
+    }
+  }
+  return owner;
 }
 
 bool rebuild_debug_objects(Session& session) {
@@ -347,7 +385,27 @@ bool rebuild_debug_objects(Session& session) {
   if (!session.simulation) {
     return true;
   }
-  const auto& processes = session.simulation->design().processes();
+  const auto& design = session.simulation->design();
+  for (const auto& specialization : design.specializations()) {
+    if (specialization.instance == design.top()) {
+      continue;
+    }
+    if (session.scopes.size()
+        > kObjectIndexMask - kScopePayloadBase) {
+      session.scopes.clear();
+      return false;
+    }
+    session.scopes.push_back(ScopeObject{
+        ScopeObjectKind::instance,
+        std::nullopt,
+        owning_instance_scope(session, specialization.instance),
+        specialization.instance,
+        specialization.unit,
+        fsim::runtime::simir::SourceLocation{
+            specialization.source, 1, 1}});
+  }
+
+  const auto& processes = design.processes();
   for (std::size_t process = 0; process < processes.size(); ++process) {
     const auto& program = processes[process];
     for (std::size_t local = 0;
@@ -420,9 +478,12 @@ bool variable_initialized(
 }
 
 bool scope_entered(Session& session, const ScopeObject& scope) {
+  if (scope.kind != ScopeObjectKind::lexical || !scope.process) {
+    return false;
+  }
   const auto prefix = scope.full_name + ".";
   for (const auto& variable : session.variables) {
-    if (variable.process == scope.process
+    if (variable.process == *scope.process
         && variable.full_name.starts_with(prefix)
         && variable_initialized(session, variable)) {
       return true;
@@ -913,7 +974,8 @@ fsim_status_t fsim_session_visit_children(
         for (std::size_t index = 0;
              index < value.scopes.size(); ++index) {
           const auto& scope = value.scopes[index];
-          if (scope.process != *process || scope.parent_scope) {
+          if (scope.kind != ScopeObjectKind::lexical
+              || scope.process != *process || scope.parent_scope) {
             continue;
           }
           CallbackGuard guard{value};
@@ -943,6 +1005,7 @@ fsim_status_t fsim_session_visit_children(
         return FSIM_STATUS_OK;
       }
       if (const auto scope_index = object_scope(value, parent)) {
+        const auto& parent_scope = value.scopes[*scope_index];
         for (std::size_t index = 0;
              index < value.scopes.size(); ++index) {
           const auto& scope = value.scopes[index];
@@ -957,6 +1020,41 @@ fsim_status_t fsim_session_visit_children(
               == 0) {
             return FSIM_STATUS_OK;
           }
+        }
+        if (parent_scope.kind == ScopeObjectKind::instance) {
+          for (const auto& signal :
+               value.simulation->design().signals()) {
+            if (owning_instance_scope(value, signal.name)
+                != scope_index) {
+              continue;
+            }
+            CallbackGuard guard{value};
+            if (callback(
+                    value.handle,
+                    signal_handle(value, signal.id),
+                    user_data)
+                == 0) {
+              return FSIM_STATUS_OK;
+            }
+          }
+          const auto& processes =
+              value.simulation->design().processes();
+          for (std::size_t index = 0;
+               index < processes.size(); ++index) {
+            if (owning_instance_scope(value, processes[index].name)
+                != scope_index) {
+              continue;
+            }
+            CallbackGuard guard{value};
+            if (callback(
+                    value.handle,
+                    process_handle(value, index),
+                    user_data)
+                == 0) {
+              return FSIM_STATUS_OK;
+            }
+          }
+          return FSIM_STATUS_OK;
         }
         for (std::size_t index = 0;
              index < value.variables.size(); ++index) {
@@ -976,7 +1074,24 @@ fsim_status_t fsim_session_visit_children(
       }
       return FSIM_STATUS_INVALID_HANDLE;
     }
+    for (std::size_t index = 0;
+         index < value.scopes.size(); ++index) {
+      const auto& scope = value.scopes[index];
+      if (scope.kind != ScopeObjectKind::instance
+          || scope.parent_scope) {
+        continue;
+      }
+      CallbackGuard guard{value};
+      if (callback(
+              value.handle, scope_handle(value, index), user_data)
+          == 0) {
+        return FSIM_STATUS_OK;
+      }
+    }
     for (const auto& signal : value.simulation->design().signals()) {
+      if (owning_instance_scope(value, signal.name)) {
+        continue;
+      }
       CallbackGuard guard{value};
       if (callback(
               value.handle, signal_handle(value, signal.id), user_data)
@@ -986,6 +1101,9 @@ fsim_status_t fsim_session_visit_children(
     }
     const auto& processes = value.simulation->design().processes();
     for (std::size_t index = 0; index < processes.size(); ++index) {
+      if (owning_instance_scope(value, processes[index].name)) {
+        continue;
+      }
       CallbackGuard guard{value};
       if (callback(value.handle, process_handle(value, index), user_data) == 0) {
         break;
@@ -1062,7 +1180,9 @@ fsim_status_t fsim_session_get_object_info(
     }
     if (const auto signal = object_signal(value, object)) {
       const auto& info = value.simulation->design().signals().at(*signal);
-      out_info->parent = root_handle(value);
+      const auto owner = owning_instance_scope(value, info.name);
+      out_info->parent =
+          owner ? scope_handle(value, *owner) : root_handle(value);
       out_info->kind = info.is_port ? FSIM_OBJECT_PORT : FSIM_OBJECT_SIGNAL;
       out_info->width = info.width;
       out_info->name = view(leaf_name(info.name));
@@ -1084,7 +1204,9 @@ fsim_status_t fsim_session_get_object_info(
     }
     if (const auto process = object_process(value, object)) {
       const auto& info = value.simulation->design().processes().at(*process);
-      out_info->parent = root_handle(value);
+      const auto owner = owning_instance_scope(value, info.name);
+      out_info->parent =
+          owner ? scope_handle(value, *owner) : root_handle(value);
       out_info->kind = FSIM_OBJECT_PROCESS;
       out_info->width = 0;
       out_info->name = view(info.name);
@@ -1100,12 +1222,14 @@ fsim_status_t fsim_session_get_object_info(
       out_info->parent =
           info.parent_scope
           ? scope_handle(value, *info.parent_scope)
-          : process_handle(value, info.process);
+          : info.process
+                ? process_handle(value, *info.process)
+                : root_handle(value);
       out_info->kind = FSIM_OBJECT_SCOPE;
       out_info->width = 0;
       out_info->name = view(leaf_name(info.full_name));
       out_info->full_name = view(info.full_name);
-      out_info->type_name = view("scope");
+      out_info->type_name = view(info.type_name);
       if (scope_entered(value, info)) {
         out_info->flags |= FSIM_OBJECT_FLAG_ENTERED;
       }

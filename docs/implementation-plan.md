@@ -320,7 +320,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the eleventh post-gate batch, including native-C lexical scope hierarchy and runtime debug-state metadata (135.65 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the twelfth post-gate batch, including native-C elaborated instance hierarchy and ownership metadata (128.03 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -659,9 +659,10 @@ Planned implementation sequence:
 4. Complete Windows execution evidence and broader event/list/error tests for
    the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
    timed, delta, and static-wait execution is implemented.
-5. Complete source metadata for instance/driver objects and remaining
-   executable constructs. Native C process, lexical-scope, packed-variable,
-   signal, and port objects now carry retained source metadata.
+5. Complete source metadata for generate-region/driver objects and remaining
+   executable constructs. Native C instance, process, lexical-scope,
+   packed-variable, signal, and port objects now carry retained source
+   metadata.
 6. Complete remaining public C API object kinds and richer value metadata.
    Append-only input/output prefixes, legacy/current/future structure sizes,
    strict C11 use, and assertion diagnostic metadata now have automated
@@ -742,23 +743,22 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The eleventh post-gate batch is implementation-complete:
+The twelfth post-gate batch is implementation-complete:
 
-1. lexical scopes receive a dedicated collision-free v1 handle encoding;
-2. nested scope objects are derived deterministically from debug-local paths;
-3. stable full-path lookup resolves each explicit scope;
-4. process enumeration returns only direct scopes and unscoped locals;
-5. scope enumeration returns only direct child scopes and locals;
-6. nested scope/local parent handles reflect lexical ownership;
-7. scope metadata exposes kind, name, full path, type, width, and source;
-8. callback-directed early termination is preserved during scope traversal;
-9. scope/local metadata reports entered/initialized runtime state; and
-10. scope value reads are rejected and rebuilds invalidate stale scope
-    handles just like every other hierarchy object.
+1. each elaborated child specialization becomes an instance-scope object;
+2. the selected top remains the root rather than a redundant child scope;
+3. instance scopes reuse the generation-safe scope-handle encoding;
+4. stable full-path lookup resolves child instances;
+5. instance metadata exposes leaf/full names and bound-unit type identity;
+6. instance metadata retains its owning source file;
+7. root enumeration returns only top-owned objects and direct instances;
+8. instance enumeration returns directly owned signals and processes;
+9. signal/process parent metadata follows the longest owning instance path;
+10. process path lookup round-trips through enumerated instance children, and
+    rebuilds invalidate stale instance handles.
 
-Focused native-C API and strict C11 compatibility tests pass. The interval
-LLVM 22 Debug regression passed all 19 tests in 135.65 seconds. This batch is
-ready to commit and push.
+Focused native-C hierarchy tests pass. The interval LLVM 22 Debug regression
+passed all 19 tests in 128.03 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 

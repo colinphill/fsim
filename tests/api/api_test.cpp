@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/api.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -166,6 +167,12 @@ module tb(output logic observed);
     end : unselected
     #1 $finish;
   end : control
+  child u();
+endmodule
+
+module child;
+  logic child_value;
+  initial child_value = 1'b1;
 endmodule
 )";
   }
@@ -300,7 +307,104 @@ max_deltas = 1000
   assert(
       fsim_session_visit_children(session, root, visit, &children)
       == FSIM_STATUS_OK);
-  assert(children == 4);
+  assert(children == 5);
+
+  fsim_object_t child_instance = FSIM_INVALID_OBJECT;
+  fsim_object_t child_signal = FSIM_INVALID_OBJECT;
+  fsim_object_t child_process = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session, text("tb.u"), &child_instance)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session, text("tb.u.child_value"), &child_signal)
+      == FSIM_STATUS_OK);
+  fsim_object_info_t child_instance_info{};
+  child_instance_info.struct_size = sizeof(child_instance_info);
+  child_instance_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, child_instance, &child_instance_info)
+      == FSIM_STATUS_OK);
+  assert(child_instance_info.kind == FSIM_OBJECT_SCOPE);
+  assert(child_instance_info.parent == root);
+  assert(
+      std::string(
+          child_instance_info.name.data,
+          child_instance_info.name.size)
+      == "u");
+  assert(
+      std::string(
+          child_instance_info.full_name.data,
+          child_instance_info.full_name.size)
+      == "tb.u");
+  assert(
+      std::string(
+          child_instance_info.type_name.data,
+          child_instance_info.type_name.size)
+          .find("child")
+      != std::string::npos);
+  assert(
+      (child_instance_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
+      == FSIM_OBJECT_FLAG_HAS_SOURCE);
+  std::vector<fsim_object_t> child_instance_children;
+  assert(
+      fsim_session_visit_children(
+          session,
+          child_instance,
+          collect_object,
+          &child_instance_children)
+      == FSIM_STATUS_OK);
+  assert(child_instance_children.size() == 2);
+  for (const auto child : child_instance_children) {
+    fsim_object_info_t child_info{};
+    child_info.struct_size = sizeof(child_info);
+    child_info.api_version = FSIM_API_VERSION;
+    assert(
+        fsim_session_get_object_info(session, child, &child_info)
+        == FSIM_STATUS_OK);
+    if (child_info.kind == FSIM_OBJECT_PROCESS) {
+      child_process = child;
+    }
+  }
+  assert(child_process != FSIM_INVALID_OBJECT);
+  assert(
+      std::find(
+          child_instance_children.begin(),
+          child_instance_children.end(),
+          child_signal)
+      != child_instance_children.end());
+  assert(
+      std::find(
+          child_instance_children.begin(),
+          child_instance_children.end(),
+          child_process)
+      != child_instance_children.end());
+  fsim_object_info_t child_signal_info{};
+  child_signal_info.struct_size = sizeof(child_signal_info);
+  child_signal_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, child_signal, &child_signal_info)
+      == FSIM_STATUS_OK);
+  assert(child_signal_info.parent == child_instance);
+  fsim_object_info_t child_process_info{};
+  child_process_info.struct_size = sizeof(child_process_info);
+  child_process_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, child_process, &child_process_info)
+      == FSIM_STATUS_OK);
+  assert(child_process_info.parent == child_instance);
+  fsim_object_t found_child_process = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session,
+          child_process_info.full_name,
+          &found_child_process)
+      == FSIM_STATUS_OK);
+  assert(found_child_process == child_process);
 
   fsim_object_t process = FSIM_INVALID_OBJECT;
   assert(
@@ -745,6 +849,7 @@ max_deltas = 1000
   const auto old_root = root;
   const auto old_q = q;
   const auto old_process = process;
+  const auto old_child_instance = child_instance;
   const auto old_control_scope = control_scope;
   const auto old_control_state = control_state;
   assert(fsim_session_build(session) == FSIM_STATUS_OK);
@@ -764,6 +869,10 @@ max_deltas = 1000
   assert(
       fsim_session_visit_children(
           session, old_control_scope, visit, &stale_children)
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_visit_children(
+          session, old_child_instance, visit, &stale_children)
       == FSIM_STATUS_INVALID_HANDLE);
   assert(
       fsim_session_read_value(

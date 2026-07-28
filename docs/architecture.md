@@ -716,7 +716,9 @@ callback with the originating process handle plus severity, source
 path/line/column, and message. Process, lexical-scope, variable, signal, and
 port object metadata also carry retained declaration source locations. Scope
 and local flags distinguish never-entered/uninitialized state from retained
-runtime values. Instance scopes, driver objects, and source metadata for those
+runtime values. Elaborated child specializations are explicit instance scopes;
+direct enumeration and signal/process parent metadata follow their owning
+instance. Generate-region scopes, driver objects, and source metadata for those
 deferred kinds are not yet wired.
 
 Optimized `run` and instrumented `debug` are required to have identical
@@ -751,7 +753,7 @@ previous handler on every exit path. Tests raise SIGINT through the real handler
 and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
 to terminal completion, and restore a preinstalled handler. The `locals`
 command reads declared packed process variables through an engine-neutral
-interface; richer local types and instance scopes remain planned.
+interface; richer local types and generate-region scopes remain planned.
 
 ## Tcl automation
 
