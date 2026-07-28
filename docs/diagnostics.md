@@ -28,6 +28,7 @@ therefore excluded.
 | `FSIM-TCL-ASSERT-0001` | note/warning/error/fatal | An HDL assertion failed while a Tcl-controlled simulation was running. |
 | `FSIM-API-0002` | error | A C API check or build was requested before loading a project. |
 | `FSIM-API-0003` | error | A C API operation requires a successfully built design. |
+| `FSIM-API-0004` | error | A built design contains more debug-visible local variables than the version-1 object-handle encoding can represent. |
 | `FSIM-API-ASSERT-0001` | assertion severity | A false HDL assertion stopped simulation through the C API; the diagnostic carries its process, source location, severity, and message. |
 | `FSIM-API-RUN-0001` | error | Simulation invoked through the C API failed at runtime. |
 | `FSIM-API-VALUE-0001` | error | A C API deposit or force value is invalid for the selected signal. |

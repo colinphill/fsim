@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/api.h"
 
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstring>
@@ -8,7 +9,10 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -103,6 +107,15 @@ int visit(fsim_session_t, fsim_object_t, void* user_data) {
   return 1;
 }
 
+int collect_object(
+    fsim_session_t,
+    const fsim_object_t object,
+    void* user_data) {
+  static_cast<std::vector<fsim_object_t>*>(user_data)
+      ->push_back(object);
+  return 1;
+}
+
 fsim_string_view_t text(const char* value) {
   return {value, std::strlen(value)};
 }
@@ -120,11 +133,27 @@ int main() {
     source << R"(
 module tb;
   logic q;
-  initial begin
-    q = 1'b0;
-    #2 q = 1'b1;
+  initial begin : control
+    logic state = 1'b0;
+    begin : inner
+      logic state = 1'b1;
+      q = state;
+    end : inner
+    q = state;
+    #2 begin : timed
+      logic later = 1'b1;
+      q = later;
+    end : timed
+    if (q) begin : selected
+      logic chosen = 1'b1;
+      q = chosen;
+    end : selected
+    else begin : unselected
+      logic never_entered = 1'b0;
+      q = never_entered;
+    end : unselected
     #1 $finish;
-  end
+  end : control
 endmodule
 )";
   }
@@ -227,6 +256,87 @@ max_deltas = 1000
       == FSIM_STATUS_OK);
   assert(children == 2);
 
+  fsim_object_t process = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session, text("tb.process_0"), &process)
+      == FSIM_STATUS_OK);
+  std::vector<fsim_object_t> process_children;
+  assert(
+      fsim_session_visit_children(
+          session, process, collect_object, &process_children)
+      == FSIM_STATUS_OK);
+  assert(process_children.size() == 5);
+
+  fsim_object_t control_state = FSIM_INVALID_OBJECT;
+  fsim_object_t inner_state = FSIM_INVALID_OBJECT;
+  fsim_object_t timed_later = FSIM_INVALID_OBJECT;
+  fsim_object_t selected_chosen = FSIM_INVALID_OBJECT;
+  fsim_object_t unselected_local = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control.state"),
+          &control_state)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control.inner.state"),
+          &inner_state)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control.timed.later"),
+          &timed_later)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control.selected.chosen"),
+          &selected_chosen)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.process_0.control.unselected.never_entered"),
+          &unselected_local)
+      == FSIM_STATUS_OK);
+  fsim_object_info_t local_info{};
+  local_info.struct_size = sizeof(local_info);
+  local_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, inner_state, &local_info)
+      == FSIM_STATUS_OK);
+  assert(local_info.kind == FSIM_OBJECT_VARIABLE);
+  assert(local_info.parent == process);
+  assert(local_info.width == 1);
+  assert(
+      std::string(local_info.name.data, local_info.name.size)
+      == "state");
+  assert(
+      std::string(
+          local_info.full_name.data,
+          local_info.full_name.size)
+      == "tb.process_0.control.inner.state");
+  assert(
+      std::string(
+          local_info.type_name.data,
+          local_info.type_name.size)
+      == "logic");
+  std::size_t local_required = 123;
+  assert(
+      fsim_session_read_value(
+          session,
+          control_state,
+          nullptr,
+          0,
+          &local_required)
+      == FSIM_STATUS_UNAVAILABLE);
+  assert(local_required == 0);
+
   fsim_object_t q = FSIM_INVALID_OBJECT;
   assert(
       fsim_session_find_object(session, text("q"), &q)
@@ -267,6 +377,29 @@ max_deltas = 1000
       fsim_session_read_value(session, q, value, sizeof(value), &required)
       == FSIM_STATUS_OK);
   assert(std::string(value) == "1");
+  for (const auto& [local, expected] :
+       std::array{
+           std::pair{control_state, std::string_view{"0"}},
+           std::pair{inner_state, std::string_view{"1"}},
+           std::pair{timed_later, std::string_view{"1"}},
+           std::pair{selected_chosen, std::string_view{"1"}},
+       }) {
+    assert(
+        fsim_session_read_value(
+            session, local, value, sizeof(value), &required)
+        == FSIM_STATUS_OK);
+    assert(std::string_view{value} == expected);
+  }
+  required = 123;
+  assert(
+      fsim_session_read_value(
+          session,
+          unselected_local,
+          value,
+          sizeof(value),
+          &required)
+      == FSIM_STATUS_UNAVAILABLE);
+  assert(required == 0);
   assert(counts.values >= 3);
   assert(counts.safe_points > 0);
   assert(counts.reentry_attempted);
@@ -282,6 +415,8 @@ max_deltas = 1000
 
   const auto old_root = root;
   const auto old_q = q;
+  const auto old_process = process;
+  const auto old_control_state = control_state;
   assert(fsim_session_build(session) == FSIM_STATUS_OK);
   assert(
       fsim_session_read_value(
@@ -291,6 +426,18 @@ max_deltas = 1000
   assert(
       fsim_session_visit_children(
           session, old_root, visit, &stale_children)
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_visit_children(
+          session, old_process, visit, &stale_children)
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_read_value(
+          session,
+          old_control_state,
+          value,
+          sizeof(value),
+          &required)
       == FSIM_STATUS_INVALID_HANDLE);
   fsim_object_t rebuilt_q = FSIM_INVALID_OBJECT;
   assert(

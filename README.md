@@ -436,8 +436,11 @@ run/debug command and restores the host's previous handler on exit.
 The native C session API also exposes tested statement/process/delta/time
 stepping and an asynchronous stop request that may be issued from a synchronous
 safe-point callback. Executable safe-point callbacks carry the current process
-handle. A terminal HDL stop takes precedence when it coincides with an external
-step/stop request, so a finished design is never reported resumable.
+handle. Debug-visible process variables are generation-safe child objects with
+full-path lookup, typed metadata, and canonical retained-value reads; locals in
+blocks that have never executed report unavailable in both interpreter and
+compiled modes. A terminal HDL stop takes precedence when it coincides with an
+external step/stop request, so a finished design is never reported resumable.
 
 With LLVM enabled, `fsim build` compiles eligible processes and `fsim run`
 uses a hybrid engine. Processes whose supported value-bearing operations are

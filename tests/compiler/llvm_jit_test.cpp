@@ -594,8 +594,11 @@ void test_scheduling_differential_at_level(
   const auto layout = jit.frame_layout(handle);
   std::vector<std::uint64_t> register_aval(layout.register_count);
   std::vector<std::uint64_t> register_bval(layout.register_count);
+  std::vector<std::uint8_t> register_initialized(layout.register_count);
   fsim_jit_frame_v1 frame{};
-  jit.initialize_frame(handle, frame, register_aval, register_bval);
+  jit.initialize_frame(
+      handle, frame, register_aval, register_bval,
+      register_initialized);
 
   TestRuntime runtime;
   auto descriptor = abi(runtime);
@@ -752,9 +755,12 @@ void test_control_flow_at_level(const JitOptimizationLevel optimization,
         jit.frame_layout(error_handle).register_count);
     std::vector<std::uint64_t> register_bval(
         jit.frame_layout(error_handle).register_count);
+    std::vector<std::uint8_t> register_initialized(
+        jit.frame_layout(error_handle).register_count);
     fsim_jit_frame_v1 frame{};
     jit.initialize_frame(
-        error_handle, frame, register_aval, register_bval);
+        error_handle, frame, register_aval, register_bval,
+        register_initialized);
     auto result = new_resume_result();
     expect_generated_runtime_error(
         [&] {
@@ -817,12 +823,19 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
                                            UINT64_MAX);
   std::vector<std::uint64_t> register_bval(layout.register_count,
                                            UINT64_MAX);
+  std::vector<std::uint8_t> register_initialized(
+      layout.register_count, UINT8_MAX);
   fsim_jit_frame_v1 frame{};
-  jit.initialize_frame(handle, frame, register_aval, register_bval);
+  jit.initialize_frame(
+      handle, frame, register_aval, register_bval,
+      register_initialized);
   assert(std::all_of(register_aval.begin(), register_aval.end(),
                      [](const auto value) { return value == 0; }));
   assert(std::all_of(register_bval.begin(), register_bval.end(),
                      [](const auto value) { return value == 0; }));
+  assert(std::all_of(
+      register_initialized.begin(), register_initialized.end(),
+      [](const auto value) { return value == 0; }));
   assert(frame.layout_id_low == layout.layout_id_low);
   assert(frame.layout_id_high == layout.layout_id_high);
   assert(frame.program_counter == 0);
@@ -867,6 +880,13 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   }
   {
     auto wrong = frame;
+    wrong.register_initialized = nullptr;
+    expect_error(
+        [&] { (void)jit.resume(handle, descriptor, wrong, result); },
+        "frame register storage is null");
+  }
+  {
+    auto wrong = frame;
     wrong.program_counter =
         static_cast<std::uint32_t>(process.operations.size());
     expect_error(
@@ -899,19 +919,25 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   {
     std::array<std::uint64_t, 1> too_small_aval{};
     std::array<std::uint64_t, 1> too_small_bval{};
+    std::array<std::uint8_t, 1> too_small_initialized{};
     fsim_jit_frame_v1 unused{};
     expect_error(
         [&] {
           jit.initialize_frame(
-              handle, unused, too_small_aval, too_small_bval);
+              handle, unused, too_small_aval, too_small_bval,
+              too_small_initialized);
         },
         "register storage is smaller");
   }
   {
     std::vector<std::uint64_t> aliased(layout.register_count);
+    std::vector<std::uint8_t> initialized(layout.register_count);
     fsim_jit_frame_v1 unused{};
     expect_error(
-        [&] { jit.initialize_frame(handle, unused, aliased, aliased); },
+        [&] {
+          jit.initialize_frame(
+              handle, unused, aliased, aliased, initialized);
+        },
         "must be distinct");
   }
 
@@ -924,6 +950,8 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   assert(frame.last_instruction == 2);
   assert(register_aval[0] == UINT64_C(0xa5));
   assert(register_bval[0] == 0);
+  assert(register_initialized[0] == 1);
+  assert(register_initialized[1] == 0);
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::yielded);
@@ -933,6 +961,8 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   assert(frame.program_counter == 6);
   assert(register_aval[1] == UINT64_C(0x5a));
   assert(register_bval[1] == 0);
+  assert(register_initialized[0] == 1);
+  assert(register_initialized[1] == 1);
 
   assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::paused);
@@ -1006,9 +1036,12 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   const auto loop_layout = jit.frame_layout(loop_handle);
   std::vector<std::uint64_t> loop_aval(loop_layout.register_count);
   std::vector<std::uint64_t> loop_bval(loop_layout.register_count);
+  std::vector<std::uint8_t> loop_initialized(
+      loop_layout.register_count);
   fsim_jit_frame_v1 loop_frame{};
   jit.initialize_frame(
-      loop_handle, loop_frame, loop_aval, loop_bval);
+      loop_handle, loop_frame, loop_aval, loop_bval,
+      loop_initialized);
   auto loop_result = new_resume_result();
   TestRuntime loop_runtime;
   auto loop_descriptor = abi(loop_runtime);
@@ -1067,9 +1100,11 @@ void test_signal_waits_at_level(
   assert(layout.register_count == 0);
   std::vector<std::uint64_t> register_aval;
   std::vector<std::uint64_t> register_bval;
+  std::vector<std::uint8_t> register_initialized;
   fsim_jit_frame_v1 frame{};
   jit.initialize_frame(
-      handle, frame, register_aval, register_bval);
+      handle, frame, register_aval, register_bval,
+      register_initialized);
   auto result = new_resume_result();
 
   assert(jit.resume(handle, descriptor, frame, result) ==
@@ -1132,7 +1167,8 @@ void test_signal_waits_at_level(
   const auto wait_on_handle = jit.lookup(wait_on_symbol);
   fsim_jit_frame_v1 wait_on_frame{};
   jit.initialize_frame(
-      wait_on_handle, wait_on_frame, register_aval, register_bval);
+      wait_on_handle, wait_on_frame, register_aval, register_bval,
+      register_initialized);
   auto wait_on_result = new_resume_result();
   assert(jit.resume(
              wait_on_handle, descriptor, wait_on_frame, wait_on_result) ==
@@ -1158,7 +1194,8 @@ void test_signal_waits_at_level(
   const auto sensitivity_handle = jit.lookup(sensitivity_symbol);
   fsim_jit_frame_v1 sensitivity_frame{};
   jit.initialize_frame(
-      sensitivity_handle, sensitivity_frame, register_aval, register_bval);
+      sensitivity_handle, sensitivity_frame, register_aval, register_bval,
+      register_initialized);
   auto sensitivity_result = new_resume_result();
   assert(jit.resume(
              sensitivity_handle, descriptor, sensitivity_frame,
@@ -1189,9 +1226,11 @@ void test_signal_waits_at_level(
   const auto timed_handle = jit.lookup(timed_symbol);
   std::vector<std::uint64_t> timed_aval(1);
   std::vector<std::uint64_t> timed_bval(1);
+  std::vector<std::uint8_t> timed_initialized(1);
   fsim_jit_frame_v1 timed_frame{};
   jit.initialize_frame(
-      timed_handle, timed_frame, timed_aval, timed_bval);
+      timed_handle, timed_frame, timed_aval, timed_bval,
+      timed_initialized);
   auto timed_result = new_resume_result();
   assert(
       jit.resume(
@@ -2084,8 +2123,10 @@ void test_debug_point_instrumentation() {
         const auto handle = jit.lookup(symbol);
         std::array<std::uint64_t, 0> aval{};
         std::array<std::uint64_t, 0> bval{};
+        std::array<std::uint8_t, 0> initialized{};
         fsim_jit_frame_v1 frame{};
-        jit.initialize_frame(handle, frame, aval, bval);
+        jit.initialize_frame(
+            handle, frame, aval, bval, initialized);
         fsim_jit_resume_result_v1 result{
             FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1,
             static_cast<std::uint32_t>(
@@ -2119,7 +2160,8 @@ void test_debug_point_instrumentation() {
             == JitResumeStatus::completed);
         assert(result.instruction == 1);
         if (optimization == JitOptimizationLevel::o2) {
-          jit.initialize_frame(handle, frame, aval, bval);
+          jit.initialize_frame(
+              handle, frame, aval, bval, initialized);
           descriptor.flags = FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS;
           assert(
               jit.resume(handle, descriptor, frame, result)

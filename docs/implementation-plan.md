@@ -86,7 +86,10 @@ The following foundation is implemented:
   elaboration and shared compilation units;
 - recursive VHDL/SV hierarchy in both language directions with explicit
   bindings and boundary checks;
-- buffered VCD, a bounded command-line debugger, and a versioned native C API;
+- buffered VCD, a bounded command-line debugger, and a versioned native C API
+  with generation-safe process-variable child objects, typed/full-path
+  metadata, canonical retained-value reads, and explicit unavailable state
+  before a lexical block first executes;
 - an LLVM 22.1.8 ORC adapter with caller-owned resumable process frames for
   processes whose value-bearing operations are up to 64 bits, with O0/O2
   lowering for update-phase/delayed writes plus dynamic/static sensitivity
@@ -486,9 +489,10 @@ Completed:
 
 Remaining before the architecture gate passes:
 
-- add call safe points, C API local objects, and complete source metadata to
-  the current O0 hybrid debugger; bounded nested/scoped SystemVerilog packed
-  locals now have interpreter/LLVM O0/O2 and cache-differential evidence;
+- add call safe points and complete source metadata to the current O0 hybrid
+  debugger; bounded nested/scoped SystemVerilog packed locals and native-C
+  variable objects now have interpreter/LLVM O0/O2 and cache-differential
+  evidence;
 - run every supported semantic test through interpreter and JIT and compare
   final state, assertions, scheduler observations, and trace events;
 - extend the bounded mixed-language differential to O0 and mixed-language
@@ -652,8 +656,8 @@ Planned implementation sequence:
 4. Complete Windows execution evidence and broader event/list/error tests for
    the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
    timed, delta, and static-wait execution is implemented.
-5. Expose scoped debug locals through the native C object model and add call
-   safe points.
+5. Add call safe points and complete the native C metadata for remaining
+   object kinds.
 6. Complete public C API metadata, remaining object kinds, and
    forward-compatibility tests; the bounded assertion callback now carries
    process, severity, source location, and message.
@@ -697,9 +701,8 @@ Remaining before v1 release:
 The next development iterations should occur in this order:
 
 1. **Close the architecture gate:** extend the bounded O0 hybrid debugger with
-   call instrumentation and native-C scoped-local enumeration, add remaining
-   VHDL generic and SystemVerilog parameter semantics, and broaden the
-   interpreter/JIT differential harness.
+   call instrumentation, add remaining VHDL generic and SystemVerilog
+   parameter semantics, and broaden the interpreter/JIT differential harness.
 2. **Build typed semantic layers:** explicit VHDL HIR, SV HIR, DesignIR
    specialization, constant evaluation, and stable source/debug metadata.
 3. **Expand synthesizable coverage:** packages/parameters/generics, generates,
@@ -734,26 +737,27 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The seventh post-gate batch is implementation-complete:
+The eighth post-gate batch is implementation-complete:
 
-1. named process-body blocks remain explicit lexical HIR scopes;
-2. nested named procedural blocks retain their declarations and labels;
-3. matching closing labels are accepted while orphan/mismatched labels receive
-   `FSIM-SV-SEM-034`;
-4. declared conditional-branch and procedural-loop bodies retain their
-   lexical blocks instead of losing declarations during normalization;
-5. each lexical declaration owns one stable process-frame register;
-6. declaration initialization executes whenever its block is entered;
-7. inner locals may shadow and then restore an outer local binding;
-8. locals may shadow and then restore a visible module signal binding;
-9. debugger-local names encode named/anonymous lexical ancestry without
-   duplicating static-loop-expanded declarations; and
-10. interpreter, LLVM O0, LLVM O2, final frame values, and warm native-cache
-    behavior agree for nested, static-loop, and runtime-loop locals.
+1. native C variable handles use a dedicated object tag and design generation;
+2. each successful build creates a deterministic flattened variable-object
+   index with stable full names;
+3. exact full-path lookup resolves debug-visible variables;
+4. process-child enumeration returns its variables in debug-frame order;
+5. variable metadata reports process parent, leaf/full name, source type, and
+   packed width;
+6. canonical value reads accept variable objects as well as signals;
+7. variables whose lexical declaration has never executed return
+   `FSIM_STATUS_UNAVAILABLE`;
+8. rebuilds invalidate stale process-variable handles and child enumeration;
+9. the append-only plain-C JIT frame records per-register initialization
+   without exposing C++ layouts; and
+10. interpreter, LLVM O0, and LLVM O2 agree on retained active-local values
+    and unavailable never-entered locals.
 
-Focused frontend, elaboration, diagnostic-catalog, and scoped-local application
+Focused C API, LLVM adapter, scoped-local application, and diagnostic-catalog
 tests pass. The interval LLVM 22 Debug regression passed all 17 tests in
-141.75 seconds. This batch is ready to commit and push.
+132.75 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 

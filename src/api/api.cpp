@@ -15,17 +15,26 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace {
 
 constexpr std::uint32_t kRootPayload = 1;
 constexpr std::uint32_t kSignalPayload = UINT32_C(0x40000000);
 constexpr std::uint32_t kProcessPayload = UINT32_C(0x80000000);
+constexpr std::uint32_t kVariablePayload = UINT32_C(0xc0000000);
 constexpr std::uint32_t kObjectIndexMask = UINT32_C(0x3fffffff);
+
+struct VariableObject {
+  std::size_t process{};
+  std::size_t local{};
+  std::string full_name;
+};
 
 struct Session {
   // Callbacks execute synchronously on the simulation thread and may perform
@@ -46,6 +55,7 @@ struct Session {
   std::uint64_t seed{1};
   std::optional<fsim::runtime::simir::ProcessId>
       current_execution_process;
+  std::vector<VariableObject> variables;
   bool finished{};
 };
 
@@ -208,6 +218,57 @@ std::optional<std::size_t> object_process(
     return std::nullopt;
   }
   return static_cast<std::size_t>(index);
+}
+
+fsim_object_t variable_handle(
+    const Session& session, const std::size_t variable) {
+  if (variable > kObjectIndexMask) {
+    return FSIM_INVALID_OBJECT;
+  }
+  return object_handle(
+      session,
+      kVariablePayload | static_cast<std::uint32_t>(variable));
+}
+
+std::optional<std::size_t> object_variable(
+    const Session& session,
+    const fsim_object_t object) {
+  if (!session.simulation || !current_object(session, object)) {
+    return std::nullopt;
+  }
+  const auto payload = object_payload(object);
+  if ((payload & ~kObjectIndexMask) != kVariablePayload) {
+    return std::nullopt;
+  }
+  const auto index =
+      static_cast<std::size_t>(payload & kObjectIndexMask);
+  if (index >= session.variables.size()) {
+    return std::nullopt;
+  }
+  return index;
+}
+
+bool rebuild_variable_objects(Session& session) {
+  session.variables.clear();
+  if (!session.simulation) {
+    return true;
+  }
+  const auto& processes = session.simulation->design().processes();
+  for (std::size_t process = 0; process < processes.size(); ++process) {
+    const auto& program = processes[process];
+    for (std::size_t local = 0;
+         local < program.debug_locals.size(); ++local) {
+      if (session.variables.size() > kObjectIndexMask) {
+        session.variables.clear();
+        return false;
+      }
+      session.variables.push_back({
+          process,
+          local,
+          program.name + "." + program.debug_locals[local].name});
+    }
+  }
+  return true;
 }
 
 std::string_view leaf_name(const std::string_view name) {
@@ -517,6 +578,7 @@ fsim_status_t fsim_session_load_project(
     value.diagnostics.clear();
     value.project.reset();
     value.simulation.reset();
+    value.variables.clear();
     advance_design_generation(value);
     value.finished = false;
     value.current_execution_process.reset();
@@ -558,6 +620,7 @@ fsim_status_t fsim_session_build(const fsim_session_t session) {
     }
     value.diagnostics.clear();
     value.simulation.reset();
+    value.variables.clear();
     advance_design_generation(value);
     value.finished = false;
     value.current_execution_process.reset();
@@ -573,6 +636,14 @@ fsim_status_t fsim_session_build(const fsim_session_t session) {
     }
     value.simulation = std::make_unique<fsim::app::Simulation>(
         std::move(*built), value.max_deltas);
+    if (!rebuild_variable_objects(value)) {
+      value.simulation.reset();
+      value.diagnostics.error(
+          "FSIM-API-0004",
+          "the design contains too many debug-visible local variables for "
+          "the version-1 object handle encoding");
+      return FSIM_STATUS_INTERNAL_ERROR;
+    }
     const auto native_cache =
         value.simulation->native_cache_statistics();
     if (native_cache.load_failures != 0
@@ -638,6 +709,13 @@ fsim_status_t fsim_session_find_object(
         return FSIM_STATUS_OK;
       }
     }
+    for (std::size_t index = 0;
+         index < value.variables.size(); ++index) {
+      if (value.variables[index].full_name == requested) {
+        *out_object = variable_handle(value, index);
+        return FSIM_STATUS_OK;
+      }
+    }
     return FSIM_STATUS_INVALID_HANDLE;
   });
 }
@@ -655,7 +733,25 @@ fsim_status_t fsim_session_visit_children(
       return FSIM_STATUS_INVALID_ARGUMENT;
     }
     if (parent != root_handle(value)) {
-      if (object_signal(value, parent) || object_process(value, parent)) {
+      if (object_signal(value, parent)
+          || object_variable(value, parent)) {
+        return FSIM_STATUS_OK;
+      }
+      if (const auto process = object_process(value, parent)) {
+        for (std::size_t index = 0;
+             index < value.variables.size(); ++index) {
+          if (value.variables[index].process != *process) {
+            continue;
+          }
+          CallbackGuard guard{value};
+          if (callback(
+                  value.handle,
+                  variable_handle(value, index),
+                  user_data)
+              == 0) {
+            break;
+          }
+        }
         return FSIM_STATUS_OK;
       }
       return FSIM_STATUS_INVALID_HANDLE;
@@ -730,6 +826,22 @@ fsim_status_t fsim_session_get_object_info(
       out_info->type_name = view("process");
       return FSIM_STATUS_OK;
     }
+    if (const auto variable = object_variable(value, object)) {
+      const auto& reference = value.variables[*variable];
+      const auto& process =
+          value.simulation->design().processes().at(
+              reference.process);
+      const auto& info =
+          process.debug_locals.at(reference.local);
+      out_info->parent =
+          process_handle(value, reference.process);
+      out_info->kind = FSIM_OBJECT_VARIABLE;
+      out_info->width = info.width;
+      out_info->name = view(leaf_name(info.name));
+      out_info->full_name = view(reference.full_name);
+      out_info->type_name = view(info.type_name);
+      return FSIM_STATUS_OK;
+    }
     return FSIM_STATUS_INVALID_HANDLE;
   });
 }
@@ -748,12 +860,24 @@ fsim_status_t fsim_session_read_value(
     if (!ready(value, "value reads")) {
       return FSIM_STATUS_INVALID_ARGUMENT;
     }
-    const auto signal = object_signal(value, object);
-    if (!signal) {
+    std::optional<fsim::runtime::PackedLogic4> packed;
+    if (const auto signal = object_signal(value, object)) {
+      packed = value.simulation->read_signal(*signal);
+    } else if (const auto variable =
+                   object_variable(value, object)) {
+      const auto& reference = value.variables[*variable];
+      try {
+        packed = value.simulation->read_process_local(
+            static_cast<fsim::runtime::simir::ProcessId>(
+                reference.process),
+            reference.local);
+      } catch (const std::logic_error&) {
+        return FSIM_STATUS_UNAVAILABLE;
+      }
+    } else {
       return FSIM_STATUS_INVALID_HANDLE;
     }
-    const auto encoded =
-        value.simulation->read_signal(*signal).to_msb_string();
+    const auto encoded = packed->to_msb_string();
     *out_required = encoded.size() + 1;
     if (buffer == nullptr || buffer_size < *out_required) {
       return FSIM_STATUS_INVALID_ARGUMENT;

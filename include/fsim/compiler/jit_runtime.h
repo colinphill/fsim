@@ -130,8 +130,9 @@ typedef struct fsim_jit_runtime_v1 {
 
 /*
  * Caller-owned persistent process frame. register_aval and register_bval each
- * point to register_count uint64_t elements supplied by the caller. layout_id
- * is process-specific and must come from the adapter's frame-layout query.
+ * point to register_count uint64_t elements and register_initialized points to
+ * register_count bytes supplied by the caller. layout_id is process-specific
+ * and must come from the adapter's frame-layout query.
  */
 typedef struct fsim_jit_frame_v1 {
   uint32_t abi_version;
@@ -144,6 +145,7 @@ typedef struct fsim_jit_frame_v1 {
   uint32_t last_instruction;
   uint64_t* register_aval;
   uint64_t* register_bval;
+  uint8_t* register_initialized;
 } fsim_jit_frame_v1;
 
 /*

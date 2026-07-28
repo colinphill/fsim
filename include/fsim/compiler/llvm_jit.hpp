@@ -197,13 +197,15 @@ public:
   [[nodiscard]] JitProcessFrameLayout
   frame_layout(JitProcessHandle process) const;
 
-  /// Initialize a caller-owned v1 frame and zero its register storage.
+  /// Initialize a caller-owned v1 frame, zero its value storage, and mark
+  /// every register unavailable until generated code first writes it.
   ///
-  /// Each span must contain at least frame_layout().register_count elements and
-  /// remain alive for every resume() using the frame.
+  /// Each span must contain at least frame_layout().register_count elements
+  /// and remain alive for every resume() using the frame.
   void initialize_frame(JitProcessHandle process, fsim_jit_frame_v1 &frame,
                         std::span<std::uint64_t> register_aval,
-                        std::span<std::uint64_t> register_bval) const;
+                        std::span<std::uint64_t> register_bval,
+                        std::span<std::uint8_t> register_initialized) const;
 
   /// Run from the frame PC until completion, failure, Stop, or suspension.
   ///

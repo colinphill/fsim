@@ -129,8 +129,13 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     const auto layout = jit_.frame_layout(handle_);
     register_aval_.resize(layout.register_count);
     register_bval_.resize(layout.register_count);
+    register_initialized_.resize(layout.register_count);
     jit_.initialize_frame(
-        handle_, frame_, register_aval_, register_bval_);
+        handle_,
+        frame_,
+        register_aval_,
+        register_bval_,
+        register_initialized_);
   }
 
   [[nodiscard]] runtime::simir::ProcessResumeResult resume(
@@ -290,6 +295,10 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       throw compiler::LlvmJitError{
           "compiled process debug-register request is out of range"};
     }
+    if (register_initialized_[id] == 0) {
+      throw std::logic_error{
+          "compiled process debug local has not been initialized"};
+    }
     return PackedLogic4::from_aval_bval(
         width, register_aval_[id], register_bval_[id]);
   }
@@ -305,6 +314,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
     register_aval_[id] = value.aval_words().front();
     register_bval_[id] = value.bval_words().front();
+    register_initialized_[id] = 1;
   }
 
  private:
@@ -633,6 +643,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
   fsim_jit_frame_v1 frame_{};
   std::vector<std::uint64_t> register_aval_;
   std::vector<std::uint64_t> register_bval_;
+  std::vector<std::uint8_t> register_initialized_;
 };
 
 [[nodiscard]] compiler::JitOptimizationLevel jit_optimization(

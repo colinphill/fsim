@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -29,6 +30,7 @@ struct Capture {
   std::vector<std::string> locals;
   std::size_t compiled_processes{};
   fsim::app::NativeCacheStatistics cache;
+  bool inactive_local_unavailable{};
 };
 
 void print_diagnostics(const fsim::diagnostic::Engine& diagnostics) {
@@ -72,6 +74,11 @@ Capture execute(
   for (std::size_t index = 0; index < 6; ++index) {
     capture.locals.push_back(
         simulation.read_process_local(0, index).to_msb_string());
+  }
+  try {
+    (void)simulation.read_process_local(0, 6);
+  } catch (const std::logic_error&) {
+    capture.inactive_local_unavailable = true;
   }
   return capture;
 }
@@ -145,6 +152,8 @@ void test_scoped_locals(
       == reference.run.callbacks_executed);
   assert(compiled.signals == reference.signals);
   assert(compiled.locals == reference.locals);
+  assert(reference.inactive_local_unavailable);
+  assert(compiled.inactive_local_unavailable);
   assert(compiled.compiled_processes == 1);
   assert((
       reference.signals

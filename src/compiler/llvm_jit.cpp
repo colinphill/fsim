@@ -120,9 +120,10 @@ static_assert(offsetof(fsim_jit_runtime_v1, signal_last_value) == 96);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_last_event) == 104);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_active) == 112);
 static_assert(sizeof(fsim_jit_runtime_v1) == 120);
-static_assert(sizeof(fsim_jit_frame_v1) == 56);
+static_assert(sizeof(fsim_jit_frame_v1) == 64);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
+static_assert(offsetof(fsim_jit_frame_v1, register_initialized) == 56);
 static_assert(sizeof(fsim_jit_resume_result_v1) == 24);
 
 constexpr auto kJitRuntimeV1PrefixSize =
@@ -1642,6 +1643,7 @@ struct EncodedValue {
 struct RegisterSlot {
   llvm::Value *aval{};
   llvm::Value *bval{};
+  llvm::Value *initialized{};
   std::uint32_t width{};
 };
 
@@ -1663,6 +1665,10 @@ void store_register(llvm::IRBuilder<> &builder,
                     const RegisterId id, const EncodedValue value) {
   builder.CreateStore(value.aval, registers[id].aval);
   builder.CreateStore(value.bval, registers[id].bval);
+  builder.CreateStore(
+      llvm::ConstantInt::get(
+          llvm::Type::getInt8Ty(builder.getContext()), 1),
+      registers[id].initialized);
 }
 
 struct EncodedBit {
@@ -2212,7 +2218,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
-      {i32, i32, i64, i64, i32, i32, i32, i32, pointer, pointer},
+      {i32, i32, i64, i64, i32, i32, i32, i32, pointer, pointer,
+       pointer},
       "fsim_jit_frame_v1");
   auto *result_type = llvm::StructType::create(
       context, {i32, i32, i32, i32, i64},
@@ -2354,6 +2361,10 @@ void lower_process(llvm::Module &module, const std::string &symbol,
   auto *register_bval = builder.CreateLoad(
       pointer, builder.CreateStructGEP(frame_type, frame_argument, 9),
       "register.bval.base");
+  auto *register_initialized = builder.CreateLoad(
+      pointer, builder.CreateStructGEP(frame_type, frame_argument, 10),
+      "register.initialized.base");
+  auto *i8 = llvm::Type::getInt8Ty(context);
   std::vector<RegisterSlot> registers(process.register_count);
   for (std::size_t index = 0; index < process.register_count; ++index) {
     const auto width = validated.register_widths[index];
@@ -2367,6 +2378,9 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         builder.CreateGEP(
             i64, register_bval, constant_i64(context, index),
             "register." + std::to_string(index) + ".bval"),
+        builder.CreateGEP(
+            i8, register_initialized, constant_i64(context, index),
+            "register." + std::to_string(index) + ".initialized"),
         width,
     };
   }
@@ -3607,10 +3621,12 @@ LlvmJit::frame_layout(const JitProcessHandle process) const {
 void LlvmJit::initialize_frame(
     const JitProcessHandle process, fsim_jit_frame_v1 &frame,
     const std::span<std::uint64_t> register_aval,
-    const std::span<std::uint64_t> register_bval) const {
+    const std::span<std::uint64_t> register_bval,
+    const std::span<std::uint8_t> register_initialized) const {
   const auto layout = frame_layout(process);
   if (register_aval.size() < layout.register_count ||
-      register_bval.size() < layout.register_count) {
+      register_bval.size() < layout.register_count
+      || register_initialized.size() < layout.register_count) {
     throw LlvmJitError(
         "caller-owned JIT register storage is smaller than the frame layout");
   }
@@ -3621,6 +3637,8 @@ void LlvmJit::initialize_frame(
   }
   std::fill_n(register_aval.begin(), layout.register_count, UINT64_C(0));
   std::fill_n(register_bval.begin(), layout.register_count, UINT64_C(0));
+  std::fill_n(
+      register_initialized.begin(), layout.register_count, UINT8_C(0));
   frame = {
       FSIM_JIT_FRAME_ABI_VERSION_V1,
       static_cast<std::uint32_t>(sizeof(fsim_jit_frame_v1)),
@@ -3632,6 +3650,7 @@ void LlvmJit::initialize_frame(
       FSIM_JIT_INVALID_INSTRUCTION,
       register_aval.data(),
       register_bval.data(),
+      register_initialized.data(),
   };
 }
 
@@ -3787,7 +3806,8 @@ LlvmJit::resume(const JitProcessHandle process,
     throw LlvmJitError("JIT frame layout mismatch");
   }
   if (frame.register_count != 0 &&
-      (frame.register_aval == nullptr || frame.register_bval == nullptr)) {
+      (frame.register_aval == nullptr || frame.register_bval == nullptr
+       || frame.register_initialized == nullptr)) {
     throw LlvmJitError("JIT frame register storage is null");
   }
   if (frame.register_count != 0 &&
@@ -3912,8 +3932,15 @@ LlvmJit::execute(const JitProcessHandle process,
       found->second.info.frame_layout.register_count);
   std::vector<std::uint64_t> register_bval(
       found->second.info.frame_layout.register_count);
+  std::vector<std::uint8_t> register_initialized(
+      found->second.info.frame_layout.register_count);
   fsim_jit_frame_v1 frame{};
-  initialize_frame(process, frame, register_aval, register_bval);
+  initialize_frame(
+      process,
+      frame,
+      register_aval,
+      register_bval,
+      register_initialized);
   fsim_jit_resume_result_v1 result{
       FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1,
       static_cast<std::uint32_t>(sizeof(fsim_jit_resume_result_v1)),

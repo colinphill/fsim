@@ -191,6 +191,8 @@ FSIM_PUBLIC fsim_status_t fsim_session_get_object_info(
 // Values use fsim's canonical textual representation. If buffer is NULL or too
 // small, out_required receives the required byte count including the trailing
 // NUL and FSIM_STATUS_INVALID_ARGUMENT is returned.
+// A process variable whose lexical block has never been entered returns
+// FSIM_STATUS_UNAVAILABLE and sets out_required to zero.
 FSIM_PUBLIC fsim_status_t fsim_session_read_value(
     fsim_session_t session,
     fsim_object_t object,
