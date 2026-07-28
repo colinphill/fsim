@@ -1589,6 +1589,8 @@ SC_MODULE(BoundPorts) {
   }
 };
 
+)";
+    output << R"(
 SC_MODULE(NativeLeaf) {
   sc_core::sc_in<sc_dt::sc_logic> value{"value"};
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
