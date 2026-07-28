@@ -9,6 +9,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -22,9 +23,17 @@ struct TemporaryDirectory {
 };
 
 struct Capture {
+  struct Change {
+    fsim::runtime::SimulationTick time{};
+    std::uint64_t delta{};
+    std::string value;
+  };
+
   fsim::runtime::RunResult result;
   std::string event;
   std::string observed;
+  std::vector<Change> event_changes;
+  std::vector<Change> observed_changes;
   std::size_t compiled_processes{};
 };
 
@@ -40,6 +49,23 @@ Capture execute(
 
   Capture capture;
   capture.compiled_processes = simulation.compiled_process_count();
+  simulation.set_signal_change_hook(
+      [&](const fsim::runtime::simir::SignalId signal,
+          const fsim::runtime::PackedLogic4& value,
+          const fsim::runtime::SimulationTick time,
+          const std::uint64_t delta) {
+        auto* changes =
+            signal == *event
+            ? &capture.event_changes
+            : signal == *observed
+                ? &capture.observed_changes
+                : nullptr;
+        if (changes != nullptr) {
+          changes->push_back(
+              Capture::Change{
+                  time, delta, value.to_msb_string()});
+        }
+      });
   capture.result = simulation.run();
   capture.event = simulation.read_signal(*event).to_msb_string();
   capture.observed =
@@ -97,6 +123,24 @@ void test_named_events(
     assert(capture->result.time == 3);
     assert(capture->event == "0");
     assert(capture->observed == "10");
+    assert(capture->event_changes.size() == 2);
+    assert(capture->event_changes[0].time == 1);
+    assert(capture->event_changes[0].value == "1");
+    assert(capture->event_changes[1].time == 2);
+    assert(capture->event_changes[1].value == "0");
+    assert(capture->observed_changes.size() == 3);
+    assert(capture->observed_changes[0].time == 0);
+    assert(capture->observed_changes[0].value == "00");
+    assert(capture->observed_changes[1].time == 1);
+    assert(capture->observed_changes[1].value == "01");
+    assert(
+        capture->observed_changes[1].delta
+        > capture->event_changes[0].delta);
+    assert(capture->observed_changes[2].time == 2);
+    assert(capture->observed_changes[2].value == "10");
+    assert(
+        capture->observed_changes[2].delta
+        > capture->event_changes[1].delta);
   }
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 2);
@@ -120,7 +164,7 @@ module named_event_test;
   logic [1:0] observed;
   initial begin
     #1 -> fired;
-    #1 -> fired;
+    #1 ->> fired;
     #1 $finish;
   end
   initial begin

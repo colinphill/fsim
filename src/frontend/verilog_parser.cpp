@@ -3356,18 +3356,22 @@ class VerilogParser final : private detail::ParserBase {
       const auto start = previous();
       Statement statement;
       statement.kind = StatementKind::EventTrigger;
+      if (match(TokenKind::Greater)) {
+        statement.assignment_kind = AssignmentKind::NonBlocking;
+        if (language_ == Language::Verilog2005) {
+          error(
+              previous(),
+              "FSIM-VERILOG-SEM-008",
+              "nonblocking named-event trigger '->>' requires "
+              "SystemVerilog");
+        }
+      }
       const auto event = expect_identifier("named event after '->'");
       statement.target = Expression{
           ExpressionKind::Identifier,
           event.text,
           {},
           event.span};
-      if (match(TokenKind::Greater)) {
-        error(
-            previous(),
-            "FSIM-SV-UNSUPPORTED-032",
-            "nonblocking named-event trigger '->>' is not implemented");
-      }
       expect(
           TokenKind::Semicolon,
           "';' after named-event trigger",

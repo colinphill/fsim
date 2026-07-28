@@ -2917,8 +2917,14 @@ private:
             ReadSignal{current, found->second});
         process_.operations.emplace_back(
             UnaryNot{toggled, current});
-        process_.operations.emplace_back(
-            WriteBlocking{found->second, toggled});
+        if (statement.assignment_kind
+            == AssignmentKind::NonBlocking) {
+            process_.operations.emplace_back(
+                WriteUpdate{found->second, toggled});
+        } else {
+            process_.operations.emplace_back(
+                WriteBlocking{found->second, toggled});
+        }
     }
 
     static const Statement* recognized_vhdl_edge_guard(

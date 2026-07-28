@@ -423,6 +423,7 @@ therefore excluded.
 | `FSIM-VERILOG-SEM-005` | error | Compound assignments or standalone increment/decrement were used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-006` | error | A `final` procedure was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-007` | error | `$fatal` was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-008` | error | A nonblocking named-event trigger (`->>`) was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal integer literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |
@@ -484,7 +485,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-029` | error | A packed-struct member has an unpacked dimension or initializer. |
 | `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
 | `FSIM-SV-UNSUPPORTED-031` | error | A procedural `for` loop does not declare an inline `int` or `integer` index. |
-| `FSIM-SV-UNSUPPORTED-032` | error | A nonblocking named-event trigger (`->>`) is outside the immediate-trigger slice. |
 
 ## Elaboration and SimIR lowering
 

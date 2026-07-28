@@ -287,8 +287,9 @@ The runtime records recently changed signals and pending stable orders so a
 Immediate Verilog/SystemVerilog named-event triggers use a zero-initialized
 internal event bit and toggle it with an active-phase blocking write. Existing
 any-change sensitivity fanout therefore wakes static or dynamically suspended
-event waiters in the next deterministic delta. Nonblocking `->>` publication
-is deferred until named-event NBA scheduling is represented explicitly.
+event waiters in the next deterministic delta. SystemVerilog nonblocking
+`->>` uses the same toggle value but publishes it with `WriteUpdate` in the
+common update phase; affected waiters resume in the following delta.
 
 The four queues are the implementation spine for the more detailed
 cross-language lattice in

@@ -8366,6 +8366,7 @@ module named_event;
   logic observed;
   initial begin
     #1 -> fired;
+    #1 ->> fired;
     #1 $finish;
   end
   initial begin
@@ -8398,6 +8399,15 @@ endmodule
             [](const fsim::runtime::simir::Operation& operation) {
               return std::holds_alternative<
                   fsim::runtime::simir::WriteBlocking>(operation);
+            })
+        == 1);
+    assert(
+        std::count_if(
+            trigger_process.operations.begin(),
+            trigger_process.operations.end(),
+            [](const fsim::runtime::simir::Operation& operation) {
+              return std::holds_alternative<
+                  fsim::runtime::simir::WriteUpdate>(operation);
             })
         == 1);
     const auto& waiting_process =

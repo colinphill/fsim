@@ -5337,8 +5337,30 @@ endmodule
         });
   };
   require(
-      has_code(nonblocking, "FSIM-SV-UNSUPPORTED-032"),
-      "nonblocking event trigger diagnostic");
+      nonblocking.ok()
+          && nonblocking.design.units.front()
+                 .processes.front().statements.front()
+                 .kind
+              == StatementKind::EventTrigger
+          && nonblocking.design.units.front()
+                 .processes.front().statements.front()
+                 .assignment_kind
+              == AssignmentKind::NonBlocking,
+      "nonblocking event trigger HIR");
+
+  const auto verilog_nonblocking = parse_text(
+      "nonblocking_event.v",
+      R"(
+module nonblocking_event;
+  event fired;
+  initial ->> fired;
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      has_code(
+          verilog_nonblocking, "FSIM-VERILOG-SEM-008"),
+      "nonblocking event trigger language diagnostic");
 
   const auto duplicate = parse_text(
       "duplicate_event.sv",
