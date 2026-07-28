@@ -123,6 +123,11 @@ fsim_string_view_t text(const char* value) {
 }  // namespace
 
 int main() {
+  static_assert(FSIM_STRUCT_HEADER_SIZE == 8);
+  static_assert(
+      FSIM_OBJECT_INFO_V1_SIZE
+      == offsetof(fsim_object_info_t, source_path));
+
   const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto directory =
       std::filesystem::temp_directory_path()
@@ -131,7 +136,7 @@ int main() {
   {
     std::ofstream source(directory / "tb.sv");
     source << R"(
-module tb;
+module tb(output logic observed);
   logic q;
   logic call_result;
   initial begin : control
@@ -226,6 +231,29 @@ max_deltas = 1000
   options.api_version = FSIM_API_VERSION;
   options.max_deltas = 1000;
   options.seed = 1;
+
+  // Input structures are append-only prefixes: a header-only caller receives
+  // defaults and the implementation must not inspect unavailable tail fields.
+  fsim_session_options_t prefix_options{};
+  prefix_options.struct_size = FSIM_STRUCT_HEADER_SIZE;
+  prefix_options.api_version = FSIM_API_VERSION;
+  prefix_options.max_deltas = 1;
+  prefix_options.seed = 99;
+  fsim_session_t prefix_session = FSIM_INVALID_SESSION;
+  assert(
+      fsim_session_create(&prefix_options, &prefix_session)
+      == FSIM_STATUS_OK);
+  assert(fsim_session_destroy(prefix_session) == FSIM_STATUS_OK);
+  prefix_options.struct_size = FSIM_STRUCT_HEADER_SIZE - 1;
+  assert(
+      fsim_session_create(&prefix_options, &prefix_session)
+      == FSIM_STATUS_INCOMPATIBLE_ABI);
+  prefix_options.struct_size = FSIM_STRUCT_HEADER_SIZE;
+  prefix_options.api_version = FSIM_API_VERSION + 1;
+  assert(
+      fsim_session_create(&prefix_options, &prefix_session)
+      == FSIM_STATUS_INCOMPATIBLE_ABI);
+
   fsim_session_t session = FSIM_INVALID_SESSION;
   assert(fsim_session_create(&options, &session) == FSIM_STATUS_OK);
   assert(session != FSIM_INVALID_SESSION);
@@ -240,8 +268,19 @@ max_deltas = 1000
   callbacks.value_change = value_change;
   callbacks.assertion = assertion;
   callbacks.lifecycle = lifecycle;
-  assert(fsim_session_set_callbacks(session, &callbacks) == FSIM_STATUS_OK);
 
+  // A callback outside the advertised prefix is ignored even when the backing
+  // allocation happens to contain a non-null value.
+  fsim_callbacks_t prefix_callbacks = callbacks;
+  prefix_callbacks.struct_size = offsetof(fsim_callbacks_t, lifecycle);
+  assert(
+      fsim_session_set_callbacks(session, &prefix_callbacks)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_load_project(session, manifest_path.string().c_str())
+      == FSIM_STATUS_OK);
+  assert(counts.lifecycle == 0);
+  assert(fsim_session_set_callbacks(session, &callbacks) == FSIM_STATUS_OK);
   assert(
       fsim_session_load_project(session, manifest_path.string().c_str())
       == FSIM_STATUS_OK);
@@ -256,7 +295,7 @@ max_deltas = 1000
   assert(
       fsim_session_visit_children(session, root, visit, &children)
       == FSIM_STATUS_OK);
-  assert(children == 3);
+  assert(children == 4);
 
   fsim_object_t process = FSIM_INVALID_OBJECT;
   assert(
@@ -328,6 +367,101 @@ max_deltas = 1000
           local_info.type_name.data,
           local_info.type_name.size)
       == "logic");
+  assert(
+      (local_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
+      == FSIM_OBJECT_FLAG_HAS_SOURCE);
+  assert(
+      std::filesystem::path(
+          std::string(
+              local_info.source_path.data,
+              local_info.source_path.size))
+              .filename()
+      == "tb.sv");
+  assert(local_info.source_line == 8);
+  assert(local_info.source_column > 0);
+
+  // The original v1 object-info prefix remains accepted. Appended fields and
+  // their capability flag are not touched when the caller advertises only the
+  // old size.
+  fsim_object_info_t legacy_local_info{};
+  legacy_local_info.struct_size = FSIM_OBJECT_INFO_V1_SIZE;
+  legacy_local_info.api_version = FSIM_API_VERSION;
+  legacy_local_info.source_path = text("untouched");
+  legacy_local_info.source_line = 0x11223344U;
+  legacy_local_info.source_column = 0x55667788U;
+  assert(
+      fsim_session_get_object_info(
+          session, inner_state, &legacy_local_info)
+      == FSIM_STATUS_OK);
+  assert(legacy_local_info.kind == FSIM_OBJECT_VARIABLE);
+  assert(
+      (legacy_local_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE) == 0);
+  assert(
+      std::string(
+          legacy_local_info.source_path.data,
+          legacy_local_info.source_path.size)
+      == "untouched");
+  assert(legacy_local_info.source_line == 0x11223344U);
+  assert(legacy_local_info.source_column == 0x55667788U);
+
+  fsim_object_info_t partial_source_info{};
+  partial_source_info.struct_size =
+      offsetof(fsim_object_info_t, source_line);
+  partial_source_info.api_version = FSIM_API_VERSION;
+  partial_source_info.source_line = 0xaabbccddU;
+  partial_source_info.source_column = 0xeeff0011U;
+  assert(
+      fsim_session_get_object_info(
+          session, inner_state, &partial_source_info)
+      == FSIM_STATUS_OK);
+  assert(
+      (partial_source_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
+      == FSIM_OBJECT_FLAG_HAS_SOURCE);
+  assert(
+      std::filesystem::path(
+          std::string(
+              partial_source_info.source_path.data,
+              partial_source_info.source_path.size))
+              .filename()
+      == "tb.sv");
+  assert(partial_source_info.source_line == 0xaabbccddU);
+  assert(partial_source_info.source_column == 0xeeff0011U);
+
+  struct FutureObjectInfo {
+    fsim_object_info_t value;
+    std::uint64_t future_tail;
+  };
+  FutureObjectInfo future_local_info{};
+  future_local_info.value.struct_size = sizeof(future_local_info);
+  future_local_info.value.api_version = FSIM_API_VERSION;
+  future_local_info.future_tail = UINT64_C(0xdecafbadcafebeef);
+  assert(
+      fsim_session_get_object_info(
+          session, inner_state, &future_local_info.value)
+      == FSIM_STATUS_OK);
+  assert(
+      future_local_info.future_tail
+      == UINT64_C(0xdecafbadcafebeef));
+
+  fsim_object_info_t process_info{};
+  process_info.struct_size = sizeof(process_info);
+  process_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, process, &process_info)
+      == FSIM_STATUS_OK);
+  assert(
+      (process_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
+      == FSIM_OBJECT_FLAG_HAS_SOURCE);
+  assert(
+      std::filesystem::path(
+          std::string(
+              process_info.source_path.data,
+              process_info.source_path.size))
+              .filename()
+      == "tb.sv");
+  assert(process_info.source_line == 5);
+  assert(process_info.source_column > 0);
   std::size_t local_required = 123;
   assert(
       fsim_session_read_value(
@@ -349,6 +483,42 @@ max_deltas = 1000
   assert(fsim_session_get_object_info(session, q, &info) == FSIM_STATUS_OK);
   assert(info.kind == FSIM_OBJECT_SIGNAL);
   assert(info.width == 1);
+  assert(
+      (info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
+      == FSIM_OBJECT_FLAG_HAS_SOURCE);
+  assert(
+      std::filesystem::path(
+          std::string(info.source_path.data, info.source_path.size))
+              .filename()
+      == "tb.sv");
+  assert(info.source_line == 3);
+  assert(info.source_column > 0);
+
+  fsim_object_t observed = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session, text("observed"), &observed)
+      == FSIM_STATUS_OK);
+  fsim_object_info_t port_info{};
+  port_info.struct_size = sizeof(port_info);
+  port_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, observed, &port_info)
+      == FSIM_STATUS_OK);
+  assert(port_info.kind == FSIM_OBJECT_PORT);
+  assert(
+      (port_info.flags & FSIM_OBJECT_FLAG_HAS_SOURCE)
+      == FSIM_OBJECT_FLAG_HAS_SOURCE);
+  assert(
+      std::filesystem::path(
+          std::string(
+              port_info.source_path.data,
+              port_info.source_path.size))
+              .filename()
+      == "tb.sv");
+  assert(port_info.source_line == 2);
+  assert(port_info.source_column > 0);
 
   std::size_t required = 0;
   assert(
@@ -587,6 +757,31 @@ max_deltas = 1000
   assert(counts.assertion_path == (directory / "assertion.vhd").string());
   assert(counts.assertion_line == 9);
   assert(counts.assertion_column == 5);
+
+  assert(
+      fsim_session_diagnostic_count(session, &diagnostic_count)
+      == FSIM_STATUS_OK);
+  assert(diagnostic_count == 1);
+  struct FutureDiagnostic {
+    fsim_diagnostic_t value;
+    std::uint64_t future_tail;
+  };
+  FutureDiagnostic future_diagnostic{};
+  future_diagnostic.value.struct_size = sizeof(future_diagnostic);
+  future_diagnostic.value.api_version = FSIM_API_VERSION;
+  future_diagnostic.future_tail = UINT64_C(0x0123456789abcdef);
+  assert(
+      fsim_session_get_diagnostic(
+          session, 0, &future_diagnostic.value)
+      == FSIM_STATUS_OK);
+  assert(
+      std::string(
+          future_diagnostic.value.code.data,
+          future_diagnostic.value.code.size)
+      == "FSIM-API-ASSERT-0001");
+  assert(
+      future_diagnostic.future_tail
+      == UINT64_C(0x0123456789abcdef));
 
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
 

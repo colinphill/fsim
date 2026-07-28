@@ -331,6 +331,11 @@ manifest and resets any live, finished, or poisoned session, while
 simulation starts. Interactive and batch Python support is planned later,
 after the Tcl and native control contracts stabilize.
 
+The native C API accepts append-only structure prefixes and never reads or
+writes fields beyond the caller-advertised size. Its hierarchy includes
+generation-checked signal, port, process, and packed procedural-variable
+objects with source metadata where a declaration location is available.
+
 ## Build and test
 
 On Linux:

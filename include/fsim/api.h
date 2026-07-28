@@ -24,6 +24,8 @@ extern "C" {
 #define FSIM_API_VERSION UINT32_C(1)
 #define FSIM_INVALID_SESSION UINT64_C(0)
 #define FSIM_INVALID_OBJECT UINT64_C(0)
+#define FSIM_OBJECT_FLAG_FORCED UINT32_C(0x00000001)
+#define FSIM_OBJECT_FLAG_HAS_SOURCE UINT32_C(0x00000002)
 
 typedef uint64_t fsim_session_t;
 typedef uint64_t fsim_object_t;
@@ -110,7 +112,19 @@ typedef struct fsim_object_info {
   fsim_string_view_t name;
   fsim_string_view_t full_name;
   fsim_string_view_t type_name;
+  /*
+   * Append-only v1 extension. Callers built against the original v1 prefix
+   * may pass FSIM_OBJECT_INFO_V1_SIZE and these members are not accessed.
+   */
+  fsim_string_view_t source_path;
+  uint32_t source_line;
+  uint32_t source_column;
 } fsim_object_info_t;
+
+#define FSIM_STRUCT_HEADER_SIZE \
+  (offsetof(fsim_session_options_t, max_deltas))
+#define FSIM_OBJECT_INFO_V1_SIZE \
+  (offsetof(fsim_object_info_t, source_path))
 
 /*
  * Executable source safe points carry an FSIM_OBJECT_PROCESS handle.

@@ -690,31 +690,36 @@ files are preserved; and empty canonical shards are reclaimed. Adapter
 defaults are 30 days, 10,000 entries, and 10 GiB, with best-effort prune
 telemetry that cannot prevent JIT construction. O0
 exposes source-bearing statement, wait, assertion, process-entry, and
-process-suspension points plus addressable ≤64-bit packed process locals. Call
-points, complete local scopes/types, and complete source metadata remain open.
+process-suspension and supported-call points plus addressable ≤64-bit packed
+process locals. Richer local types and complete source metadata for deferred
+object and executable kinds remain open.
 The application analysis cache remains separate.
 
 ## Debug and public API
 
 `include/fsim/api.h` defines opaque 64-bit session/object handles, versioned
-structures, diagnostic/status returns, hierarchy and value operations,
+append-only structures, diagnostic/status returns, hierarchy and value operations,
 run/step/stop calls, and synchronous callbacks. It deliberately exposes no C++
-layout and no exception may cross it. Sessions can currently load, check, and
-build projects; enumerate the bounded signal/process object view; look up
-hierarchical signal paths; read, deposit, force, and release values; run; step
+layout and no exception may cross it. Every structure field is read or written
+only when covered by the caller-advertised size; the original v1 object-info
+prefix remains accepted and unknown future tails are preserved. Sessions can
+currently load, check, and build projects; enumerate signals, ports, processes,
+and packed procedural variables; look up their hierarchical paths; read,
+deposit, force, and release values; run; step
 by statement, process, delta, or time; request stop; and receive lifecycle,
 safe-point, and value-change callbacks. Executable safe-point callbacks include
 a valid process handle. Object handles carry a build generation so a rebuild
 invalidates stale hierarchy handles, and mutating/rebuilding re-entry from a
 synchronous callback is rejected. False assertions invoke the assertion
 callback with the originating process handle plus severity, source
-path/line/column, and message. Scope objects, C API local objects, and complete
-non-assertion source/debug metadata are not yet wired.
+path/line/column, and message. Process, variable, signal, and port object
+metadata also carry retained declaration source locations. Explicit scope and
+driver objects and source metadata for those deferred kinds are not yet wired.
 
 Optimized `run` and instrumented `debug` are required to have identical
 simulation semantics. Bounded debug code uses addressable process frames and
-safe points at statements, waits, process boundaries, assertion failures,
-delta boundaries, and time boundaries. Call points remain open. The default
+safe points at statements, supported calls, waits, process boundaries,
+assertion failures, delta boundaries, and time boundaries. The default
 LLVM-enabled `run` path is
 the O2 hybrid engine. The current bounded `debug` path forces O0 for eligible
 process groups and retains per-process interpreter fallback. SimIR carries
@@ -743,7 +748,7 @@ previous handler on every exit path. Tests raise SIGINT through the real handler
 and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
 to terminal completion, and restore a preinstalled handler. The `locals`
 command reads declared packed process variables through an engine-neutral
-interface; nested scopes, richer types, and C API local objects remain planned.
+interface; richer types and explicit scope objects remain planned.
 
 ## Tcl automation
 

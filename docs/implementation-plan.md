@@ -320,11 +320,11 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 15/15 tests pass after the ten-feature batch through VHDL signal `'active`, including design-stop/final isolation with ordinary future work pending (136.92 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the tenth post-gate batch, including strict C11/native-C prefix compatibility and object source metadata (146.81 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
-| Boost.Context 1.91.0 fibers | Checksum-verified fetch/configure/build; current LLVM Debug 15/15 and ASan/UBSan 14/14 aggregate suites pass, including compiled-SV/SystemC application tests |
+| Boost.Context 1.91.0 fibers | Checksum-verified fetch/configure/build; current LLVM Debug 19/19 and ASan/UBSan 14/14 aggregate suites pass, including compiled-SV/SystemC application tests |
 | Verilog/SV preprocessing/directives | GCC Debug and exact LLVM 22 atomic frontend/elaboration plus source-set/combined interpreter/compiled differentials pass, including shared default-net/cell/reset state and omitted-input pulls |
 | Conditional instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL and SV selection, stable generated mixed-binding paths, interpreter/JIT equivalence, and cold/warm native cache |
 | Iterative instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL ascending/descending ranges and inline/module-scope SV `genvar` loops with assignment/prefix/postfix/compound updates, nested expansion, mixed indexed bindings, interpreter/JIT equivalence, and cold/warm native cache |
@@ -659,10 +659,13 @@ Planned implementation sequence:
 4. Complete Windows execution evidence and broader event/list/error tests for
    the Boost.Context 1.91.0 `SC_THREAD`/`SC_CTHREAD` implementation; Linux
    timed, delta, and static-wait execution is implemented.
-5. Complete source metadata and native C metadata for remaining object kinds.
-6. Complete public C API metadata, remaining object kinds, and
-   forward-compatibility tests; the bounded assertion callback now carries
-   process, severity, source location, and message.
+5. Complete source metadata for explicit scope/driver objects and remaining
+   executable constructs. Native C process, packed-variable, signal, and port
+   objects now carry declaration source metadata.
+6. Complete remaining public C API object kinds and richer value metadata.
+   Append-only input/output prefixes, legacy/current/future structure sizes,
+   strict C11 use, and assertion diagnostic metadata now have automated
+   compatibility evidence.
 
 TLM, AMS, CCI, dynamic SystemC process creation, arbitrary custom primitive
 channels, and Accellera ABI/kernel compatibility remain deferred.
@@ -739,23 +742,23 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The ninth post-gate batch is implementation-complete:
+The tenth post-gate batch is implementation-complete:
 
-1. SimIR distinguishes call safe points from statement/wait/assertion points;
-2. the interpreter preserves call kind, process, instruction, and source;
-3. supported SystemVerilog runtime built-ins emit pre-call points;
-4. supported VHDL attribute calls emit the same common points;
-5. nested calls retain deterministic outer-before-inner point ordering;
-6. LLVM O0 returns unconditionally at call points;
-7. LLVM O2 keeps call points behind the existing size-gated debug flag;
-8. CLI/Tcl debugger statement stepping treats calls as executable stops;
-9. native C statement stepping and synchronous callbacks observe calls; and
-10. interpreter, LLVM O0, and LLVM O2 agree on pre-call state, source
-    locations, resume behavior, and final values.
+1. native input structures accept the stable header-only prefix;
+2. session-option fields are read only when individually advertised;
+3. callback fields are copied only when individually advertised;
+4. the original v1 object-info prefix remains accepted unchanged;
+5. appended source fields support intermediate member-level prefixes;
+6. unknown future object and diagnostic tails remain untouched;
+7. packed procedural-variable objects expose declaration source metadata;
+8. process objects expose their retained entry source metadata;
+9. signal and port objects retain and expose declaration source metadata; and
+10. a strict C11 compile/link/run test covers the public header, constants,
+    prefix sizes, session creation, and destruction.
 
-Focused elaboration, runtime, LLVM adapter, C API, and call-safe-point
-application tests pass. The interval LLVM 22 Debug regression passed all 18
-tests in 139.89 seconds. This batch is ready to commit and push.
+Focused native-C API and C/C++ compatibility tests pass. The interval LLVM 22
+Debug regression passed all 19 tests in 146.81 seconds. This batch is ready to
+commit and push.
 
 ## v1 release condition
 

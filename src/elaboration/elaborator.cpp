@@ -7877,7 +7877,8 @@ private:
             declaration.type.packed_range,
             declaration.type.packed_members,
             declaration.is_port,
-            declaration.direction});
+            declaration.direction,
+            declaration.span});
         auto initial = Logic4::x;
         if (declaration.type.spelling == "tri0") {
             initial = Logic4::zero;

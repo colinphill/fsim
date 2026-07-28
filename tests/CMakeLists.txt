@@ -217,4 +217,13 @@ if(TARGET fsim_application)
   fsim_configure_test(fsim_api_tests)
   target_link_libraries(fsim_api_tests PRIVATE fsim_api)
   add_test(NAME fsim.api COMMAND fsim_api_tests)
+
+  add_executable(fsim_api_header_c_test api/api_header_c_test.c)
+  target_compile_features(fsim_api_header_c_test PRIVATE c_std_11)
+  target_link_libraries(fsim_api_header_c_test PRIVATE fsim_api)
+  set_target_properties(
+    fsim_api_header_c_test
+    PROPERTIES LINKER_LANGUAGE CXX
+  )
+  add_test(NAME fsim.api.c_header COMMAND fsim_api_header_c_test)
 endif()

@@ -98,11 +98,43 @@ fsim_severity_t convert_severity(
   return FSIM_SEVERITY_ERROR;
 }
 
-bool valid_output_header(
+bool valid_struct_header(
     const std::uint32_t struct_size,
     const std::uint32_t api_version,
     const std::size_t required_size) noexcept {
   return struct_size >= required_size && api_version == FSIM_API_VERSION;
+}
+
+bool struct_contains(
+    const std::uint32_t struct_size,
+    const std::size_t offset,
+    const std::size_t field_size) noexcept {
+  return offset <= struct_size && field_size <= struct_size - offset;
+}
+
+#define FSIM_STRUCT_CONTAINS(struct_size, type, member) \
+  struct_contains(                                      \
+      (struct_size), offsetof(type, member),            \
+      sizeof(((type*)nullptr)->member))
+
+const fsim::runtime::simir::SourceLocation* process_source(
+    const fsim::runtime::simir::Process& process) noexcept {
+  const fsim::runtime::simir::SourceLocation* first = nullptr;
+  for (const auto& operation : process.operations) {
+    const auto* point =
+        std::get_if<fsim::runtime::simir::DebugPoint>(&operation);
+    if (point == nullptr) {
+      continue;
+    }
+    if (first == nullptr) {
+      first = &point->source;
+    }
+    if (point->kind
+        == fsim::runtime::simir::DebugPointKind::process_entry) {
+      return &point->source;
+    }
+  }
+  return first;
 }
 
 template <typename Function>
@@ -500,19 +532,27 @@ fsim_status_t fsim_session_create(
   }
   *out_session = FSIM_INVALID_SESSION;
   if (options != nullptr
-      && !valid_output_header(
+      && !valid_struct_header(
           options->struct_size,
           options->api_version,
-          sizeof(fsim_session_options_t))) {
+          FSIM_STRUCT_HEADER_SIZE)) {
     return FSIM_STATUS_INCOMPATIBLE_ABI;
   }
   try {
     auto session = std::make_shared<Session>();
     if (options != nullptr) {
-      session->max_deltas =
-          options->max_deltas == 0 ? std::uint64_t{100'000}
-                                   : options->max_deltas;
-      session->seed = options->seed;
+      if (FSIM_STRUCT_CONTAINS(
+              options->struct_size,
+              fsim_session_options_t,
+              max_deltas)) {
+        session->max_deltas =
+            options->max_deltas == 0 ? std::uint64_t{100'000}
+                                     : options->max_deltas;
+      }
+      if (FSIM_STRUCT_CONTAINS(
+              options->struct_size, fsim_session_options_t, seed)) {
+        session->seed = options->seed;
+      }
     }
     fsim_session_t handle =
         next_session.fetch_add(1, std::memory_order_relaxed);
@@ -782,10 +822,10 @@ fsim_status_t fsim_session_get_object_info(
   if (out_info == nullptr) {
     return FSIM_STATUS_INVALID_ARGUMENT;
   }
-  if (!valid_output_header(
+  if (!valid_struct_header(
           out_info->struct_size,
           out_info->api_version,
-          sizeof(fsim_object_info_t))) {
+          FSIM_OBJECT_INFO_V1_SIZE)) {
     return FSIM_STATUS_INCOMPATIBLE_ABI;
   }
   return with_session(session, [&](Session& value) {
@@ -794,6 +834,42 @@ fsim_status_t fsim_session_get_object_info(
     }
     out_info->handle = object;
     out_info->flags = 0;
+    const auto write_source_path =
+        FSIM_STRUCT_CONTAINS(
+            out_info->struct_size, fsim_object_info_t, source_path);
+    const auto write_source_line =
+        FSIM_STRUCT_CONTAINS(
+            out_info->struct_size, fsim_object_info_t, source_line);
+    const auto write_source_column =
+        FSIM_STRUCT_CONTAINS(
+            out_info->struct_size, fsim_object_info_t, source_column);
+    if (write_source_path) {
+      out_info->source_path = view("");
+    }
+    if (write_source_line) {
+      out_info->source_line = 0;
+    }
+    if (write_source_column) {
+      out_info->source_column = 0;
+    }
+    const auto set_source =
+        [&](const fsim::runtime::simir::SourceLocation& source) {
+          if (source.path.empty()
+              || (!write_source_path && !write_source_line
+                  && !write_source_column)) {
+            return;
+          }
+          if (write_source_path) {
+            out_info->source_path = view(source.path);
+          }
+          if (write_source_line) {
+            out_info->source_line = source.line;
+          }
+          if (write_source_column) {
+            out_info->source_column = source.column;
+          }
+          out_info->flags |= FSIM_OBJECT_FLAG_HAS_SOURCE;
+        };
     if (object == root_handle(value)) {
       const auto& top = value.simulation->design().top();
       out_info->parent = FSIM_INVALID_OBJECT;
@@ -813,7 +889,17 @@ fsim_status_t fsim_session_get_object_info(
       out_info->full_name = view(info.name);
       out_info->type_name = view("logic4");
       out_info->flags =
-          value.simulation->signal_is_forced(*signal) ? 1U : 0U;
+          value.simulation->signal_is_forced(*signal)
+          ? FSIM_OBJECT_FLAG_FORCED
+          : 0U;
+      if (!info.declaration_span.source_name.empty()) {
+        set_source(fsim::runtime::simir::SourceLocation{
+            info.declaration_span.source_name,
+            static_cast<std::uint32_t>(
+                info.declaration_span.begin.line),
+            static_cast<std::uint32_t>(
+                info.declaration_span.begin.column)});
+      }
       return FSIM_STATUS_OK;
     }
     if (const auto process = object_process(value, object)) {
@@ -824,6 +910,9 @@ fsim_status_t fsim_session_get_object_info(
       out_info->name = view(info.name);
       out_info->full_name = view(info.name);
       out_info->type_name = view("process");
+      if (const auto* source = process_source(info)) {
+        set_source(*source);
+      }
       return FSIM_STATUS_OK;
     }
     if (const auto variable = object_variable(value, object)) {
@@ -840,6 +929,7 @@ fsim_status_t fsim_session_get_object_info(
       out_info->name = view(leaf_name(info.name));
       out_info->full_name = view(reference.full_name);
       out_info->type_name = view(info.type_name);
+      set_source(info.source);
       return FSIM_STATUS_OK;
     }
     return FSIM_STATUS_INVALID_HANDLE;
@@ -1090,17 +1180,41 @@ fsim_status_t fsim_session_set_callbacks(
     const fsim_session_t session,
     const fsim_callbacks_t* callbacks) {
   if (callbacks != nullptr
-      && !valid_output_header(
+      && !valid_struct_header(
           callbacks->struct_size,
           callbacks->api_version,
-          sizeof(fsim_callbacks_t))) {
+          FSIM_STRUCT_HEADER_SIZE)) {
     return FSIM_STATUS_INCOMPATIBLE_ABI;
   }
   return with_session(session, [&](Session& value) {
     if (mutation_forbidden(value)) {
       return FSIM_STATUS_UNAVAILABLE;
     }
-    value.callbacks = callbacks == nullptr ? fsim_callbacks_t{} : *callbacks;
+    value.callbacks = {};
+    if (callbacks != nullptr) {
+      value.callbacks.struct_size = sizeof(value.callbacks);
+      value.callbacks.api_version = FSIM_API_VERSION;
+      if (FSIM_STRUCT_CONTAINS(
+              callbacks->struct_size, fsim_callbacks_t, user_data)) {
+        value.callbacks.user_data = callbacks->user_data;
+      }
+      if (FSIM_STRUCT_CONTAINS(
+              callbacks->struct_size, fsim_callbacks_t, safe_point)) {
+        value.callbacks.safe_point = callbacks->safe_point;
+      }
+      if (FSIM_STRUCT_CONTAINS(
+              callbacks->struct_size, fsim_callbacks_t, value_change)) {
+        value.callbacks.value_change = callbacks->value_change;
+      }
+      if (FSIM_STRUCT_CONTAINS(
+              callbacks->struct_size, fsim_callbacks_t, assertion)) {
+        value.callbacks.assertion = callbacks->assertion;
+      }
+      if (FSIM_STRUCT_CONTAINS(
+              callbacks->struct_size, fsim_callbacks_t, lifecycle)) {
+        value.callbacks.lifecycle = callbacks->lifecycle;
+      }
+    }
     if (value.simulation) {
       attach_callbacks(value);
     }
@@ -1115,7 +1229,7 @@ fsim_status_t fsim_session_get_diagnostic(
   if (out_diagnostic == nullptr) {
     return FSIM_STATUS_INVALID_ARGUMENT;
   }
-  if (!valid_output_header(
+  if (!valid_struct_header(
           out_diagnostic->struct_size,
           out_diagnostic->api_version,
           sizeof(fsim_diagnostic_t))) {
