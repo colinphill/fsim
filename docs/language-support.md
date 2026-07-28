@@ -27,7 +27,9 @@ silently discarded.
 The VHDL expression slice also executes one-dimensional packed-object
 `'left`, `'right`, `'low`, `'high`, `'length`, and `'ascending` attributes.
 An optional dimension must be the constant `1`; declared `to`/`downto`
-direction is preserved.
+direction is preserved. A visible signal may use the dynamic `'event`
+attribute; its Boolean result is true only in the delta cycle containing that
+signal's committed effective-value change.
 
 VHDL identifiers are canonicalized case-insensitively. Verilog and
 SystemVerilog identifiers remain case-sensitive. VHDL nine-state scalar and

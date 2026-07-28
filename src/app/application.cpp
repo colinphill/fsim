@@ -157,6 +157,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.write_signal_slice = write_signal_slice;
     runtime.write_update_slice = write_update_slice;
     runtime.write_after_slice = write_after_slice;
+    runtime.signal_event = signal_event;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -535,6 +536,22 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     // The generated status and the immutable SimIR assertion carry all data
     // needed after the C ABI returns. No C++ allocation or exception is
     // permitted in this thunk.
+  }
+
+  static std::uint32_t signal_event(
+      void* context,
+      const std::uint32_t signal) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure || state.context == nullptr
+        || signal >= state.signal_widths.size()) {
+      return 0;
+    }
+    try {
+      return state.context->signal_event(signal) ? 1U : 0U;
+    } catch (...) {
+      capture_failure(state);
+      return 0;
+    }
   }
 
   compiler::LlvmJit& jit_;

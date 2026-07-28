@@ -32,6 +32,12 @@ struct ReadSignal {
   SignalId signal{};
 };
 
+/// True only during the delta in which the signal most recently changed.
+struct SignalEvent {
+  RegisterId destination{};
+  SignalId signal{};
+};
+
 struct CopyRegister {
   RegisterId destination{};
   RegisterId source{};
@@ -338,13 +344,13 @@ struct Pause {};
 struct Halt {};
 
 using Operation =
-    std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, LogicalNot,
-                 LogicalBinary, Reduction, CountOnes, CountBits, Shift,
-                 Extract, Concatenate, Binary, Insert, ConditionalSelect,
-                 WriteBlocking, WriteUpdate, WriteAfter, WriteBlockingSlice,
-                 WriteUpdateSlice, WriteAfterSlice, WaitFor, WaitOn,
-                 WaitSensitivity, WaitForever, Yield, Jump, Branch,
-                 DebugPoint, Assert, Pause, Stop, Halt>;
+    std::variant<LoadConstant, ReadSignal, SignalEvent, CopyRegister, UnaryNot,
+                 LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
+                 Shift, Extract, Concatenate, Binary, Insert,
+                 ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
+                 WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
+                 WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
+                 Branch, DebugPoint, Assert, Pause, Stop, Halt>;
 
 struct Signal {
   std::string name;

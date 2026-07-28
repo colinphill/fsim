@@ -209,6 +209,11 @@ extern "C" void write_after_slice(
        width});
 }
 
+extern "C" std::uint32_t signal_event(
+    void*, const std::uint32_t) {
+  return 0;
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -224,6 +229,7 @@ extern "C" void write_after_slice(
       &write_signal_slice,
       &write_update_slice,
       &write_after_slice,
+      &signal_event,
   };
 }
 

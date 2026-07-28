@@ -53,7 +53,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, write_update_slice) == 72,
                "runtime partial update callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, write_after_slice) == 80,
                "runtime delayed partial-write callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 88,
+_Static_assert(offsetof(fsim_jit_runtime_v1, signal_event) == 88,
+               "runtime signal-event callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 96,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -161,6 +163,11 @@ static void write_after_slice(
   ((callback_state*)context)->slice_delay = delay;
 }
 
+static uint32_t signal_event(void* context, uint32_t signal) {
+  (void)context;
+  return signal == UINT32_C(9);
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -176,7 +183,8 @@ int main(void) {
       0,
       write_slice,
       write_slice,
-      write_after_slice};
+      write_after_slice,
+      signal_event};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -195,6 +203,8 @@ int main(void) {
   runtime.write_after_slice(
       runtime.context, UINT32_C(8), UINT32_C(11), UINT32_C(12),
       UINT64_C(0xabc), UINT64_C(0x400), UINT64_C(13));
+  const uint32_t event_active =
+      runtime.signal_event(runtime.context, UINT32_C(9));
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -202,6 +212,9 @@ int main(void) {
   }
   if (aval != UINT64_C(1) || bval != UINT64_C(0)) {
     return 2;
+  }
+  if (event_active != UINT32_C(1)) {
+    return 5;
   }
   if (state.update_count != UINT32_C(1) ||
       state.after_count != UINT32_C(1) ||

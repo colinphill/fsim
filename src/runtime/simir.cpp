@@ -2039,6 +2039,18 @@ void Interpreter::Impl::execute(ProcessId id) {
                   get_signal(op.signal).initial_value;
               ++process.pc;
             },
+            [&](const SignalEvent& op) {
+              (void)get_signal(op.signal);
+              const auto& event = signal_events[op.signal];
+              const auto active =
+                  event
+                  && event->first == scheduler.now()
+                  && event->second == scheduler.delta();
+              get_register(process, op.destination) =
+                  PackedLogic4(
+                      1, active ? Logic4::one : Logic4::zero);
+              ++process.pc;
+            },
             [&](const CopyRegister& op) {
               get_register(process, op.destination) =
                   get_register(process, op.source);

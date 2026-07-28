@@ -4733,6 +4733,33 @@ private:
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'event") {
+            if (expression.operands.size() != 1
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-094",
+                    "'event requires one signal name and no dimension",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-094",
+                    "'event object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                SignalEvent{destination, signal->second});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
             && (expression.text == "'left"
                 || expression.text == "'right"
                 || expression.text == "'low"
@@ -5809,6 +5836,11 @@ private:
             return std::size_t{1};
         }
         if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'event") {
+            return std::size_t{1};
+        }
+        if (expression.kind == ExpressionKind::Call
             && (expression.text == "$left"
                 || expression.text == "$right"
                 || expression.text == "$low"
@@ -5974,7 +6006,8 @@ private:
                 return true;
             }
             if (language_ == frontend::Language::Vhdl2008
-                && expression.text == "'ascending") {
+                && (expression.text == "'ascending"
+                    || expression.text == "'event")) {
                 return false;
             }
             if (language_ != frontend::Language::Vhdl2008

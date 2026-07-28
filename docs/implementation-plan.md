@@ -292,7 +292,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 625 unique current production diagnostic codes.
+- a stable catalog covering 626 unique current production diagnostic codes.
 
 Current and most recent aggregate Linux regression snapshots:
 
@@ -328,6 +328,7 @@ Current and most recent aggregate Linux regression snapshots:
 | Verilog/SystemVerilog resumable stop | Exact LLVM 22 frontend/runtime/compiler/diagnostic-catalog plus the fast expression application target for `$stop` and `$stop(argument)`, distinct non-design pause identity, next-instruction frame preservation, deferred finals, explicit clear-and-resume, and interpreter/LLVM O0/O2 equivalence |
 | SystemVerilog fatal task | Exact LLVM 22 frontend/diagnostic-catalog plus focused source failure execution for standalone and immediate-assertion `$fatal`, optional numeric finish control, literal message retention, Verilog-2005 rejection, and the common interpreter/LLVM O0/O2 failure-severity path |
 | VHDL packed-object attributes | Exact LLVM 22 frontend/elaboration/diagnostic-catalog plus the fast expression application target for `'left`/`'right`/`'low`/`'high`/`'length`/`'ascending`, optional dimension `1`, declared ascending/descending ranges, and interpreter/LLVM O0/O2 equivalence |
+| VHDL signal event attribute | Exact LLVM 22 frontend/runtime/compiler/diagnostic-catalog plus the fast expression application target for delta-scoped `'event`, classic rising-event guards, appended plain-C runtime callback validation, and interpreter/LLVM O0/O2 equivalence |
 | VHDL conditional assignments | Exact LLVM 22 frontend/elaboration/diagnostic-catalog plus the fast expression application target for concurrent and sequential VHDL-2008 `when`/`else` assignments, chained source-order alternatives, Boolean-condition enforcement, missing-else recovery, and interpreter/LLVM O0/O2 equivalence |
 | VHDL selected signal assignments | Exact LLVM 22 frontend/diagnostic-catalog plus the fast expression application target for labeled/unlabeled `with`/`select`, grouped exact choices, final `others`, retained waveform delays, inferred selector/value sensitivity, timed reactive selection, and interpreter/LLVM O0/O2 equivalence |
 | VHDL clock-edge guards | Exact LLVM 22 frontend/elaboration plus the fast expression application target for sole outer `rising_edge`/`falling_edge` sensitivity refinement, negative-edge scheduling, and interpreter/LLVM O0/O2 equivalence |

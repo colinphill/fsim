@@ -547,6 +547,7 @@ therefore excluded.
 | `FSIM-ELAB-091` | error | Bounded VHDL packed exponentiation has a dynamic or negative exponent. |
 | `FSIM-ELAB-092` | error | A VHDL conditional-assignment condition is not Boolean. |
 | `FSIM-ELAB-093` | error | A VHDL array attribute has no representable static packed range or selects an unsupported dimension. |
+| `FSIM-ELAB-094` | error | The VHDL `'event` attribute does not name one visible signal. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

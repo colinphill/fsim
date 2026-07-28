@@ -110,6 +110,8 @@ The current tree contains:
   choices, a final `others`, inferred sensitivity, and optional waveform delay;
 - VHDL packed-object `'left`, `'right`, `'low`, `'high`, `'length`, and
   `'ascending` attributes with declared-direction preservation;
+- VHDL signal `'event` with delta-scoped effective-value-change semantics and
+  the classic `clk'event and clk = '1'` clock idiom;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and
