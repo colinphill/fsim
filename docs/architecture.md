@@ -55,9 +55,11 @@ package-only edit changes the owning specialization's native-object key even
 when the executable unit source is unchanged. Cross-library dependencies are
 associated with their own source set, and its language, standard, library,
 compilation-unit policy, defines, and include settings enter the provenance
-key. Package bodies, recursive package imports, types/subprograms,
-standard-package loading, and general VHDL visibility remain future
-semantic-layer work.
+key. Package visibility may recurse through other constant-only project
+packages; the full acyclic source closure is retained, while a visibility cycle
+is diagnosed with its package chain. Package bodies, types/subprograms,
+standard-package loading, and general VHDL visibility remain future semantic
+layer work.
 
 The current hierarchy builder recursively follows direct VHDL/SV instances,
 bounded conditional/iterative/selection generate regions, and always-selected

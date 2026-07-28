@@ -4800,22 +4800,32 @@ end architecture rtl;
       == 2);
 #endif
 
+  const auto package_base_constant_source =
+      directory / "package_base_constants.vhd";
   const auto package_constant_source =
       directory / "package_constants.vhd";
   const auto package_constant_user_source =
       directory / "package_constant_user.vhd";
   const auto write_package_constants =
       [&](const std::uint64_t base_value) {
-        std::ofstream output(package_constant_source);
-        output << "package constants is\n"
-               << "  constant width : natural := 4;\n"
+        std::ofstream output(package_base_constant_source);
+        output << "package base_constants is\n"
+               << "  constant base_width : natural := 4;\n"
                << "  constant base_value : natural := "
                << base_value << ";\n"
-               << "  constant next_value : natural := "
-                  "base_value + 1;\n"
-               << "end package constants;\n";
+               << "end package base_constants;\n";
       };
   write_package_constants(5);
+  {
+    std::ofstream output(package_constant_source);
+    output << R"(
+use work.base_constants.all;
+package constants is
+  constant width : natural := base_width;
+  constant next_value : natural := base_value + 1;
+end package constants;
+)";
+  }
   {
     std::ofstream output(package_constant_user_source);
     output << R"(
@@ -4851,7 +4861,10 @@ end architecture rtl;
   package_library_sources.standard = "2008";
   package_library_sources.library = "support";
   package_library_sources.compilation_unit = "file";
-  package_library_sources.files = {package_constant_source};
+  package_library_sources.files = {
+      package_base_constant_source,
+      package_constant_source,
+  };
   package_constant_config.source_sets.push_back(
       std::move(package_library_sources));
   fsim::project::SourceSet package_user_sources;
@@ -4888,6 +4901,12 @@ end architecture rtl;
                 dependencies.begin(),
                 dependencies.end(),
                 package_constant_source.string())
+            != dependencies.end());
+        assert(
+            std::find(
+                dependencies.begin(),
+                dependencies.end(),
+                package_base_constant_source.string())
             != dependencies.end());
         auto key = project->specialization_cache_keys.front();
         auto simulation = capture_simulation(

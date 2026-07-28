@@ -31,8 +31,8 @@ The current tree contains:
   deliberately small executable subset;
 - bounded VHDL package declarations with declaration-ordered scalar
   integer/Boolean/bit constants, explicit `use library.package.all` or
-  `use library.package.name` visibility, and package-source specialization
-  provenance;
+  `use library.package.name` visibility, acyclic package-to-package imports,
+  and transitive package-source specialization provenance;
 - Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
   macros, object/function expansion with default arguments, multiline
   replacements, token concatenation/stringification, conditional compilation,

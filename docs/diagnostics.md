@@ -441,6 +441,7 @@ therefore excluded.
 | `FSIM-ELAB-PKG-004` | error | The same bare VHDL constant name is directly visible from multiple imported packages. |
 | `FSIM-ELAB-PKG-005` | error | A package constant default cannot be evaluated in declaration order. |
 | `FSIM-ELAB-PKG-006` | error | A package constant value violates its bounded scalar subtype. |
+| `FSIM-ELAB-PKG-007` | error | Project-package use visibility contains a dependency cycle. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

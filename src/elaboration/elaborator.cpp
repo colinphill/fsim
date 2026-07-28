@@ -4190,7 +4190,8 @@ private:
     void import_vhdl_package_constants(
         DesignUnit& unit,
         const std::span<const frontend::VhdlContextItem>
-            context) {
+            context,
+        std::vector<const DesignUnit*>& import_stack) {
         std::vector<frontend::ParameterDeclaration> imports;
         std::unordered_map<std::string, std::string> bare_owners;
         std::unordered_set<std::string> dependencies;
@@ -4251,12 +4252,42 @@ private:
                          ? std::string{"work"}
                          : package->library)
                     + "." + package->name;
+                if (std::find(
+                        import_stack.begin(),
+                        import_stack.end(),
+                        &*package)
+                    != import_stack.end()) {
+                    std::string cycle;
+                    for (const auto* imported : import_stack) {
+                        if (!cycle.empty()) {
+                            cycle += " -> ";
+                        }
+                        cycle +=
+                            (imported->library.empty()
+                                 ? std::string{"work"}
+                                 : imported->library)
+                            + "." + imported->name;
+                    }
+                    cycle += " -> " + package_owner;
+                    report(
+                        "FSIM-ELAB-PKG-007",
+                        "cyclic VHDL package visibility: " + cycle,
+                        item.span);
+                    continue;
+                }
+                import_stack.push_back(&*package);
+                auto effective_package = *package;
+                import_vhdl_package_constants(
+                    effective_package,
+                    package->vhdl_context,
+                    import_stack);
                 auto specialized = specialize_unit(
-                    *package,
+                    effective_package,
                     {},
                     {},
                     frontend::Language::Vhdl2008,
                     diagnostics_);
+                import_stack.pop_back();
                 const bool import_all = parts[2] == "all";
                 bool found_selected = import_all;
                 for (const auto& declaration :
@@ -4325,6 +4356,13 @@ private:
                     unit.source_dependencies.push_back(
                         package->span.source_name);
                 }
+                for (const auto& dependency :
+                     specialized.unit.source_dependencies) {
+                    if (dependencies.insert(dependency).second) {
+                        unit.source_dependencies.push_back(
+                            dependency);
+                    }
+                }
             }
         }
         imports.insert(
@@ -4366,7 +4404,9 @@ private:
             context.end(),
             selected.vhdl_context.begin(),
             selected.vhdl_context.end());
-        import_vhdl_package_constants(result, context);
+        std::vector<const DesignUnit*> import_stack;
+        import_vhdl_package_constants(
+            result, context, import_stack);
         return result;
     }
 

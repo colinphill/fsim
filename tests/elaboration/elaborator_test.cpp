@@ -503,12 +503,22 @@ end architecture;
             .to_msb_string()
         == "00000000");
 
+    const auto package_base_source =
+        fsim::frontend::parse_text(
+            "package_base_constants.vhd",
+            R"(
+package base_constants is
+  constant base_width : natural := 4;
+  constant base_value : natural := 5;
+end package base_constants;
+)",
+            fsim::frontend::Language::Vhdl2008);
     const auto package_source = fsim::frontend::parse_text(
         "package_constants.vhd",
         R"(
+use work.base_constants.all;
 package constants is
-  constant width : natural := 4;
-  constant base_value : natural := 5;
+  constant width : natural := base_width;
   constant next_value : natural := base_value + 1;
 end package constants;
 )",
@@ -531,10 +541,15 @@ begin
 end architecture rtl;
 )",
             fsim::frontend::Language::Vhdl2008);
+    assert(package_base_source.ok());
     assert(package_source.ok());
     assert(package_user_source.ok());
     fsim::frontend::ParsedDesign package_design =
-        package_source.design;
+        package_base_source.design;
+    package_design.units.insert(
+        package_design.units.end(),
+        package_source.design.units.begin(),
+        package_source.design.units.end());
     package_design.units.insert(
         package_design.units.end(),
         package_user_source.design.units.begin(),
@@ -566,6 +581,11 @@ end architecture rtl;
                package_specialization.source_dependencies.begin(),
                package_specialization.source_dependencies.end(),
                "package_constants.vhd")
+           != package_specialization.source_dependencies.end());
+    assert(std::find(
+               package_specialization.source_dependencies.begin(),
+               package_specialization.source_dependencies.end(),
+               "package_base_constants.vhd")
            != package_specialization.source_dependencies.end());
     auto package_interpreter =
         package_elaborated.design->create_interpreter();
@@ -699,6 +719,34 @@ end architecture rtl;
         invalid_package_values_result, "FSIM-ELAB-PKG-005"));
     assert(has_diagnostic(
         invalid_package_values_result, "FSIM-ELAB-PKG-006"));
+
+    const auto cyclic_packages = fsim::frontend::parse_text(
+        "cyclic_packages.vhd",
+        R"(
+use work.second_values.all;
+package first_values is
+  constant first : natural := second + 1;
+end package first_values;
+use work.first_values.all;
+package second_values is
+  constant second : natural := first + 1;
+end package second_values;
+use work.first_values.all;
+entity cyclic_package_user is
+end entity cyclic_package_user;
+architecture rtl of cyclic_package_user is
+begin
+end architecture rtl;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(cyclic_packages.ok());
+    const auto cyclic_package_result =
+        fsim::elaboration::elaborate(
+            cyclic_packages.design,
+            "vhdl:work.cyclic_package_user(rtl)");
+    assert(!cyclic_package_result.ok());
+    assert(has_diagnostic(
+        cyclic_package_result, "FSIM-ELAB-PKG-007"));
 
     const auto invalid_generics = fsim::frontend::parse_text(
         "invalid-generic-elaboration.vhd",
