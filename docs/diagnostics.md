@@ -336,6 +336,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-088` | error | Expected `;` after a packed-aggregate member declaration. |
 | `FSIM-SV-PARSE-089` | error | A bounded packed aggregate has no members. |
 | `FSIM-SV-PARSE-090` | error | A replication concatenation has no repeated operands. |
+| `FSIM-SV-PARSE-091` | error | Expected `(` after a built-in gate primitive and its optional instance name. |
+| `FSIM-SV-PARSE-092` | error | A built-in gate primitive does not begin its terminal list with an output lvalue. |
+| `FSIM-SV-PARSE-093` | error | Expected `)` after a built-in gate primitive terminal list. |
+| `FSIM-SV-PARSE-094` | error | Expected `;` after a built-in gate primitive instance. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -373,6 +377,7 @@ therefore excluded.
 | `FSIM-SV-SEM-023` | error | A package declaration end name does not match its opening name. |
 | `FSIM-SV-SEM-024` | error | A bounded scope declares the same typedef name more than once. |
 | `FSIM-SV-SEM-025` | error | A bounded packed aggregate declares the same member name more than once. |
+| `FSIM-SV-SEM-026` | error | A bounded built-in gate primitive has an invalid number of input terminals. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

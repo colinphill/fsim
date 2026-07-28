@@ -259,6 +259,22 @@ module logical_app;
   logic reduced_xor;
   logic [3:0] shifted_left;
   logic [3:0] shifted_right;
+  logic gate_buf;
+  logic gate_not;
+  logic gate_and;
+  logic gate_nand;
+  logic gate_or;
+  logic gate_nor;
+  logic gate_xor;
+  logic gate_xnor;
+  buf (gate_buf, lhs[0]);
+  not gate_inverter (gate_not, lhs[0]);
+  and (gate_and, lhs[0], rhs[0], lhs[1]);
+  nand (gate_nand, lhs[0], rhs[0], lhs[1]);
+  or (gate_or, lhs[0], rhs[0], lhs[1]);
+  nor (gate_nor, lhs[0], rhs[0], lhs[1]);
+  xor (gate_xor, lhs[0], rhs[0], lhs[1]);
+  xnor (gate_xnor, lhs[0], rhs[0], lhs[1]);
   always_comb begin
     conjunction = lhs && rhs;
     disjunction = lhs || rhs;
@@ -3965,16 +3981,17 @@ end architecture rtl;
       logical_hybrid.result.status
       == fsim::runtime::RunStatus::stopped);
   assert(logical_hybrid.result.time == 5);
-  assert(logical_hybrid.process_count == 2);
+  assert(logical_hybrid.process_count == 10);
 #if defined(FSIM_HAS_LLVM)
-  assert(logical_hybrid.compiled_processes == 2);
+  assert(logical_hybrid.compiled_processes == 10);
   assert(logical_hybrid.compiled_modules == 1);
 #endif
   assert((
       logical_hybrid.final_values
       == std::vector<std::string>{
           "0010", "01", "001", "1", "1",
-          "0", "1", "1", "0100", "0001"}));
+          "0", "1", "1", "0100", "0001",
+          "0", "1", "0", "1", "1", "0", "0", "1"}));
 
   auto arithmetic_config = config;
   arithmetic_config.project.name = "arithmetic-expression-test";

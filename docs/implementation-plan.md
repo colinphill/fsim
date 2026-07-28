@@ -251,7 +251,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 527 unique current production diagnostic codes.
+- a stable catalog covering 532 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -425,7 +425,7 @@ Early groundwork:
   non-nested packed structs, equal-width packed unions, constant
   aggregate-member bit/part-selects, constant indexed part-selects, and
   constant replication concatenations, arithmetic shifts, complemented
-  reductions, and binary XNOR,
+  reductions, binary XNOR, and bounded scalar built-in gate primitives,
   executable explicit/implicit conditional, inline/module-genvar iterative,
   selection, and direct/named static generate bodies, and bounded
   `` `timescale`` handling;

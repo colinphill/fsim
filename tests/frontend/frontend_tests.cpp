@@ -2470,6 +2470,73 @@ endmodule
   }
 }
 
+void test_gate_primitives() {
+  const auto result = parse_text(
+      "gates.sv",
+      R"(
+module gates;
+  logic a;
+  logic b;
+  logic c;
+  logic y_buf;
+  logic y_not;
+  logic y_and;
+  logic y_nand;
+  logic y_or;
+  logic y_nor;
+  logic y_xor;
+  logic y_xnor;
+  buf (y_buf, a);
+  not named_not (y_not, a);
+  and (y_and, a, b, c);
+  nand (y_nand, a, b, c);
+  or (y_or, a, b, c);
+  nor (y_nor, a, b, c);
+  xor (y_xor, a, b, c);
+  xnor (y_xnor, a, b, c);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(result.ok(), "built-in gate primitives must parse");
+  const auto& statements =
+      result.design.units.front().concurrent_statements;
+  require(
+      statements.size() == 8
+          && std::ranges::all_of(
+              statements,
+              [](const Statement& statement) {
+                return statement.kind == StatementKind::Assignment
+                    && statement.assignment_kind
+                        == AssignmentKind::Continuous;
+              })
+          && statements[0].value.kind == ExpressionKind::Identifier
+          && statements[1].value.kind == ExpressionKind::Unary
+          && statements[2].value.kind == ExpressionKind::Binary
+          && statements[3].value.kind == ExpressionKind::Unary,
+      "gate primitives lower into continuous expression HIR");
+
+  const auto invalid = parse_text(
+      "invalid_gate.sv",
+      R"(
+module invalid_gate;
+  logic a;
+  logic y;
+  and (y, a);
+  not (y, a, a);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid.ok()
+          && std::ranges::count_if(
+                 invalid.diagnostics,
+                 [](const Diagnostic& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-026";
+                 })
+              == 2,
+      "invalid gate terminal counts are targeted");
+}
+
 void test_systemverilog_select_and_concatenation_expressions() {
   const auto result = parse_text(
       "select_concat.sv",
@@ -3496,6 +3563,7 @@ int main() {
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
     test_systemverilog_arithmetic_expressions();
+    test_gate_primitives();
     test_systemverilog_select_and_concatenation_expressions();
     test_conditional_statement_trees();
     test_conditional_generate_hierarchy();
