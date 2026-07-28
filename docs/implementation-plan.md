@@ -198,6 +198,8 @@ The following foundation is implemented:
   differential source tests;
 - VHDL packed `sll`/`srl`/`sra` for locally static nonnegative counts through
   the common four-state interpreter and LLVM shift kernels;
+- ordered VHDL sequential packed `case` statements with exact multi-choice
+  matching, nested statement bodies, and `others`;
 - nested VHDL `if`/`elsif`/`else` with Boolean literals and typed Boolean
   operators, plus nested SystemVerilog `if`/`else` and immediate assertions
   using packed four-state truth conversion, with O0/O2 differential evidence;
@@ -251,7 +253,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 533 unique current production diagnostic codes.
+- a stable catalog covering 541 unique current production diagnostic codes.
 
 Current Linux validation:
 

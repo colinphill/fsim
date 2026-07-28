@@ -79,6 +79,8 @@ The current tree contains:
   Verilog/SystemVerilog `if`/`else` with packed four-state truth conversion;
 - VHDL Boolean literals, equality/inequality, and `not`/`and`/`or`/`xor` plus
   `nand`/`nor`/`xnor` Boolean operations;
+- ordered VHDL sequential packed `case` statements with `|` choices and
+  `others`, lowered through common exact case-equality branches;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - vector-aware SystemVerilog logical negation and unsigned

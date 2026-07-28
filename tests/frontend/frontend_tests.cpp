@@ -805,6 +805,82 @@ endmodule
       "SystemVerilog signed arithmetic expression nodes");
 }
 
+void test_vhdl_case_statements() {
+  const auto result = parse_text(
+      "case_statement.vhd",
+      R"(
+entity case_statement is
+end entity;
+architecture rtl of case_statement is
+  signal selector : std_logic_vector(1 downto 0);
+  signal result : std_logic;
+begin
+  choose: process(selector)
+  begin
+    case selector is
+      when "00" | "01" =>
+        result <= '0';
+      when others =>
+        result <= '1';
+    end case;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "VHDL sequential case statement must parse");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->processes.front().statements.size() == 1
+          && architecture->processes.front().statements[0].kind
+              == StatementKind::Case
+          && architecture->processes.front()
+                 .statements[0]
+                 .case_alternatives.size()
+              == 2
+          && architecture->processes.front()
+                 .statements[0]
+                 .case_alternatives[0]
+                 .choices.size()
+              == 2
+          && architecture->processes.front()
+                 .statements[0]
+                 .case_alternatives[1]
+                 .is_default,
+      "VHDL case alternatives and choices are retained");
+
+  const auto duplicate_others = parse_text(
+      "duplicate_others.vhd",
+      R"(
+architecture rtl of duplicate_others is
+begin
+  choose: process
+  begin
+    case "00" is
+      when others => null;
+      when others => null;
+    end case;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !duplicate_others.ok()
+          && std::ranges::any_of(
+              duplicate_others.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-021";
+              })
+          && std::ranges::any_of(
+              duplicate_others.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-022";
+              }),
+      "duplicate and nonfinal VHDL case others alternatives are targeted");
+}
+
 void test_systemverilog_vertical_slice() {
   constexpr std::string_view source = R"(
 module counter(
@@ -3556,6 +3632,7 @@ int main() {
     test_vhdl_generics();
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
+    test_vhdl_case_statements();
     test_systemverilog_vertical_slice();
     test_systemverilog_preprocessor();
     test_non_ansi_verilog_ports();

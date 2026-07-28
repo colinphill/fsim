@@ -1605,6 +1605,59 @@ class VhdlParser final : private detail::ParserBase {
       statement.span = span_from(start, previous());
       return statement;
     }
+    if (match_keyword("case", true)) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::Case;
+      statement.condition = parse_expression();
+      expect_keyword("is", true, "FSIM-VHDL-PARSE-094");
+      bool saw_others = false;
+      while (!at_end() && !keyword("end", 0, true)) {
+        expect_keyword("when", true, "FSIM-VHDL-PARSE-095");
+        if (saw_others) {
+          error(
+              previous(),
+              "FSIM-VHDL-SEM-022",
+              "the others alternative must be last in a VHDL case "
+              "statement");
+        }
+        CaseAlternative alternative;
+        const auto alternative_start = previous();
+        if (match_keyword("others", true)) {
+          alternative.is_default = true;
+          if (saw_others) {
+            error(
+                previous(),
+                "FSIM-VHDL-SEM-021",
+                "a VHDL case statement contains more than one others "
+                "alternative");
+          }
+          saw_others = true;
+        } else {
+          do {
+            alternative.choices.push_back(parse_expression());
+          } while (match(TokenKind::Pipe));
+        }
+        expect(
+            TokenKind::Arrow,
+            "'=>' after VHDL case choices",
+            "FSIM-VHDL-PARSE-096");
+        alternative.statements =
+            parse_statement_list({"when", "end"});
+        alternative.span =
+            span_from(alternative_start, previous());
+        statement.case_alternatives.push_back(
+            std::move(alternative));
+      }
+      expect_keyword("end", true, "FSIM-VHDL-PARSE-097");
+      expect_keyword("case", true, "FSIM-VHDL-PARSE-098");
+      expect(
+          TokenKind::Semicolon,
+          "';' after VHDL case statement",
+          "FSIM-VHDL-PARSE-099");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     if (match_keyword("null", true)) {
       const auto start = previous();
       expect(TokenKind::Semicolon, "';' after null",

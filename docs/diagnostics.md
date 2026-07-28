@@ -157,6 +157,12 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-091` | error | Expected `end` for a VHDL context declaration. |
 | `FSIM-VHDL-PARSE-092` | error | A context declaration end name does not match its opening name. |
 | `FSIM-VHDL-PARSE-093` | error | Expected `;` after a VHDL context declaration. |
+| `FSIM-VHDL-PARSE-094` | error | Expected `is` after a sequential VHDL case selector. |
+| `FSIM-VHDL-PARSE-095` | error | Expected `when` before a sequential VHDL case alternative. |
+| `FSIM-VHDL-PARSE-096` | error | Expected `=>` after sequential VHDL case choices. |
+| `FSIM-VHDL-PARSE-097` | error | Expected `end` for a sequential VHDL case statement. |
+| `FSIM-VHDL-PARSE-098` | error | Expected `case` after the sequential statement's `end`. |
+| `FSIM-VHDL-PARSE-099` | error | Expected `;` after a sequential VHDL case statement. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -175,6 +181,8 @@ therefore excluded.
 | `FSIM-VHDL-SEM-018` | error | An `others` case-generate alternative is not last. |
 | `FSIM-VHDL-SEM-019` | error | A generated constant is duplicated or conflicts with a generated signal. |
 | `FSIM-VHDL-SEM-020` | error | A package constant name is declared more than once. |
+| `FSIM-VHDL-SEM-021` | error | A sequential VHDL case statement contains more than one `others` alternative. |
+| `FSIM-VHDL-SEM-022` | error | A sequential VHDL case statement has an alternative after `others`. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
