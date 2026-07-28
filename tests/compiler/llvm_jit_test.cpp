@@ -1002,6 +1002,7 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
           {2, 0, 2},
           {EdgeKind::any, EdgeKind::posedge, EdgeKind::any}},
       WaitSensitivity{},
+      WaitForever{},
       Halt{},
   };
   return process;
@@ -1062,11 +1063,20 @@ void test_signal_waits_at_level(
   assert(process.static_sensitivity[1].edge == EdgeKind::any);
 
   assert(jit.resume(handle, descriptor, frame, result) ==
+         JitResumeStatus::wait_forever);
+  assert(result.status == FSIM_JIT_RESUME_STATUS_WAIT_FOREVER);
+  assert(result.instruction == 2);
+  assert(result.delay == 0);
+  assert(frame.program_counter == 3);
+  assert(frame.last_instruction == 2);
+  assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
+
+  assert(jit.resume(handle, descriptor, frame, result) ==
          JitResumeStatus::completed);
   assert(result.status == FSIM_JIT_RESUME_STATUS_COMPLETED);
-  assert(result.instruction == 2);
+  assert(result.instruction == 3);
   assert(frame.program_counter == process.operations.size());
-  assert(frame.last_instruction == 2);
+  assert(frame.last_instruction == 3);
   assert(frame.state == FSIM_JIT_FRAME_STATE_COMPLETED);
   assert(runtime.writes.empty());
   assert(runtime.scheduled_writes.empty());

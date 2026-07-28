@@ -1468,6 +1468,12 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
+  if (std::holds_alternative<WaitForever>(operation)) {
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
+    return;
+  }
   if (std::holds_alternative<Yield>(operation)) {
     queue_next_delta(process.program.id);
     notify_execution_point(
@@ -1785,6 +1791,9 @@ void Interpreter::Impl::execute(ProcessId id) {
               boundary = true;
             },
             [&](const WaitSensitivity &) {
+              boundary = true;
+            },
+            [&](const WaitForever &) {
               boundary = true;
             },
             [&](const Yield &) {

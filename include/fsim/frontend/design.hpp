@@ -240,6 +240,7 @@ enum class StatementKind {
   Assert,
   Delay,
   WaitOn,
+  WaitUntil,
   Finish,
   Block,
   Null,

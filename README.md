@@ -120,6 +120,9 @@ The current tree contains:
   unrolled and runtime loops;
 - unconditional VHDL sequential loops and post-test SystemVerilog `do-while`
   loops, including correct trailing-condition targets for `continue`;
+- dependency-driven VHDL `wait until` and Verilog/SystemVerilog
+  `wait (expression)` suspension with condition re-evaluation, attached
+  procedural statements, and non-polling constant-false waits;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,
@@ -372,10 +375,11 @@ ordered operands, widths, dynamic edges, and static sensitivity signal/edge
 data. An unrelated,
 uninstantiated source edit therefore retains the specialization's native
 object, while even a comment-only edit to its owning source invalidates it.
-`WaitOn` and `WaitSensitivity` use appended resume-status values while keeping
-the v1 result layout and its existing status values unchanged. The result
-identifies the boundary instruction; immutable SimIR retains the dynamic
-signal/edge list and static edge rules for the kernel. Consequently,
+`WaitOn`, `WaitSensitivity`, and `WaitForever` use appended resume-status
+values while keeping the v1 result layout and its existing status values
+unchanged. The result identifies the boundary instruction; immutable SimIR
+retains the dynamic signal/edge list and static edge rules for the kernel.
+Consequently,
 any-change sensitivity-only signals may exceed 64 bits because no signal value
 crosses the generated ABI; edge-qualified sensitivities require scalar
 signals. Builds without LLVM execute entirely through the reference evaluator.

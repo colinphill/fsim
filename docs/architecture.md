@@ -425,11 +425,12 @@ The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths
 report waits, yields, stop, and halt through the same kernel boundary handler.
-For `WaitOn` and `WaitSensitivity`, the boundary reports only the instruction
-index. The immutable SimIR process continues to own the ordered dynamic signal
-list and the static signal/edge rules, so generated code does not copy scheduler
-metadata across the ABI. The kernel validates the returned instruction and
-sequential resume PC, then installs or observes the corresponding sensitivity.
+For `WaitOn`, `WaitSensitivity`, and `WaitForever`, the boundary reports only
+the instruction index. The immutable SimIR process continues to own the
+ordered dynamic signal list and the static signal/edge rules, so generated
+code does not copy scheduler metadata across the ABI. The kernel validates the
+returned instruction and sequential resume PC, then installs or observes the
+corresponding sensitivity or permanent suspension.
 Every simulation test added for a compiled operation should run through both
 paths and compare output, final state, assertions, and trace events.
 
@@ -446,24 +447,27 @@ operations therefore remains valid with the original v1 prefix. CMake requires
 the exact supported LLVM package when `FSIM_LLVM_MODE=ON`; the checked-in Linux
 LLVM job builds and runs the adapter suite against 22.1.8. A separate C11 test
 verifies the offsets, extended size, callback handoff, and genuine C ABI.
-`WAIT_ON` and `WAIT_SENSITIVITY` are appended resume-status values 6 and 7;
-values 0 through 5, the v1 result ABI version, and the 24-byte result layout are
-unchanged. The existing instruction field identifies the immutable SimIR wait
-operation, and delay remains meaningful only for `WAIT_FOR`.
+`WAIT_ON`, `WAIT_SENSITIVITY`, `DEBUG_POINT`, and `WAIT_FOREVER` are append-only
+resume-status values 6 through 9; values 0 through 5, the v1 result ABI
+version, and the 24-byte result layout are unchanged. The existing instruction
+field identifies the immutable SimIR boundary operation, and delay remains
+meaningful only for `WAIT_FOR`.
 
 The current adapter compiles control-flow graphs containing loads, reads,
 common operations, blocking writes, assertions, jumps, branches, timed waits,
-dynamic-signal waits, static-sensitivity waits, next-delta yields,
+dynamic-signal waits, static-sensitivity and permanent waits, next-delta yields,
 update-phase writes, delayed writes, design stop, and halt.
 A versioned caller-owned plain-C frame holds the process PC plus separate
 `aval`/`bval` register planes; a versioned result reports completion, assertion
-failure, timed/dynamic/static wait, yield, or stop. Generated scheduled writes
-hand the checked `Logic4Word` planes directly to the kernel without allocating
-an intermediate wide value. The kernel, rather than generated code, owns
+failure, timed/dynamic/static/permanent wait, yield, or stop. Generated
+scheduled writes hand the checked `Logic4Word` planes directly to the kernel
+without allocating an intermediate wide value. The kernel, rather than
+generated code, owns
 update coalescing, timestamp overflow checks, sensitivity installation, edge
 rules, and phase scheduling. Loops are accepted when every invocation reaches
-a `WaitFor`, `WaitOn`, `WaitSensitivity`, or `Yield` suspension; reachable
-zero-time cycles without one of these safe boundaries are rejected.
+a `WaitFor`, `WaitOn`, `WaitSensitivity`, `WaitForever`, or `Yield`
+suspension; reachable zero-time cycles without one of these safe boundaries
+are rejected.
 Sensitivity-only signals may be wider than 64 bits because their values never
 cross the native ABI; any operation that reads or writes a value remains on the
 1-to-64-bit compiled fast path.
@@ -508,9 +512,9 @@ referenced signal ID or width change invalidates it.
 Scheduled-write operation kind and signal/source identity participate in this
 key, as does the exact 64-bit delay for `WriteAfter`; changing a delayed write
 to an update write or changing its delay cannot reuse the object.
-Wait identity includes `WaitOn` versus `WaitSensitivity`, the ordered dynamic
-signal operands, widths, and edge kinds, plus every static sensitivity signal,
-width, and edge kind.
+Wait identity includes `WaitOn`, `WaitSensitivity`, or `WaitForever`, the
+ordered dynamic signal operands, widths, and edge kinds, plus every static
+sensitivity signal, width, and edge kind.
 Cached objects are parsed and checked for the expected architecture before
 reuse; a rejected entry is recompiled and replaced. The frame and resume-result
 ABI versions and structure sizes, including the extended runtime-table size,

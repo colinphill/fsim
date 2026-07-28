@@ -238,6 +238,10 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
         require_boundary<runtime::simir::WaitSensitivity>(
             result.instruction, "WaitSensitivity");
         break;
+      case compiler::JitResumeStatus::wait_forever:
+        require_boundary<runtime::simir::WaitForever>(
+            result.instruction, "WaitForever");
+        break;
       case compiler::JitResumeStatus::yielded:
         require_boundary<runtime::simir::Yield>(
             result.instruction, "yield");

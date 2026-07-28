@@ -137,9 +137,9 @@ The following foundation is implemented:
   callbacks and the runtime for values up to 64 bits;
 - append-only, per-process size-gated v1 runtime-table callbacks for
   `write_update` and `write_after`;
-- appended `WaitOn`/`WaitSensitivity` resume statuses that preserve existing
-  status values and the v1 result layout, with immutable SimIR retaining wait
-  operands and edge rules;
+- appended `WaitOn`/`WaitSensitivity`/`WaitForever` resume statuses that
+  preserve existing status values and the v1 result layout, with immutable
+  SimIR retaining wait operands and edge rules;
 - complete validation of the bounded compiled-wait representation and support
   for sensitivity-only signals wider than 64 bits when no value crosses the
   ABI;
@@ -218,6 +218,10 @@ The following foundation is implemented:
   both elaboration-unrolled and cyclic runtime CFGs;
 - unconditional VHDL sequential loops and SystemVerilog post-test `do-while`
   loops, with `continue` edges targeting the trailing condition;
+- dependency-driven VHDL `wait until` and Verilog/SystemVerilog condition
+  waits lowered to signal-change suspension and condition-recheck CFGs,
+  including attached Verilog statements and debugger-visible permanent waits
+  for dependency-free false conditions;
 - nested VHDL `if`/`elsif`/`else` with Boolean literals and typed Boolean
   operators, plus nested SystemVerilog `if`/`else` and immediate assertions
   using packed four-state truth conversion, with O0/O2 differential evidence;
@@ -271,7 +275,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 586 unique current production diagnostic codes.
+- a stable catalog covering 589 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -298,6 +302,7 @@ Current Linux validation:
 | SystemVerilog expression semantics | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for four-state logical/reduction/shift/arithmetic operations, complemented reductions/XNOR, and exact `===`/`!==` X/Z comparison |
 | VHDL packed shifts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for `sll`/`srl`/`sra`, including X-containing data and arithmetic left-element fill |
 | Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional VHDL forms, static-unrolled/runtime/unconditional/post-test loops, guaranteed first execution, trailing-condition continue targeting, innermost-loop targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
+| Conditional waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for VHDL `wait until` and Verilog/SystemVerilog `wait (expression)`, multi-signal dependency rechecks, SV unknown-as-false behavior, attached statements, debugger-visible permanent suspension, append-only status 9, process-group compilation, and interpreter/JIT O0/O2 equivalence |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -360,9 +365,9 @@ Completed:
   structure-size and callback validation;
 - allocation-free checked word handoff for generated blocking, update-phase,
   and delayed writes;
-- appended `WaitOn`/`WaitSensitivity` v1 resume statuses without changing the
-  result structure or existing numeric values; immutable SimIR owns dynamic
-  operands and dynamic/static edge rules;
+- appended `WaitOn`/`WaitSensitivity`/`WaitForever` v1 resume statuses without
+  changing the result structure or existing numeric values; immutable SimIR
+  owns dynamic operands and dynamic/static edge rules;
 - validation of wait lists, signal IDs and widths, edge kinds/scalar edge
   rules, boundary instructions, resume PCs, and frame states, while allowing
   sensitivity-only signals wider than 64 bits;
@@ -510,6 +515,8 @@ Completed groundwork:
 - nested SystemVerilog `break`/`continue` and VHDL `exit`/`next` control for
   statically unrolled and runtime loops;
 - unconditional VHDL loops and post-test SystemVerilog `do-while` loops;
+- VHDL `wait until` and Verilog/SystemVerilog condition waits with
+  dependency-driven re-evaluation and non-polling constant-false suspension;
 - bounded nested VHDL and SystemVerilog conditional statements, including
   language-specific Boolean/four-state condition rules;
 - deterministic project seed handling;

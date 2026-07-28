@@ -76,6 +76,7 @@ using runtime::simir::UnknownBranchPolicy;
 using runtime::simir::WaitFor;
 using runtime::simir::WaitOn;
 using runtime::simir::WaitSensitivity;
+using runtime::simir::WaitForever;
 using runtime::simir::WriteAfter;
 using runtime::simir::WriteAfterSlice;
 using runtime::simir::WriteBlocking;
@@ -790,6 +791,7 @@ validate_process(const Process &process,
                        "WaitSensitivity requires a static sensitivity list");
               }
             },
+            [&](const WaitForever &) {},
             [&](const Yield &) {},
             [&](const Stop &) {}},
         process.operations[index]);
@@ -927,6 +929,7 @@ validate_process(const Process &process,
     return std::holds_alternative<WaitFor>(operation) ||
            std::holds_alternative<WaitOn>(operation) ||
            std::holds_alternative<WaitSensitivity>(operation) ||
+           std::holds_alternative<WaitForever>(operation) ||
            std::holds_alternative<Yield>(operation);
   };
   const auto is_cycle_safe_point =
@@ -1356,6 +1359,9 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                     static_cast<std::underlying_type_t<EdgeKind>>(
                         sensitivity.edge));
               }
+            },
+            [&](const WaitForever &) {
+              builder.add("operation", "WaitForever");
             },
             [&](const Yield &) {
               builder.add("operation", "Yield");
@@ -2643,6 +2649,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY, instruction, 0,
                   FSIM_JIT_FRAME_STATE_READY, next_instruction);
             },
+            [&](const WaitForever &) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_WAIT_FOREVER, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            },
             [&](const Yield &) {
               return_result(
                   FSIM_JIT_RESUME_STATUS_YIELDED, instruction, 0,
@@ -3162,6 +3173,11 @@ LlvmJit::resume(const JitProcessHandle process,
       throw LlvmJitError("generated process returned an invalid frame state");
     }
     return JitResumeStatus::wait_sensitivity;
+  case FSIM_JIT_RESUME_STATUS_WAIT_FOREVER:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::wait_forever;
   case FSIM_JIT_RESUME_STATUS_DEBUG_POINT:
     if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
       throw LlvmJitError("generated process returned an invalid frame state");
@@ -3227,6 +3243,7 @@ LlvmJit::execute(const JitProcessHandle process,
   case JitResumeStatus::wait_for:
   case JitResumeStatus::wait_on:
   case JitResumeStatus::wait_sensitivity:
+  case JitResumeStatus::wait_forever:
   case JitResumeStatus::yielded:
   case JitResumeStatus::debug_point:
     throw LlvmJitError(

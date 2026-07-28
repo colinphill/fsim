@@ -301,6 +301,45 @@ void test_simir() {
           "SimIR update/delay behavior");
 }
 
+void test_simir_permanent_wait() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto signal = interpreter.add_signal(
+      {"top.unreachable", PackedLogic4::from_msb_string("0")});
+  Process process;
+  process.id = 0;
+  process.name = "permanent_wait";
+  process.register_count = 1;
+  process.operations = {
+      WaitForever{},
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteBlocking{signal, 0},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  std::vector<ExecutionPoint> points;
+  interpreter.set_execution_point_hook(
+      [&](Scheduler&, const ExecutionPoint& point) {
+        points.push_back(point);
+      });
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "a permanently suspended process leaves the design quiescent");
+  require(
+      interpreter.signal_value(signal).to_msb_string() == "0",
+      "operations after a permanent wait must remain unreachable");
+  require(
+      points.size() == 1
+          && points.front().kind
+              == ExecutionPointKind::process_suspend
+          && points.front().instruction == 0,
+      "a permanent wait remains debugger-visible as process suspension");
+}
+
 void test_simir_update_coalescing() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2368,6 +2407,7 @@ int main() {
     test_scheduler_safe_point_scheduling();
     test_scheduler_delta_limit();
     test_simir();
+    test_simir_permanent_wait();
     test_simir_update_coalescing();
     test_simir_expressions_and_edges();
     test_simir_noninitializing_static_process();

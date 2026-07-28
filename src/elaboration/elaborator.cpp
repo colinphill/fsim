@@ -2578,6 +2578,7 @@ private:
                         });
                 return statement.kind == StatementKind::Delay
                     || statement.kind == StatementKind::WaitOn
+                    || statement.kind == StatementKind::WaitUntil
                     || contains_explicit_wait(statement.statements)
                     || contains_explicit_wait(statement.else_statements)
                     || case_wait;
@@ -2739,7 +2740,8 @@ private:
                 kind = DebugPointKind::assertion;
             } else if (
                 statement.kind == StatementKind::Delay
-                || statement.kind == StatementKind::WaitOn) {
+                || statement.kind == StatementKind::WaitOn
+                || statement.kind == StatementKind::WaitUntil) {
                 kind = DebugPointKind::wait;
             }
             emit_debug_point(kind, statement.span);
@@ -2842,6 +2844,9 @@ private:
             lower_statements(statement.statements);
             break;
         }
+        case StatementKind::WaitUntil:
+            lower_wait_until(statement);
+            break;
         case StatementKind::Finish:
             process_.operations.emplace_back(Stop{});
             break;
@@ -2862,6 +2867,69 @@ private:
                 span.source_name,
                 static_cast<std::uint32_t>(span.begin.line),
                 static_cast<std::uint32_t>(span.begin.column)}});
+    }
+
+    void lower_wait_until(const Statement& statement) {
+        const auto condition_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        const auto condition = lower_condition(
+            statement.condition,
+            "FSIM-ELAB-079",
+            "wait-until");
+        if (!condition) {
+            return;
+        }
+        const auto branch_index =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        const auto unknown_policy =
+            language_ == frontend::Language::Vhdl2008
+                ? UnknownBranchPolicy::error
+                : UnknownBranchPolicy::when_false;
+        process_.operations.emplace_back(
+            Branch{*condition, 0, 0, unknown_policy});
+
+        const auto wait_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        std::set<std::string> dependencies;
+        collect_identifiers(
+            statement.condition, dependencies);
+        std::vector<SignalId> waited_signals;
+        for (const auto& dependency : dependencies) {
+            if (locals_.contains(dependency)) {
+                continue;
+            }
+            if (const auto found = signals_.find(dependency);
+                found != signals_.end()) {
+                waited_signals.push_back(found->second);
+            }
+        }
+        std::ranges::sort(waited_signals);
+        waited_signals.erase(
+            std::unique(
+                waited_signals.begin(),
+                waited_signals.end()),
+            waited_signals.end());
+        if (waited_signals.empty()) {
+            process_.operations.emplace_back(WaitForever{});
+        } else {
+            process_.operations.emplace_back(
+                WaitOn{std::move(waited_signals)});
+            process_.operations.emplace_back(
+                Jump{condition_start});
+        }
+
+        const auto satisfied_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        lower_statements(statement.statements);
+        process_.operations[branch_index] = Branch{
+            *condition,
+            satisfied_start,
+            wait_start,
+            unknown_policy};
     }
 
     std::optional<RegisterId> lower_condition(
@@ -5033,6 +5101,7 @@ private:
                 break;
             case StatementKind::If:
             case StatementKind::Assert:
+            case StatementKind::WaitUntil:
                 collect_identifiers(statement.condition, output);
                 break;
             case StatementKind::Case:

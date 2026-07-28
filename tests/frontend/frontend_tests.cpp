@@ -2173,6 +2173,7 @@ begin
   begin
     wait for 2 ns;
     wait on trigger;
+    wait until trigger = '1';
   end process;
 end architecture;
 )",
@@ -2181,7 +2182,7 @@ end architecture;
   const auto& vhdl_statements =
       vhdl.design.units.back().processes.front().statements;
   require(
-      vhdl_statements.size() == 2
+      vhdl_statements.size() == 3
           && vhdl_statements[0].kind == StatementKind::Delay
           && vhdl_statements[0].delay
           && vhdl_statements[0].delay->magnitude == 2
@@ -2189,7 +2190,12 @@ end architecture;
           && vhdl_statements[1].kind == StatementKind::WaitOn
           && vhdl_statements[1].sensitivities.size() == 1
           && vhdl_statements[1].sensitivities.front().signal
-              == "trigger",
+              == "trigger"
+          && vhdl_statements[2].kind
+              == StatementKind::WaitUntil
+          && vhdl_statements[2].condition.kind
+              == ExpressionKind::Binary
+          && vhdl_statements[2].condition.text == "=",
       "VHDL wait metadata");
 
   const auto system_verilog = parse_text(
@@ -2201,6 +2207,7 @@ module events;
   initial begin
     @(posedge trigger);
     @(negedge trigger) observed = trigger;
+    wait (trigger) observed = 1'b1;
   end
 endmodule
 )",
@@ -2211,7 +2218,7 @@ endmodule
   const auto& sv_statements =
       system_verilog.design.units.front().processes.front().statements;
   require(
-      sv_statements.size() == 2
+      sv_statements.size() == 3
           && sv_statements[0].kind == StatementKind::WaitOn
           && sv_statements[0].sensitivities.size() == 1
           && sv_statements[0].sensitivities.front().signal == "trigger"
@@ -2223,8 +2230,41 @@ endmodule
               == EdgeKind::Negative
           && sv_statements[1].statements.size() == 1
           && sv_statements[1].statements.front().kind
+              == StatementKind::Assignment
+          && sv_statements[2].kind
+              == StatementKind::WaitUntil
+          && sv_statements[2].condition.kind
+              == ExpressionKind::Identifier
+          && sv_statements[2].statements.size() == 1
+          && sv_statements[2].statements.front().kind
               == StatementKind::Assignment,
       "SystemVerilog procedural event metadata");
+
+  const auto malformed_sv_wait = parse_text(
+      "bad_wait.sv",
+      R"(
+module bad_wait;
+  logic trigger;
+  initial wait trigger;
+  initial wait (trigger;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_sv_wait.ok()
+          && std::ranges::any_of(
+              malformed_sv_wait.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-109";
+              })
+          && std::ranges::any_of(
+              malformed_sv_wait.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-110";
+              }),
+      "malformed condition waits receive stable diagnostics");
 
   const auto invalid_vhdl = parse_text(
       "bad_wait.vhd",

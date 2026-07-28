@@ -1460,6 +1460,7 @@ class VhdlParser final : private detail::ParserBase {
           for (const auto& statement : statements) {
             if (statement.kind == StatementKind::Delay
                 || statement.kind == StatementKind::WaitOn
+                || statement.kind == StatementKind::WaitUntil
                 || self(self, statement.statements)
                 || self(self, statement.else_statements)) {
               return true;
@@ -1547,11 +1548,24 @@ class VhdlParser final : private detail::ParserBase {
           skip_to_semicolon();
           return std::nullopt;
         }
+      } else if (match_keyword("until", true)) {
+        statement.kind = StatementKind::WaitUntil;
+        statement.condition = parse_expression();
+        if (keyword("for", 0, true)) {
+          error(
+              current(),
+              "FSIM-VHDL-UNSUPPORTED-016",
+              "combined wait until/for clauses are not implemented in "
+              "this frontend slice");
+          skip_to_semicolon();
+          return std::nullopt;
+        }
       } else {
         error(
             current(),
             "FSIM-VHDL-UNSUPPORTED-016",
-            "this frontend slice supports only 'wait for' and 'wait on'");
+            "this frontend slice supports only 'wait for', 'wait on', and "
+            "'wait until'");
         skip_to_semicolon();
         return std::nullopt;
       }

@@ -379,6 +379,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-106` | error | Expected `(` before a SystemVerilog do-while condition. |
 | `FSIM-SV-PARSE-107` | error | Expected `)` after a SystemVerilog do-while condition. |
 | `FSIM-SV-PARSE-108` | error | Expected `;` after a SystemVerilog do-while statement. |
+| `FSIM-SV-PARSE-109` | error | Expected `(` after a Verilog/SystemVerilog `wait`. |
+| `FSIM-SV-PARSE-110` | error | Expected `)` after a Verilog/SystemVerilog wait condition. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -508,6 +510,7 @@ therefore excluded.
 | `FSIM-ELAB-076` | error | A Verilog/SystemVerilog repeat count is negative. |
 | `FSIM-ELAB-077` | error | A VHDL while condition is not scalar Boolean. |
 | `FSIM-ELAB-078` | error | Loop-control HIR reached elaboration without an enclosing loop. |
+| `FSIM-ELAB-079` | error | A VHDL wait-until condition is not scalar Boolean. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

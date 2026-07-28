@@ -230,6 +230,11 @@ struct WaitOn {
 /// Suspend until this process's static sensitivity condition is met.
 struct WaitSensitivity {};
 
+/// Suspend permanently without completing the process. This models
+/// dependency-free false condition waits while preserving debugger-visible
+/// suspended state.
+struct WaitForever {};
+
 /// Suspend and resume in the active phase of the next delta cycle.
 struct Yield {};
 
@@ -297,8 +302,9 @@ using Operation =
                  LogicalBinary, Reduction, Shift, Extract, Concatenate, Binary,
                  Insert, ConditionalSelect, WriteBlocking, WriteUpdate,
                  WriteAfter, WriteBlockingSlice, WriteUpdateSlice,
-                 WriteAfterSlice, WaitFor, WaitOn, WaitSensitivity, Yield, Jump,
-                 Branch, DebugPoint, Assert, Stop, Halt>;
+                 WriteAfterSlice, WaitFor, WaitOn, WaitSensitivity,
+                 WaitForever, Yield, Jump, Branch, DebugPoint, Assert, Stop,
+                 Halt>;
 
 struct Signal {
   std::string name;
@@ -494,9 +500,10 @@ struct ExternalSuspension {
 
 /// Describes the boundary at which an alternate executor returned control.
 ///
-/// `instruction` identifies a WaitFor, WaitOn, WaitSensitivity, Yield, Stop,
-/// or Halt operation. `next_instruction` is the executor's persistent resume
-/// PC and must be exactly the following operation for the current SimIR.
+/// `instruction` identifies a WaitFor, WaitOn, WaitSensitivity, WaitForever,
+/// Yield, Stop, or Halt operation. `next_instruction` is the executor's
+/// persistent resume PC and must be exactly the following operation for the
+/// current SimIR.
 /// `external` overrides the placeholder SimIR boundary for an executor whose
 /// suspension kind is selected dynamically.
 struct ProcessResumeResult {

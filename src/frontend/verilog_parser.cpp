@@ -3228,6 +3228,26 @@ class VerilogParser final : private detail::ParserBase {
       statement.span = span_from(start, previous());
       return statement;
     }
+    if (match_keyword("wait")) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::WaitUntil;
+      expect(
+          TokenKind::LeftParen,
+          "'(' after wait",
+          "FSIM-SV-PARSE-109");
+      statement.condition = parse_expression();
+      expect(
+          TokenKind::RightParen,
+          "')' after wait condition",
+          "FSIM-SV-PARSE-110");
+      if (auto controlled = parse_statement()) {
+        statement.statements.push_back(
+            std::move(*controlled));
+      }
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     if (language_ == Language::SystemVerilog2017
         && match_keyword("assert")) {
       const auto start = previous();

@@ -4187,6 +4187,195 @@ endmodule
             .to_msb_string()
         == "0");
 
+    const auto vhdl_condition_wait =
+        fsim::frontend::parse_text(
+            "condition_wait.vhd",
+            R"(
+entity condition_wait is end entity;
+architecture rtl of condition_wait is
+  signal trigger : boolean;
+  signal observed : boolean;
+begin
+  observer: process
+  begin
+    wait until trigger;
+    observed <= true;
+    wait on trigger;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_condition_wait.ok());
+    const auto elaborated_vhdl_condition_wait =
+        fsim::elaboration::elaborate(
+            vhdl_condition_wait.design,
+            "vhdl:work.condition_wait(rtl)");
+    assert(elaborated_vhdl_condition_wait.ok());
+    const auto& vhdl_condition_wait_process =
+        elaborated_vhdl_condition_wait.design
+            ->processes().front();
+    assert(
+        std::count_if(
+            vhdl_condition_wait_process.operations.begin(),
+            vhdl_condition_wait_process.operations.end(),
+            [](const fsim::runtime::simir::Operation& operation) {
+              return std::holds_alternative<
+                  fsim::runtime::simir::WaitOn>(operation);
+            })
+        == 2);
+    auto vhdl_condition_wait_interpreter =
+        elaborated_vhdl_condition_wait.design
+            ->create_interpreter();
+    const auto vhdl_condition_trigger =
+        elaborated_vhdl_condition_wait.design
+            ->find_signal("trigger");
+    const auto vhdl_condition_observed =
+        elaborated_vhdl_condition_wait.design
+            ->find_signal("observed");
+    assert(vhdl_condition_trigger && vhdl_condition_observed);
+    vhdl_condition_wait_interpreter->schedule_signal_at(
+        *vhdl_condition_trigger,
+        fsim::runtime::PackedLogic4::from_msb_string("0"),
+        1);
+    vhdl_condition_wait_interpreter->schedule_signal_at(
+        *vhdl_condition_trigger,
+        fsim::runtime::PackedLogic4::from_msb_string("1"),
+        2);
+    const auto vhdl_condition_wait_before =
+        vhdl_condition_wait_interpreter->run(1);
+    assert(
+        vhdl_condition_wait_before.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        vhdl_condition_wait_interpreter
+            ->signal_value(*vhdl_condition_observed)
+            .to_msb_string()
+        == "0");
+    const auto vhdl_condition_wait_after =
+        vhdl_condition_wait_interpreter->run(3);
+    assert(
+        vhdl_condition_wait_after.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        vhdl_condition_wait_interpreter
+            ->signal_value(*vhdl_condition_observed)
+            .to_msb_string()
+        == "1");
+
+    const auto sv_condition_wait =
+        fsim::frontend::parse_text(
+            "condition_wait.sv",
+            R"(
+module condition_wait;
+  logic gate;
+  logic enable;
+  logic observed;
+  logic constant_wait_result;
+  initial begin
+    gate = 1'b0;
+    enable = 1'b0;
+    #1 gate = 1'bx;
+    #1 enable = 1'b1;
+    #1 $finish;
+  end
+  initial begin
+    observed = 1'b0;
+    wait (gate || enable) observed = 1'b1;
+  end
+  initial begin
+    constant_wait_result = 1'b0;
+    wait (1'b0);
+    constant_wait_result = 1'b1;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(sv_condition_wait.ok());
+    const auto elaborated_sv_condition_wait =
+        fsim::elaboration::elaborate(
+            sv_condition_wait.design,
+            "sv:work.condition_wait");
+    if (!elaborated_sv_condition_wait.ok()) {
+        for (const auto& diagnostic :
+             elaborated_sv_condition_wait.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_sv_condition_wait.ok());
+    assert(std::ranges::any_of(
+        elaborated_sv_condition_wait.design->processes(),
+        [](const fsim::runtime::simir::Process& process) {
+          return std::ranges::any_of(
+              process.operations,
+              [](const fsim::runtime::simir::Operation& operation) {
+                const auto* wait = std::get_if<
+                    fsim::runtime::simir::WaitOn>(
+                    &operation);
+                return wait != nullptr
+                    && wait->signals.size() == 2;
+              });
+        }));
+    auto sv_condition_wait_interpreter =
+        elaborated_sv_condition_wait.design
+            ->create_interpreter();
+    const auto sv_condition_observed =
+        elaborated_sv_condition_wait.design
+            ->find_signal("observed");
+    const auto sv_constant_wait_result =
+        elaborated_sv_condition_wait.design
+            ->find_signal("constant_wait_result");
+    assert(sv_condition_observed && sv_constant_wait_result);
+    const auto sv_condition_wait_before =
+        sv_condition_wait_interpreter->run(1);
+    assert(
+        sv_condition_wait_before.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        sv_condition_wait_interpreter
+            ->signal_value(*sv_condition_observed)
+            .to_msb_string()
+        == "0");
+    const auto sv_condition_wait_after =
+        sv_condition_wait_interpreter->run();
+    assert(
+        sv_condition_wait_after.status
+        == fsim::runtime::RunStatus::stopped);
+    assert(
+        sv_condition_wait_interpreter
+            ->signal_value(*sv_condition_observed)
+            .to_msb_string()
+        == "1");
+    assert(
+        sv_condition_wait_interpreter
+            ->signal_value(*sv_constant_wait_result)
+            .to_msb_string()
+        == "0");
+
+    const auto invalid_vhdl_condition_wait =
+        fsim::frontend::parse_text(
+            "invalid_condition_wait.vhd",
+            R"(
+entity invalid_condition_wait is end entity;
+architecture rtl of invalid_condition_wait is
+  signal trigger : std_logic;
+begin
+  observer: process
+  begin
+    wait until trigger;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_condition_wait.ok());
+    const auto rejected_vhdl_condition_wait =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_condition_wait.design,
+            "vhdl:work.invalid_condition_wait(rtl)");
+    assert(!rejected_vhdl_condition_wait.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_condition_wait, "FSIM-ELAB-079"));
+
     const auto unknown_wait = fsim::frontend::parse_text(
         "unknown_wait.vhd",
         R"(
