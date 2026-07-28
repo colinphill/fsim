@@ -348,6 +348,150 @@ endmodule
     assert(has_diagnostic(
         rejected_parameters, "FSIM-ELAB-PARAM-005"));
 
+    const auto systemverilog_base_package =
+        fsim::frontend::parse_text(
+            "systemverilog_base_package.sv",
+            R"(
+package base_values;
+  parameter int WIDTH = 4;
+  localparam int BASE = 5;
+endpackage : base_values
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    const auto systemverilog_derived_package =
+        fsim::frontend::parse_text(
+            "systemverilog_derived_package.sv",
+            R"(
+import base_values::*;
+package derived_values;
+  localparam int NEXT = BASE + 1;
+endpackage : derived_values
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    const auto systemverilog_package_user =
+        fsim::frontend::parse_text(
+            "systemverilog_package_user.sv",
+            R"(
+import derived_values::NEXT;
+module systemverilog_package_user(
+  output logic [base_values::WIDTH-1:0] observed
+);
+  assign observed = NEXT;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(systemverilog_base_package.ok());
+    assert(systemverilog_derived_package.ok());
+    assert(systemverilog_package_user.ok());
+    fsim::frontend::ParsedDesign systemverilog_package_design =
+        systemverilog_base_package.design;
+    systemverilog_package_design.units.insert(
+        systemverilog_package_design.units.end(),
+        systemverilog_derived_package.design.units.begin(),
+        systemverilog_derived_package.design.units.end());
+    systemverilog_package_design.units.insert(
+        systemverilog_package_design.units.end(),
+        systemverilog_package_user.design.units.begin(),
+        systemverilog_package_user.design.units.end());
+    const auto systemverilog_package_elaborated =
+        fsim::elaboration::elaborate(
+            systemverilog_package_design,
+            "sv:work.systemverilog_package_user");
+    if (!systemverilog_package_elaborated.ok()) {
+        for (const auto& diagnostic :
+             systemverilog_package_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(systemverilog_package_elaborated.ok());
+    const auto systemverilog_package_observed =
+        systemverilog_package_elaborated.design->find_signal(
+            "observed");
+    assert(systemverilog_package_observed);
+    assert(
+        systemverilog_package_elaborated.design->signals()
+            .at(*systemverilog_package_observed).width
+        == 4);
+    const auto& systemverilog_package_dependencies =
+        systemverilog_package_elaborated.design
+            ->specializations()
+            .front()
+            .source_dependencies;
+    assert(std::find(
+               systemverilog_package_dependencies.begin(),
+               systemverilog_package_dependencies.end(),
+               "systemverilog_base_package.sv")
+           != systemverilog_package_dependencies.end());
+    assert(std::find(
+               systemverilog_package_dependencies.begin(),
+               systemverilog_package_dependencies.end(),
+               "systemverilog_derived_package.sv")
+           != systemverilog_package_dependencies.end());
+    auto systemverilog_package_interpreter =
+        systemverilog_package_elaborated.design
+            ->create_interpreter();
+    assert(
+        systemverilog_package_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        systemverilog_package_interpreter
+            ->signal_value(*systemverilog_package_observed)
+            .to_msb_string()
+        == "0110");
+
+    const auto invalid_systemverilog_packages =
+        fsim::frontend::parse_text(
+            "invalid_systemverilog_packages.sv",
+            R"(
+package first_values;
+  import second_values::*;
+  localparam int VALUE = OTHER + 1;
+endpackage
+package second_values;
+  import first_values::*;
+  localparam int OTHER = VALUE + 1;
+endpackage
+package duplicate_values;
+  localparam int VALUE = 2;
+endpackage
+package alpha_values;
+  localparam int SHARED = 3;
+endpackage
+package beta_values;
+  localparam int SHARED = 4;
+endpackage
+package broken_values;
+  localparam int BROKEN = 1 / 0;
+endpackage
+import duplicate_values::MISSING;
+import missing_values::*;
+import first_values::*;
+import alpha_values::*, beta_values::*;
+import broken_values::*;
+module invalid_systemverilog_package_user;
+  logic value;
+  assign value = first_values::second_values::VALUE;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_systemverilog_packages.ok());
+    const auto invalid_systemverilog_package_result =
+        fsim::elaboration::elaborate(
+            invalid_systemverilog_packages.design,
+            "sv:work.invalid_systemverilog_package_user");
+    assert(!invalid_systemverilog_package_result.ok());
+    for (const auto code : {
+             "FSIM-ELAB-SVPKG-001",
+             "FSIM-ELAB-SVPKG-002",
+             "FSIM-ELAB-SVPKG-003",
+             "FSIM-ELAB-SVPKG-004",
+             "FSIM-ELAB-SVPKG-005",
+             "FSIM-ELAB-SVPKG-006"}) {
+        assert(has_diagnostic(
+            invalid_systemverilog_package_result, code));
+    }
+
     const auto generic_parsed = fsim::frontend::parse_text(
         "generic-specialization.vhd",
         R"(

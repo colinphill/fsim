@@ -77,6 +77,14 @@ acyclic context/package chain. Context sources join that chain's semantic
 source dependencies, and missing, malformed, or cyclic references are
 diagnosed before specialization.
 
+The bounded SystemVerilog package path represents integral package parameters
+and localparams as immutable declaration-ordered constants. Compilation-unit
+and unit-local `import package::*` or `import package::name` clauses inject
+case-sensitive direct names, while `package::name` remains explicitly scoped.
+Imported packages may themselves import packages; elaboration detects cycles
+and ambiguous wildcard names. Only recursively referenced package sources
+enter specialization and native-cache provenance.
+
 The current hierarchy builder recursively follows direct VHDL/SV instances,
 bounded conditional/iterative/selection generate regions, and always-selected
 static regions representing unguarded VHDL blocks or direct/named

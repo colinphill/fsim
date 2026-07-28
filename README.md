@@ -37,6 +37,10 @@ The current tree contains:
 - bounded VHDL context declarations/references with recursive reusable
   library/use visibility, cycle diagnostics, and transitive context-source
   cache provenance;
+- bounded SystemVerilog packages with immutable integral
+  parameters/localparams, wildcard or selected imports, direct
+  `package::constant` expressions, recursive dependency diagnostics, and
+  precise specialization provenance;
 - Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
   macros, object/function expansion with default arguments, multiline
   replacements, token concatenation/stringification, conditional compilation,

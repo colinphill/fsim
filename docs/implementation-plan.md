@@ -109,6 +109,10 @@ The following foundation is implemented:
 - bounded reusable VHDL project contexts containing library/use/context items,
   with recursive expansion, cycle diagnostics, package visibility, and
   transitive context-source cache provenance;
+- bounded SystemVerilog packages containing immutable integral
+  parameters/localparams, compilation-unit and unit-local wildcard/selected
+  imports, recursive case-sensitive visibility, direct scoped constants, and
+  precise source/cache provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -233,7 +237,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 487 unique current production diagnostic codes.
+- a stable catalog covering 499 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -256,6 +260,7 @@ Current Linux validation:
 | VHDL package constants | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, `work` and cross-library selected/whole-package visibility, recursive declaration-order folding, interpreter/JIT/VCD equality, targeted import/evaluation/subtype/cycle diagnostics, and transitive package-only native-cache invalidation |
 | VHDL selected package constants | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for two-/three-part qualified constants in ranges and behavior, recursive folding, missing/malformed diagnostics, interpreter/JIT/VCD equality, and precise native-cache provenance |
 | VHDL reusable contexts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive cross-library context/package visibility, missing/malformed/cycle diagnostics, interpreter/JIT/VCD equality, and context-only native-cache invalidation |
+| SystemVerilog package constants | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive imports, direct scoped names, case-sensitive failures, interpreter/JIT/VCD equality, unrelated-package reuse, and transitive native-cache invalidation |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -399,7 +404,8 @@ Early groundwork:
   executable conditional/iterative/selection generate and unguarded block
   statements;
 - SV modules, common declarations, simple hierarchy, basic procedural and
-  continuous statements, bounded integral parameter specialization,
+  continuous statements, bounded integral parameter specialization and
+  bounded integral packages/imports,
   executable explicit/implicit conditional, inline/module-genvar iterative,
   selection, and direct/named static generate bodies, and bounded
   `` `timescale`` handling;
@@ -417,7 +423,7 @@ Planned implementation sequence:
    generics, overload/type resolution, constant evaluation, and reviewed IEEE
    packages.
 3. Complete the remaining Verilog/SV `` `line``/pragma semantics, parameters,
-   packages, interfaces/modports, general-body generates, broader legal
+   package types/subprograms, interfaces/modports, general-body generates, broader legal
    noncanonical genvar/case-choice forms, and complete synthesizable types.
    Includes, macros with default arguments, conditionals, compilation-unit
    sharing, cache provenance, `` `default_nettype``, and

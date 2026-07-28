@@ -225,6 +225,17 @@ class VerilogParser final : private detail::ParserBase {
     while (!at_end()) {
       if (match_keyword("module")) {
         design.units.push_back(parse_module(previous()));
+      } else if (match_keyword("package")) {
+        auto package = parse_package(previous());
+        auto& exports =
+            package_constant_names_[package.name];
+        for (const auto& parameter : package.parameters) {
+          exports.insert(parameter.name);
+        }
+        design.units.push_back(std::move(package));
+      } else if (match_keyword("import")) {
+        parse_import_clause(
+            compilation_unit_imports_, previous());
       } else if (at(TokenKind::Backtick)) {
         parse_directive();
       } else {
@@ -589,6 +600,15 @@ class VerilogParser final : private detail::ParserBase {
   };
 
   void note_implicit_net_reference(const Token& name) {
+    for (const auto& import_item : active_package_imports_) {
+      if ((!import_item.name.empty()
+           && import_item.name == name.text)
+          || (import_item.name.empty()
+              && package_constant_names_[
+                     import_item.package].contains(name.text))) {
+        return;
+      }
+    }
     if (!current_procedural_names_.contains(name.text)
         && !current_generate_names_.contains(name.text)) {
       implicit_net_references_.push_back(
@@ -657,6 +677,10 @@ class VerilogParser final : private detail::ParserBase {
     DesignUnit unit;
     unit.kind = UnitKind::VerilogModule;
     unit.language = language_;
+    unit.systemverilog_imports =
+        compilation_unit_imports_;
+    active_package_imports_ =
+        unit.systemverilog_imports;
     unit.default_nettype = current_default_nettype_;
     unit.is_cell = current_cell_define_;
     if (!module_time_unit_.empty()) {
@@ -685,6 +709,11 @@ class VerilogParser final : private detail::ParserBase {
         parse_parameter_group(unit, false, false, previous());
       } else if (match_keyword("localparam")) {
         parse_parameter_group(unit, true, false, previous());
+      } else if (match_keyword("import")) {
+        parse_import_clause(
+            unit.systemverilog_imports, previous());
+        active_package_imports_ =
+            unit.systemverilog_imports;
       } else if (match_keyword("genvar")) {
         parse_genvar_declaration(unit);
       } else if (is_declaration_start()) {
@@ -746,6 +775,96 @@ class VerilogParser final : private detail::ParserBase {
       }
     }
     resolve_implicit_nets(unit);
+    unit.span = span_from(start, previous());
+    return unit;
+  }
+
+  void parse_import_clause(
+      std::vector<SystemVerilogImport>& imports,
+      const Token& start) {
+    for (;;) {
+      const auto package =
+          expect_identifier("package name in import");
+      expect(
+          TokenKind::Scope,
+          "'::' after imported package name",
+          "FSIM-SV-PARSE-078");
+      std::string name;
+      if (match(TokenKind::Star)) {
+        name.clear();
+      } else {
+        name =
+            expect_identifier("imported package item").text;
+      }
+      imports.push_back({
+          package.text,
+          std::move(name),
+          cover(start.span, previous().span)});
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after package import",
+        "FSIM-SV-PARSE-079");
+  }
+
+  DesignUnit parse_package(const Token& start) {
+    non_ansi_ports_.clear();
+    body_port_declarations_.clear();
+    port_type_refinements_.clear();
+    implicit_net_references_.clear();
+    current_procedural_names_.clear();
+    current_generate_names_.clear();
+    declared_genvars_.clear();
+    external_genvar_uses_.clear();
+    DesignUnit unit;
+    unit.kind = UnitKind::SystemVerilogPackage;
+    unit.language = language_;
+    unit.systemverilog_imports =
+        compilation_unit_imports_;
+    active_package_imports_ =
+        unit.systemverilog_imports;
+    const auto name = expect_identifier("package name");
+    unit.name = name.text;
+    expect(
+        TokenKind::Semicolon,
+        "';' after package header",
+        "FSIM-SV-PARSE-080");
+    while (!at_end() && !keyword("endpackage")) {
+      if (match_keyword("parameter")
+          || match_keyword("localparam")) {
+        parse_parameter_group(
+            unit, true, false, previous());
+      } else if (match_keyword("import")) {
+        parse_import_clause(
+            unit.systemverilog_imports, previous());
+        active_package_imports_ =
+            unit.systemverilog_imports;
+      } else {
+        const auto unsupported = advance();
+        error(
+            unsupported,
+            "FSIM-SV-UNSUPPORTED-023",
+            "unsupported package item starting with '"
+                + unsupported.text + "'");
+        skip_to_semicolon();
+      }
+    }
+    expect_keyword(
+        "endpackage", false, "FSIM-SV-PARSE-081");
+    if (match(TokenKind::Colon)) {
+      const auto end_name =
+          expect_identifier("package name after endpackage");
+      if (end_name.text != unit.name) {
+        error(
+            end_name,
+            "FSIM-SV-SEM-023",
+            "package end name does not match '"
+                + unit.name + "'");
+      }
+    }
     unit.span = span_from(start, previous());
     return unit;
   }
@@ -2670,8 +2789,17 @@ class VerilogParser final : private detail::ParserBase {
     }
     if (at(TokenKind::Identifier)) {
       const auto name = advance();
-      Expression expression{ExpressionKind::Identifier, name.text, {},
-                            name.span};
+      std::string canonical = name.text;
+      while (match(TokenKind::Scope)) {
+        canonical += "::";
+        canonical +=
+            expect_identifier("package-scoped name").text;
+      }
+      Expression expression{
+          ExpressionKind::Identifier,
+          canonical,
+          {},
+          cover(name.span, previous().span)};
       if (match(TokenKind::LeftParen)) {
         std::vector<Expression> arguments;
         if (!at(TokenKind::RightParen)) {
@@ -2681,7 +2809,7 @@ class VerilogParser final : private detail::ParserBase {
         }
         expect(TokenKind::RightParen, "')' after arguments",
                "FSIM-SV-PARSE-028");
-        expression = Expression{ExpressionKind::Call, name.text,
+        expression = Expression{ExpressionKind::Call, canonical,
                                 std::move(arguments),
                                 cover(name.span, previous().span)};
         return parse_postfix(std::move(expression));
@@ -2771,6 +2899,13 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> declared_genvars_;
   std::vector<Token> external_genvar_uses_;
   std::vector<ImplicitNetReference> implicit_net_references_;
+  std::vector<SystemVerilogImport>
+      compilation_unit_imports_;
+  std::vector<SystemVerilogImport> active_package_imports_;
+  std::unordered_map<
+      std::string,
+      std::unordered_set<std::string>>
+      package_constant_names_;
   std::string current_default_nettype_{"wire"};
   bool current_cell_define_{};
   VerilogUnconnectedDrive current_unconnected_drive_{

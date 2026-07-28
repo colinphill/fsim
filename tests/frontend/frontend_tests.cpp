@@ -1543,6 +1543,91 @@ endmodule
       "parameter declaration and override diagnostics are targeted");
 }
 
+void test_systemverilog_packages() {
+  const auto parsed = parse_text(
+      "packages.sv",
+      R"(
+package base_values;
+  parameter int WIDTH = 4;
+  localparam int BASE = 5;
+endpackage : base_values
+
+import base_values::*;
+package derived_values;
+  localparam int NEXT = BASE + 1;
+endpackage : derived_values
+
+import base_values::WIDTH, derived_values::NEXT;
+module package_user(output logic [base_values::WIDTH-1:0] observed);
+  assign observed = derived_values::NEXT;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "bounded SystemVerilog packages must parse");
+  require(
+      parsed.design.units.size() == 3
+          && parsed.design.units[0].kind
+              == UnitKind::SystemVerilogPackage
+          && parsed.design.units[1].kind
+              == UnitKind::SystemVerilogPackage
+          && parsed.design.units[2].kind
+              == UnitKind::VerilogModule,
+      "packages and module retain distinct unit kinds");
+  require(
+      parsed.design.units[0].parameters.size() == 2
+          && parsed.design.units[0].parameters[0].local
+          && parsed.design.units[1].parameters.front()
+                 .default_value.operands.front().text
+              == "BASE",
+      "package parameters are immutable declaration-ordered constants");
+  require(
+      parsed.design.units[1].systemverilog_imports.size() == 1
+          && parsed.design.units[1]
+                 .systemverilog_imports.front()
+                 .name.empty()
+          && parsed.design.units[2]
+                 .systemverilog_imports.size()
+              == 3,
+      "compilation-unit wildcard and selected imports reach later units");
+  require(
+      parsed.design.units[2].ports.front()
+              .type.packed_range_expression->left
+              .operands.front().text
+          == "base_values::WIDTH"
+          && parsed.design.units[2].signals.empty()
+          && parsed.design.units[2]
+                 .concurrent_statements.front()
+                 .value.text
+              == "derived_values::NEXT",
+      "package-scoped expressions survive typed HIR parsing");
+
+  const auto invalid = parse_text(
+      "invalid_packages.sv",
+      R"(
+package invalid_values;
+  logic unsupported;
+endpackage : wrong_name
+import invalid_values;
+module recovered;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto has_code = [&](const std::string_view code) {
+    return std::any_of(
+        invalid.diagnostics.begin(),
+        invalid.diagnostics.end(),
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !invalid.ok()
+          && has_code("FSIM-SV-UNSUPPORTED-023")
+          && has_code("FSIM-SV-SEM-023")
+          && has_code("FSIM-SV-PARSE-078"),
+      "invalid package items, end names, and imports are targeted");
+}
+
 void test_immediate_assertions() {
   const auto vhdl = parse_text(
       "assertions.vhd",
@@ -3155,6 +3240,7 @@ int main() {
     test_systemverilog_timescale_context();
     test_systemverilog_compiler_directives();
     test_systemverilog_parameters();
+    test_systemverilog_packages();
     test_immediate_assertions();
     test_process_variable_declarations();
     test_procedural_wait_statements();

@@ -920,7 +920,9 @@ void collect_qualified_identifiers(
     const Expression& expression,
     QualifiedIdentifierMap& identifiers) {
     if (expression.kind == ExpressionKind::Identifier
-        && expression.text.find('.') != std::string::npos) {
+        && (expression.text.find('.') != std::string::npos
+            || expression.text.find("::")
+                != std::string::npos)) {
         identifiers.try_emplace(
             expression.text, expression.span);
     }
@@ -1635,6 +1637,7 @@ enum class SpecializationDiagnostic {
 const char* specialization_diagnostic_code(
     const bool is_vhdl,
     const bool is_package,
+    const bool is_systemverilog_package,
     const SpecializationDiagnostic diagnostic) {
     switch (diagnostic) {
     case SpecializationDiagnostic::invalid_actual:
@@ -1656,6 +1659,9 @@ const char* specialization_diagnostic_code(
     case SpecializationDiagnostic::default_evaluation:
         if (is_package) {
             return "FSIM-ELAB-PKG-005";
+        }
+        if (is_systemverilog_package) {
+            return "FSIM-ELAB-SVPKG-006";
         }
         return is_vhdl
             ? "FSIM-ELAB-GENERIC-005"
@@ -1710,6 +1716,9 @@ SpecializedUnit specialize_unit(
         source.language == frontend::Language::Vhdl2008;
     const bool is_package =
         source.kind == frontend::UnitKind::VhdlPackage;
+    const bool is_systemverilog_package =
+        source.kind
+        == frontend::UnitKind::SystemVerilogPackage;
     const bool is_verilog =
         source.language == frontend::Language::SystemVerilog2017
         || source.language == frontend::Language::Verilog2005;
@@ -1717,10 +1726,14 @@ SpecializedUnit specialize_unit(
         association_language == frontend::Language::Vhdl2008;
     const auto code = [&](const SpecializationDiagnostic diagnostic) {
         return specialization_diagnostic_code(
-            is_vhdl, is_package, diagnostic);
+            is_vhdl,
+            is_package,
+            is_systemverilog_package,
+            diagnostic);
     };
     const auto object_kind =
-        is_package ? std::string_view{"package constant"}
+        (is_package || is_systemverilog_package)
+            ? std::string_view{"package constant"}
         : is_vhdl ? std::string_view{"generic"}
                 : std::string_view{"parameter"};
     if (!is_vhdl && !is_verilog) {
@@ -4826,8 +4839,293 @@ private:
         unit.parameters = std::move(imports);
     }
 
+    std::optional<SpecializedUnit>
+    specialize_systemverilog_package(
+        const DesignUnit& package,
+        std::vector<const DesignUnit*>& import_stack,
+        const frontend::SourceSpan& reference_span) {
+        if (std::find(
+                import_stack.begin(),
+                import_stack.end(),
+                &package)
+            != import_stack.end()) {
+            std::string cycle;
+            for (const auto* imported : import_stack) {
+                if (!cycle.empty()) {
+                    cycle += " -> ";
+                }
+                cycle += imported->name;
+            }
+            cycle += " -> " + package.name;
+            report(
+                "FSIM-ELAB-SVPKG-004",
+                "cyclic SystemVerilog package visibility: "
+                    + cycle,
+                reference_span);
+            return std::nullopt;
+        }
+        import_stack.push_back(&package);
+        auto effective_package = package;
+        import_systemverilog_package_constants(
+            effective_package, import_stack);
+        import_qualified_systemverilog_package_constants(
+            effective_package, import_stack);
+        auto specialized = specialize_unit(
+            effective_package,
+            {},
+            {},
+            frontend::Language::SystemVerilog2017,
+            diagnostics_);
+        import_stack.pop_back();
+        return specialized;
+    }
+
+    const DesignUnit* find_systemverilog_package(
+        const DesignUnit& owner,
+        const std::string_view name) const {
+        const auto owner_library =
+            owner.library.empty()
+                ? std::string_view{"work"}
+                : std::string_view{owner.library};
+        const auto found = std::find_if(
+            parsed_.units.begin(),
+            parsed_.units.end(),
+            [&](const DesignUnit& candidate) {
+                const auto candidate_library =
+                    candidate.library.empty()
+                        ? std::string_view{"work"}
+                        : std::string_view{candidate.library};
+                return candidate.kind
+                        == frontend::UnitKind::
+                            SystemVerilogPackage
+                    && candidate.name == name
+                    && candidate_library == owner_library;
+            });
+        return found == parsed_.units.end()
+            ? nullptr
+            : &*found;
+    }
+
+    void append_package_dependencies(
+        DesignUnit& unit,
+        const DesignUnit& package,
+        const SpecializedUnit& specialized) {
+        const auto append = [&](const std::string& dependency) {
+            if (std::find(
+                    unit.source_dependencies.begin(),
+                    unit.source_dependencies.end(),
+                    dependency)
+                == unit.source_dependencies.end()) {
+                unit.source_dependencies.push_back(dependency);
+            }
+        };
+        append(package.span.source_name);
+        for (const auto& dependency :
+             specialized.unit.source_dependencies) {
+            append(dependency);
+        }
+    }
+
+    void import_systemverilog_package_constants(
+        DesignUnit& unit,
+        std::vector<const DesignUnit*>& import_stack) {
+        std::vector<frontend::ParameterDeclaration> imports;
+        std::unordered_map<std::string, std::string> owners;
+        for (const auto& import_item :
+             unit.systemverilog_imports) {
+            const auto* package =
+                find_systemverilog_package(
+                    unit, import_item.package);
+            if (package == nullptr) {
+                report(
+                    "FSIM-ELAB-SVPKG-001",
+                    "SystemVerilog package '"
+                        + import_item.package + "' was not found",
+                    import_item.span);
+                continue;
+            }
+            auto specialized_package =
+                specialize_systemverilog_package(
+                    *package, import_stack, import_item.span);
+            if (!specialized_package) {
+                continue;
+            }
+            const bool wildcard = import_item.name.empty();
+            bool found_selected = wildcard;
+            for (const auto& declaration :
+                 package->parameters) {
+                if (!wildcard
+                    && declaration.name != import_item.name) {
+                    continue;
+                }
+                found_selected = true;
+                const auto value =
+                    specialized_package->environment.find(
+                        declaration.name);
+                if (value
+                    == specialized_package->environment.end()) {
+                    continue;
+                }
+                const auto [owner, inserted] =
+                    owners.emplace(
+                        declaration.name, package->name);
+                if (!inserted
+                    && owner->second != package->name) {
+                    report(
+                        "FSIM-ELAB-SVPKG-003",
+                        "SystemVerilog package constant '"
+                            + declaration.name
+                            + "' is imported from multiple "
+                              "packages",
+                        import_item.span);
+                    continue;
+                }
+                if (std::any_of(
+                        imports.begin(),
+                        imports.end(),
+                        [&](const auto& existing) {
+                            return existing.name
+                                == declaration.name;
+                        })) {
+                    continue;
+                }
+                imports.push_back({
+                    declaration.name,
+                    declaration.type,
+                    constant_expression(
+                        value->second,
+                        declaration.span,
+                        declaration.type.domain,
+                        frontend::Language::
+                            SystemVerilog2017),
+                    true,
+                    declaration.span});
+            }
+            if (!found_selected) {
+                report(
+                    "FSIM-ELAB-SVPKG-002",
+                    "SystemVerilog package '"
+                        + package->name
+                        + "' has no constant '"
+                        + import_item.name + "'",
+                    import_item.span);
+            }
+            append_package_dependencies(
+                unit, *package, *specialized_package);
+        }
+        imports.insert(
+            imports.end(),
+            std::make_move_iterator(unit.parameters.begin()),
+            std::make_move_iterator(unit.parameters.end()));
+        unit.parameters = std::move(imports);
+    }
+
+    void import_qualified_systemverilog_package_constants(
+        DesignUnit& unit,
+        std::vector<const DesignUnit*>& import_stack) {
+        auto identifiers = qualified_identifiers(unit);
+        std::vector<std::string> ordered;
+        for (const auto& [identifier, span] : identifiers) {
+            (void)span;
+            if (identifier.find("::")
+                != std::string::npos) {
+                ordered.push_back(identifier);
+            }
+        }
+        std::sort(ordered.begin(), ordered.end());
+        std::vector<frontend::ParameterDeclaration> imports;
+        for (const auto& identifier : ordered) {
+            const auto& reference_span =
+                identifiers.at(identifier);
+            const auto separator = identifier.find("::");
+            if (separator == std::string::npos
+                || separator == 0
+                || identifier.find("::", separator + 2)
+                    != std::string::npos
+                || separator + 2 >= identifier.size()) {
+                report(
+                    "FSIM-ELAB-SVPKG-005",
+                    "a package-scoped constant must be "
+                    "package::constant",
+                    reference_span);
+                continue;
+            }
+            const auto package_name =
+                identifier.substr(0, separator);
+            const auto constant_name =
+                identifier.substr(separator + 2);
+            const auto* package =
+                find_systemverilog_package(
+                    unit, package_name);
+            if (package == nullptr) {
+                report(
+                    "FSIM-ELAB-SVPKG-001",
+                    "SystemVerilog package '"
+                        + package_name + "' was not found",
+                    reference_span);
+                continue;
+            }
+            auto specialized_package =
+                specialize_systemverilog_package(
+                    *package, import_stack, reference_span);
+            if (!specialized_package) {
+                continue;
+            }
+            const auto declaration = std::find_if(
+                package->parameters.begin(),
+                package->parameters.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == constant_name;
+                });
+            if (declaration == package->parameters.end()) {
+                report(
+                    "FSIM-ELAB-SVPKG-002",
+                    "SystemVerilog package '"
+                        + package_name
+                        + "' has no constant '"
+                        + constant_name + "'",
+                    reference_span);
+                continue;
+            }
+            const auto value =
+                specialized_package->environment.find(
+                    constant_name);
+            if (value
+                == specialized_package->environment.end()) {
+                continue;
+            }
+            imports.push_back({
+                identifier,
+                declaration->type,
+                constant_expression(
+                    value->second,
+                    declaration->span,
+                    declaration->type.domain,
+                    frontend::Language::
+                        SystemVerilog2017),
+                true,
+                declaration->span});
+            append_package_dependencies(
+                unit, *package, *specialized_package);
+        }
+        imports.insert(
+            imports.end(),
+            std::make_move_iterator(unit.parameters.begin()),
+            std::make_move_iterator(unit.parameters.end()));
+        unit.parameters = std::move(imports);
+    }
+
     DesignUnit effective_unit(const DesignUnit& selected) {
         auto result = selected;
+        if (selected.kind
+            == frontend::UnitKind::VerilogModule) {
+            std::vector<const DesignUnit*> import_stack;
+            import_systemverilog_package_constants(
+                result, import_stack);
+            import_qualified_systemverilog_package_constants(
+                result, import_stack);
+            return result;
+        }
         if (selected.kind
             != frontend::UnitKind::VhdlArchitecture) {
             return result;

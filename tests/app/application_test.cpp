@@ -5065,6 +5065,196 @@ end architecture rtl;
       package_constant_changed.simulation.native_cache.stores == 1);
 #endif
 
+  const auto systemverilog_base_package_source =
+      directory / "systemverilog_base_package.sv";
+  const auto systemverilog_derived_package_source =
+      directory / "systemverilog_derived_package.sv";
+  const auto systemverilog_unused_package_source =
+      directory / "systemverilog_unused_package.sv";
+  const auto systemverilog_package_user_source =
+      directory / "systemverilog_package_user.sv";
+  const auto write_systemverilog_base_package =
+      [&](const std::uint64_t base_value) {
+        std::ofstream output(
+            systemverilog_base_package_source);
+        output << "package base_values;\n"
+               << "  parameter int WIDTH = 4;\n"
+               << "  localparam int BASE = "
+               << base_value << ";\n"
+               << "endpackage : base_values\n";
+      };
+  write_systemverilog_base_package(5);
+  {
+    std::ofstream output(
+        systemverilog_derived_package_source);
+    output << R"(
+import base_values::*;
+package derived_values;
+  localparam int NEXT = BASE + 1;
+endpackage : derived_values
+)";
+  }
+  const auto write_systemverilog_unused_package =
+      [&](const std::string_view revision) {
+        std::ofstream output(
+            systemverilog_unused_package_source);
+        output << "// " << revision << '\n'
+               << "package unused_values;\n"
+               << "  localparam int UNRELATED = 99;\n"
+               << "endpackage : unused_values\n";
+      };
+  write_systemverilog_unused_package("unused revision 1");
+  {
+    std::ofstream output(
+        systemverilog_package_user_source);
+    output << R"(
+import derived_values::NEXT;
+module systemverilog_package_user(
+  output logic [base_values::WIDTH-1:0] observed
+);
+  assign observed = NEXT;
+endmodule
+)";
+  }
+  auto systemverilog_package_config = config;
+  systemverilog_package_config.project.name =
+      "systemverilog-package-test";
+  systemverilog_package_config.project.top =
+      "sv:work.systemverilog_package_user";
+  systemverilog_package_config.build.optimization =
+      fsim::project::Optimization::o2;
+  systemverilog_package_config.build.cache_path =
+      directory / "systemverilog-package-cache";
+  systemverilog_package_config.source_sets.clear();
+  fsim::project::SourceSet systemverilog_package_sources;
+  systemverilog_package_sources.language =
+      fsim::project::Language::system_verilog;
+  systemverilog_package_sources.standard = "2017";
+  systemverilog_package_sources.library = "work";
+  systemverilog_package_sources.compilation_unit = "file";
+  systemverilog_package_sources.files = {
+      systemverilog_base_package_source,
+      systemverilog_derived_package_source,
+      systemverilog_unused_package_source,
+      systemverilog_package_user_source,
+  };
+  systemverilog_package_config.source_sets.push_back(
+      std::move(systemverilog_package_sources));
+  const auto run_systemverilog_packages =
+      [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            systemverilog_package_config,
+            run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 1);
+        assert(project->specialization_cache_keys.size() == 1);
+        const auto& dependencies =
+            project->design.specializations()
+                .front()
+                .source_dependencies;
+        assert(
+            std::find(
+                dependencies.begin(),
+                dependencies.end(),
+                systemverilog_base_package_source.string())
+            != dependencies.end());
+        assert(
+            std::find(
+                dependencies.begin(),
+                dependencies.end(),
+                systemverilog_derived_package_source.string())
+            != dependencies.end());
+        assert(
+            std::find(
+                dependencies.begin(),
+                dependencies.end(),
+                systemverilog_unused_package_source.string())
+            == dependencies.end());
+        auto key = project->specialization_cache_keys.front();
+        auto simulation = capture_simulation(
+            std::move(*project), engine);
+        return PackageConstantRun{
+            std::move(key), std::move(simulation)};
+      };
+  const auto systemverilog_package_reference =
+      run_systemverilog_packages(
+          fsim::app::SimulationEngine::interpreter);
+  const auto systemverilog_package_cold =
+      run_systemverilog_packages(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      systemverilog_package_reference.simulation,
+      systemverilog_package_cold.simulation);
+  assert((
+      systemverilog_package_cold.simulation.final_values
+      == std::vector<std::string>{"0110"}));
+  assert(
+      systemverilog_package_cold.simulation.process_count == 1);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      systemverilog_package_cold.simulation.compiled_processes
+      == 1);
+  assert(
+      systemverilog_package_cold.simulation.compiled_modules
+      == 1);
+  assert(
+      systemverilog_package_cold.simulation.native_cache.misses
+      == 1);
+#endif
+
+  const auto systemverilog_package_warm =
+      run_systemverilog_packages(
+          fsim::app::SimulationEngine::compiled);
+  assert(
+      systemverilog_package_warm.specialization_key
+      == systemverilog_package_cold.specialization_key);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      systemverilog_package_warm.simulation.native_cache.hits
+      == 1);
+#endif
+
+  write_systemverilog_unused_package("unused revision 2");
+  const auto systemverilog_package_unrelated =
+      run_systemverilog_packages(
+          fsim::app::SimulationEngine::compiled);
+  assert(
+      systemverilog_package_unrelated.specialization_key
+      == systemverilog_package_cold.specialization_key);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      systemverilog_package_unrelated
+          .simulation.native_cache.hits
+      == 1);
+#endif
+
+  write_systemverilog_base_package(9);
+  const auto systemverilog_package_changed_reference =
+      run_systemverilog_packages(
+          fsim::app::SimulationEngine::interpreter);
+  const auto systemverilog_package_changed =
+      run_systemverilog_packages(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      systemverilog_package_changed_reference.simulation,
+      systemverilog_package_changed.simulation);
+  assert(
+      systemverilog_package_changed.specialization_key
+      != systemverilog_package_cold.specialization_key);
+  assert((
+      systemverilog_package_changed.simulation.final_values
+      == std::vector<std::string>{"1010"}));
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      systemverilog_package_changed.simulation.native_cache.misses
+      == 1);
+#endif
+
   // Explicit mixed-language bindings carry construction actuals from the
   // parent syntax into the selected foreign unit before boundary widths are
   // checked. Exercise both hierarchy directions through the interpreter and

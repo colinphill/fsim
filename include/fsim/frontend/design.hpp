@@ -18,6 +18,7 @@ enum class UnitKind {
   VhdlArchitecture,
   VhdlPackage,
   VhdlContext,
+  SystemVerilogPackage,
   VerilogModule,
 };
 
@@ -333,6 +334,13 @@ struct VhdlContextItem {
   SourceSpan span;
 };
 
+struct SystemVerilogImport {
+  std::string package;
+  // Empty means wildcard import.
+  std::string name;
+  SourceSpan span;
+};
+
 struct DesignUnit {
   UnitKind kind{UnitKind::VerilogModule};
   Language language{Language::SystemVerilog2017};
@@ -351,6 +359,8 @@ struct DesignUnit {
   // VHDL context items immediately preceding this library unit, or the
   // reusable items contained by a bounded VHDL context declaration.
   std::vector<VhdlContextItem> vhdl_context;
+  // Compilation-unit or unit-local SystemVerilog package imports.
+  std::vector<SystemVerilogImport> systemverilog_imports;
   std::vector<ParameterDeclaration> parameters;
   std::vector<SignalDeclaration> ports;
   std::vector<SignalDeclaration> signals;
