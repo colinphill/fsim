@@ -410,6 +410,11 @@ and LLVM single-word path. SystemVerilog chooses signed arithmetic only when
 both operands are signed; an unsigned operand makes the operation unsigned.
 The bounded VHDL path rejects explicitly mixed signed/unsigned operands while
 allowing an integer literal to take its surrounding numeric context.
+Packed VHDL `abs` accepts a signed operand. It extracts the leftmost sign
+element, computes the same-width two's-complement negation, and selects the
+original or negated value through the common four-state conditional operation.
+The minimum negative value therefore wraps at its declared width; a negative
+operand containing any `X` or `Z` produces the arithmetic all-unknown result.
 
 VHDL `sll` and `srl` use the common zero-filling packed shift operations.
 `sla` replicates the rightmost packed element and `sra` replicates the

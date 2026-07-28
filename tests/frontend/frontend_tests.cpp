@@ -731,7 +731,8 @@ entity signed_ops is
     shifted_arithmetic : out signed(7 downto 0);
     shifted_arithmetic_left : out signed(7 downto 0);
     rotated_left : out signed(7 downto 0);
-    rotated_right : out signed(7 downto 0)
+    rotated_right : out signed(7 downto 0);
+    absolute : out signed(7 downto 0)
   );
 end entity;
 architecture rtl of signed_ops is
@@ -745,6 +746,7 @@ begin
   shifted_arithmetic_left <= lhs sla 1;
   rotated_left <= lhs rol 1;
   rotated_right <= lhs ror 1;
+  absolute <= abs lhs;
 end architecture;
 )",
       Language::Vhdl2008);
@@ -754,7 +756,7 @@ end architecture;
   const auto* architecture =
       vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(
-      entity != nullptr && entity->ports.size() == 11
+      entity != nullptr && entity->ports.size() == 12
           && std::ranges::all_of(
               entity->ports,
               [](const SignalDeclaration& port) {
@@ -763,7 +765,7 @@ end architecture;
       "VHDL signed subtype metadata");
   require(
       architecture != nullptr
-          && architecture->concurrent_statements.size() == 9
+          && architecture->concurrent_statements.size() == 10
           && architecture->concurrent_statements[0].value.text == "/"
           && architecture->concurrent_statements[1].value.text
               == "rem"
@@ -780,8 +782,12 @@ end architecture;
           && architecture->concurrent_statements[7].value.text
               == "rol"
           && architecture->concurrent_statements[8].value.text
-              == "ror",
-      "VHDL signed arithmetic, shift, and rotate expression nodes");
+              == "ror"
+          && architecture->concurrent_statements[9].value.kind
+              == ExpressionKind::Unary
+          && architecture->concurrent_statements[9].value.text
+              == "abs",
+      "VHDL signed arithmetic, shift, rotate, and absolute expression nodes");
 
   const auto systemverilog = parse_text(
       "signed_ops.sv",

@@ -513,6 +513,7 @@ therefore excluded.
 | `FSIM-ELAB-079` | error | A VHDL wait-until condition is not scalar Boolean. |
 | `FSIM-ELAB-080` | error | Targeted loop-control HIR names no enclosing loop. |
 | `FSIM-ELAB-081` | error | A case statement reached elaboration with an invalid internal matching mode. |
+| `FSIM-ELAB-082` | error | The bounded packed VHDL `abs` operator has a nonsigned operand. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

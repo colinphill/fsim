@@ -5604,7 +5604,8 @@ entity vhdl_signed_arithmetic is
     rotated_right : out signed(7 downto 0);
     reversed_logical_left : out signed(7 downto 0);
     reversed_arithmetic_right : out signed(7 downto 0);
-    reversed_rotate_left : out signed(7 downto 0)
+    reversed_rotate_left : out signed(7 downto 0);
+    absolute : out signed(7 downto 0)
   );
 end entity;
 
@@ -5628,6 +5629,7 @@ begin
     reversed_logical_left <= lhs sll -1;
     reversed_arithmetic_right <= lhs sra -1;
     reversed_rotate_left <= lhs rol -1;
+    absolute <= abs lhs;
   end process;
 end architecture;
 )",
@@ -5683,7 +5685,9 @@ end architecture;
         elaborated_vhdl_signed_arithmetic.design->find_signal(
             "reversed_arithmetic_right"),
         elaborated_vhdl_signed_arithmetic.design->find_signal(
-            "reversed_rotate_left")};
+            "reversed_rotate_left"),
+        elaborated_vhdl_signed_arithmetic.design->find_signal(
+            "absolute")};
     assert(vhdl_signed_lhs && vhdl_signed_rhs);
     assert(std::ranges::all_of(
         vhdl_signed_outputs,
@@ -5702,7 +5706,7 @@ end architecture;
         fsim::runtime::PackedLogic4::from_msb_string(
             "00000011"));
     (void)vhdl_signed_interpreter->run();
-    const std::array<std::string_view, 16>
+    const std::array<std::string_view, 17>
         expected_vhdl_signed{
             "11111110",
             "11111000",
@@ -5719,7 +5723,8 @@ end architecture;
             "11111101",
             "01111101",
             "11110111",
-            "11111101"};
+            "11111101",
+            "00000101"};
     for (std::size_t index = 0;
          index < vhdl_signed_outputs.size(); ++index) {
       assert(
@@ -5752,6 +5757,31 @@ end architecture;
               .to_msb_string()
           == expected_unknown_shifts[index]);
     }
+    assert(
+        vhdl_signed_interpreter
+            ->signal_value(*vhdl_signed_outputs.back())
+            .to_msb_string()
+        == "XXXXXXXX");
+    vhdl_signed_interpreter->deposit_signal(
+        *vhdl_signed_lhs,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "10000000"));
+    (void)vhdl_signed_interpreter->run();
+    assert(
+        vhdl_signed_interpreter
+            ->signal_value(*vhdl_signed_outputs.back())
+            .to_msb_string()
+        == "10000000");
+    vhdl_signed_interpreter->deposit_signal(
+        *vhdl_signed_lhs,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "00000101"));
+    (void)vhdl_signed_interpreter->run();
+    assert(
+        vhdl_signed_interpreter
+            ->signal_value(*vhdl_signed_outputs.back())
+            .to_msb_string()
+        == "00000101");
 
     const auto invalid_vhdl_shift =
         fsim::frontend::parse_text(
@@ -5778,6 +5808,32 @@ end architecture;
     assert(!rejected_vhdl_shift.ok());
     assert(has_diagnostic(
         rejected_vhdl_shift, "FSIM-ELAB-070"));
+
+    const auto invalid_vhdl_abs =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_abs.vhd",
+            R"(
+entity invalid_vhdl_abs is
+  port (
+    lhs : in unsigned(7 downto 0);
+    result : out unsigned(7 downto 0)
+  );
+end entity;
+
+architecture rtl of invalid_vhdl_abs is
+begin
+  result <= abs lhs;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_abs.ok());
+    const auto rejected_vhdl_abs =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_abs.design,
+            "vhdl:work.invalid_vhdl_abs(rtl)");
+    assert(!rejected_vhdl_abs.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_abs, "FSIM-ELAB-082"));
 
     const auto mixed_vhdl_arithmetic =
         fsim::frontend::parse_text(

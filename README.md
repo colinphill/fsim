@@ -101,7 +101,8 @@ The current tree contains:
 - fixed-width signed and unsigned packed arithmetic/comparison for VHDL and
   SystemVerilog, including distinct VHDL `rem`/`mod`, SystemVerilog
   mixed-signedness rules, deterministic `X/Z`/zero-divisor behavior, and
-  fixed-width signed-overflow wrapping;
+  fixed-width signed-overflow wrapping, plus bounded packed VHDL signed
+  `abs`;
 - VHDL packed `sll`/`srl`/`sla`/`sra` shifts and `rol`/`ror` rotates for
   locally static integer counts, including standard negative-count direction
   reversal and four-state arithmetic fill;

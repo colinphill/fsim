@@ -4576,6 +4576,56 @@ private:
         }
         if (expression.kind == ExpressionKind::Unary
             && expression.operands.size() == 1
+            && expression.text == "abs") {
+            if (language_ != frontend::Language::Vhdl2008
+                || !is_signed_expression(expression.operands[0])) {
+                report(
+                    "FSIM-ELAB-082",
+                    "the bounded packed abs operator requires a signed "
+                    "VHDL operand",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            const auto source = lower_expression(
+                expression.operands[0], source_width);
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto zero = allocate_register(
+                register_width(*source), register_domain(*source));
+            process_.operations.emplace_back(LoadConstant{
+                zero,
+                PackedLogic4(
+                    register_width(*source), Logic4::zero)});
+            const auto negated = allocate_register(
+                register_width(*source), register_domain(*source));
+            process_.operations.emplace_back(Binary{
+                BinaryOperator::subtract_signed,
+                negated,
+                zero,
+                *source});
+            const auto sign = allocate_register(
+                1, register_domain(*source));
+            process_.operations.emplace_back(Extract{
+                sign,
+                *source,
+                static_cast<std::uint32_t>(
+                    register_width(*source) - 1U),
+                1});
+            const auto destination = allocate_register(
+                register_width(*source), register_domain(*source));
+            process_.operations.emplace_back(ConditionalSelect{
+                destination,
+                sign,
+                negated,
+                *source});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Unary
+            && expression.operands.size() == 1
             && (expression.text == "not" || expression.text == "~")) {
             const auto source = lower_expression(expression.operands[0], expected_width);
             if (!source) {

@@ -204,7 +204,7 @@ void test_vhdl_shift_rotate(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 9> signal_paths{
+  const std::array<std::string, 11> signal_paths{
       "shift_rotate_app.arithmetic_left",
       "shift_rotate_app.rotated_left",
       "shift_rotate_app.rotated_right",
@@ -213,7 +213,9 @@ void test_vhdl_shift_rotate(
       "shift_rotate_app.reversed_rotate_left",
       "shift_rotate_app.oversized_arithmetic_left",
       "shift_rotate_app.wrapped_rotate_left",
-      "shift_rotate_app.wrapped_rotate_right"};
+      "shift_rotate_app.wrapped_rotate_right",
+      "shift_rotate_app.absolute_unknown",
+      "shift_rotate_app.absolute_known"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -239,11 +241,13 @@ void test_vhdl_shift_rotate(
           "Z10X0000",
           "ZZZZZZZZ",
           "0X0000Z1",
-          "Z10X0000"}));
+          "Z10X0000",
+          "XXXXXXXX",
+          "00000101"}));
   assert(reference.compiled_processes == 0);
   assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 2);
+  assert(compiled.compiled_processes == 3);
   assert(compiled.compiled_modules == 1);
 #else
   assert(compiled.compiled_processes == 0);
@@ -361,6 +365,7 @@ end entity;
 
 architecture rtl of shift_rotate_app is
   signal value : signed(7 downto 0);
+  signal known_value : signed(7 downto 0);
   signal arithmetic_left : signed(7 downto 0);
   signal rotated_left : signed(7 downto 0);
   signal rotated_right : signed(7 downto 0);
@@ -370,9 +375,12 @@ architecture rtl of shift_rotate_app is
   signal oversized_arithmetic_left : signed(7 downto 0);
   signal wrapped_rotate_left : signed(7 downto 0);
   signal wrapped_rotate_right : signed(7 downto 0);
+  signal absolute_unknown : signed(7 downto 0);
+  signal absolute_known : signed(7 downto 0);
 begin
   value <= "10X0000Z";
-  calculate: process(value)
+  known_value <= "11111011";
+  calculate: process(value, known_value)
   begin
     arithmetic_left <= value sla 1;
     rotated_left <= value rol 1;
@@ -383,6 +391,8 @@ begin
     oversized_arithmetic_left <= value sla 8;
     wrapped_rotate_left <= value rol 9;
     wrapped_rotate_right <= value ror 9;
+    absolute_unknown <= abs value;
+    absolute_known <= abs known_value;
   end process;
 end architecture;
 )";

@@ -198,7 +198,8 @@ The following foundation is implemented:
 - equal-width signed/unsigned packed arithmetic and relational comparisons for
   VHDL and SystemVerilog, including distinct signed remainder/modulo,
   arbitrary-width interpreter algorithms, guarded LLVM lowering, and
-  differential source tests;
+  differential source tests, plus bounded packed VHDL signed `abs` through
+  common sign-extract/negate/select operations;
 - VHDL packed `sll`/`srl`/`sla`/`sra` and `rol`/`ror` for locally static
   integer counts through common four-state interpreter and LLVM kernels,
   including negative-count direction reversal, end-element arithmetic fill,
@@ -285,7 +286,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 591 unique current production diagnostic codes.
+- a stable catalog covering 592 unique current production diagnostic codes.
 
 Current and most recent aggregate Linux regression snapshots:
 
@@ -314,6 +315,7 @@ Current and most recent aggregate Linux regression snapshots:
 | Verilog-2005/SystemVerilog constant `$clog2` | GCC Debug and exact LLVM 22 frontend/elaboration plus the fast expression application target and batched ASan/UBSan aggregate pass for nonnegative integral arguments, zero/one/power/non-power edge values, derived parameter-dependent port widths, distinct specialization/cache identity, and interpreter/LLVM O0/O2 behavior |
 | SystemVerilog wildcard case semantics | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests for ordered `casez`/`casex`, selector- and choice-side wildcards, known-bit mismatch preservation, defensive HIR rejection, interpreter/JIT equivalence, LLVM O0/O2 truth tables, and operator-sensitive native-cache identity |
 | VHDL packed shifts and rotates | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler plus the fast expression application target and batched ASan/UBSan aggregate pass for `sll`/`srl`/`sla`/`sra` and `rol`/`ror`, including X/Z data, end-element arithmetic fill, oversized counts, modulo-width rotation, and negative-count direction reversal |
+| VHDL packed signed `abs` | GCC Debug and exact LLVM 22 frontend/elaboration plus the fast expression application target pass for known negative, positive, and X/Z-containing values, same-width wrapping, unsigned rejection, and interpreter/LLVM O0/O2 equivalence |
 | Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional and labeled VHDL forms, named outer-loop transfers across static/runtime loops, opening/end label validation, guaranteed first execution, trailing-condition continue targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
 | Conditional and combined waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for all bounded VHDL wait-clause combinations and Verilog/SystemVerilog `wait (expression)`, first-suspend versus immediate-test semantics, event/timeout races, absolute-deadline rearming, engine-owned wake-result registers, multi-signal dependency rechecks, debugger-visible permanent suspension, append-only status 9, cache identity, and interpreter/JIT O0/O2 equivalence |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
