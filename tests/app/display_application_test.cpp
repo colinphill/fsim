@@ -194,7 +194,7 @@ void test_display(
   assert(reference.output[9].text == "u=x");
   assert(reference.output[9].newline);
   assert(reference.output[9].time == 0);
-  assert(reference.output[10].text == "postponed");
+  assert(reference.output[10].text == "post=10xz");
   assert(reference.output[10].newline);
   assert(reference.output[10].time == 0);
   assert(reference.output[11].text == "monitored");
@@ -305,7 +305,8 @@ module display_test;
     $display("d=%d", n);
     $display("s=%d", s);
     $display("u=%d", q);
-    $strobe("postponed");
+    $strobe("post=%b", q);
+    q = 4'b0011;
     $monitor("monitored");
     #2 $write("second");
     $write;
@@ -370,7 +371,7 @@ end architecture;
         output.str().find(
             "first\t+line\nembedded \"quote\" \\ A\n"
             "42\n-1\nq=%:10xz!\n[10xz]h=x\n"
-            "d=165\ns=-1\nu=x\npostponed\n"
+            "d=165\ns=-1\nu=x\npost=10xz\n"
             "monitored\nsecond\n"
             "simulation stopped at tick 2")
         != std::string::npos);

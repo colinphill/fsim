@@ -91,6 +91,8 @@ The current tree contains:
 - runtime `$display`/`$write` `%b`/`%h`/`%d` formatting for one packed
   expression,
   including four-state bits, literal prefix/suffix text, and `%%`;
+- formatted `$strobe` captures its evaluated value in the active phase and
+  publishes the resulting text in the postponed phase;
 - decoded Verilog/SystemVerilog literal escapes in `$fatal` and immediate
   assertion `$error` diagnostics;
 - VHDL-2008 literal `report` statements at `note`, `warning`, and `error`

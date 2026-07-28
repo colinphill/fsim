@@ -829,9 +829,12 @@ The twentieth post-gate batch is in progress:
 4. Runtime formatting now supports arbitrary-width `%d`, derives signed
    two's-complement behavior from the typed expression, and emits `x` when
    any operand bit is unknown or high impedance.
+5. Formatted `$strobe` now evaluates and formats its one operand during active
+   execution, captures immutable text, and publishes that text in the
+   timestamp's postponed phase even if the operand changes later.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM, application, Tcl,
-native API, and diagnostic-catalog tests pass. This is feature 4 of 10, so the
+native API, and diagnostic-catalog tests pass. This is feature 5 of 10, so the
 interval full regression and remote push are not due yet.
 
 ## v1 release condition

@@ -5664,18 +5664,20 @@ endmodule
       R"(
 module formatted_strobe;
   logic q;
-  initial $strobe("%b", q);
+  initial $strobe("q=%b", q);
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      std::any_of(
-          unsupported_strobe.diagnostics.begin(),
-          unsupported_strobe.diagnostics.end(),
-          [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-SV-SEM-039";
-          }),
-      "formatted $strobe arguments need a targeted diagnostic");
+      unsupported_strobe.ok()
+          && unsupported_strobe.design.units.front().processes.front()
+                 .statements.front().output_format
+              == OutputFormat::Binary
+          && unsupported_strobe.design.units.front().processes.front()
+                 .statements.front().output_postponed
+          && unsupported_strobe.design.units.front().processes.front()
+                 .statements.front().output_prefix == "q=",
+      "formatted $strobe HIR and postponed policy");
 
   const auto monitor = parse_text(
       "monitor.sv",

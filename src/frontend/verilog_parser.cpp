@@ -3853,13 +3853,11 @@ class VerilogParser final : private detail::ParserBase {
                   "the current formatted-output slice supports one "
                   "%b, %h, or %d conversion and %%");
             } else if (match(TokenKind::Comma)) {
-              if (postponed) {
+              if (monitor) {
                 error(
                     previous(),
                     semantic_code,
-                    monitor
-                        ? "value-sensitive $monitor is not implemented"
-                        : "formatted $strobe is not implemented");
+                    "value-sensitive $monitor is not implemented");
                 statement.value = parse_expression();
               } else if (!parsed_format.format) {
                 error(

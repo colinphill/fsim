@@ -69,8 +69,9 @@ hex output retains `ceil(width/4)` lowercase digits, preserving uniform X/Z
 nibbles and mapping mixed known/unknown nibbles to `x`. Decimal output handles
 arbitrary packed widths, respects typed signedness through two's-complement,
 and renders a value containing X/Z as `x`. Additional arguments, other
-conversions, format width/precision modifiers, and dynamic `$strobe`/`$monitor`
-remain targeted.
+conversions, format width/precision modifiers, and dynamic `$monitor` remain
+targeted. `$strobe` accepts the same single conversion/value form, captures
+the formatted result when called, and publishes it in the postponed phase.
 
 Literal `$fatal` and immediate-assertion `$error` messages use the same
 Verilog/SystemVerilog escape decoding as output tasks, including byte-exact

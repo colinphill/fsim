@@ -375,6 +375,10 @@ Hex formatting retains `ceil(width/4)` digits. Uniform X/Z nibbles remain
 Decimal formatting uses an arbitrary-width binary-to-decimal kernel, derives
 two's-complement interpretation from the typed expression, and renders any
 four-state unknown value as `x`.
+`FormatDisplay` also carries postponed policy. For `$strobe`, the common
+runtime formats and owns the complete text when the operation executes, then
+schedules that immutable text in the timestamp's postponed worklist. Later
+active/update changes therefore cannot alter the captured result.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment
