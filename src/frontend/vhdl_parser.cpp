@@ -2023,11 +2023,24 @@ class VhdlParser final : private detail::ParserBase {
         break;
       }
       const auto operator_token = advance();
+      if (operation->name == "**"
+          && (at(TokenKind::Plus) || at(TokenKind::Minus))) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-114",
+            "a signed VHDL exponent must be parenthesized");
+      }
       Expression right = parse_expression(operation->precedence + 1);
       const auto combined_span = cover(left.span, right.span);
       left = Expression{ExpressionKind::Binary, operation->name,
                         {std::move(left), std::move(right)}, combined_span};
       (void)operator_token;
+      if (operation->name == "**" && at(TokenKind::Power)) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-114",
+            "chained VHDL exponentiation requires parentheses");
+      }
     }
     return left;
   }
@@ -2065,12 +2078,22 @@ class VhdlParser final : private detail::ParserBase {
         keyword("mod", 0, true) || keyword("rem", 0, true)) {
       return BinaryOperation{6, detail::ascii_lower(current().text)};
     }
+    if (at(TokenKind::Power)) {
+      return BinaryOperation{7, "**"};
+    }
     return std::nullopt;
   }
 
   Expression parse_unary() {
-    if (at(TokenKind::Plus) || at(TokenKind::Minus) ||
-        keyword("not", 0, true) || keyword("abs", 0, true)) {
+    if (at(TokenKind::Plus) || at(TokenKind::Minus)) {
+      const auto operation = advance();
+      Expression operand = parse_expression(6);
+      return Expression{ExpressionKind::Unary,
+                        detail::ascii_lower(operation.text),
+                        {std::move(operand)},
+                        cover(operation.span, operand.span)};
+    }
+    if (keyword("not", 0, true) || keyword("abs", 0, true)) {
       const auto operation = advance();
       Expression operand = parse_unary();
       return Expression{ExpressionKind::Unary,

@@ -177,6 +177,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-111` | error | Expected `end` after an unconditional VHDL sequential-loop body. |
 | `FSIM-VHDL-PARSE-112` | error | Expected `loop` after `end` for an unconditional VHDL sequential loop. |
 | `FSIM-VHDL-PARSE-113` | error | Expected `;` after an unconditional VHDL sequential loop. |
+| `FSIM-VHDL-PARSE-114` | error | A VHDL exponent has an unparenthesized sign or an exponentiation chain omits required parentheses. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -522,6 +523,7 @@ therefore excluded.
 | `FSIM-ELAB-088` | error | `$countones` is used outside SystemVerilog or without one statically sized packed argument. |
 | `FSIM-ELAB-089` | error | `$countbits` lacks a packed expression or at least one constant one-bit `0`, `1`, `X`, or `Z` control. |
 | `FSIM-ELAB-090` | error | `$dimensions` or `$unpacked_dimensions` is used outside SystemVerilog or without one statically sized packed argument. |
+| `FSIM-ELAB-091` | error | Bounded VHDL packed exponentiation has a dynamic or negative exponent. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

@@ -934,6 +934,134 @@ endmodule
       "SystemVerilog signed arithmetic, casts, and system-function nodes");
 }
 
+void test_exponentiation_expression_nodes() {
+  const auto systemverilog = parse_text(
+      "power.sv",
+      R"(
+module power;
+  logic [15:0] result;
+  always_comb result = 2 ** 3 ** 2;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "SystemVerilog exponentiation source must parse");
+  const auto& systemverilog_value =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements.front()
+          .value;
+  require(
+      systemverilog_value.kind == ExpressionKind::Binary
+          && systemverilog_value.text == "**"
+          && systemverilog_value.operands[0].kind
+              == ExpressionKind::Binary
+          && systemverilog_value.operands[0].text == "**",
+      "SystemVerilog exponentiation must associate left-to-right");
+
+  const auto verilog = parse_text(
+      "power.v",
+      R"(
+module verilog_power;
+  reg [15:0] result;
+  initial result = 16'd2 ** 16'd3 ** 16'd2;
+endmodule
+)",
+      Language::Verilog2005);
+  require(verilog.ok(), "Verilog-2005 exponentiation source must parse");
+  const auto& verilog_value =
+      verilog.design.units.front()
+          .processes.front()
+          .statements.front()
+          .value;
+  require(
+      verilog_value.kind == ExpressionKind::Binary
+          && verilog_value.text == "**"
+          && verilog_value.operands[0].kind
+              == ExpressionKind::Binary
+          && verilog_value.operands[0].text == "**",
+      "Verilog-2005 exponentiation must associate left-to-right");
+
+  const auto vhdl = parse_text(
+      "power.vhd",
+      R"(
+entity power is
+end entity;
+
+architecture rtl of power is
+  signal result : unsigned(15 downto 0);
+  signal signed_result : signed(15 downto 0);
+begin
+  result <= 2 ** 3;
+  signed_result <= -2 ** 2;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(vhdl.ok(), "VHDL exponentiation source must parse");
+  const auto* architecture =
+      vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture
+          && architecture->concurrent_statements.size() == 2
+          && architecture->concurrent_statements.front()
+                 .value.text
+              == "**"
+          && architecture->concurrent_statements[1]
+                 .value.kind
+              == ExpressionKind::Unary
+          && architecture->concurrent_statements[1]
+                 .value.operands.front().text
+              == "**",
+      "VHDL exponentiation precedence relative to a leading sign");
+
+  const auto invalid_vhdl_chain = parse_text(
+      "invalid_power_chain.vhd",
+      R"(
+entity invalid_power_chain is
+end entity;
+
+architecture rtl of invalid_power_chain is
+  signal result : unsigned(15 downto 0);
+begin
+  result <= 2 ** 3 ** 2;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_vhdl_chain.ok()
+          && std::ranges::any_of(
+              invalid_vhdl_chain.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-114";
+              }),
+      "unparenthesized VHDL exponentiation chains must be rejected");
+
+  const auto invalid_vhdl_signed_exponent = parse_text(
+      "invalid_signed_exponent.vhd",
+      R"(
+entity invalid_signed_exponent is
+end entity;
+
+architecture rtl of invalid_signed_exponent is
+  signal result : unsigned(15 downto 0);
+begin
+  result <= 2 ** -1;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_vhdl_signed_exponent.ok()
+          && std::ranges::any_of(
+              invalid_vhdl_signed_exponent.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-114";
+              }),
+      "an unparenthesized signed VHDL exponent must be rejected");
+}
+
 void test_vhdl_case_statements() {
   const auto result = parse_text(
       "case_statement.vhd",
@@ -4543,6 +4671,7 @@ int main() {
     test_vhdl_generics();
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
+    test_exponentiation_expression_nodes();
     test_vhdl_case_statements();
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();

@@ -5170,6 +5170,156 @@ endmodule
             .to_msb_string()
         == "1");
 
+    const auto systemverilog_power =
+        fsim::frontend::parse_text(
+            "systemverilog_power.sv",
+            R"(
+module systemverilog_power #(
+  parameter int PARAMETER_POWER = 3 ** 4
+);
+  logic [7:0] positive;
+  logic [7:0] zero_exponent;
+  logic [15:0] left_associative;
+  logic signed [7:0] negative_exponent;
+  logic signed [7:0] minus_one_negative;
+  logic signed [7:0] zero_negative;
+  logic [7:0] unknown_operand;
+  logic [7:0] parameter_power;
+  initial begin
+    positive = 8'd3 ** 8'd4;
+    zero_exponent = 8'd7 ** 8'd0;
+    left_associative = 16'd2 ** 16'd3 ** 16'd2;
+    negative_exponent =
+        $signed(8'hfe) ** $signed(8'hfd);
+    minus_one_negative =
+        $signed(8'hff) ** $signed(8'hfd);
+    zero_negative =
+        $signed(8'h00) ** $signed(8'hff);
+    unknown_operand = 8'b000000x1 ** 8'd2;
+    parameter_power = PARAMETER_POWER;
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(systemverilog_power.ok());
+    const auto elaborated_systemverilog_power =
+        fsim::elaboration::elaborate(
+            systemverilog_power.design,
+            "sv:work.systemverilog_power");
+    if (!elaborated_systemverilog_power.ok()) {
+        for (const auto& diagnostic :
+             elaborated_systemverilog_power.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_systemverilog_power.ok());
+    auto systemverilog_power_interpreter =
+        elaborated_systemverilog_power.design
+            ->create_interpreter();
+    const auto systemverilog_power_result =
+        systemverilog_power_interpreter->run();
+    assert(
+        systemverilog_power_result.status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto& [name, expected] :
+         std::initializer_list<
+             std::pair<std::string_view, std::string_view>>{
+             {"positive", "01010001"},
+             {"zero_exponent", "00000001"},
+             {"left_associative", "0000000001000000"},
+             {"negative_exponent", "00000000"},
+             {"minus_one_negative", "11111111"},
+             {"zero_negative", "XXXXXXXX"},
+             {"unknown_operand", "XXXXXXXX"},
+             {"parameter_power", "01010001"}}) {
+        const auto signal =
+            elaborated_systemverilog_power.design
+                ->find_signal(name);
+        assert(signal);
+        assert(
+            systemverilog_power_interpreter
+                ->signal_value(*signal)
+                .to_msb_string()
+            == expected);
+    }
+
+    const auto vhdl_power = fsim::frontend::parse_text(
+        "vhdl_power.vhd",
+        R"(
+entity vhdl_power is
+end entity;
+
+architecture rtl of vhdl_power is
+  signal positive : unsigned(7 downto 0);
+  signal negative_base : signed(7 downto 0);
+  signal zero_exponent : unsigned(7 downto 0);
+begin
+  positive <= "00000011" ** 4;
+  negative_base <= "11111110" ** 3;
+  zero_exponent <= "00000111" ** 0;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_power.ok());
+    const auto elaborated_vhdl_power =
+        fsim::elaboration::elaborate(
+            vhdl_power.design,
+            "vhdl:work.vhdl_power(rtl)");
+    if (!elaborated_vhdl_power.ok()) {
+        for (const auto& diagnostic :
+             elaborated_vhdl_power.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_vhdl_power.ok());
+    auto vhdl_power_interpreter =
+        elaborated_vhdl_power.design->create_interpreter();
+    const auto vhdl_power_result =
+        vhdl_power_interpreter->run();
+    assert(
+        vhdl_power_result.status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto& [name, expected] :
+         std::initializer_list<
+             std::pair<std::string_view, std::string_view>>{
+             {"positive", "01010001"},
+             {"negative_base", "11111000"},
+             {"zero_exponent", "00000001"}}) {
+        const auto signal =
+            elaborated_vhdl_power.design->find_signal(name);
+        assert(signal);
+        assert(
+            vhdl_power_interpreter
+                ->signal_value(*signal)
+                .to_msb_string()
+            == expected);
+    }
+
+    const auto invalid_vhdl_power =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_power.vhd",
+            R"(
+entity invalid_vhdl_power is
+end entity;
+
+architecture rtl of invalid_vhdl_power is
+  signal result : unsigned(7 downto 0);
+begin
+  result <= "00000010" ** (-1);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_power.ok());
+    const auto rejected_vhdl_power =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_power.design,
+            "vhdl:work.invalid_vhdl_power(rtl)");
+    assert(!rejected_vhdl_power.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_power, "FSIM-ELAB-091"));
+
     const auto signedness_casts = fsim::frontend::parse_text(
         "signedness_casts.sv",
         R"(

@@ -1647,7 +1647,7 @@ void test_unsigned_arithmetic_at_level(
   Process process;
   process.id = 0;
   process.name = std::string{symbol};
-  process.register_count = 7;
+  process.register_count = 8;
   process.operations = {
       ReadSignal{0, 0},
       ReadSignal{1, 1},
@@ -1661,39 +1661,41 @@ void test_unsigned_arithmetic_at_level(
       WriteBlocking{5, 5},
       Binary{BinaryOperator::modulo_unsigned, 6, 0, 1},
       WriteBlocking{6, 6},
+      Binary{BinaryOperator::power_unsigned, 7, 0, 1},
+      WriteBlocking{7, 7},
       Halt{},
   };
-  const std::array<std::uint32_t, 7> widths{
-      8, 8, 8, 8, 8, 8, 8};
+  const std::array<std::uint32_t, 8> widths{
+      8, 8, 8, 8, 8, 8, 8, 8};
   jit.add_process(symbol, process, widths);
   const auto handle = jit.lookup(symbol);
 
   struct TestCase {
     std::string_view lhs;
     std::string_view rhs;
-    std::array<std::string_view, 5> expected;
+    std::array<std::string_view, 6> expected;
   };
   const std::array cases{
       TestCase{
           "11001000",
           "00000111",
           {"11001111", "11000001", "01111000",
-           "00011100", "00000100"}},
+           "00011100", "00000100", "00000000"}},
       TestCase{
           "00000000",
           "00000000",
           {"00000000", "00000000", "00000000",
-           "XXXXXXXX", "XXXXXXXX"}},
+           "XXXXXXXX", "XXXXXXXX", "00000001"}},
       TestCase{
           "10X01000",
           "00000111",
           {"XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
-           "XXXXXXXX", "XXXXXXXX"}},
+           "XXXXXXXX", "XXXXXXXX", "XXXXXXXX"}},
       TestCase{
           "11001000",
           "00000Z11",
           {"XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
-           "XXXXXXXX", "XXXXXXXX"}},
+           "XXXXXXXX", "XXXXXXXX", "XXXXXXXX"}},
   };
   for (const auto& test : cases) {
     TestRuntime runtime;
@@ -1726,7 +1728,7 @@ void test_signed_arithmetic_at_level(
   Process process;
   process.id = 0;
   process.name = std::string{symbol};
-  process.register_count = 12;
+  process.register_count = 13;
   process.operations = {
       ReadSignal{0, 0},
       ReadSignal{1, 1},
@@ -1751,17 +1753,19 @@ void test_signed_arithmetic_at_level(
       Binary{
           BinaryOperator::greater_equal_signed, 11, 0, 1},
       WriteBlocking{11, 11},
+      Binary{BinaryOperator::power_signed, 12, 0, 1},
+      WriteBlocking{12, 12},
       Halt{},
   };
-  const std::array<std::uint32_t, 12> widths{
-      8, 8, 8, 8, 8, 8, 8, 8, 1, 1, 1, 1};
+  const std::array<std::uint32_t, 13> widths{
+      8, 8, 8, 8, 8, 8, 8, 8, 1, 1, 1, 1, 8};
   jit.add_process(symbol, process, widths);
   const auto handle = jit.lookup(symbol);
 
   struct TestCase {
     std::string_view lhs;
     std::string_view rhs;
-    std::array<std::string_view, 10> expected;
+    std::array<std::string_view, 11> expected;
   };
   const std::array cases{
       TestCase{
@@ -1769,31 +1773,31 @@ void test_signed_arithmetic_at_level(
           "00000011",
           {"11111110", "11111000", "11110001",
            "11111111", "11111110", "00000001",
-           "1", "1", "0", "0"}},
+           "1", "1", "0", "0", "10000011"}},
       TestCase{
           "00000101",
           "11111101",
           {"00000010", "00001000", "11110001",
            "11111111", "00000010", "11111111",
-           "0", "0", "1", "1"}},
+           "0", "0", "1", "1", "00000000"}},
       TestCase{
           "10000000",
           "11111111",
           {"01111111", "10000001", "10000000",
            "10000000", "00000000", "00000000",
-           "1", "1", "0", "0"}},
+           "1", "1", "0", "0", "00000000"}},
       TestCase{
           "10X01000",
           "00000111",
           {"XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
            "XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
-           "X", "X", "X", "X"}},
+           "X", "X", "X", "X", "XXXXXXXX"}},
       TestCase{
           "00000101",
           "00000000",
           {"00000101", "00000101", "00000000",
            "XXXXXXXX", "XXXXXXXX", "XXXXXXXX",
-           "0", "0", "1", "1"}},
+           "0", "0", "1", "1", "00000001"}},
   };
   for (const auto& test : cases) {
     TestRuntime runtime;
@@ -2851,6 +2855,60 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     expect_cache_statistics(one_sided_wildcard, 0, 1, 1);
   }
   assert(cached_object_paths(cache_directory).size() == 22);
+
+  constexpr std::string_view power_symbol =
+      "persistent_cache_power_operator";
+  const std::array<std::uint32_t, 1> power_widths{8};
+  const auto make_power_process =
+      [](const BinaryOperator operation) {
+        Process process;
+        process.id = 0;
+        process.name = "cached_power_operator";
+        process.register_count = 3;
+        process.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("00000011")},
+            LoadConstant{
+                1, PackedLogic4::from_msb_string("00000100")},
+            Binary{operation, 2, 0, 1},
+            WriteBlocking{0, 2},
+            Halt{},
+        };
+        return process;
+      };
+  const auto run_power_process =
+      [&](LlvmJit& jit, const std::string_view expected) {
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        assert(
+            jit.execute(jit.lookup(power_symbol), descriptor)
+            == JitExecutionStatus::completed);
+        const auto encoded =
+            PackedLogic4::from_msb_string(expected).low_word();
+        assert((
+            runtime.signals[0]
+            == EncodedSignal{encoded.aval, encoded.bval}));
+      };
+  {
+    LlvmJit multiply{options};
+    multiply.add_process(
+        power_symbol,
+        make_power_process(BinaryOperator::multiply_unsigned),
+        power_widths);
+    run_power_process(multiply, "00001100");
+    expect_cache_statistics(multiply, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 23);
+  {
+    LlvmJit power{options};
+    power.add_process(
+        power_symbol,
+        make_power_process(BinaryOperator::power_unsigned),
+        power_widths);
+    run_power_process(power, "01010001");
+    expect_cache_statistics(power, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 24);
 }
 
 void test_optimization_cache_invalidation(

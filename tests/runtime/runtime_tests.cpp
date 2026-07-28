@@ -843,7 +843,7 @@ void test_simir_wide_unsigned_arithmetic() {
   using namespace fsim::runtime::simir;
 
   Interpreter interpreter;
-  std::array<SignalId, 7> outputs{};
+  std::array<SignalId, 9> outputs{};
   for (std::size_t index = 0; index < outputs.size(); ++index) {
     outputs[index] = interpreter.add_signal({
         "top.arithmetic_" + std::to_string(index),
@@ -857,7 +857,7 @@ void test_simir_wide_unsigned_arithmetic() {
   Process process;
   process.id = 0;
   process.name = "wide_unsigned_arithmetic";
-  process.register_count = 11;
+  process.register_count = 15;
   process.operations = {
       LoadConstant{0, PackedLogic4::from_msb_string(lhs)},
       LoadConstant{1, PackedLogic4::from_msb_string(rhs)},
@@ -880,6 +880,18 @@ void test_simir_wide_unsigned_arithmetic() {
       LoadConstant{9, PackedLogic4(65, Logic4::zero)},
       Binary{BinaryOperator::divide_unsigned, 10, 0, 9},
       WriteBlocking{outputs[6], 10},
+      LoadConstant{
+          11,
+          PackedLogic4::from_msb_string(
+              std::string(63, '0') + "11")},
+      LoadConstant{
+          12,
+          PackedLogic4::from_msb_string(
+              std::string(62, '0') + "100")},
+      Binary{BinaryOperator::power_unsigned, 13, 11, 12},
+      WriteBlocking{outputs[7], 13},
+      Binary{BinaryOperator::power_unsigned, 14, 7, 12},
+      WriteBlocking{outputs[8], 14},
       Halt{},
   };
   (void)interpreter.add_process(std::move(process));
@@ -896,6 +908,8 @@ void test_simir_wide_unsigned_arithmetic() {
                         "01010101010101010101010101010101"},
       std::string(64, '0') + "1",
       std::string(65, 'X'),
+      std::string(65, 'X'),
+      std::string(58, '0') + "1010001",
       std::string(65, 'X')};
   for (std::size_t index = 0; index < outputs.size(); ++index) {
     require(

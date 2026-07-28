@@ -471,7 +471,9 @@ class Lexer {
         }
         return;
       case '*':
-        emit(TokenKind::Star, begin);
+        emit(
+            consume_if('*') ? TokenKind::Power : TokenKind::Star,
+            begin);
         return;
       case '/':
         if (consume_if('=')) {
@@ -621,6 +623,8 @@ const char* to_string(TokenKind kind) noexcept {
       return "'-='";
     case TokenKind::Star:
       return "'*'";
+    case TokenKind::Power:
+      return "'**'";
     case TokenKind::Slash:
       return "'/'";
     case TokenKind::Percent:

@@ -204,7 +204,7 @@ void test_vhdl_shift_rotate(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 11> signal_paths{
+  const std::array<std::string, 14> signal_paths{
       "shift_rotate_app.arithmetic_left",
       "shift_rotate_app.rotated_left",
       "shift_rotate_app.rotated_right",
@@ -215,7 +215,10 @@ void test_vhdl_shift_rotate(
       "shift_rotate_app.wrapped_rotate_left",
       "shift_rotate_app.wrapped_rotate_right",
       "shift_rotate_app.absolute_unknown",
-      "shift_rotate_app.absolute_known"};
+      "shift_rotate_app.absolute_known",
+      "shift_rotate_app.power_positive",
+      "shift_rotate_app.power_negative",
+      "shift_rotate_app.power_zero"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -243,11 +246,79 @@ void test_vhdl_shift_rotate(
           "0X0000Z1",
           "Z10X0000",
           "XXXXXXXX",
-          "00000101"}));
+          "00000101",
+          "01010001",
+          "11111000",
+          "00000001"}));
   assert(reference.compiled_processes == 0);
   assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 3);
+  assert(compiled.compiled_modules == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
+#endif
+}
+
+void test_verilog_power(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "verilog-power-expression-test";
+  config.project.top = "verilog:work.verilog_power_app";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "verilog-power-cache-o0"
+             : "verilog-power-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::verilog;
+  sources.standard = "2005";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    print_diagnostics(diagnostics);
+  }
+  assert(reference_project);
+  assert(compiled_project);
+
+  const std::array<std::string, 2> signal_paths{
+      "verilog_power_app.positive",
+      "verilog_power_app.left_associative"};
+  const auto reference = run(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter,
+      signal_paths);
+  const auto compiled = run(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled,
+      signal_paths);
+
+  assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+  assert(reference.result.status == compiled.result.status);
+  assert(reference.result.time == compiled.result.time);
+  assert(reference.result.delta == compiled.result.delta);
+  assert(reference.values == compiled.values);
+  assert((
+      compiled.values
+      == std::vector<std::string>{
+          "01010001", "0000000001000000"}));
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes == 1);
   assert(compiled.compiled_modules == 1);
 #else
   assert(compiled.compiled_processes == 0);
@@ -359,7 +430,7 @@ void test_systemverilog_signedness_casts(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 37> signal_paths{
+  const std::array<std::string, 45> signal_paths{
       "signedness_cast_app.signed_less",
       "signedness_cast_app.unsigned_less",
       "signedness_cast_app.signed_shift",
@@ -382,6 +453,14 @@ void test_systemverilog_signedness_casts(
       "signedness_cast_app.ascending_increment",
       "signedness_cast_app.dimensions",
       "signedness_cast_app.unpacked_dimensions",
+      "signedness_cast_app.power_positive",
+      "signedness_cast_app.power_zero",
+      "signedness_cast_app.power_left_associative",
+      "signedness_cast_app.power_negative_exponent",
+      "signedness_cast_app.power_minus_one_negative",
+      "signedness_cast_app.power_zero_negative",
+      "signedness_cast_app.power_unknown",
+      "signedness_cast_app.power_parameter",
       "signedness_cast_app.onehot_zero",
       "signedness_cast_app.onehot_single",
       "signedness_cast_app.onehot_multiple",
@@ -436,6 +515,14 @@ void test_systemverilog_signedness_casts(
           "11111111111111111111111111111111",
           "00000000000000000000000000000001",
           "00000000000000000000000000000000",
+          "01010001",
+          "00000001",
+          "0000000001000000",
+          "00000000",
+          "11111111",
+          "XXXXXXXX",
+          "XXXXXXXX",
+          "01010001",
           "0",
           "1",
           "0",
@@ -635,6 +722,9 @@ architecture rtl of shift_rotate_app is
   signal wrapped_rotate_right : signed(7 downto 0);
   signal absolute_unknown : signed(7 downto 0);
   signal absolute_known : signed(7 downto 0);
+  signal power_positive : unsigned(7 downto 0);
+  signal power_negative : signed(7 downto 0);
+  signal power_zero : unsigned(7 downto 0);
 begin
   value <= "10X0000Z";
   known_value <= "11111011";
@@ -651,8 +741,27 @@ begin
     wrapped_rotate_right <= value ror 9;
     absolute_unknown <= abs value;
     absolute_known <= abs known_value;
+    power_positive <= "00000011" ** 4;
+    power_negative <= "11111110" ** 3;
+    power_zero <= "00000111" ** 0;
   end process;
 end architecture;
+)";
+  }
+  const auto verilog_power_source =
+      directory.path / "power.v";
+  {
+    std::ofstream output(verilog_power_source);
+    output << R"(
+module verilog_power_app;
+  reg [7:0] positive;
+  reg [15:0] left_associative;
+  initial begin
+    positive = 8'd3 ** 8'd4;
+    left_associative = 16'd2 ** 16'd3 ** 16'd2;
+    $finish;
+  end
+endmodule
 )";
   }
   const auto clog2_source = directory.path / "clog2.sv";
@@ -680,7 +789,9 @@ endmodule
   {
     std::ofstream output(signedness_source);
     output << R"(
-module signedness_cast_app;
+module signedness_cast_app #(
+  parameter int PARAMETER_POWER = 3 ** 4
+);
   logic [3:0] unsigned_value;
   logic signed [3:0] signed_value;
   logic signed_less;
@@ -707,6 +818,14 @@ module signedness_cast_app;
   logic signed [31:0] ascending_increment;
   logic signed [31:0] dimensions;
   logic signed [31:0] unpacked_dimensions;
+  logic [7:0] power_positive;
+  logic [7:0] power_zero;
+  logic [15:0] power_left_associative;
+  logic signed [7:0] power_negative_exponent;
+  logic signed [7:0] power_minus_one_negative;
+  logic signed [7:0] power_zero_negative;
+  logic [7:0] power_unknown;
+  logic [7:0] power_parameter;
   logic onehot_zero;
   logic onehot_single;
   logic onehot_multiple;
@@ -747,6 +866,18 @@ module signedness_cast_app;
     ascending_increment = $increment(ascending);
     dimensions = $dimensions(descending);
     unpacked_dimensions = $unpacked_dimensions(ascending);
+    power_positive = 8'd3 ** 8'd4;
+    power_zero = 8'd7 ** 8'd0;
+    power_left_associative =
+        16'd2 ** 16'd3 ** 16'd2;
+    power_negative_exponent =
+        $signed(8'hfe) ** $signed(8'hfd);
+    power_minus_one_negative =
+        $signed(8'hff) ** $signed(8'hfd);
+    power_zero_negative =
+        $signed(8'h00) ** $signed(8'hff);
+    power_unknown = 8'b000000x1 ** 8'd2;
+    power_parameter = PARAMETER_POWER;
     onehot_zero = $onehot(4'b0000);
     onehot_single = $onehot(4'b0010);
     onehot_multiple = $onehot(4'b1010);
@@ -826,6 +957,14 @@ end architecture;
   test_vhdl_shift_rotate(
       directory.path,
       vhdl_source,
+      fsim::project::Optimization::o2);
+  test_verilog_power(
+      directory.path,
+      verilog_power_source,
+      fsim::project::Optimization::o0);
+  test_verilog_power(
+      directory.path,
+      verilog_power_source,
       fsim::project::Optimization::o2);
   test_systemverilog_clog2(
       directory.path,

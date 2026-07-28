@@ -313,6 +313,27 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return true;
 }
 
+[[nodiscard]] bool is_one(const PackedLogic4& value) {
+  if (value.get(0) != Logic4::one) {
+    return false;
+  }
+  for (std::size_t index = 1; index < value.width(); ++index) {
+    if (value.get(index) != Logic4::zero) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] bool is_all_ones(const PackedLogic4& value) {
+  for (std::size_t index = 0; index < value.width(); ++index) {
+    if (value.get(index) != Logic4::one) {
+      return false;
+    }
+  }
+  return true;
+}
+
 [[nodiscard]] int compare_known_unsigned(
     const PackedLogic4& lhs,
     const PackedLogic4& rhs) {
@@ -384,6 +405,47 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
       carry =
           (accumulated && multiplicand)
           || (carry && (accumulated || multiplicand));
+    }
+  }
+  return result;
+}
+
+[[nodiscard]] PackedLogic4 power_known(
+    const PackedLogic4& base,
+    const PackedLogic4& exponent,
+    const bool signed_exponent) {
+  const bool negative =
+      signed_exponent
+      && exponent.get(exponent.width() - 1) == Logic4::one;
+  if (negative) {
+    if (is_zero(base)) {
+      return PackedLogic4(base.width(), Logic4::x);
+    }
+    if (is_one(base)) {
+      auto result = PackedLogic4(base.width(), Logic4::zero);
+      result.set(0, Logic4::one);
+      return result;
+    }
+    if (is_all_ones(base)) {
+      if (exponent.get(0) == Logic4::one) {
+        return base;
+      }
+      auto result = PackedLogic4(base.width(), Logic4::zero);
+      result.set(0, Logic4::one);
+      return result;
+    }
+    return PackedLogic4(base.width(), Logic4::zero);
+  }
+
+  auto result = PackedLogic4(base.width(), Logic4::zero);
+  result.set(0, Logic4::one);
+  auto factor = base;
+  for (std::size_t bit = 0; bit < exponent.width(); ++bit) {
+    if (exponent.get(bit) == Logic4::one) {
+      result = multiply_known(result, factor);
+    }
+    if (bit + 1 < exponent.width()) {
+      factor = multiply_known(factor, factor);
     }
   }
   return result;
@@ -575,11 +637,13 @@ struct SignedDivision {
     case BinaryOperator::add_unsigned:
     case BinaryOperator::subtract_unsigned:
     case BinaryOperator::multiply_unsigned:
+    case BinaryOperator::power_unsigned:
     case BinaryOperator::divide_unsigned:
     case BinaryOperator::modulo_unsigned:
     case BinaryOperator::add_signed:
     case BinaryOperator::subtract_signed:
     case BinaryOperator::multiply_signed:
+    case BinaryOperator::power_signed:
     case BinaryOperator::divide_signed:
     case BinaryOperator::remainder_signed:
     case BinaryOperator::modulo_signed:
@@ -599,11 +663,13 @@ struct SignedDivision {
       operation == BinaryOperator::add_unsigned
       || operation == BinaryOperator::subtract_unsigned
       || operation == BinaryOperator::multiply_unsigned
+      || operation == BinaryOperator::power_unsigned
       || operation == BinaryOperator::divide_unsigned
       || operation == BinaryOperator::modulo_unsigned
       || operation == BinaryOperator::add_signed
       || operation == BinaryOperator::subtract_signed
       || operation == BinaryOperator::multiply_signed
+      || operation == BinaryOperator::power_signed
       || operation == BinaryOperator::divide_signed
       || operation == BinaryOperator::remainder_signed
       || operation == BinaryOperator::modulo_signed;
@@ -621,6 +687,13 @@ struct SignedDivision {
   if (operation == BinaryOperator::multiply_unsigned
       || operation == BinaryOperator::multiply_signed) {
     return multiply_known(lhs, rhs);
+  }
+  if (operation == BinaryOperator::power_unsigned
+      || operation == BinaryOperator::power_signed) {
+    return power_known(
+        lhs,
+        rhs,
+        operation == BinaryOperator::power_signed);
   }
   if (operation == BinaryOperator::divide_unsigned
       || operation == BinaryOperator::modulo_unsigned) {
@@ -663,11 +736,13 @@ struct SignedDivision {
     case BinaryOperator::add_unsigned:
     case BinaryOperator::subtract_unsigned:
     case BinaryOperator::multiply_unsigned:
+    case BinaryOperator::power_unsigned:
     case BinaryOperator::divide_unsigned:
     case BinaryOperator::modulo_unsigned:
     case BinaryOperator::add_signed:
     case BinaryOperator::subtract_signed:
     case BinaryOperator::multiply_signed:
+    case BinaryOperator::power_signed:
     case BinaryOperator::divide_signed:
     case BinaryOperator::remainder_signed:
     case BinaryOperator::modulo_signed:

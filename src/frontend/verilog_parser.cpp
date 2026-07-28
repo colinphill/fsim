@@ -3579,6 +3579,9 @@ class VerilogParser final : private detail::ParserBase {
         at(TokenKind::Percent)) {
       return BinaryOperation{10, current().text};
     }
+    if (at(TokenKind::Power)) {
+      return BinaryOperation{11, "**"};
+    }
     return std::nullopt;
   }
 

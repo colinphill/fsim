@@ -652,11 +652,13 @@ validate_process(const Process &process,
               case BinaryOperator::add_unsigned:
               case BinaryOperator::subtract_unsigned:
               case BinaryOperator::multiply_unsigned:
+              case BinaryOperator::power_unsigned:
               case BinaryOperator::divide_unsigned:
               case BinaryOperator::modulo_unsigned:
               case BinaryOperator::add_signed:
               case BinaryOperator::subtract_signed:
               case BinaryOperator::multiply_signed:
+              case BinaryOperator::power_signed:
               case BinaryOperator::divide_signed:
               case BinaryOperator::remainder_signed:
               case BinaryOperator::modulo_signed:
@@ -1754,10 +1756,12 @@ struct EncodedBit {
   }
   case BinaryOperator::subtract_unsigned:
   case BinaryOperator::multiply_unsigned:
+  case BinaryOperator::power_unsigned:
   case BinaryOperator::divide_unsigned:
   case BinaryOperator::modulo_unsigned:
   case BinaryOperator::subtract_signed:
   case BinaryOperator::multiply_signed:
+  case BinaryOperator::power_signed:
   case BinaryOperator::divide_signed:
   case BinaryOperator::remainder_signed:
   case BinaryOperator::modulo_signed: {
@@ -1790,6 +1794,59 @@ struct EncodedBit {
         operation == BinaryOperator::multiply_unsigned
         || operation == BinaryOperator::multiply_signed) {
       known_result = builder.CreateMul(left, right);
+    } else if (
+        operation == BinaryOperator::power_unsigned
+        || operation == BinaryOperator::power_signed) {
+      llvm::Value* powered = constant_i64(context, 1);
+      llvm::Value* factor = left;
+      for (std::uint32_t bit = 0; bit < lhs.width; ++bit) {
+        auto* selected = builder.CreateICmpNE(
+            builder.CreateAnd(
+                builder.CreateLShr(
+                    right, constant_i64(context, bit)),
+                constant_i64(context, 1)),
+            constant_i64(context, 0));
+        powered = builder.CreateSelect(
+            selected,
+            builder.CreateAnd(
+                builder.CreateMul(powered, factor), mask),
+            powered);
+        if (bit + 1U < lhs.width) {
+          factor = builder.CreateAnd(
+              builder.CreateMul(factor, factor), mask);
+        }
+      }
+      if (operation == BinaryOperator::power_signed) {
+        const auto sign_bit =
+            std::uint64_t{1} << (lhs.width - 1U);
+        auto* negative = builder.CreateICmpNE(
+            builder.CreateAnd(
+                right, constant_i64(context, sign_bit)),
+            constant_i64(context, 0));
+        auto* base_zero = builder.CreateICmpEQ(
+            left, constant_i64(context, 0));
+        invalid = builder.CreateOr(
+            invalid, builder.CreateAnd(negative, base_zero));
+        auto* base_one = builder.CreateICmpEQ(
+            left, constant_i64(context, 1));
+        auto* base_minus_one = builder.CreateICmpEQ(left, mask);
+        auto* odd = builder.CreateICmpNE(
+            builder.CreateAnd(
+                right, constant_i64(context, 1)),
+            constant_i64(context, 0));
+        auto* minus_one_result = builder.CreateSelect(
+            odd, mask, constant_i64(context, 1));
+        auto* negative_result = builder.CreateSelect(
+            base_one,
+            constant_i64(context, 1),
+            builder.CreateSelect(
+                base_minus_one,
+                minus_one_result,
+                constant_i64(context, 0)));
+        powered = builder.CreateSelect(
+            negative, negative_result, powered);
+      }
+      known_result = powered;
     } else if (
         operation == BinaryOperator::divide_unsigned) {
       known_result = builder.CreateUDiv(left, right);
@@ -1984,11 +2041,13 @@ struct EncodedBit {
     case BinaryOperator::add_unsigned:
     case BinaryOperator::subtract_unsigned:
     case BinaryOperator::multiply_unsigned:
+    case BinaryOperator::power_unsigned:
     case BinaryOperator::divide_unsigned:
     case BinaryOperator::modulo_unsigned:
     case BinaryOperator::add_signed:
     case BinaryOperator::subtract_signed:
     case BinaryOperator::multiply_signed:
+    case BinaryOperator::power_signed:
     case BinaryOperator::divide_signed:
     case BinaryOperator::remainder_signed:
     case BinaryOperator::modulo_signed:

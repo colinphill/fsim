@@ -66,6 +66,7 @@ enum class TokenKind {
   MinusMinus,
   MinusAssign,
   Star,
+  Power,
   Slash,
   Percent,
   Ampersand,

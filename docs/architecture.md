@@ -410,6 +410,16 @@ and LLVM single-word path. SystemVerilog chooses signed arithmetic only when
 both operands are signed; an unsigned operand makes the operation unsigned.
 The bounded VHDL path rejects explicitly mixed signed/unsigned operands while
 allowing an integer literal to take its surrounding numeric context.
+Packed exponentiation uses exponentiation by squaring in the arbitrary-width
+interpreter and a fixed unrolled bit scan in eligible LLVM modules. Positive
+exponents wrap modulo the destination width, zero exponents produce one, and
+any `X`/`Z` operand produces all `X`. SystemVerilog `**` associates
+left-to-right; signed negative exponents produce zero except for bases `1` and
+`-1`, while zero raised to a negative exponent produces all `X`. The bounded
+VHDL numeric-vector form follows VHDL factor syntax: an unparenthesized factor
+contains at most one `**`, a leading sign applies outside that factor, and the
+exponent must be a locally static nonnegative integer. Integral constant
+folding uses checked signed 64-bit exponentiation and diagnoses overflow.
 Packed VHDL `abs` accepts a signed operand. It extracts the leftmost sign
 element, computes the same-width two's-complement negation, and selects the
 original or negated value through the common four-state conditional operation.

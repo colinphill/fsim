@@ -441,6 +441,41 @@ bool checked_multiply(
     return true;
 }
 
+bool checked_power(
+    const std::int64_t base,
+    const std::int64_t exponent,
+    std::int64_t& result) {
+    if (exponent < 0) {
+        if (base == 0) {
+            return false;
+        }
+        if (base == 1) {
+            result = 1;
+        } else if (base == -1) {
+            result = (exponent & 1) != 0 ? -1 : 1;
+        } else {
+            result = 0;
+        }
+        return true;
+    }
+    result = 1;
+    auto factor = base;
+    auto remaining = static_cast<std::uint64_t>(exponent);
+    while (remaining != 0) {
+        if ((remaining & 1U) != 0) {
+            if (!checked_multiply(result, factor, result)) {
+                return false;
+            }
+        }
+        remaining >>= 1U;
+        if (remaining != 0
+            && !checked_multiply(factor, factor, factor)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::optional<std::int64_t> evaluate_constant_expression(
     const Expression& expression,
     const ConstantEnvironment& environment,
@@ -594,6 +629,17 @@ std::optional<std::int64_t> evaluate_constant_expression(
     if (expression.text == "*") {
         if (!checked_multiply(*left, *right, result)) {
             error = "constant multiplication overflows signed 64-bit range";
+            return std::nullopt;
+        }
+        return result;
+    }
+    if (expression.text == "**") {
+        if (!checked_power(*left, *right, result)) {
+            error =
+                *left == 0 && *right < 0
+                    ? "constant zero to a negative power is undefined"
+                    : "constant exponentiation overflows signed 64-bit "
+                      "range";
             return std::nullopt;
         }
         return result;
@@ -5230,6 +5276,19 @@ private:
         }
         if (expression.kind == ExpressionKind::Binary && expression.operands.size() == 2) {
             const auto width = infer_width(expression).value_or(expected_width);
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.text == "**") {
+                const auto exponent =
+                    constant_index(expression.operands[1]);
+                if (!exponent || *exponent < 0) {
+                    report(
+                        "FSIM-ELAB-091",
+                        "bounded VHDL integer exponentiation requires "
+                        "a locally static nonnegative exponent",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+            }
             const auto lhs = lower_expression(expression.operands[0], width);
             const auto rhs = lower_expression(expression.operands[1], width);
             if (!lhs || !rhs) {
@@ -5270,6 +5329,8 @@ private:
                 operation = BinaryOperator::subtract_unsigned;
             } else if (expression.text == "*") {
                 operation = BinaryOperator::multiply_unsigned;
+            } else if (expression.text == "**") {
+                operation = BinaryOperator::power_unsigned;
             } else if (expression.text == "/") {
                 operation = BinaryOperator::divide_unsigned;
             } else if (
@@ -5331,6 +5392,7 @@ private:
                 *operation == BinaryOperator::add_unsigned
                 || *operation == BinaryOperator::subtract_unsigned
                 || *operation == BinaryOperator::multiply_unsigned
+                || *operation == BinaryOperator::power_unsigned
                 || *operation == BinaryOperator::divide_unsigned
                 || *operation == BinaryOperator::modulo_unsigned;
             const bool lhs_signed =
@@ -5367,6 +5429,10 @@ private:
                     *operation
                     == BinaryOperator::multiply_unsigned) {
                     operation = BinaryOperator::multiply_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::power_unsigned) {
+                    operation = BinaryOperator::power_signed;
                 } else if (
                     *operation
                     == BinaryOperator::divide_unsigned) {
