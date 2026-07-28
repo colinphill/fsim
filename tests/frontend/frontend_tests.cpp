@@ -1601,6 +1601,10 @@ module package_user #(
     overlay.payload = local_value;
     packet.payload[WIDTH-2:0] = local_value[WIDTH-2:0];
     overlay.mirror[WIDTH-1] = local_value[WIDTH-1];
+    packet.payload[0 +: WIDTH-1] =
+      local_value[0 +: WIDTH-1];
+    overlay.mirror[WIDTH-1 -: 2] =
+      local_value[WIDTH-1 -: 2];
   end
   assign observed = staged;
 endmodule
@@ -1713,7 +1717,7 @@ endmodule
   const auto& aggregate_statements =
       parsed.design.units[2].processes.front().statements;
   require(
-      aggregate_statements.size() == 6
+      aggregate_statements.size() == 8
           && aggregate_statements[4].target.kind
               == ExpressionKind::Slice
           && aggregate_statements[4].target.operands.front().text
@@ -1725,8 +1729,16 @@ endmodule
           && aggregate_statements[5].target.operands.front().text
               == "overlay.mirror"
           && aggregate_statements[5].value.kind
-              == ExpressionKind::Index,
-      "packed aggregate members retain chained bit/part selects");
+              == ExpressionKind::Index
+          && aggregate_statements[6].target.kind
+              == ExpressionKind::Slice
+          && aggregate_statements[6].target.text == "+:"
+          && aggregate_statements[6].value.text == "+:"
+          && aggregate_statements[7].target.kind
+              == ExpressionKind::Slice
+          && aggregate_statements[7].target.text == "-:"
+          && aggregate_statements[7].value.text == "-:",
+      "packed aggregate members retain fixed and indexed part-selects");
 
   const auto invalid = parse_text(
       "invalid_packages.sv",

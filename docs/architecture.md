@@ -96,6 +96,11 @@ One constant bit- or part-select may follow a member name. Parameter and
 imported-package-constant bounds are folded after specialization, then the
 member-relative offset is composed with the aggregate layout offset before
 lowering.
+SystemVerilog constant indexed part-selects normalize `base +: width` and
+`base -: width` into a direction-preserving conventional range. Both ascending
+and descending declarations therefore reach the same contiguous SimIR
+extract/insert operations, while nonpositive widths and out-of-range endpoints
+are rejected before lowering.
 Compilation-unit and unit-local `import package::*` or
 `import package::name` clauses inject case-sensitive direct constants and
 types, while `package::name` remains explicitly scoped. Alias chains resolve

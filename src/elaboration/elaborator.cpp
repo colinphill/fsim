@@ -2897,6 +2897,99 @@ private:
                 static_cast<std::uint32_t>(statement.span.begin.column)}});
     }
 
+    struct ConstantSliceSelection {
+        std::size_t offset{};
+        std::size_t width{};
+    };
+
+    std::optional<ConstantSliceSelection>
+    constant_slice_selection(
+        const Expression& expression,
+        const std::size_t source_width) const {
+        if (expression.kind != ExpressionKind::Slice
+            || expression.operands.size() != 3) {
+            return std::nullopt;
+        }
+        const auto& source = expression.operands[0];
+        const auto range =
+            expression_range(source, source_width);
+        if (!range) {
+            return std::nullopt;
+        }
+
+        std::int64_t left = 0;
+        std::int64_t right = 0;
+        std::uint64_t width = 0;
+        if (expression.text == "+:"
+            || expression.text == "-:") {
+            const auto base =
+                constant_index(expression.operands[1]);
+            const auto selected_width =
+                constant_index(expression.operands[2]);
+            if (!base || !selected_width
+                || *selected_width <= 0) {
+                return std::nullopt;
+            }
+            const auto distance = *selected_width - 1;
+            std::int64_t lower = 0;
+            std::int64_t upper = 0;
+            if (expression.text == "+:") {
+                if (*base
+                    > std::numeric_limits<std::int64_t>::max()
+                          - distance) {
+                    return std::nullopt;
+                }
+                lower = *base;
+                upper = *base + distance;
+            } else {
+                if (*base
+                    < std::numeric_limits<std::int64_t>::min()
+                          + distance) {
+                    return std::nullopt;
+                }
+                lower = *base - distance;
+                upper = *base;
+            }
+            if (range->left >= range->right) {
+                left = upper;
+                right = lower;
+            } else {
+                left = lower;
+                right = upper;
+            }
+            width = static_cast<std::uint64_t>(*selected_width);
+        } else {
+            const auto parsed_left =
+                constant_index(expression.operands[1]);
+            const auto parsed_right =
+                constant_index(expression.operands[2]);
+            if (!parsed_left || !parsed_right) {
+                return std::nullopt;
+            }
+            left = *parsed_left;
+            right = *parsed_right;
+            const bool selected_descending = left >= right;
+            if (left != right
+                && selected_descending
+                    != (range->left >= range->right)) {
+                return std::nullopt;
+            }
+            width = index_distance(left, right) + 1;
+        }
+        const auto offset =
+            select_offset(source, right, source_width);
+        const auto left_offset =
+            select_offset(source, left, source_width);
+        if (!offset || !left_offset
+            || width == 0
+            || width
+                > std::numeric_limits<std::size_t>::max()) {
+            return std::nullopt;
+        }
+        return ConstantSliceSelection{
+            *offset, static_cast<std::size_t>(width)};
+    }
+
     void lower_assignment(const Statement& statement) {
         const Expression* base = &statement.target;
         std::optional<std::uint32_t> selected_offset;
@@ -2992,54 +3085,29 @@ private:
                 static_cast<std::uint32_t>(base_offset + *offset);
             selected_width = 1;
         } else if (statement.target.kind == ExpressionKind::Slice) {
-            const auto left =
-                constant_index(statement.target.operands[1]);
-            const auto right =
-                constant_index(statement.target.operands[2]);
-            if (!left || !right) {
-                report(
-                    "FSIM-ELAB-068",
-                    "an assignment part-select requires constant integer "
-                    "bounds",
-                    statement.target.span);
-                return;
-            }
-            const auto range =
-                expression_range(*base, selection_source_width);
-            const auto offset =
-                select_offset(
-                    *base, *right, selection_source_width);
-            const auto left_offset =
-                select_offset(
-                    *base, *left, selection_source_width);
-            const auto width = index_distance(*left, *right) + 1;
+            const auto selection =
+                constant_slice_selection(
+                    statement.target, selection_source_width);
             const auto base_offset =
                 static_cast<std::uint64_t>(
                     selected_offset.value_or(0));
-            const bool selected_descending = *left >= *right;
-            const bool direction_matches =
-                *left == *right
-                || (range
-                    && selected_descending
-                        == (range->left >= range->right));
-            if (!offset || !left_offset || !direction_matches
-                || base_offset + *offset
+            if (!selection
+                || base_offset + selection->offset
                     > std::numeric_limits<std::uint32_t>::max()
-                || width
+                || selection->width
                     > std::numeric_limits<std::uint32_t>::max()) {
                 report(
                     "FSIM-ELAB-068",
-                    "assignment part-select bounds "
-                        + std::to_string(*left) + ":"
-                        + std::to_string(*right)
-                        + " are outside or reverse the target's declared "
-                          "packed range",
+                    "an assignment part-select requires constant in-range "
+                    "bounds, a positive indexed width, and a direction "
+                    "compatible with the target's declared packed range",
                     statement.target.span);
                 return;
             }
             selected_offset =
-                static_cast<std::uint32_t>(base_offset + *offset);
-            selected_width = static_cast<std::size_t>(width);
+                static_cast<std::uint32_t>(
+                    base_offset + selection->offset);
+            selected_width = selection->width;
         }
 
         const auto target_width =
@@ -3484,42 +3552,21 @@ private:
             && expression.operands.size() == 3) {
             const auto source_width =
                 infer_width(expression.operands[0]);
-            const auto left =
-                constant_index(expression.operands[1]);
-            const auto right =
-                constant_index(expression.operands[2]);
-            if (!source_width || !left || !right) {
-                report(
-                    "FSIM-ELAB-068",
-                    "a part-select requires an inferable packed source and "
-                    "constant integer bounds",
-                    expression.span);
-                return std::nullopt;
-            }
-            const auto range =
-                expression_range(
-                    expression.operands[0], *source_width);
-            const auto offset = select_offset(
-                expression.operands[0], *right, *source_width);
-            const auto left_offset = select_offset(
-                expression.operands[0], *left, *source_width);
-            const auto width = index_distance(*left, *right) + 1;
-            const bool selected_descending = *left >= *right;
-            const bool direction_matches =
-                *left == *right
-                || (range
-                    && selected_descending
-                        == (range->left >= range->right));
-            if (!offset || !left_offset || !direction_matches
-                || width
+            const auto selection =
+                source_width
+                    ? constant_slice_selection(
+                          expression, *source_width)
+                    : std::nullopt;
+            if (!source_width || !selection
+                || selection->offset
+                    > std::numeric_limits<std::uint32_t>::max()
+                || selection->width
                     > std::numeric_limits<std::uint32_t>::max()) {
                 report(
                     "FSIM-ELAB-068",
-                    "part-select bounds "
-                        + std::to_string(*left) + ":"
-                        + std::to_string(*right)
-                        + " are outside or reverse the source's declared "
-                          "packed range",
+                    "a part-select requires an inferable packed source, "
+                    "constant in-range bounds, a positive indexed width, "
+                    "and compatible direction",
                     expression.span);
                 return std::nullopt;
             }
@@ -3530,13 +3577,13 @@ private:
                 return std::nullopt;
             }
             const auto destination = allocate_register(
-                static_cast<std::size_t>(width),
+                selection->width,
                 register_domain(*source));
             process_.operations.emplace_back(Extract{
                 destination,
                 *source,
-                static_cast<std::uint32_t>(*offset),
-                static_cast<std::uint32_t>(width)});
+                static_cast<std::uint32_t>(selection->offset),
+                static_cast<std::uint32_t>(selection->width)});
             return destination;
         }
         if (language_ != frontend::Language::Vhdl2008
@@ -4153,6 +4200,17 @@ private:
         }
         if (expression.kind == ExpressionKind::Slice
             && expression.operands.size() == 3) {
+            if (expression.text == "+:"
+                || expression.text == "-:") {
+                const auto width =
+                    constant_index(expression.operands[2]);
+                if (width && *width > 0
+                    && static_cast<std::uint64_t>(*width)
+                        <= std::numeric_limits<std::size_t>::max()) {
+                    return static_cast<std::size_t>(*width);
+                }
+                return std::nullopt;
+            }
             const auto left = constant_index(expression.operands[1]);
             const auto right = constant_index(expression.operands[2]);
             if (left && right) {

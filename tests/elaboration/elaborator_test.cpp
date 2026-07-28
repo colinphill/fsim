@@ -402,8 +402,12 @@ module systemverilog_package_user #(
   output result_t observed
 );
   typedef result_t local_result_t;
+  typedef struct packed {
+    logic [0:3] payload;
+  } ascending_packet_t;
   packet_t packet;
   overlay_t overlay;
+  ascending_packet_t ascending_packet;
   result_t struct_payload;
   generate
     if (1) begin : typed
@@ -415,10 +419,15 @@ module systemverilog_package_user #(
     packet_t local_packet;
     local_packet.payload = INITIAL;
     local_packet.valid = 1'b1;
-    local_packet.payload[1:0] = 2'b10;
+    local_packet.payload[0 +: 2] = 2'b10;
     packet = local_packet;
     overlay.payload = INITIAL;
-    overlay.mirror[WIDTH-1:2] = packet.payload[WIDTH-1:2];
+    overlay.mirror[WIDTH-1 -: 2] =
+      packet.payload[WIDTH-1 -: 2];
+    ascending_packet.payload = 4'b1010;
+    ascending_packet.payload[0 +: 2] = 2'b01;
+    ascending_packet.payload[3 -: 2] =
+      ascending_packet.payload[0 +: 2];
   end
   packet_passthrough u_passthrough(
     .packet(packet),
@@ -515,6 +524,10 @@ endmodule
         systemverilog_package_elaborated.design->find_signal(
             "systemverilog_package_user.struct_payload");
     assert(systemverilog_struct_payload);
+    const auto systemverilog_ascending_packet =
+        systemverilog_package_elaborated.design->find_signal(
+            "systemverilog_package_user.ascending_packet");
+    assert(systemverilog_ascending_packet);
     const auto& systemverilog_package_dependencies =
         systemverilog_package_elaborated.design
             ->specializations()
@@ -556,6 +569,11 @@ endmodule
             ->signal_value(*systemverilog_struct_payload)
             .to_msb_string()
         == "0110");
+    assert(
+        systemverilog_package_interpreter
+            ->signal_value(*systemverilog_ascending_packet)
+            .to_msb_string()
+        == "0101");
 
     const auto invalid_systemverilog_packages =
         fsim::frontend::parse_text(
@@ -622,6 +640,9 @@ module invalid_systemverilog_package_user;
   invalid_packet_t invalid_packet;
   valid_packet_t valid_packet;
   initial valid_packet.field[2+2] = 1'b0;
+  initial valid_packet.field[0 +: 0] = 1'b0;
+  initial valid_packet.field[3 +: 2] = 2'b00;
+  initial valid_packet.field[0 -: 2] = 2'b00;
   assign value = first_values::second_values::VALUE;
   assign value = invalid_packet.payload;
 endmodule
@@ -652,6 +673,14 @@ endmodule
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));
     }
+    assert(
+        std::count_if(
+            invalid_systemverilog_package_result.diagnostics.begin(),
+            invalid_systemverilog_package_result.diagnostics.end(),
+            [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-ELAB-068";
+            })
+        >= 4);
 
     const auto generic_parsed = fsim::frontend::parse_text(
         "generic-specialization.vhd",

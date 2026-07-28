@@ -3037,7 +3037,19 @@ class VerilogParser final : private detail::ParserBase {
         expression.span = cover(expression.span, selected.span);
       } else if (match(TokenKind::LeftBracket)) {
         Expression first = parse_expression();
-        if (match(TokenKind::Colon)) {
+        if (at(TokenKind::PlusColon)
+            || at(TokenKind::MinusColon)) {
+          const auto direction = advance();
+          Expression width = parse_expression();
+          expect(TokenKind::RightBracket,
+                 "']' after indexed part-select",
+                 "FSIM-SV-PARSE-025");
+          expression =
+              Expression{ExpressionKind::Slice, direction.text,
+                         {std::move(expression), std::move(first),
+                          std::move(width)},
+                         cover(expression.span, previous().span)};
+        } else if (match(TokenKind::Colon)) {
           Expression second = parse_expression();
           expect(TokenKind::RightBracket, "']' after part-select",
                  "FSIM-SV-PARSE-025");
@@ -3243,7 +3255,19 @@ class VerilogParser final : private detail::ParserBase {
         expression.span = cover(expression.span, member.span);
       } else if (match(TokenKind::LeftBracket)) {
         Expression first = parse_expression();
-        if (match(TokenKind::Colon)) {
+        if (at(TokenKind::PlusColon)
+            || at(TokenKind::MinusColon)) {
+          const auto direction = advance();
+          Expression width = parse_expression();
+          expect(TokenKind::RightBracket,
+                 "']' after indexed part-select",
+                 "FSIM-SV-PARSE-032");
+          expression =
+              Expression{ExpressionKind::Slice, direction.text,
+                         {std::move(expression), std::move(first),
+                          std::move(width)},
+                         cover(expression.span, previous().span)};
+        } else if (match(TokenKind::Colon)) {
           Expression second = parse_expression();
           expect(TokenKind::RightBracket, "']' after part-select",
                  "FSIM-SV-PARSE-032");
