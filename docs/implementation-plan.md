@@ -1034,9 +1034,13 @@ All ten implementation features are complete:
 Focused frontend, diagnostics, elaboration, runtime, LLVM O0/O2,
 application, CLI, Tcl, and native API tests pass. The generated-code semantic
 change advances the persistent native-object schema to v12 so older cached
-assertion code cannot be reused. The scheduled full local regression and gate
-record follow in a separate checkpoint commit. GitHub Actions state remains
-unqueried unless explicitly requested.
+assertion code cannot be reused. The exact LLVM 22.1.8 warnings-as-errors
+regression then passed all 25 tests in 171.12 seconds on 2026-07-28. This
+includes the frontend, project and diagnostics catalogs, cache, elaboration,
+SystemC header/ABI/plugin/compiler, strict JIT C ABI, LLVM, interpreter/O0/O2
+application differentials, Tcl 9 selection/relocation/callbacks, native API/C
+header, and runtime suites. The batch ends at feature commit `eeeea28`; no
+GitHub Actions state was queried for this local gate.
 
 ## v1 release condition
 
