@@ -183,6 +183,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-117` | error | Expected `<=` before selected-assignment waveforms. |
 | `FSIM-VHDL-PARSE-118` | error | Expected `when` after a selected-assignment waveform. |
 | `FSIM-VHDL-PARSE-119` | error | Expected `;` after a selected signal assignment. |
+| `FSIM-VHDL-PARSE-120` | error | Expected `)` after a VHDL array-attribute dimension. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -210,6 +211,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-027` | error | A selected assignment contains more than one `others` alternative. |
 | `FSIM-VHDL-SEM-028` | error | A selected-assignment alternative follows `others`. |
 | `FSIM-VHDL-SEM-029` | error | The bounded selected-assignment form has no final `others` alternative. |
+| `FSIM-VHDL-SEM-030` | error | The selected VHDL attribute is outside the bounded supported array-attribute set. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -544,6 +546,7 @@ therefore excluded.
 | `FSIM-ELAB-090` | error | `$dimensions` or `$unpacked_dimensions` is used outside SystemVerilog or without one statically sized packed argument. |
 | `FSIM-ELAB-091` | error | Bounded VHDL packed exponentiation has a dynamic or negative exponent. |
 | `FSIM-ELAB-092` | error | A VHDL conditional-assignment condition is not Boolean. |
+| `FSIM-ELAB-093` | error | A VHDL array attribute has no representable static packed range or selects an unsupported dimension. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

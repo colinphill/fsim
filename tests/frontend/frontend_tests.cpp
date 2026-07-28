@@ -1364,6 +1364,73 @@ end architecture;
       "a VHDL conditional assignment without else must be diagnosed");
 }
 
+void test_vhdl_array_attributes() {
+  const auto result = parse_text(
+      "array_attributes.vhd",
+      R"(
+entity array_attributes is
+end entity;
+
+architecture rtl of array_attributes is
+  signal descending : std_logic_vector(7 downto 4);
+  signal result : signed(31 downto 0);
+  signal direction : boolean;
+begin
+  observe: process
+  begin
+    result <= descending'left;
+    result <= descending'right(1);
+    result <= descending'low;
+    result <= descending'high;
+    result <= descending'length;
+    direction <= descending'ascending;
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "bounded VHDL array attributes must parse");
+  const auto& statements =
+      result.design.units.back().processes.front().statements;
+  const std::array<std::string_view, 6> attributes{
+      "'left", "'right", "'low", "'high", "'length",
+      "'ascending"};
+  require(statements.size() == 7, "VHDL attribute statement count");
+  for (std::size_t index = 0; index < attributes.size(); ++index) {
+    require(
+        statements[index].value.kind == ExpressionKind::Call
+            && statements[index].value.text == attributes[index]
+            && statements[index].value.operands.front().text
+                == "descending",
+        "VHDL attribute call HIR");
+  }
+  require(
+      statements[1].value.operands.size() == 2
+          && statements[1].value.operands[1].text == "1",
+      "VHDL attribute optional dimension");
+
+  const auto unsupported = parse_text(
+      "unsupported_attribute.vhd",
+      R"(
+architecture rtl of unsupported_attribute is
+  signal value : bit_vector(3 downto 0);
+  signal result : signed(31 downto 0);
+begin
+  result <= value'instance_name;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !unsupported.ok()
+          && std::ranges::any_of(
+              unsupported.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-030";
+              }),
+      "unsupported VHDL attributes must be targeted");
+}
+
 void test_vhdl_selected_assignments() {
   const auto result = parse_text(
       "selected_assignment.vhd",
@@ -5123,6 +5190,7 @@ int main() {
     test_systemverilog_final_procedures();
     test_verilog_stop_task();
     test_vhdl_conditional_assignments();
+    test_vhdl_array_attributes();
     test_vhdl_selected_assignments();
     test_vhdl_case_statements();
     test_vhdl_sequential_for_loops();

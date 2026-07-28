@@ -44,6 +44,12 @@ interfaces or test scaffolding exist.
   runtime configuration.
 - Cross-language selection remains explicit through `fsim.toml`; fsim never
   guesses a SystemC, VHDL, or Verilog/SystemVerilog target by name.
+- Tcl is the first scripted automation surface. Interactive and batch Tcl
+  commands must wrap the same project, session, debugger, and callback model
+  as the CLI and native C API; they do not own a separate simulation kernel.
+- Python automation follows later, after the Tcl command model and opaque
+  native session/object ABI are stable. It must reuse those semantics rather
+  than introduce a second control path.
 
 ## Current validated baseline
 
@@ -286,7 +292,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 622 unique current production diagnostic codes.
+- a stable catalog covering 625 unique current production diagnostic codes.
 
 Current and most recent aggregate Linux regression snapshots:
 
@@ -321,6 +327,7 @@ Current and most recent aggregate Linux regression snapshots:
 | SystemVerilog final procedures | Exact LLVM 22 frontend/runtime/diagnostic-catalog plus the fast expression application target for noninitializing final-process metadata, exactly-once natural-quiescence and `$finish` execution, stable ordering, stopped-identity preservation, suspension/NBA rejection, Verilog-2005 rejection, and interpreter/LLVM O0/O2 equivalence |
 | Verilog/SystemVerilog resumable stop | Exact LLVM 22 frontend/runtime/compiler/diagnostic-catalog plus the fast expression application target for `$stop` and `$stop(argument)`, distinct non-design pause identity, next-instruction frame preservation, deferred finals, explicit clear-and-resume, and interpreter/LLVM O0/O2 equivalence |
 | SystemVerilog fatal task | Exact LLVM 22 frontend/diagnostic-catalog plus focused source failure execution for standalone and immediate-assertion `$fatal`, optional numeric finish control, literal message retention, Verilog-2005 rejection, and the common interpreter/LLVM O0/O2 failure-severity path |
+| VHDL packed-object attributes | Exact LLVM 22 frontend/elaboration/diagnostic-catalog plus the fast expression application target for `'left`/`'right`/`'low`/`'high`/`'length`/`'ascending`, optional dimension `1`, declared ascending/descending ranges, and interpreter/LLVM O0/O2 equivalence |
 | VHDL conditional assignments | Exact LLVM 22 frontend/elaboration/diagnostic-catalog plus the fast expression application target for concurrent and sequential VHDL-2008 `when`/`else` assignments, chained source-order alternatives, Boolean-condition enforcement, missing-else recovery, and interpreter/LLVM O0/O2 equivalence |
 | VHDL selected signal assignments | Exact LLVM 22 frontend/diagnostic-catalog plus the fast expression application target for labeled/unlabeled `with`/`select`, grouped exact choices, final `others`, retained waveform delays, inferred selector/value sensitivity, timed reactive selection, and interpreter/LLVM O0/O2 equivalence |
 | VHDL clock-edge guards | Exact LLVM 22 frontend/elaboration plus the fast expression application target for sole outer `rising_edge`/`falling_edge` sensitivity refinement, negative-edge scheduling, and interpreter/LLVM O0/O2 equivalence |
@@ -673,10 +680,19 @@ The next development iterations should occur in this order:
    SystemC hierarchy directions, and delay/delta/NBA matrices.
 5. **Implement procedural testbenches and the SystemC kernel:** dynamic data,
    files/random/events, factories, channels, methods, and fibers.
-6. **Complete visibility:** source-level debugger behavior, trace selection,
-   public API metadata, and normalized differential trace tests.
+6. **Complete visibility and automation:** source-level debugger behavior,
+   trace selection, public API metadata, interactive `fsim tcl`, batch
+   `fsim tcl SCRIPT [ARG ...]`, and normalized differential trace/control
+   tests. Tcl commands cover project load/check/build, hierarchy/value access,
+   run/stop/step, breakpoints, force/deposit/release, trace selection,
+   diagnostics, callbacks, and deterministic batch exit status.
 7. **Harden for release:** Windows LLVM gates, fuzzing, Unicode/path behavior,
    cache eviction/fingerprinting, benchmarks, and full feature-matrix closure.
+
+After v1 Tcl and native-C control surfaces stabilize, plan an interactive and
+batch Python interface over the same opaque handles and operations. Python
+packaging, stable-ABI policy, notebook integration, and async ergonomics are
+post-v1 scope.
 
 Each iteration must add or update feature-matrix evidence and run through the
 interpreter/JIT differential harness once the affected operation is supported
@@ -693,6 +709,9 @@ fsim v1 may be declared only when:
 - Ubuntu x86-64/GCC and Windows x86-64/MSVC Debug and Release gates pass;
 - LLVM 22.1.8, cache, SystemC plug-in, VCD, debugger, sanitizer, and fuzz gates
   are green;
+- interactive and batch Tcl behavior passes on Windows and Linux, including
+  script arguments, diagnostics, stop/resume, callbacks, and nonzero batch
+  exit status after a command failure;
 - recursive VHDL/SystemVerilog/SystemC hierarchy passes elaboration and runtime
   matrices in every parent-to-child language direction, including mixed
   hierarchy rooted at SystemC;

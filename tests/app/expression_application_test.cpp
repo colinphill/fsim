@@ -916,6 +916,89 @@ void test_systemverilog_fatal(
 #endif
 }
 
+void test_vhdl_array_attributes(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "vhdl-array-attribute-test";
+  config.project.top = "vhdl:work.attribute_app(rtl)";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "attribute-cache-o0"
+             : "attribute-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    print_diagnostics(diagnostics);
+  }
+  assert(reference_project);
+  assert(compiled_project);
+
+  const std::array<std::string, 12> paths{
+      "attribute_app.descending_left",
+      "attribute_app.descending_right",
+      "attribute_app.descending_low",
+      "attribute_app.descending_high",
+      "attribute_app.descending_length",
+      "attribute_app.descending_ascending",
+      "attribute_app.ascending_left",
+      "attribute_app.ascending_right",
+      "attribute_app.ascending_low",
+      "attribute_app.ascending_high",
+      "attribute_app.ascending_length",
+      "attribute_app.ascending_ascending"};
+  const auto reference = run(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter,
+      paths);
+  const auto compiled = run(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled,
+      paths);
+  assert(reference.result.status == fsim::runtime::RunStatus::completed);
+  assert(reference.result.status == compiled.result.status);
+  assert(reference.values == compiled.values);
+  assert((
+      compiled.values
+      == std::vector<std::string>{
+          "00000000000000000000000000000111",
+          "00000000000000000000000000000100",
+          "00000000000000000000000000000100",
+          "00000000000000000000000000000111",
+          "00000000000000000000000000000100",
+          "0",
+          "00000000000000000000000000000010",
+          "00000000000000000000000000000101",
+          "00000000000000000000000000000010",
+          "00000000000000000000000000000101",
+          "00000000000000000000000000000100",
+          "1"}));
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes == 1);
+  assert(compiled.compiled_modules == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -1312,6 +1395,48 @@ module fatal_app;
 endmodule
 )";
   }
+  const auto attribute_source = directory.path / "attributes.vhd";
+  {
+    std::ofstream output(attribute_source);
+    output << R"(
+entity attribute_app is
+end entity;
+
+architecture rtl of attribute_app is
+  signal descending : std_logic_vector(7 downto 4);
+  signal ascending : std_logic_vector(2 to 5);
+  signal descending_left : signed(31 downto 0);
+  signal descending_right : signed(31 downto 0);
+  signal descending_low : signed(31 downto 0);
+  signal descending_high : signed(31 downto 0);
+  signal descending_length : signed(31 downto 0);
+  signal descending_ascending : boolean;
+  signal ascending_left : signed(31 downto 0);
+  signal ascending_right : signed(31 downto 0);
+  signal ascending_low : signed(31 downto 0);
+  signal ascending_high : signed(31 downto 0);
+  signal ascending_length : signed(31 downto 0);
+  signal ascending_ascending : boolean;
+begin
+  observe: process
+  begin
+    descending_left <= descending'left;
+    descending_right <= descending'right(1);
+    descending_low <= descending'low;
+    descending_high <= descending'high;
+    descending_length <= descending'length;
+    descending_ascending <= descending'ascending;
+    ascending_left <= ascending'left;
+    ascending_right <= ascending'right;
+    ascending_low <= ascending'low;
+    ascending_high <= ascending'high;
+    ascending_length <= ascending'length(1);
+    ascending_ascending <= ascending'ascending;
+    wait;
+  end process;
+end architecture;
+)";
+  }
 
   test_wildcard_equality(
       directory.path, source, fsim::project::Optimization::o0);
@@ -1380,5 +1505,13 @@ endmodule
   test_systemverilog_fatal(
       directory.path,
       fatal_source,
+      fsim::project::Optimization::o2);
+  test_vhdl_array_attributes(
+      directory.path,
+      attribute_source,
+      fsim::project::Optimization::o0);
+  test_vhdl_array_attributes(
+      directory.path,
+      attribute_source,
       fsim::project::Optimization::o2);
 }

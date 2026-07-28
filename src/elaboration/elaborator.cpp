@@ -4732,6 +4732,98 @@ private:
             return destination;
         }
         if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && (expression.text == "'left"
+                || expression.text == "'right"
+                || expression.text == "'low"
+                || expression.text == "'high"
+                || expression.text == "'length"
+                || expression.text == "'ascending")) {
+            if (expression.operands.empty()
+                || expression.operands.size() > 2) {
+                report(
+                    "FSIM-ELAB-093",
+                    expression.text
+                        + " requires one bounded array object and at "
+                          "most one dimension",
+                    expression.span);
+                return std::nullopt;
+            }
+            if (expression.operands.size() == 2) {
+                const auto dimension =
+                    constant_index(expression.operands[1]);
+                if (!dimension || *dimension != 1) {
+                    report(
+                        "FSIM-ELAB-093",
+                        expression.text
+                            + " supports only the constant dimension 1",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+            }
+            const auto operand_width =
+                infer_width(expression.operands.front());
+            const auto range =
+                operand_width
+                    ? expression_range(
+                          expression.operands.front(),
+                          *operand_width)
+                    : std::nullopt;
+            if (!operand_width || !range || *operand_width == 0
+                || *operand_width
+                    > std::numeric_limits<std::int32_t>::max()) {
+                report(
+                    "FSIM-ELAB-093",
+                    expression.text
+                        + " cannot infer a representable static packed "
+                          "range for its object",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            if (expression.text == "'ascending") {
+                const auto destination = allocate_register(
+                    1, frontend::ValueDomain::Boolean);
+                process_.operations.emplace_back(LoadConstant{
+                    destination,
+                    PackedLogic4(
+                        1,
+                        range->descending
+                            ? Logic4::zero
+                            : Logic4::one)});
+                return destination;
+            }
+            std::int64_t result = 0;
+            if (expression.text == "'left") {
+                result = range->left;
+            } else if (expression.text == "'right") {
+                result = range->right;
+            } else if (expression.text == "'low") {
+                result = std::min(range->left, range->right);
+            } else if (expression.text == "'high") {
+                result = std::max(range->left, range->right);
+            } else {
+                result = static_cast<std::int64_t>(*operand_width);
+            }
+            if (result < std::numeric_limits<std::int32_t>::min()
+                || result
+                    > std::numeric_limits<std::int32_t>::max()) {
+                report(
+                    "FSIM-ELAB-093",
+                    expression.text
+                        + " result is outside the bounded 32-bit "
+                          "integer range",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                32, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant{
+                destination,
+                unsigned_value(
+                    static_cast<std::uint32_t>(result), 32)});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
             && language_ != frontend::Language::Vhdl2008
             && (expression.text == "$signed"
                 || expression.text == "$unsigned")) {
@@ -5703,6 +5795,20 @@ private:
             return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && (expression.text == "'left"
+                || expression.text == "'right"
+                || expression.text == "'low"
+                || expression.text == "'high"
+                || expression.text == "'length")) {
+            return std::size_t{32};
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'ascending") {
+            return std::size_t{1};
+        }
+        if (expression.kind == ExpressionKind::Call
             && (expression.text == "$left"
                 || expression.text == "$right"
                 || expression.text == "$low"
@@ -5859,6 +5965,18 @@ private:
             }
             return is_signed_expression(expression.operands[0]);
         case ExpressionKind::Call:
+            if (language_ == frontend::Language::Vhdl2008
+                && (expression.text == "'left"
+                    || expression.text == "'right"
+                    || expression.text == "'low"
+                    || expression.text == "'high"
+                    || expression.text == "'length")) {
+                return true;
+            }
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.text == "'ascending") {
+                return false;
+            }
             if (language_ != frontend::Language::Vhdl2008
                 && expression.operands.size() == 1
                 && expression.text == "$signed") {

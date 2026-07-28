@@ -4,6 +4,7 @@
 #include "parser_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -2231,6 +2232,42 @@ class VhdlParser final : private detail::ParserBase {
       while (match(TokenKind::Dot)) {
         canonical += '.';
         canonical += vhdl_name(expect_identifier("selected name").text);
+      }
+      if (match(TokenKind::Apostrophe)) {
+        const auto attribute =
+            expect_identifier("attribute designator");
+        const auto designator = vhdl_name(attribute.text);
+        static constexpr std::array<std::string_view, 6>
+            supported_attributes{
+                "left", "right", "low", "high", "length",
+                "ascending"};
+        if (std::ranges::find(
+                supported_attributes, designator)
+            == supported_attributes.end()) {
+          error(
+              attribute,
+              "FSIM-VHDL-SEM-030",
+              "unsupported bounded array attribute '"
+                  + attribute.text + "'");
+        }
+        std::vector<Expression> operands{
+            Expression{
+                ExpressionKind::Identifier,
+                canonical,
+                {},
+                name.span}};
+        if (match(TokenKind::LeftParen)) {
+          operands.push_back(parse_expression());
+          expect(
+              TokenKind::RightParen,
+              "')' after attribute dimension",
+              "FSIM-VHDL-PARSE-120");
+        }
+        return Expression{
+            ExpressionKind::Call,
+            "'" + designator,
+            std::move(operands),
+            cover(name.span, previous().span)};
       }
       if (match(TokenKind::LeftParen)) {
         const auto base =

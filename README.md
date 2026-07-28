@@ -108,6 +108,8 @@ The current tree contains:
   Boolean `when`/`else` alternatives;
 - VHDL `with`/`select` concurrent signal assignments with grouped exact
   choices, a final `others`, inferred sensitivity, and optional waveform delay;
+- VHDL packed-object `'left`, `'right`, `'low`, `'high`, `'length`, and
+  `'ascending` attributes with declared-direction preservation;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and
@@ -288,6 +290,11 @@ Boost.Context 1.91.0 package and otherwise fetches Boost's official pinned
 source archive with SHA-256 verification. Set
 `FSIM_SYSTEMC_FIBER_MODE=OFF` only for a dependency-free build that
 intentionally diagnoses `SC_THREAD`/`SC_CTHREAD` as non-executable.
+
+The v1 automation roadmap includes a first-class Tcl interface for both an
+interactive shell and batch scripts, backed by the same project/session/debug
+operations as the CLI and native C API. Interactive and batch Python support
+is planned later, after the Tcl and native control contracts stabilize.
 
 ## Build and test
 
