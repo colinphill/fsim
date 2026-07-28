@@ -6770,6 +6770,13 @@ endmodule
       == 0);
   assert(debug_error.str().empty());
   const auto transcript = debug_output.str();
+  auto normalized_transcript = transcript;
+  std::replace(
+      normalized_transcript.begin(),
+      normalized_transcript.end(),
+      '\\',
+      '/');
+  const auto normalized_source = source.generic_string();
   assert(transcript.find("tb.u_child") != std::string::npos);
   assert(
       transcript.find("tb.u_child.value = X") != std::string::npos);
@@ -6787,14 +6794,14 @@ endmodule
       transcript.find("breakpoint 3 set at tb.sv:14")
       != std::string::npos);
   assert(
-      transcript.find(
-          "hit breakpoint 3: " + source.string() + ":14:")
+      normalized_transcript.find(
+          "hit breakpoint 3: " + normalized_source + ":14:")
       != std::string::npos);
   assert(
-      transcript.find(" at " + source.string() + ":15:")
+      normalized_transcript.find(" at " + normalized_source + ":15:")
       != std::string::npos);
   assert(
-      transcript.find(" at " + source.string() + ":16:")
+      normalized_transcript.find(" at " + normalized_source + ":16:")
       != std::string::npos);
   assert(
       transcript.find("local_state = 0") != std::string::npos);
