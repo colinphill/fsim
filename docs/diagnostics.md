@@ -393,6 +393,9 @@ therefore excluded.
 | `FSIM-SV-PARSE-111` | error | Expected `final` at the start of a SystemVerilog final procedure. |
 | `FSIM-SV-PARSE-112` | error | Expected `)` after a Verilog/SystemVerilog `$stop` argument. |
 | `FSIM-SV-PARSE-113` | error | Expected `;` after a Verilog/SystemVerilog `$stop` task. |
+| `FSIM-SV-PARSE-114` | error | Expected a literal message after a SystemVerilog `$fatal` finish argument. |
+| `FSIM-SV-PARSE-115` | error | Expected `)` after SystemVerilog `$fatal` arguments. |
+| `FSIM-SV-PARSE-116` | error | Expected `;` after a SystemVerilog `$fatal` task. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -409,6 +412,7 @@ therefore excluded.
 | `FSIM-VERILOG-SEM-004` | error | A SystemVerilog-only wildcard equality operator was used in Verilog-2005. |
 | `FSIM-VERILOG-SEM-005` | error | Compound assignments or standalone increment/decrement were used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-006` | error | A `final` procedure was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-007` | error | `$fatal` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal integer literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |

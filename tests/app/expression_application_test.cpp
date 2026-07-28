@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -37,6 +38,15 @@ struct StopCapture {
   fsim::runtime::RunResult resumed;
   std::vector<std::string> paused_values;
   std::vector<std::string> resumed_values;
+  std::size_t compiled_processes{};
+  std::size_t compiled_modules{};
+};
+
+struct FatalCapture {
+  fsim::runtime::simir::AssertionSeverity severity{};
+  std::string message;
+  std::uint32_t line{};
+  std::uint32_t column{};
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
 };
@@ -110,6 +120,26 @@ template <std::size_t SignalCount>
   for (const auto signal : signals) {
     capture.resumed_values.push_back(
         simulation.read_signal(signal).to_msb_string());
+  }
+  return capture;
+}
+
+[[nodiscard]] FatalCapture run_fatal(
+    fsim::app::BuiltProject project,
+    const fsim::app::SimulationEngine engine) {
+  fsim::app::Simulation simulation(
+      std::move(project), 1000, engine);
+  FatalCapture capture;
+  capture.compiled_processes = simulation.compiled_process_count();
+  capture.compiled_modules = simulation.compiled_module_count();
+  try {
+    (void)simulation.run();
+    assert(false && "$fatal must fail simulation");
+  } catch (const fsim::runtime::simir::AssertionError& error) {
+    capture.severity = error.severity();
+    capture.message = error.what();
+    capture.line = error.source().line;
+    capture.column = error.source().column;
   }
   return capture;
 }
@@ -828,6 +858,64 @@ void test_verilog_stop(
 #endif
 }
 
+void test_systemverilog_fatal(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "systemverilog-fatal-test";
+  config.project.top = "sv:work.fatal_app";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "fatal-cache-o0"
+             : "fatal-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::system_verilog;
+  sources.standard = "2017";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    print_diagnostics(diagnostics);
+  }
+  assert(reference_project);
+  assert(compiled_project);
+
+  const auto reference = run_fatal(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto compiled = run_fatal(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled);
+  assert(reference.severity
+         == fsim::runtime::simir::AssertionSeverity::failure);
+  assert(reference.severity == compiled.severity);
+  assert(reference.message == compiled.message);
+  assert(reference.line == compiled.line);
+  assert(reference.column == compiled.column);
+  assert(reference.message.find("fatal source message")
+         != std::string::npos);
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes == 1);
+  assert(compiled.compiled_modules == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -1215,6 +1303,15 @@ module stop_app;
 endmodule
 )";
   }
+  const auto fatal_source = directory.path / "fatal.sv";
+  {
+    std::ofstream output(fatal_source);
+    output << R"(
+module fatal_app;
+  initial $fatal(1, "fatal source message");
+endmodule
+)";
+  }
 
   test_wildcard_equality(
       directory.path, source, fsim::project::Optimization::o0);
@@ -1275,5 +1372,13 @@ endmodule
   test_verilog_stop(
       directory.path,
       stop_source,
+      fsim::project::Optimization::o2);
+  test_systemverilog_fatal(
+      directory.path,
+      fatal_source,
+      fsim::project::Optimization::o0);
+  test_systemverilog_fatal(
+      directory.path,
+      fatal_source,
       fsim::project::Optimization::o2);
 }

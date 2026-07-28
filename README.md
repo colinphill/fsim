@@ -117,6 +117,8 @@ The current tree contains:
   `$finish`, with interpreter/LLVM lifecycle equivalence;
 - resumable Verilog-2005/SystemVerilog `$stop`, preserving the next statement
   and deferring final procedures until resumed completion;
+- SystemVerilog `$fatal` as a standalone task or immediate-assertion failure
+  action, retaining failure severity and a bounded literal message;
 - vector-aware SystemVerilog logical negation and unsigned
   equality/relational comparisons with four-state unknown propagation, plus
   exact known-result `===`/`!==` comparison of `0`/`1`/`X`/`Z`;

@@ -2795,7 +2795,7 @@ end architecture;
       "bad_assertion.sv",
       R"(
 module bad_assertion;
-  initial assert (1'b0) else $fatal;
+  initial assert (1'b0) else $warning;
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -2808,6 +2808,51 @@ endmodule
                 return diagnostic.code == "FSIM-SV-PARSE-041";
               }),
       "unsupported SystemVerilog assertion action diagnostic");
+
+  const auto fatal = parse_text(
+      "fatal.sv",
+      R"(
+module fatal_tasks;
+  initial begin
+    $fatal;
+    $fatal("standalone fatal");
+    $fatal(1, "controlled fatal");
+    assert (1'b0) else $fatal("assertion fatal");
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(fatal.ok(), "bounded SystemVerilog $fatal forms must parse");
+  const auto& fatal_statements =
+      fatal.design.units.front().processes.front().statements;
+  require(
+      fatal_statements.size() == 4
+          && std::ranges::all_of(
+              fatal_statements,
+              [](const auto& statement) {
+                return statement.kind == StatementKind::Assert
+                    && statement.assertion_severity
+                        == AssertionSeverity::Failure;
+              })
+          && fatal_statements[0].assertion_message == "$fatal"
+          && fatal_statements[1].assertion_message == "standalone fatal"
+          && fatal_statements[2].assertion_message == "controlled fatal"
+          && fatal_statements[3].assertion_message == "assertion fatal",
+      "standalone and assertion-action $fatal metadata");
+
+  const auto verilog_fatal = parse_text(
+      "fatal.v",
+      "module fatal_v; initial $fatal; endmodule",
+      Language::Verilog2005);
+  require(
+      !verilog_fatal.ok()
+          && std::ranges::any_of(
+              verilog_fatal.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-007";
+              }),
+      "$fatal must remain SystemVerilog-only");
 }
 
 void test_process_variable_declarations() {

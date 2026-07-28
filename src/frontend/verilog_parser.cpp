@@ -3273,6 +3273,36 @@ class VerilogParser final : private detail::ParserBase {
     return statement;
   }
 
+  void parse_fatal_arguments(Statement& statement) {
+    statement.assertion_message = "$fatal";
+    statement.assertion_severity = AssertionSeverity::Failure;
+    if (!match(TokenKind::LeftParen)) {
+      return;
+    }
+    if (!at(TokenKind::RightParen)) {
+      if (at(TokenKind::StringLiteral)) {
+        statement.assertion_message =
+            string_literal_text(advance());
+      } else {
+        // Accept and ignore the standard numeric finish control while
+        // retaining one bounded literal display message.
+        (void)parse_expression();
+        if (match(TokenKind::Comma)) {
+          const auto message = expect(
+              TokenKind::StringLiteral,
+              "literal message after the $fatal finish argument",
+              "FSIM-SV-PARSE-114");
+          statement.assertion_message =
+              string_literal_text(message);
+        }
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after $fatal arguments",
+        "FSIM-SV-PARSE-115");
+  }
+
   std::optional<Statement> parse_statement() {
     if (language_ == Language::SystemVerilog2017
         && (keyword("unique") || keyword("unique0")
@@ -3362,18 +3392,45 @@ class VerilogParser final : private detail::ParserBase {
       expect(TokenKind::RightParen, "')' after assertion condition",
              "FSIM-SV-PARSE-040");
       if (match_keyword("else")) {
-        expect_keyword("$error", false, "FSIM-SV-PARSE-041");
-        if (match(TokenKind::LeftParen)) {
-          const auto message = expect(
-              TokenKind::StringLiteral, "string literal passed to $error",
-              "FSIM-SV-PARSE-042");
-          statement.assertion_message = string_literal_text(message);
-          expect(TokenKind::RightParen, "')' after $error message",
-                 "FSIM-SV-PARSE-043");
+        if (match_keyword("$fatal")) {
+          parse_fatal_arguments(statement);
+        } else {
+          expect_keyword("$error", false, "FSIM-SV-PARSE-041");
+          if (match(TokenKind::LeftParen)) {
+            const auto message = expect(
+                TokenKind::StringLiteral, "string literal passed to $error",
+                "FSIM-SV-PARSE-042");
+            statement.assertion_message = string_literal_text(message);
+            expect(TokenKind::RightParen, "')' after $error message",
+                   "FSIM-SV-PARSE-043");
+          }
         }
       }
       expect(TokenKind::Semicolon, "';' after assertion",
              "FSIM-SV-PARSE-044");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
+    if (keyword("$fatal")) {
+      const auto start = advance();
+      Statement statement;
+      statement.kind = StatementKind::Assert;
+      statement.condition = Expression{
+          ExpressionKind::IntegerLiteral,
+          "0",
+          {},
+          start.span};
+      if (language_ == Language::Verilog2005) {
+        error(
+            start,
+            "FSIM-VERILOG-SEM-007",
+            "$fatal requires SystemVerilog");
+      }
+      parse_fatal_arguments(statement);
+      expect(
+          TokenKind::Semicolon,
+          "';' after $fatal",
+          "FSIM-SV-PARSE-116");
       statement.span = span_from(start, previous());
       return statement;
     }
