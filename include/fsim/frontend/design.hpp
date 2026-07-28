@@ -276,6 +276,9 @@ struct CaseAlternative;
 struct Statement {
   StatementKind kind{StatementKind::Null};
   SourceSpan span;
+  // Canonical source label when the language permits a labeled statement.
+  // Concurrent VHDL assertions use this for stable process/debug naming.
+  std::string label;
 
   AssignmentKind assignment_kind{AssignmentKind::Blocking};
   Expression target;

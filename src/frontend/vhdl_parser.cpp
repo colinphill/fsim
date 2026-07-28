@@ -754,6 +754,14 @@ class VhdlParser final : private detail::ParserBase {
           label_token ? vhdl_name(label_token->text) : std::string{}));
       return;
     }
+    if (match_keyword("assert", true)) {
+      auto statement = parse_vhdl_assertion(previous());
+      if (label_token) {
+        statement.label = vhdl_name(label_token->text);
+      }
+      unit.concurrent_statements.push_back(std::move(statement));
+      return;
+    }
     if (label_token && match_keyword("if", true)) {
       unit.generate_regions.push_back(
           parse_vhdl_conditional_generate(
@@ -1139,6 +1147,14 @@ class VhdlParser final : private detail::ParserBase {
       if (keyword("process", 0, true)) {
         body.processes.push_back(parse_process(
             label ? vhdl_name(label->text) : std::string{}));
+        continue;
+      }
+      if (match_keyword("assert", true)) {
+        auto statement = parse_vhdl_assertion(previous());
+        if (label) {
+          statement.label = vhdl_name(label->text);
+        }
+        body.concurrent_statements.push_back(std::move(statement));
         continue;
       }
       if (label && match_keyword("if", true)) {
@@ -1581,37 +1597,7 @@ class VhdlParser final : private detail::ParserBase {
       return statement;
     }
     if (match_keyword("assert", true)) {
-      const auto start = previous();
-      Statement statement;
-      statement.kind = StatementKind::Assert;
-      statement.condition = parse_expression();
-      if (match_keyword("report", true)) {
-        const auto message = expect(
-            TokenKind::StringLiteral, "string literal after report",
-            "FSIM-VHDL-PARSE-045");
-        statement.assertion_message = string_literal_text(message);
-      }
-      if (match_keyword("severity", true)) {
-        const auto severity = expect_identifier("assertion severity");
-        const auto canonical = detail::ascii_lower(severity.text);
-        if (canonical == "note") {
-          statement.assertion_severity = AssertionSeverity::Note;
-        } else if (canonical == "warning") {
-          statement.assertion_severity = AssertionSeverity::Warning;
-        } else if (canonical == "error") {
-          statement.assertion_severity = AssertionSeverity::Error;
-        } else if (canonical == "failure") {
-          statement.assertion_severity = AssertionSeverity::Failure;
-        } else {
-          error(
-              severity, "FSIM-VHDL-SEM-011",
-              "assertion severity must be note, warning, error, or failure");
-        }
-      }
-      expect(TokenKind::Semicolon, "';' after assertion",
-             "FSIM-VHDL-PARSE-046");
-      statement.span = span_from(start, previous());
-      return statement;
+      return parse_vhdl_assertion(previous());
     }
     if (match_keyword("if", true)) {
       const auto start = previous();
@@ -1857,6 +1843,39 @@ class VhdlParser final : private detail::ParserBase {
               unsupported.text + "'");
     skip_to_semicolon();
     return std::nullopt;
+  }
+
+  Statement parse_vhdl_assertion(const Token& start) {
+    Statement statement;
+    statement.kind = StatementKind::Assert;
+    statement.condition = parse_expression();
+    if (match_keyword("report", true)) {
+      const auto message = expect(
+          TokenKind::StringLiteral, "string literal after report",
+          "FSIM-VHDL-PARSE-045");
+      statement.assertion_message = string_literal_text(message);
+    }
+    if (match_keyword("severity", true)) {
+      const auto severity = expect_identifier("assertion severity");
+      const auto canonical = detail::ascii_lower(severity.text);
+      if (canonical == "note") {
+        statement.assertion_severity = AssertionSeverity::Note;
+      } else if (canonical == "warning") {
+        statement.assertion_severity = AssertionSeverity::Warning;
+      } else if (canonical == "error") {
+        statement.assertion_severity = AssertionSeverity::Error;
+      } else if (canonical == "failure") {
+        statement.assertion_severity = AssertionSeverity::Failure;
+      } else {
+        error(
+            severity, "FSIM-VHDL-SEM-011",
+            "assertion severity must be note, warning, error, or failure");
+      }
+    }
+    expect(TokenKind::Semicolon, "';' after assertion",
+           "FSIM-VHDL-PARSE-046");
+    statement.span = span_from(start, previous());
+    return statement;
   }
 
   void validate_opening_loop_label(

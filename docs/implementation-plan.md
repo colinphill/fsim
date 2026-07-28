@@ -286,7 +286,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 592 unique current production diagnostic codes.
+- a stable catalog covering 594 unique current production diagnostic codes.
 
 Current and most recent aggregate Linux regression snapshots:
 
@@ -294,7 +294,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 15/15 tests pass after the wildcard-equality, VHDL shift/rotate, and `$clog2` batch |
+| LLVM 22.1.8 Debug, warnings-as-errors | 15/15 tests pass after the packed VHDL `abs`, concurrent-assertion, SystemVerilog signedness-cast, and `$isunknown` batch (135.51 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -316,6 +316,9 @@ Current and most recent aggregate Linux regression snapshots:
 | SystemVerilog wildcard case semantics | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests for ordered `casez`/`casex`, selector- and choice-side wildcards, known-bit mismatch preservation, defensive HIR rejection, interpreter/JIT equivalence, LLVM O0/O2 truth tables, and operator-sensitive native-cache identity |
 | VHDL packed shifts and rotates | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler plus the fast expression application target and batched ASan/UBSan aggregate pass for `sll`/`srl`/`sla`/`sra` and `rol`/`ror`, including X/Z data, end-element arithmetic fill, oversized counts, modulo-width rotation, and negative-count direction reversal |
 | VHDL packed signed `abs` | GCC Debug and exact LLVM 22 frontend/elaboration plus the fast expression application target pass for known negative, positive, and X/Z-containing values, same-width wrapping, unsigned rejection, and interpreter/LLVM O0/O2 equivalence |
+| VHDL concurrent assertions | Exact LLVM 22 frontend/elaboration plus the fast expression application target for labeled assertion HIR, stable process naming, inferred condition sensitivity, event-driven interpreter failure metadata, and interpreter/LLVM O0/O2 execution |
+| SystemVerilog signedness casts | Exact LLVM 22 frontend/elaboration plus the fast expression application target for bit/width-preserving `$signed`/`$unsigned`, arity rejection, signed/unsigned comparisons, signedness-sensitive `>>>`, and interpreter/LLVM O0/O2 equivalence |
+| SystemVerilog unknown detection | Exact LLVM 22 frontend/elaboration plus the fast expression application target for `$isunknown`, known and X/Z-packed operands, arity/language-version rejection, and interpreter/LLVM O0/O2 equivalence |
 | Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional and labeled VHDL forms, named outer-loop transfers across static/runtime loops, opening/end label validation, guaranteed first execution, trailing-condition continue targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
 | Conditional and combined waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for all bounded VHDL wait-clause combinations and Verilog/SystemVerilog `wait (expression)`, first-suspend versus immediate-test semantics, event/timeout races, absolute-deadline rearming, engine-owned wake-result registers, multi-signal dependency rechecks, debugger-visible permanent suspension, append-only status 9, cache identity, and interpreter/JIT O0/O2 equivalence |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |

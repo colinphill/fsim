@@ -82,10 +82,15 @@ The current tree contains:
   selector-or-choice `Z` versus `X`/`Z` wildcard policies;
 - SystemVerilog `==?`/`!=?` expression lowering with right-operand-only
   `X`/`Z` masking and unmasked left-side unknown propagation;
+- SystemVerilog `$signed`/`$unsigned` casts that preserve packed bits and width
+  while selecting signed or unsigned comparisons and arithmetic shifts;
+- SystemVerilog `$isunknown` detection across complete packed `X`/`Z` values;
 - nested VHDL `if`/`elsif`/`else` with Boolean typing and nested
   Verilog/SystemVerilog `if`/`else` with packed four-state truth conversion;
 - VHDL Boolean literals, equality/inequality, and `not`/`and`/`or`/`xor` plus
   `nand`/`nor`/`xnor` Boolean operations;
+- labeled or unlabeled VHDL concurrent assertions lowered to stable reactive
+  processes with inferred condition sensitivity and retained diagnostics;
 - ordered VHDL sequential packed `case` statements with `|` choices and
   `others`, lowered through common exact case-equality branches;
 - bounded SystemVerilog conditional-expression lowering with exact

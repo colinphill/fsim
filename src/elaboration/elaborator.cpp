@@ -519,6 +519,30 @@ std::optional<std::int64_t> evaluate_constant_expression(
         return result;
     }
     if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$signed"
+            || expression.text == "$unsigned")) {
+        if (expression.operands.size() != 1) {
+            error =
+                expression.text + " requires exactly one argument";
+            return std::nullopt;
+        }
+        return evaluate_constant_expression(
+            expression.operands.front(), environment, error);
+    }
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "$isunknown") {
+        if (expression.operands.size() != 1) {
+            error = "$isunknown requires exactly one argument";
+            return std::nullopt;
+        }
+        const auto operand = evaluate_constant_expression(
+            expression.operands.front(), environment, error);
+        if (!operand) {
+            return std::nullopt;
+        }
+        return 0;
+    }
+    if (expression.kind == ExpressionKind::Call
         && expression.text == "?:"
         && expression.operands.size() == 3) {
         const auto condition = evaluate_constant_expression(
@@ -2564,11 +2588,18 @@ public:
         local_members_.clear();
         loop_controls_.clear();
         process_.id = static_cast<ProcessId>(design_.processes_.size());
-        process_.name = name + ".concurrent_" + std::to_string(order);
+        process_.name = name + "."
+            + (statement.label.empty()
+                   ? "concurrent_" + std::to_string(order)
+                   : statement.label);
         emit_debug_point(DebugPointKind::process_entry, statement.span);
 
         std::set<std::string> dependencies;
-        collect_identifiers(statement.value, dependencies);
+        if (statement.kind == StatementKind::Assert) {
+            collect_identifiers(statement.condition, dependencies);
+        } else {
+            collect_identifiers(statement.value, dependencies);
+        }
         for (const auto& dependency : dependencies) {
             if (const auto found = signals_.find(dependency); found != signals_.end()) {
                 process_.static_sensitivity.push_back({found->second, runtime::simir::EdgeKind::any});
@@ -4637,6 +4668,64 @@ private:
             return destination;
         }
         if (expression.kind == ExpressionKind::Call
+            && language_ != frontend::Language::Vhdl2008
+            && (expression.text == "$signed"
+                || expression.text == "$unsigned")) {
+            if (expression.operands.size() != 1) {
+                report(
+                    "FSIM-ELAB-083",
+                    expression.text
+                        + " requires exactly one packed argument",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source_width =
+                infer_width(expression.operands.front())
+                    .value_or(expected_width);
+            return lower_expression(
+                expression.operands.front(), source_width);
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$isunknown") {
+            if (language_
+                    != frontend::Language::SystemVerilog2017
+                || expression.operands.size() != 1) {
+                report(
+                    "FSIM-ELAB-084",
+                    "$isunknown requires SystemVerilog and exactly one "
+                    "packed argument",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source_width =
+                infer_width(expression.operands.front())
+                    .value_or(expected_width);
+            const auto source = lower_expression(
+                expression.operands.front(), source_width);
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto self_equal = allocate_register(
+                1, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary{
+                BinaryOperator::equal,
+                self_equal,
+                *source,
+                *source});
+            const auto unknown = allocate_register(
+                1, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(LoadConstant{
+                unknown, PackedLogic4(1, Logic4::x)});
+            const auto destination = allocate_register(
+                1, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary{
+                BinaryOperator::case_equal,
+                destination,
+                self_equal,
+                unknown});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
             && (expression.text == "rising_edge"
                 || expression.text == "falling_edge")) {
             report(
@@ -5227,6 +5316,10 @@ private:
             }
             return infer_width(expression.operands[2]);
         }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$isunknown") {
+            return std::size_t{1};
+        }
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
                 local != locals_.end()) {
@@ -5360,6 +5453,16 @@ private:
             }
             return is_signed_expression(expression.operands[0]);
         case ExpressionKind::Call:
+            if (language_ != frontend::Language::Vhdl2008
+                && expression.operands.size() == 1
+                && expression.text == "$signed") {
+                return true;
+            }
+            if (language_ != frontend::Language::Vhdl2008
+                && expression.operands.size() == 1
+                && expression.text == "$unsigned") {
+                return false;
+            }
             if (language_ == frontend::Language::Vhdl2008
                 && expression.operands.size() == 1
                 && (locals_.contains(expression.text)

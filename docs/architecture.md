@@ -416,6 +416,22 @@ original or negated value through the common four-state conditional operation.
 The minimum negative value therefore wraps at its declared width; a negative
 operand containing any `X` or `Z` produces the arithmetic all-unknown result.
 
+SystemVerilog `$signed` and `$unsigned` are bounded packed type casts in the
+current executable path. They preserve the operand's bits, width, and state
+domain while changing the signedness used by enclosing arithmetic shifts,
+comparisons, and arithmetic operations. Constant folding treats either cast as
+a value-preserving operation; incorrect arity is diagnosed before lowering.
+SystemVerilog `$isunknown` compares an operand with itself using ordinary
+four-state equality, then case-compares that scalar result with `X`. The result
+is therefore a known one exactly when any operand bit is `X` or `Z`, and known
+zero otherwise, using operations shared by the interpreter and LLVM paths.
+
+A VHDL concurrent assertion becomes a common implicit process. Its condition
+dependencies form the static sensitivity set, its optional label becomes the
+stable process name, and the existing assertion operation retains message,
+severity, and source metadata. The process executes once at initialization and
+again after each matching signal change.
+
 VHDL `sll` and `srl` use the common zero-filling packed shift operations.
 `sla` replicates the rightmost packed element and `sra` replicates the
 leftmost packed element, including `X` or `Z`. `rol` and `ror` reduce the

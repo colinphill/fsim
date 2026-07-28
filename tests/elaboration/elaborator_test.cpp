@@ -5169,6 +5169,135 @@ endmodule
             .to_msb_string()
         == "1");
 
+    const auto signedness_casts = fsim::frontend::parse_text(
+        "signedness_casts.sv",
+        R"(
+module signedness_casts;
+  logic [3:0] unsigned_value;
+  logic signed [3:0] signed_value;
+  logic signed_less;
+  logic unsigned_less;
+  logic [3:0] signed_shift;
+  logic [3:0] unsigned_shift;
+  logic known_is_unknown;
+  logic xz_is_unknown;
+  always_comb begin
+    signed_less = $signed(unsigned_value) < signed_value;
+    unsigned_less = $unsigned(signed_value) < unsigned_value;
+    signed_shift = $signed(unsigned_value) >>> 1;
+    unsigned_shift = $unsigned(signed_value) >>> 1;
+    known_is_unknown = $isunknown(unsigned_value);
+    xz_is_unknown = $isunknown(4'b10xz);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(signedness_casts.ok());
+    const auto elaborated_signedness_casts =
+        fsim::elaboration::elaborate(
+            signedness_casts.design,
+            "sv:work.signedness_casts");
+    assert(elaborated_signedness_casts.ok());
+    const auto unsigned_cast_input =
+        elaborated_signedness_casts.design->find_signal(
+            "unsigned_value");
+    const auto signed_cast_input =
+        elaborated_signedness_casts.design->find_signal(
+            "signed_value");
+    const std::array signedness_cast_outputs{
+        elaborated_signedness_casts.design->find_signal(
+            "signed_less"),
+        elaborated_signedness_casts.design->find_signal(
+            "unsigned_less"),
+        elaborated_signedness_casts.design->find_signal(
+            "signed_shift"),
+        elaborated_signedness_casts.design->find_signal(
+            "unsigned_shift"),
+        elaborated_signedness_casts.design->find_signal(
+            "known_is_unknown"),
+        elaborated_signedness_casts.design->find_signal(
+            "xz_is_unknown")};
+    assert(unsigned_cast_input && signed_cast_input);
+    assert(std::ranges::all_of(
+        signedness_cast_outputs,
+        [](const auto signal) { return signal.has_value(); }));
+    auto signedness_cast_interpreter =
+        elaborated_signedness_casts.design
+            ->create_interpreter();
+    signedness_cast_interpreter->deposit_signal(
+        *unsigned_cast_input,
+        fsim::runtime::PackedLogic4::from_msb_string("1111"));
+    signedness_cast_interpreter->deposit_signal(
+        *signed_cast_input,
+        fsim::runtime::PackedLogic4::from_msb_string("0001"));
+    (void)signedness_cast_interpreter->run();
+    const std::array<std::string_view, 6> expected_signedness_casts{
+        "1", "1", "1111", "0000", "0", "1"};
+    for (std::size_t index = 0;
+         index < signedness_cast_outputs.size();
+         ++index) {
+        assert(
+            signedness_cast_interpreter
+                ->signal_value(*signedness_cast_outputs[index])
+                .to_msb_string()
+            == expected_signedness_casts[index]);
+    }
+
+    const auto invalid_signedness_cast =
+        fsim::frontend::parse_text(
+            "invalid_signedness_cast.sv",
+            R"(
+module invalid_signedness_cast;
+  logic result;
+  always_comb result = $signed();
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_signedness_cast.ok());
+    const auto rejected_signedness_cast =
+        fsim::elaboration::elaborate(
+            invalid_signedness_cast.design,
+            "sv:work.invalid_signedness_cast");
+    assert(!rejected_signedness_cast.ok());
+    assert(has_diagnostic(
+        rejected_signedness_cast, "FSIM-ELAB-083"));
+
+    const auto invalid_isunknown = fsim::frontend::parse_text(
+        "invalid_isunknown.sv",
+        R"(
+module invalid_isunknown;
+  logic result;
+  always_comb result = $isunknown();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_isunknown.ok());
+    const auto rejected_isunknown =
+        fsim::elaboration::elaborate(
+            invalid_isunknown.design,
+            "sv:work.invalid_isunknown");
+    assert(!rejected_isunknown.ok());
+    assert(has_diagnostic(
+        rejected_isunknown, "FSIM-ELAB-084"));
+
+    const auto verilog_isunknown = fsim::frontend::parse_text(
+        "verilog_isunknown.v",
+        R"(
+module verilog_isunknown;
+  reg result;
+  always @* result = $isunknown(1'bx);
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(verilog_isunknown.ok());
+    const auto rejected_verilog_isunknown =
+        fsim::elaboration::elaborate(
+            verilog_isunknown.design,
+            "sv:work.verilog_isunknown");
+    assert(!rejected_verilog_isunknown.ok());
+    assert(has_diagnostic(
+        rejected_verilog_isunknown, "FSIM-ELAB-084"));
+
     const auto logical_process = fsim::frontend::parse_text(
         "logical_process.sv",
         R"(
@@ -7341,6 +7470,68 @@ end architecture;
     assert(!rejected_vhdl_assertion.ok());
     assert(has_diagnostic(
         rejected_vhdl_assertion, "FSIM-ELAB-051"));
+
+    const auto concurrent_vhdl_assertion =
+        fsim::frontend::parse_text(
+            "concurrent_assertion.vhd",
+            R"(
+entity concurrent_assertion is
+end entity;
+architecture rtl of concurrent_assertion is
+  signal gate : boolean;
+begin
+  gate_check: assert gate
+    report "concurrent gate failed" severity failure;
+  driver: process
+  begin
+    wait for 1 ns;
+    gate <= false;
+    wait;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(concurrent_vhdl_assertion.ok());
+    const auto elaborated_concurrent_vhdl_assertion =
+        fsim::elaboration::elaborate(
+            concurrent_vhdl_assertion.design,
+            "vhdl:work.concurrent_assertion(rtl)");
+    assert(elaborated_concurrent_vhdl_assertion.ok());
+    assert(
+        elaborated_concurrent_vhdl_assertion.design
+            ->processes().size()
+        == 2);
+    const auto& concurrent_assertion_process =
+        elaborated_concurrent_vhdl_assertion.design
+            ->processes().front();
+    assert(
+        concurrent_assertion_process.name
+            == "concurrent_assertion.gate_check"
+        && concurrent_assertion_process.static_sensitivity.size()
+            == 1);
+    const auto concurrent_gate =
+        elaborated_concurrent_vhdl_assertion.design
+            ->find_signal("gate");
+    assert(concurrent_gate);
+    auto concurrent_assertion_interpreter =
+        elaborated_concurrent_vhdl_assertion.design
+            ->create_interpreter();
+    concurrent_assertion_interpreter->deposit_signal(
+        *concurrent_gate,
+        fsim::runtime::PackedLogic4::from_msb_string("1"));
+    bool saw_concurrent_assertion = false;
+    try {
+        (void)concurrent_assertion_interpreter->run();
+    } catch (const fsim::runtime::simir::AssertionError& error) {
+        saw_concurrent_assertion = true;
+        assert(
+            std::string_view{error.what()}.find(
+                "concurrent gate failed")
+            != std::string_view::npos);
+        assert(
+            error.source().path == "concurrent_assertion.vhd");
+    }
+    assert(saw_concurrent_assertion);
 
     const auto vector_assertion =
         fsim::frontend::parse_text(

@@ -798,9 +798,15 @@ module signed_ops;
   logic unsigned [7:0] mixed;
   logic signed [7:0] quotient;
   logic comparison;
+  logic cast_comparison;
+  logic [7:0] cast_shift;
+  logic unknown_present;
   always_comb begin
     quotient = lhs / rhs;
     comparison = lhs < rhs;
+    cast_comparison = $signed(mixed) < rhs;
+    cast_shift = $unsigned(lhs) >>> 1;
+    unknown_present = $isunknown(mixed);
   end
 endmodule
 )",
@@ -810,17 +816,32 @@ endmodule
       "SystemVerilog signed arithmetic source must parse");
   const auto& unit = systemverilog.design.units.front();
   require(
-      unit.signals.size() == 5
+      unit.signals.size() == 8
           && unit.signals[0].type.is_signed
           && unit.signals[1].type.is_signed
           && !unit.signals[2].type.is_signed,
       "SystemVerilog explicit signedness metadata");
   require(
       unit.processes.size() == 1
-          && unit.processes.front().statements.size() == 2
+          && unit.processes.front().statements.size() == 5
           && unit.processes.front().statements[0].value.text == "/"
-          && unit.processes.front().statements[1].value.text == "<",
-      "SystemVerilog signed arithmetic expression nodes");
+          && unit.processes.front().statements[1].value.text == "<"
+          && unit.processes.front().statements[2].value.text == "<"
+          && unit.processes.front().statements[2]
+                 .value.operands.front().kind
+              == ExpressionKind::Call
+          && unit.processes.front().statements[2]
+                 .value.operands.front().text
+              == "$signed"
+          && unit.processes.front().statements[3].value.text == ">>>"
+          && unit.processes.front().statements[3]
+                 .value.operands.front().text
+              == "$unsigned"
+          && unit.processes.front().statements[4].value.kind
+              == ExpressionKind::Call
+          && unit.processes.front().statements[4].value.text
+              == "$isunknown",
+      "SystemVerilog signed arithmetic, casts, and system-function nodes");
 }
 
 void test_vhdl_case_statements() {
@@ -2069,7 +2090,10 @@ void test_immediate_assertions() {
 entity assertions is
 end entity;
 architecture rtl of assertions is
+  signal ready : boolean;
 begin
+  concurrent_check: assert ready
+    report "concurrent mismatch" severity warning;
   check: process
   begin
     assert 0 = 1 report "vhdl mismatch" severity failure;
@@ -2081,8 +2105,21 @@ end architecture;
   const auto* architecture =
       vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(
-      architecture != nullptr && architecture->processes.size() == 1,
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->concurrent_statements.size() == 1,
       "VHDL assertion process");
+  const auto& vhdl_concurrent_assertion =
+      architecture->concurrent_statements.front();
+  require(
+      vhdl_concurrent_assertion.kind == StatementKind::Assert
+          && vhdl_concurrent_assertion.label == "concurrent_check"
+          && vhdl_concurrent_assertion.condition.text == "ready"
+          && vhdl_concurrent_assertion.assertion_message
+              == "concurrent mismatch"
+          && vhdl_concurrent_assertion.assertion_severity
+              == AssertionSeverity::Warning,
+      "labeled concurrent VHDL assertion metadata");
   const auto& vhdl_assertion =
       architecture->processes.front().statements.front();
   require(
@@ -2091,7 +2128,7 @@ end architecture;
           && vhdl_assertion.assertion_severity
               == AssertionSeverity::Failure
           && vhdl_assertion.span.source_name == "assertions.vhd"
-          && vhdl_assertion.span.begin.line == 8,
+          && vhdl_assertion.span.begin.line == 11,
       "VHDL assertion metadata");
 
   const auto system_verilog = parse_text(

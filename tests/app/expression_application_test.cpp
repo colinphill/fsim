@@ -324,6 +324,136 @@ void test_wildcard_equality(
 #endif
 }
 
+void test_systemverilog_signedness_casts(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "signedness-cast-expression-test";
+  config.project.top = "sv:work.signedness_cast_app";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "signedness-cache-o0"
+             : "signedness-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::system_verilog;
+  sources.standard = "2017";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    print_diagnostics(diagnostics);
+  }
+  assert(reference_project);
+  assert(compiled_project);
+
+  const std::array<std::string, 6> signal_paths{
+      "signedness_cast_app.signed_less",
+      "signedness_cast_app.unsigned_less",
+      "signedness_cast_app.signed_shift",
+      "signedness_cast_app.unsigned_shift",
+      "signedness_cast_app.known_is_unknown",
+      "signedness_cast_app.xz_is_unknown"};
+  const auto reference = run(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter,
+      signal_paths);
+  const auto compiled = run(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled,
+      signal_paths);
+
+  assert(reference.result.status == fsim::runtime::RunStatus::stopped);
+  assert(reference.result.status == compiled.result.status);
+  assert(reference.result.time == compiled.result.time);
+  assert(reference.result.delta == compiled.result.delta);
+  assert(reference.values == compiled.values);
+  assert((
+      compiled.values
+      == std::vector<std::string>{
+          "1", "1", "1111", "0000", "0", "1"}));
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes == 1);
+  assert(compiled.compiled_modules == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
+#endif
+}
+
+void test_vhdl_concurrent_assertion(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "vhdl-concurrent-assertion-test";
+  config.project.top = "vhdl:work.concurrent_assertion_app(rtl)";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "concurrent-assert-cache-o0"
+             : "concurrent-assert-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    print_diagnostics(diagnostics);
+  }
+  assert(reference_project);
+  assert(compiled_project);
+
+  const std::array<std::string, 1> signal_paths{
+      "concurrent_assertion_app.passed"};
+  const auto reference = run(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter,
+      signal_paths);
+  const auto compiled = run(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled,
+      signal_paths);
+
+  assert(reference.result.status == fsim::runtime::RunStatus::completed);
+  assert(reference.result.status == compiled.result.status);
+  assert(reference.result.time == compiled.result.time);
+  assert(reference.result.delta == compiled.result.delta);
+  assert(reference.values == compiled.values);
+  assert(compiled.values == std::vector<std::string>{"1"});
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes == 2);
+  assert(compiled.compiled_modules == 1);
+#else
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -418,6 +548,50 @@ module clog2_application;
 endmodule
 )";
   }
+  const auto signedness_source = directory.path / "signedness_cast.sv";
+  {
+    std::ofstream output(signedness_source);
+    output << R"(
+module signedness_cast_app;
+  logic [3:0] unsigned_value;
+  logic signed [3:0] signed_value;
+  logic signed_less;
+  logic unsigned_less;
+  logic [3:0] signed_shift;
+  logic [3:0] unsigned_shift;
+  logic known_is_unknown;
+  logic xz_is_unknown;
+  initial begin
+    unsigned_value = 4'b1111;
+    signed_value = 4'b0001;
+    signed_less = $signed(unsigned_value) < signed_value;
+    unsigned_less = $unsigned(signed_value) < unsigned_value;
+    signed_shift = $signed(unsigned_value) >>> 1;
+    unsigned_shift = $unsigned(signed_value) >>> 1;
+    known_is_unknown = $isunknown(unsigned_value);
+    xz_is_unknown = $isunknown(4'b10xz);
+    $finish;
+  end
+endmodule
+)";
+  }
+  const auto concurrent_assertion_source =
+      directory.path / "concurrent_assertion.vhd";
+  {
+    std::ofstream output(concurrent_assertion_source);
+    output << R"(
+entity concurrent_assertion_app is
+end entity;
+
+architecture rtl of concurrent_assertion_app is
+  signal passed : boolean;
+begin
+  passed <= true;
+  constant_check: assert true
+    report "unreachable concurrent assertion" severity failure;
+end architecture;
+)";
+  }
 
   test_wildcard_equality(
       directory.path, source, fsim::project::Optimization::o0);
@@ -438,5 +612,21 @@ endmodule
   test_systemverilog_clog2(
       directory.path,
       clog2_source,
+      fsim::project::Optimization::o2);
+  test_systemverilog_signedness_casts(
+      directory.path,
+      signedness_source,
+      fsim::project::Optimization::o0);
+  test_systemverilog_signedness_casts(
+      directory.path,
+      signedness_source,
+      fsim::project::Optimization::o2);
+  test_vhdl_concurrent_assertion(
+      directory.path,
+      concurrent_assertion_source,
+      fsim::project::Optimization::o0);
+  test_vhdl_concurrent_assertion(
+      directory.path,
+      concurrent_assertion_source,
       fsim::project::Optimization::o2);
 }
