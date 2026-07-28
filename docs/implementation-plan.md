@@ -843,10 +843,13 @@ The twentieth post-gate batch is in progress:
 9. `%0b`, `%0h`, and `%0o` now carry typed leading-zero suppression metadata
    through HIR, SimIR, cache identity, interpreter, and LLVM execution while
    retaining at least one digit.
+10. VHDL `report ... severity failure` now publishes its severity/source
+    metadata once, terminates before any following statement, and uses the
+    same typed failure boundary in interpreter and LLVM execution.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM, application, Tcl,
-native API, and diagnostic-catalog tests pass. This is feature 9 of 10, so the
-interval full regression and remote push are not due yet.
+native API, and diagnostic-catalog tests pass. This is feature 10 of 10; the
+interval full regression and remote push are due.
 
 ## v1 release condition
 

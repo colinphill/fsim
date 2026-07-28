@@ -95,9 +95,9 @@ The current tree contains:
   publishes the resulting text in the postponed phase;
 - decoded Verilog/SystemVerilog literal escapes in `$fatal` and immediate
   assertion `$error` diagnostics;
-- VHDL-2008 literal `report` statements at `note`, `warning`, and `error`
-  severity with retained source metadata, interpreter/LLVM equivalence, and
-  native API assertion-callback visibility;
+- VHDL-2008 literal `report` statements at all standard severities with
+  retained source metadata, interpreter/LLVM equivalence, native API
+  assertion-callback visibility, and callback-before-stop `failure`;
 - deterministic simple-expression sensitivity inference for `always @*`,
   time-zero `always_comb`/`always_latch`, and dynamic `@*`;
 - ordered Verilog/SystemVerilog `case`/`casez`/`casex`/`default` lowering

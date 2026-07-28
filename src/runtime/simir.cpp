@@ -2701,6 +2701,14 @@ void Interpreter::Impl::execute(ProcessId id) {
                     scheduler.now(),
                     scheduler.delta());
               }
+              if (op.severity == AssertionSeverity::failure) {
+                throw AssertionError(
+                    process.program.id,
+                    process.pc,
+                    op.message.empty() ? "report failure" : op.message,
+                    op.severity,
+                    op.source);
+              }
               ++process.pc;
             },
             [&](const Pause &) {

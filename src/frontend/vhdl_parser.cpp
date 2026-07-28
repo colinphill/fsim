@@ -1641,11 +1641,7 @@ class VhdlParser final : private detail::ParserBase {
         } else if (detail::iequals(severity.text, "error")) {
           statement.assertion_severity = AssertionSeverity::Error;
         } else if (detail::iequals(severity.text, "failure")) {
-          error(
-              severity,
-              "FSIM-VHDL-SEM-031",
-              "VHDL report severity failure requires the configurable "
-              "assertion-stop threshold");
+          statement.assertion_severity = AssertionSeverity::Failure;
         } else {
           error(
               severity,

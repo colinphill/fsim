@@ -2969,7 +2969,7 @@ end architecture;
                  .assertion_severity == AssertionSeverity::Error,
       "VHDL report literal HIR, severity, and doubled-quote decoding");
 
-  const auto unsupported = parse_text(
+  const auto failure = parse_text(
       "report_failure.vhd",
       R"(
 entity reporter is end entity;
@@ -2984,13 +2984,14 @@ end architecture;
 )",
       Language::Vhdl2008);
   require(
-      std::any_of(
-          unsupported.diagnostics.begin(),
-          unsupported.diagnostics.end(),
-          [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-VHDL-SEM-031";
-          }),
-      "failure VHDL report severity needs a targeted diagnostic");
+      failure.ok()
+          && failure.design
+                 .find(UnitKind::VhdlArchitecture, "rtl")
+                 ->processes.front()
+                 .statements.front()
+                 .assertion_severity
+              == AssertionSeverity::Failure,
+      "failure VHDL report severity HIR");
 }
 
 void test_process_variable_declarations() {

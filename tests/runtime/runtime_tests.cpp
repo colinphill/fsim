@@ -3058,6 +3058,45 @@ void test_simir_display_output() {
                   "v=10xz!", "d=-1", "u=x", "h=a5", "c=\xA5",
                   "s=test", "z=a5"},
       "nonfatal report hook severity, source, and ordering");
+
+  Interpreter failure_interpreter;
+  Process failure_process;
+  failure_process.name = "failure-report";
+  failure_process.operations = {
+      Report{
+          "terminal",
+          AssertionSeverity::failure,
+          SourceLocation{"failure.vhd", 12, 7}},
+      Halt{}};
+  const auto failure_process_id =
+      failure_interpreter.add_process(std::move(failure_process));
+  std::size_t failure_reports{};
+  failure_interpreter.set_report_hook(
+      [&failure_reports](
+          const ProcessId,
+          const std::string_view,
+          const AssertionSeverity,
+          const SourceLocation&,
+          const SimulationTick,
+          const std::uint64_t) {
+        ++failure_reports;
+      });
+  failure_interpreter.start();
+  bool caught_failure = false;
+  try {
+    static_cast<void>(failure_interpreter.run());
+  } catch (const AssertionError& error) {
+    caught_failure =
+        error.process() == failure_process_id
+        && error.instruction() == 0
+        && error.severity() == AssertionSeverity::failure
+        && error.source().path == "failure.vhd"
+        && std::string_view{error.what()}.find("terminal")
+            != std::string_view::npos;
+  }
+  require(
+      caught_failure && failure_reports == 1,
+      "failure report callback-before-termination semantics");
 }
 
 void test_vcd() {

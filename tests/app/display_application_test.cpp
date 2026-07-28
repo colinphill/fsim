@@ -53,6 +53,16 @@ struct Capture {
   std::size_t compiled_processes{};
 };
 
+struct FailureCapture {
+  std::vector<ReportEvent> reports;
+  std::string message;
+  fsim::runtime::simir::AssertionSeverity severity{
+      fsim::runtime::simir::AssertionSeverity::note};
+  fsim::runtime::simir::SourceLocation source;
+  std::size_t compiled_processes{};
+  bool failed{};
+};
+
 int run_cli(
     const std::vector<std::string>& arguments,
     std::istream& input,
@@ -106,6 +116,41 @@ Capture execute(
                 delta});
       });
   capture.result = simulation.run();
+  return capture;
+}
+
+FailureCapture execute_failure(
+    fsim::app::BuiltProject project,
+    const fsim::app::SimulationEngine engine) {
+  fsim::app::Simulation simulation{
+      std::move(project), 1000, engine};
+  FailureCapture capture;
+  capture.compiled_processes = simulation.compiled_process_count();
+  simulation.set_report_hook(
+      [&capture](
+          const fsim::runtime::simir::ProcessId process,
+          const std::string_view message,
+          const fsim::runtime::simir::AssertionSeverity severity,
+          const fsim::runtime::simir::SourceLocation& source,
+          const fsim::runtime::SimulationTick time,
+          const std::uint64_t delta) {
+        capture.reports.push_back(
+            {
+                process,
+                std::string{message},
+                severity,
+                source,
+                time,
+                delta});
+      });
+  try {
+    static_cast<void>(simulation.run());
+  } catch (const fsim::runtime::simir::AssertionError& error) {
+    capture.failed = true;
+    capture.message = error.what();
+    capture.severity = error.severity();
+    capture.source = error.source();
+  }
   return capture;
 }
 
@@ -286,6 +331,58 @@ void test_vhdl_report(
   assert(compiled.compiled_processes == 1);
 }
 
+void test_vhdl_failure_report(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "failure-report-test";
+  config.project.top = "vhdl:work.failure_reporter(rtl)";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "failure-cache-o0"
+             : "failure-cache-o2");
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  assert(reference_project && compiled_project);
+  const auto reference = execute_failure(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto compiled = execute_failure(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled);
+  assert(reference.failed && compiled.failed);
+  assert(reference.reports == compiled.reports);
+  assert(reference.reports.size() == 1);
+  assert(reference.reports[0].message == "terminal");
+  assert(
+      reference.reports[0].severity
+      == fsim::runtime::simir::AssertionSeverity::failure);
+  assert(
+      reference.severity
+      == fsim::runtime::simir::AssertionSeverity::failure);
+  assert(reference.source == compiled.source);
+  assert(reference.source.path == source.string());
+  assert(reference.message == compiled.message);
+  assert(reference.compiled_processes == 0);
+  assert(compiled.compiled_processes == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -352,6 +449,25 @@ end architecture;
 )";
   }
 
+  const auto failure_report_source =
+      directory.path / "failure_report.vhd";
+  {
+    std::ofstream output(failure_report_source);
+    output << R"(
+entity failure_reporter is
+end entity;
+architecture rtl of failure_reporter is
+begin
+  process
+  begin
+    report "terminal" severity failure;
+    report "unreachable" severity note;
+    wait;
+  end process;
+end architecture;
+)";
+  }
+
   const auto manifest = directory.path / "fsim.toml";
   {
     std::ofstream output(manifest);
@@ -405,6 +521,14 @@ end architecture;
   test_vhdl_report(
       directory.path,
       report_source,
+      fsim::project::Optimization::o2);
+  test_vhdl_failure_report(
+      directory.path,
+      failure_report_source,
+      fsim::project::Optimization::o0);
+  test_vhdl_failure_report(
+      directory.path,
+      failure_report_source,
       fsim::project::Optimization::o2);
   std::cout << "display application tests passed\n";
 }

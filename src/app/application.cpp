@@ -232,19 +232,33 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       case compiler::JitResumeStatus::assertion_failed: {
         const auto* assertion = std::get_if<runtime::simir::Assert>(
             &process_.operations[result.instruction]);
-        if (assertion == nullptr) {
-          throw compiler::LlvmJitError(
-              "compiled process reported an assertion at a non-assert "
-              "instruction");
+        if (assertion != nullptr) {
+          throw runtime::simir::AssertionError(
+              process_.id,
+              result.instruction,
+              assertion->message.empty()
+                  ? "assertion failed"
+                  : assertion->message,
+              assertion->severity,
+              assertion->source);
         }
-        throw runtime::simir::AssertionError(
-            process_.id,
-            result.instruction,
-            assertion->message.empty()
-                ? "assertion failed"
-                : assertion->message,
-            assertion->severity,
-            assertion->source);
+        const auto* report = std::get_if<runtime::simir::Report>(
+            &process_.operations[result.instruction]);
+        if (report != nullptr
+            && report->severity
+                == runtime::simir::AssertionSeverity::failure) {
+          throw runtime::simir::AssertionError(
+              process_.id,
+              result.instruction,
+              report->message.empty()
+                  ? "report failure"
+                  : report->message,
+              report->severity,
+              report->source);
+        }
+        throw compiler::LlvmJitError(
+            "compiled process reported an assertion at an incompatible "
+            "instruction");
       }
       case compiler::JitResumeStatus::wait_for: {
         const auto* wait = std::get_if<runtime::simir::WaitFor>(

@@ -350,9 +350,11 @@ operation retaining severity and source metadata. `note`, `warning`, and
 `error` reports invoke a synchronous report hook and continue; the LLVM
 adapter uses an append-only instruction-index callback to recover the same
 immutable metadata. CLI/Tcl render the report and the native C assertion
-callback receives it without terminating the session. VHDL doubled quotes are
-decoded in the frontend. `failure` remains targeted until the assertion-stop
-threshold is configurable.
+callback receives it without terminating the session. A `failure` report
+publishes through that hook once, then terminates through the common typed
+assertion-failure boundary before any following statement. VHDL doubled
+quotes are decoded in the frontend; a configurable stop threshold remains
+targeted.
 The literal-only `$monitor` base case schedules one initial postponed
 publication. Because it has no value operands, it has no subsequent change
 trigger; monitor-list replacement and value-sensitive re-publication remain

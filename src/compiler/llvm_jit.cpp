@@ -98,7 +98,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v7";
+    "fsim-llvm-native-object-v8";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -3391,7 +3391,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   });
               branch_to_next();
             },
-            [&](const Report&) {
+            [&](const Report& operation) {
               builder.CreateCall(
                   report_type,
                   report_callback,
@@ -3400,7 +3400,17 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       llvm::ConstantInt::get(i32, process.id),
                       llvm::ConstantInt::get(i32, instruction),
                   });
-              branch_to_next();
+              if (operation.severity
+                  == runtime::simir::AssertionSeverity::failure) {
+                return_result(
+                    FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED,
+                    instruction,
+                    0,
+                    FSIM_JIT_FRAME_STATE_ASSERTION_FAILED,
+                    instruction);
+              } else {
+                branch_to_next();
+              }
             },
             [&](const Jump &operation) {
               builder.CreateBr(instruction_blocks[operation.target]);
