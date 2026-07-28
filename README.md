@@ -343,6 +343,9 @@ Conditional and iterative generate regions are retained as nested scopes,
 including indexed region names and generated local behavior.
 Supported process outputs are exposed as source-bearing driver children of
 their signals, with current-value reads in the single-driver runtime slice.
+An append-only detailed safe-point callback supplies scheduler phases and
+source-bearing executable point kinds while preserving the original v1
+callback prefix.
 
 ## Build and test
 

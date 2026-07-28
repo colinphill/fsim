@@ -320,7 +320,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the fourteenth post-gate batch, including native-C single-driver hierarchy, metadata, reads, and invalidation (133.37 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 19/19 tests pass after the fifteenth post-gate batch, including append-only source-bearing detailed native-C safe-point callbacks (137.13 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -743,23 +743,23 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The fourteenth post-gate batch is implementation-complete:
+The fifteenth post-gate batch is implementation-complete:
 
-1. driver handles use a collision-free generation-safe payload partition;
-2. whole-signal blocking writes produce driver relationships;
-3. update-phase and delayed whole-signal writes use the same adapter;
-4. blocking/update/delayed slice writes use the same adapter;
-5. repeated writes by one process to one signal deduplicate to one driver;
-6. driver paths are stable and resolve through full-path lookup;
-7. signals enumerate their drivers as direct children;
-8. driver metadata exposes parent, width, type, and process source;
-9. driver reads expose the current value in the supported single-driver slice,
-   while deposit/force/release are rejected; and
-10. generated-signal drivers, leaf traversal, and rebuild invalidation have
-    automated evidence.
+1. the callback structure has an append-only detailed safe-point field;
+2. detailed point structures carry size and API-version headers;
+3. scheduler points expose active/inactive/update/postponed phase identity;
+4. executable points distinguish statement, call, wait, assertion, process
+   entry, and process suspension;
+5. executable points carry generation-safe process handles;
+6. all points carry simulation time and delta;
+7. executable points carry the SimIR instruction index;
+8. executable points carry source path, line, and column;
+9. original and detailed callbacks coexist with identical dispatch counts;
+10. callers advertising the original v1 callback prefix neither read nor
+    invoke the appended callback, with strict C11 coverage.
 
-Focused native-C driver tests pass. The interval LLVM 22 Debug regression
-passed all 19 tests in 133.37 seconds. This batch is ready to commit and push.
+Focused native-C callback tests pass. The interval LLVM 22 Debug regression
+passed all 19 tests in 137.13 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 

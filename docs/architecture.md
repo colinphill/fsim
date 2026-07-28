@@ -727,6 +727,11 @@ across repeated whole/slice blocking, update-phase, and delayed writes. In the
 current single-driver executable slice, driver reads return the corresponding
 signal value; driver mutation remains invalid. Resolved multi-driver storage
 and per-driver pre-resolution values remain pending with resolution semantics.
+An append-only detailed safe-point callback reports scheduler phase or
+statement/call/wait/assertion/process-boundary kind, process handle,
+time/delta, instruction index, and source location. The original callback
+remains callable in parallel, while callers advertising the original v1
+callback-structure size do not expose or trigger the extension.
 
 Optimized `run` and instrumented `debug` are required to have identical
 simulation semantics. Bounded debug code uses addressable process frames and

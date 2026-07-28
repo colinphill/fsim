@@ -83,6 +83,24 @@ typedef enum fsim_lifecycle_event {
   FSIM_LIFECYCLE_SIMULATION_FINISHED = 3
 } fsim_lifecycle_event_t;
 
+typedef enum fsim_safe_point_kind {
+  FSIM_SAFE_POINT_SCHEDULER = 0,
+  FSIM_SAFE_POINT_STATEMENT = 1,
+  FSIM_SAFE_POINT_CALL = 2,
+  FSIM_SAFE_POINT_WAIT = 3,
+  FSIM_SAFE_POINT_ASSERTION = 4,
+  FSIM_SAFE_POINT_PROCESS_ENTRY = 5,
+  FSIM_SAFE_POINT_PROCESS_SUSPEND = 6
+} fsim_safe_point_kind_t;
+
+typedef enum fsim_scheduler_phase {
+  FSIM_SCHEDULER_PHASE_UNKNOWN = 0,
+  FSIM_SCHEDULER_PHASE_ACTIVE = 1,
+  FSIM_SCHEDULER_PHASE_INACTIVE = 2,
+  FSIM_SCHEDULER_PHASE_UPDATE = 3,
+  FSIM_SCHEDULER_PHASE_POSTPONED = 4
+} fsim_scheduler_phase_t;
+
 typedef struct fsim_session_options {
   uint32_t struct_size;
   uint32_t api_version;
@@ -157,6 +175,25 @@ typedef void (*fsim_lifecycle_callback_t)(
     fsim_lifecycle_event_t event,
     void* user_data);
 
+typedef struct fsim_safe_point_info {
+  uint32_t struct_size;
+  uint32_t api_version;
+  fsim_object_t process;
+  fsim_time_t time;
+  uint64_t delta;
+  uint64_t instruction;
+  fsim_safe_point_kind_t kind;
+  fsim_scheduler_phase_t phase;
+  fsim_string_view_t source_path;
+  uint32_t source_line;
+  uint32_t source_column;
+} fsim_safe_point_info_t;
+
+typedef void (*fsim_safe_point_info_callback_t)(
+    fsim_session_t session,
+    const fsim_safe_point_info_t* info,
+    void* user_data);
+
 typedef struct fsim_callbacks {
   uint32_t struct_size;
   uint32_t api_version;
@@ -165,7 +202,12 @@ typedef struct fsim_callbacks {
   fsim_value_change_callback_t value_change;
   fsim_assertion_callback_t assertion;
   fsim_lifecycle_callback_t lifecycle;
+  /* Append-only v1 extension; omitted by FSIM_CALLBACKS_V1_SIZE callers. */
+  fsim_safe_point_info_callback_t safe_point_info;
 } fsim_callbacks_t;
+
+#define FSIM_CALLBACKS_V1_SIZE \
+  (offsetof(fsim_callbacks_t, safe_point_info))
 
 // Return nonzero to continue enumeration and zero to stop successfully.
 typedef int (*fsim_visit_object_callback_t)(

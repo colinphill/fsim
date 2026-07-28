@@ -128,6 +128,42 @@ fsim_severity_t convert_severity(
   return FSIM_SEVERITY_ERROR;
 }
 
+fsim_safe_point_kind_t convert_safe_point_kind(
+    const fsim::runtime::simir::ExecutionPointKind kind) noexcept {
+  using Kind = fsim::runtime::simir::ExecutionPointKind;
+  switch (kind) {
+    case Kind::statement:
+      return FSIM_SAFE_POINT_STATEMENT;
+    case Kind::call:
+      return FSIM_SAFE_POINT_CALL;
+    case Kind::wait:
+      return FSIM_SAFE_POINT_WAIT;
+    case Kind::assertion:
+      return FSIM_SAFE_POINT_ASSERTION;
+    case Kind::process_entry:
+      return FSIM_SAFE_POINT_PROCESS_ENTRY;
+    case Kind::process_suspend:
+      return FSIM_SAFE_POINT_PROCESS_SUSPEND;
+  }
+  return FSIM_SAFE_POINT_SCHEDULER;
+}
+
+fsim_scheduler_phase_t convert_scheduler_phase(
+    const fsim::runtime::SchedulerPhase phase) noexcept {
+  using Phase = fsim::runtime::SchedulerPhase;
+  switch (phase) {
+    case Phase::active:
+      return FSIM_SCHEDULER_PHASE_ACTIVE;
+    case Phase::inactive:
+      return FSIM_SCHEDULER_PHASE_INACTIVE;
+    case Phase::update:
+      return FSIM_SCHEDULER_PHASE_UPDATE;
+    case Phase::postponed:
+      return FSIM_SCHEDULER_PHASE_POSTPONED;
+  }
+  return FSIM_SCHEDULER_PHASE_UNKNOWN;
+}
+
 bool valid_struct_header(
     const std::uint32_t struct_size,
     const std::uint32_t api_version,
@@ -678,7 +714,10 @@ void lifecycle(Session& session, const fsim_lifecycle_event_t event) {
 void invoke_safe_point(
     Session& session,
     fsim::runtime::Scheduler& scheduler,
-    const fsim_object_t process = FSIM_INVALID_OBJECT) {
+    const fsim_object_t process = FSIM_INVALID_OBJECT,
+    const fsim::runtime::simir::ExecutionPoint* point = nullptr,
+    const std::optional<fsim::runtime::SchedulerPhase> phase =
+        std::nullopt) {
   if (session.stop_requested.exchange(false, std::memory_order_relaxed)) {
     session.external_stop_seen.store(true, std::memory_order_relaxed);
     scheduler.request_stop();
@@ -691,6 +730,29 @@ void invoke_safe_point(
         scheduler.now(),
         scheduler.delta(),
         session.callbacks.user_data);
+  }
+  if (session.callbacks.safe_point_info) {
+    fsim_safe_point_info_t info{};
+    info.struct_size = sizeof(info);
+    info.api_version = FSIM_API_VERSION;
+    info.process = process;
+    info.time = scheduler.now();
+    info.delta = scheduler.delta();
+    info.instruction = UINT64_MAX;
+    info.kind = FSIM_SAFE_POINT_SCHEDULER;
+    info.phase = FSIM_SCHEDULER_PHASE_UNKNOWN;
+    if (point != nullptr) {
+      info.instruction = point->instruction;
+      info.kind = convert_safe_point_kind(point->kind);
+      info.source_path = view(point->source.path);
+      info.source_line = point->source.line;
+      info.source_column = point->source.column;
+    } else if (phase) {
+      info.phase = convert_scheduler_phase(*phase);
+    }
+    CallbackGuard guard{session};
+    session.callbacks.safe_point_info(
+        session.handle, &info, session.callbacks.user_data);
   }
 }
 
@@ -715,16 +777,25 @@ void attach_callbacks(Session& session) {
   session.simulation->set_safe_point_hook(
       [state](
           fsim::runtime::Scheduler& scheduler,
-          fsim::runtime::SchedulerPhase) {
-        invoke_safe_point(*state, scheduler);
+          const fsim::runtime::SchedulerPhase phase) {
+        invoke_safe_point(
+            *state,
+            scheduler,
+            FSIM_INVALID_OBJECT,
+            nullptr,
+            phase);
       });
-  if (session.callbacks.safe_point) {
+  if (session.callbacks.safe_point
+      || session.callbacks.safe_point_info) {
     session.simulation->set_execution_point_hook(
         [state](
             fsim::runtime::Scheduler& scheduler,
             const fsim::runtime::simir::ExecutionPoint& point) {
           invoke_safe_point(
-              *state, scheduler, process_handle(*state, point.process));
+              *state,
+              scheduler,
+              process_handle(*state, point.process),
+              &point);
         });
   } else {
     session.simulation->set_execution_point_hook({});
@@ -1642,7 +1713,8 @@ fsim_status_t fsim_session_step(
               const fsim::runtime::simir::ExecutionPoint& point) {
             invoke_safe_point(
                 *state, scheduler,
-                process_handle(*state, point.process));
+                process_handle(*state, point.process),
+                &point);
             bool stop = false;
             if (kind == FSIM_STEP_STATEMENT) {
               const auto statement =
@@ -1689,7 +1761,12 @@ fsim_status_t fsim_session_step(
         [state, start_time, kind](
             fsim::runtime::Scheduler& scheduler,
             const fsim::runtime::SchedulerPhase phase) {
-          invoke_safe_point(*state, scheduler);
+          invoke_safe_point(
+              *state,
+              scheduler,
+              FSIM_INVALID_OBJECT,
+              nullptr,
+              phase);
           if ((kind == FSIM_STEP_DELTA
                && phase == fsim::runtime::SchedulerPhase::postponed)
               || (kind == FSIM_STEP_TIME
@@ -1763,6 +1840,13 @@ fsim_status_t fsim_session_set_callbacks(
       if (FSIM_STRUCT_CONTAINS(
               callbacks->struct_size, fsim_callbacks_t, lifecycle)) {
         value.callbacks.lifecycle = callbacks->lifecycle;
+      }
+      if (FSIM_STRUCT_CONTAINS(
+              callbacks->struct_size,
+              fsim_callbacks_t,
+              safe_point_info)) {
+        value.callbacks.safe_point_info =
+            callbacks->safe_point_info;
       }
     }
     if (value.simulation) {

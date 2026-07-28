@@ -37,6 +37,19 @@ struct CallbackCounts {
   std::string assertion_path;
   std::uint32_t assertion_line{};
   std::uint32_t assertion_column{};
+  int detailed_safe_points{};
+  int scheduler_safe_points{};
+  int statement_safe_points{};
+  int call_safe_points{};
+  int wait_safe_points{};
+  int assertion_safe_points{};
+  int entry_safe_points{};
+  int suspend_safe_points{};
+  std::uint32_t scheduler_phase_mask{};
+  fsim_object_t detailed_process{FSIM_INVALID_OBJECT};
+  std::string detailed_path;
+  std::uint32_t detailed_line{};
+  std::uint64_t detailed_instruction{UINT64_MAX};
   std::string manifest;
 };
 
@@ -82,6 +95,60 @@ void safe_point(
   if (state.stop_on_safe_point && !state.stop_attempted) {
     state.stop_attempted = true;
     state.stop_status = fsim_session_request_stop(session);
+  }
+}
+
+void safe_point_info(
+    fsim_session_t,
+    const fsim_safe_point_info_t* info,
+    void* user_data) {
+  assert(info != nullptr);
+  assert(info->struct_size == sizeof(*info));
+  assert(info->api_version == FSIM_API_VERSION);
+  auto& state = *static_cast<CallbackCounts*>(user_data);
+  ++state.detailed_safe_points;
+  switch (info->kind) {
+    case FSIM_SAFE_POINT_SCHEDULER:
+      ++state.scheduler_safe_points;
+      assert(info->process == FSIM_INVALID_OBJECT);
+      assert(info->phase != FSIM_SCHEDULER_PHASE_UNKNOWN);
+      assert(info->instruction == UINT64_MAX);
+      assert(info->source_path.size == 0);
+      state.scheduler_phase_mask |=
+          UINT32_C(1) << info->phase;
+      break;
+    case FSIM_SAFE_POINT_STATEMENT:
+      ++state.statement_safe_points;
+      break;
+    case FSIM_SAFE_POINT_CALL:
+      ++state.call_safe_points;
+      break;
+    case FSIM_SAFE_POINT_WAIT:
+      ++state.wait_safe_points;
+      break;
+    case FSIM_SAFE_POINT_ASSERTION:
+      ++state.assertion_safe_points;
+      break;
+    case FSIM_SAFE_POINT_PROCESS_ENTRY:
+      ++state.entry_safe_points;
+      break;
+    case FSIM_SAFE_POINT_PROCESS_SUSPEND:
+      ++state.suspend_safe_points;
+      break;
+  }
+  if (info->kind != FSIM_SAFE_POINT_SCHEDULER) {
+    assert(info->process != FSIM_INVALID_OBJECT);
+    assert(info->phase == FSIM_SCHEDULER_PHASE_UNKNOWN);
+    assert(info->instruction != UINT64_MAX);
+    assert(info->source_path.data != nullptr);
+    assert(info->source_path.size != 0);
+    assert(info->source_line != 0);
+    assert(info->source_column != 0);
+    state.detailed_process = info->process;
+    state.detailed_path.assign(
+        info->source_path.data, info->source_path.size);
+    state.detailed_line = info->source_line;
+    state.detailed_instruction = info->instruction;
   }
 }
 
@@ -274,6 +341,38 @@ max_deltas = 1000
       fsim_session_create(&prefix_options, &prefix_session)
       == FSIM_STATUS_INCOMPATIBLE_ABI);
 
+  fsim_session_t legacy_callback_session = FSIM_INVALID_SESSION;
+  assert(
+      fsim_session_create(&options, &legacy_callback_session)
+      == FSIM_STATUS_OK);
+  CallbackCounts legacy_counts;
+  legacy_counts.manifest = manifest_path.string();
+  fsim_callbacks_t legacy_callbacks{};
+  legacy_callbacks.struct_size = FSIM_CALLBACKS_V1_SIZE;
+  legacy_callbacks.api_version = FSIM_API_VERSION;
+  legacy_callbacks.user_data = &legacy_counts;
+  legacy_callbacks.safe_point = safe_point;
+  legacy_callbacks.safe_point_info = safe_point_info;
+  assert(
+      fsim_session_set_callbacks(
+          legacy_callback_session, &legacy_callbacks)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_load_project(
+          legacy_callback_session,
+          manifest_path.string().c_str())
+      == FSIM_STATUS_OK);
+  assert(fsim_session_check(legacy_callback_session) == FSIM_STATUS_OK);
+  assert(fsim_session_build(legacy_callback_session) == FSIM_STATUS_OK);
+  assert(
+      fsim_session_run(legacy_callback_session, 10)
+      == FSIM_STATUS_STOPPED);
+  assert(legacy_counts.safe_points > 0);
+  assert(legacy_counts.detailed_safe_points == 0);
+  assert(
+      fsim_session_destroy(legacy_callback_session)
+      == FSIM_STATUS_OK);
+
   fsim_session_t session = FSIM_INVALID_SESSION;
   assert(fsim_session_create(&options, &session) == FSIM_STATUS_OK);
   assert(session != FSIM_INVALID_SESSION);
@@ -288,6 +387,7 @@ max_deltas = 1000
   callbacks.value_change = value_change;
   callbacks.assertion = assertion;
   callbacks.lifecycle = lifecycle;
+  callbacks.safe_point_info = safe_point_info;
 
   // A callback outside the advertised prefix is ignored even when the backing
   // allocation happens to contain a non-null value.
@@ -1067,6 +1167,27 @@ max_deltas = 1000
       (unselected_scope_info.flags & FSIM_OBJECT_FLAG_ENTERED) == 0);
   assert(counts.values >= 3);
   assert(counts.safe_points > 0);
+  assert(counts.detailed_safe_points == counts.safe_points);
+  assert(counts.scheduler_safe_points > 0);
+  assert(
+      (counts.scheduler_phase_mask
+       & (UINT32_C(1) << FSIM_SCHEDULER_PHASE_ACTIVE))
+      != 0);
+  assert(
+      (counts.scheduler_phase_mask
+       & (UINT32_C(1) << FSIM_SCHEDULER_PHASE_POSTPONED))
+      != 0);
+  assert(counts.statement_safe_points > 0);
+  assert(counts.call_safe_points > 0);
+  assert(counts.wait_safe_points > 0);
+  assert(counts.entry_safe_points > 0);
+  assert(counts.suspend_safe_points > 0);
+  assert(counts.detailed_process != FSIM_INVALID_OBJECT);
+  assert(
+      std::filesystem::path(counts.detailed_path).filename()
+      == "tb.sv");
+  assert(counts.detailed_line > 0);
+  assert(counts.detailed_instruction != UINT64_MAX);
   assert(counts.reentry_attempted);
   assert(counts.reentry_status == FSIM_STATUS_UNAVAILABLE);
   assert(counts.callback_mutation_attempted);
@@ -1274,6 +1395,7 @@ max_deltas = 1000
   assert(counts.assertion_path == (directory / "assertion.vhd").string());
   assert(counts.assertion_line == 9);
   assert(counts.assertion_column == 5);
+  assert(counts.assertion_safe_points > 0);
 
   assert(
       fsim_session_diagnostic_count(session, &diagnostic_count)
