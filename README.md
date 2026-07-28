@@ -116,6 +116,8 @@ The current tree contains:
   before the latest value-changing event;
 - VHDL signal `'last_event` as elapsed global-resolution ticks, with
   `TIME'HIGH` before the first event;
+- zero-duration VHDL signal `'stable`, tested both during and after an event
+  delta;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and

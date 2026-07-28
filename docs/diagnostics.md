@@ -550,6 +550,7 @@ therefore excluded.
 | `FSIM-ELAB-094` | error | The VHDL `'event` attribute does not name one visible signal. |
 | `FSIM-ELAB-095` | error | The VHDL `'last_value` attribute does not name one visible signal. |
 | `FSIM-ELAB-096` | error | The VHDL `'last_event` attribute does not name one visible signal. |
+| `FSIM-ELAB-097` | error | The bounded zero-duration VHDL `'stable` attribute does not name one visible signal or supplies a duration. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

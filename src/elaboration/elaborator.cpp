@@ -4815,6 +4815,38 @@ private:
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'stable") {
+            if (expression.operands.size() != 1
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-097",
+                    "bounded 'stable supports one signal name and its "
+                    "default zero duration",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-097",
+                    "'stable object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto event = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                SignalEvent{event, signal->second});
+            const auto destination = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                UnaryNot{destination, event});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
             && (expression.text == "'left"
                 || expression.text == "'right"
                 || expression.text == "'low"
@@ -5907,6 +5939,11 @@ private:
             return std::size_t{64};
         }
         if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'stable") {
+            return std::size_t{1};
+        }
+        if (expression.kind == ExpressionKind::Call
             && (expression.text == "$left"
                 || expression.text == "$right"
                 || expression.text == "$low"
@@ -6084,6 +6121,10 @@ private:
             if (language_ == frontend::Language::Vhdl2008
                 && expression.text == "'last_event") {
                 return true;
+            }
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.text == "'stable") {
+                return false;
             }
             if (language_ != frontend::Language::Vhdl2008
                 && expression.operands.size() == 1

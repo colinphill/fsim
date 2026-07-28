@@ -32,7 +32,9 @@ attribute; its Boolean result is true only in the delta cycle containing that
 signal's committed effective-value change. The same signal may use
 `'last_value` to read its packed effective value immediately before the latest
 value-changing event. `'last_event` returns elapsed global-resolution ticks
-since that event, or `TIME'HIGH` if the signal has never changed.
+since that event, or `TIME'HIGH` if the signal has never changed. The
+zero-duration form of `'stable` is false in the signal's event delta and true
+otherwise; explicit duration arguments are not yet lowered.
 
 VHDL identifiers are canonicalized case-insensitively. Verilog and
 SystemVerilog identifiers remain case-sensitive. VHDL nine-state scalar and

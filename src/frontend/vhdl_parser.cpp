@@ -2237,10 +2237,11 @@ class VhdlParser final : private detail::ParserBase {
         const auto attribute =
             expect_identifier("attribute designator");
         const auto designator = vhdl_name(attribute.text);
-        static constexpr std::array<std::string_view, 9>
+        static constexpr std::array<std::string_view, 10>
             supported_attributes{
                 "left", "right", "low", "high", "length",
-                "ascending", "event", "last_value", "last_event"};
+                "ascending", "event", "last_value", "last_event",
+                "stable"};
         if (std::ranges::find(
                 supported_attributes, designator)
             == supported_attributes.end()) {
