@@ -224,7 +224,11 @@ std::optional<LoweredLiteral> literal_value(
             std::string expanded;
             for (const char c : digits) {
                 if (c != '_') {
-                    expanded.push_back(c);
+                    expanded.push_back(
+                        language != frontend::Language::Vhdl2008
+                                && c == '?'
+                            ? 'z'
+                            : c);
                 }
             }
             if (expanded.size() < width) {
@@ -3534,6 +3538,23 @@ private:
     }
 
     void lower_case(const Statement& statement) {
+        BinaryOperator match_operation = BinaryOperator::case_equal;
+        switch (statement.case_match_kind) {
+        case frontend::CaseMatchKind::Exact:
+            break;
+        case frontend::CaseMatchKind::WildcardZ:
+            match_operation = BinaryOperator::casez_equal;
+            break;
+        case frontend::CaseMatchKind::WildcardXZ:
+            match_operation = BinaryOperator::casex_equal;
+            break;
+        default:
+            report(
+                "FSIM-ELAB-081",
+                "case statement has an invalid matching mode",
+                statement.span);
+            return;
+        }
         const auto selector_width =
             infer_width(statement.condition).value_or(std::size_t{1});
         const auto selector =
@@ -3572,7 +3593,7 @@ private:
                 const auto condition =
                     allocate_register(1, frontend::ValueDomain::Bit2);
                 process_.operations.emplace_back(Binary{
-                    BinaryOperator::case_equal,
+                    match_operation,
                     condition,
                     *selector,
                     *choice_register});

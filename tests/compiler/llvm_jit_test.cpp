@@ -1265,6 +1265,53 @@ void test_scalar_truth_tables_and_64_bits() {
                         UINT64_C(0x8000000000000000)}));
 }
 
+void test_wildcard_case_matching_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 4;
+  process.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      Binary{BinaryOperator::casez_equal, 2, 0, 1},
+      WriteBlocking{2, 2},
+      Binary{BinaryOperator::casex_equal, 3, 0, 1},
+      WriteBlocking{3, 3},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 4> widths{1, 1, 1, 1};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  constexpr std::array states{
+      Logic4::zero, Logic4::one, Logic4::x, Logic4::z};
+  for (const auto lhs : states) {
+    for (const auto rhs : states) {
+      TestRuntime runtime;
+      runtime.signals[0] = encode(lhs);
+      runtime.signals[1] = encode(rhs);
+      auto descriptor = abi(runtime);
+      assert(
+          jit.execute(handle, descriptor)
+          == JitExecutionStatus::completed);
+      const auto casez_match =
+          lhs == Logic4::z || rhs == Logic4::z || lhs == rhs;
+      const auto casex_match =
+          lhs == Logic4::x || lhs == Logic4::z
+          || rhs == Logic4::x || rhs == Logic4::z || lhs == rhs;
+      assert(
+          runtime.signals[2]
+          == encode(casez_match ? Logic4::one : Logic4::zero));
+      assert(
+          runtime.signals[3]
+          == encode(casex_match ? Logic4::one : Logic4::zero));
+    }
+  }
+}
+
 void test_conditional_select_at_level(
     const JitOptimizationLevel level,
     const std::string_view symbol) {
@@ -2672,6 +2719,67 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     expect_cache_statistics(changed_timeout, 0, 1, 1);
   }
   assert(cached_object_paths(cache_directory).size() == 19);
+
+  constexpr std::string_view wildcard_symbol =
+      "persistent_cache_wildcard_case";
+  const std::array<std::uint32_t, 1> wildcard_widths{1};
+  const auto make_wildcard_process =
+      [](const BinaryOperator operation) {
+        Process process;
+        process.id = 0;
+        process.name = "cached_wildcard_case";
+        process.register_count = 3;
+        process.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("10X1")},
+            LoadConstant{
+                1, PackedLogic4::from_msb_string("1011")},
+            Binary{operation, 2, 0, 1},
+            WriteBlocking{0, 2},
+            Halt{},
+        };
+        return process;
+      };
+  const auto run_wildcard_process =
+      [&](LlvmJit& jit, const Logic4 expected) {
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        assert(
+            jit.execute(jit.lookup(wildcard_symbol), descriptor)
+            == JitExecutionStatus::completed);
+        assert(runtime.signals[0] == encode(expected));
+      };
+  {
+    LlvmJit cold{options};
+    cold.add_process(
+        wildcard_symbol,
+        make_wildcard_process(BinaryOperator::casez_equal),
+        wildcard_widths);
+    run_wildcard_process(cold, Logic4::zero);
+    expect_cache_statistics(cold, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 20);
+  {
+    LlvmJit warm{options};
+    warm.add_process(
+        wildcard_symbol,
+        make_wildcard_process(BinaryOperator::casez_equal),
+        wildcard_widths);
+    run_wildcard_process(warm, Logic4::zero);
+    expect_cache_statistics(warm, 1, 0, 0);
+  }
+  // The wildcard matching policy is generated behavior and participates in
+  // native object identity.
+  {
+    LlvmJit changed_operator{options};
+    changed_operator.add_process(
+        wildcard_symbol,
+        make_wildcard_process(BinaryOperator::casex_equal),
+        wildcard_widths);
+    run_wildcard_process(changed_operator, Logic4::one);
+    expect_cache_statistics(changed_operator, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 21);
 }
 
 void test_optimization_cache_invalidation(
@@ -3215,6 +3323,10 @@ int main() {
       JitOptimizationLevel::o0, "conditional_select_o0");
   test_conditional_select_at_level(
       JitOptimizationLevel::o2, "conditional_select_o2");
+  test_wildcard_case_matching_at_level(
+      JitOptimizationLevel::o0, "wildcard_case_o0");
+  test_wildcard_case_matching_at_level(
+      JitOptimizationLevel::o2, "wildcard_case_o2");
   test_comparisons_at_level(
       JitOptimizationLevel::o0, "comparisons_o0");
   test_comparisons_at_level(

@@ -545,6 +545,61 @@ void test_simir_wide_truth_and_comparison() {
       "wide case equality distinguishes X from Z");
 }
 
+void test_simir_wildcard_case_matching() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  std::array<SignalId, 8> results{};
+  for (std::size_t index = 0; index < results.size(); ++index) {
+    results[index] = interpreter.add_signal(
+        {"top.wildcard_" + std::to_string(index),
+         PackedLogic4::from_msb_string("X")});
+  }
+
+  struct Match {
+    BinaryOperator operation;
+    std::string_view lhs;
+    std::string_view rhs;
+  };
+  const std::array matches{
+      Match{BinaryOperator::casez_equal, "10Z1", "1011"},
+      Match{BinaryOperator::casez_equal, "10X1", "1011"},
+      Match{BinaryOperator::casez_equal, "1011", "10Z1"},
+      Match{BinaryOperator::casez_equal, "10X1", "10X1"},
+      Match{BinaryOperator::casex_equal, "10X1", "1011"},
+      Match{BinaryOperator::casex_equal, "10Z1", "1001"},
+      Match{BinaryOperator::casex_equal, "11X1", "10Z1"},
+      Match{BinaryOperator::casex_equal, "1101", "1001"},
+  };
+  Process process;
+  process.id = 0;
+  process.name = "wildcard_case_matching";
+  process.register_count = 3;
+  for (std::size_t index = 0; index < matches.size(); ++index) {
+    process.operations.emplace_back(LoadConstant{
+        0, PackedLogic4::from_msb_string(matches[index].lhs)});
+    process.operations.emplace_back(LoadConstant{
+        1, PackedLogic4::from_msb_string(matches[index].rhs)});
+    process.operations.emplace_back(
+        Binary{matches[index].operation, 2, 0, 1});
+    process.operations.emplace_back(WriteBlocking{results[index], 2});
+  }
+  process.operations.emplace_back(Halt{});
+  (void)interpreter.add_process(std::move(process));
+
+  require(
+      interpreter.run().status == RunStatus::completed,
+      "wildcard case comparison process completes");
+  const std::array expected{"1", "0", "1", "1", "1", "1", "0", "0"};
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    require(
+        interpreter.signal_value(results[index]).to_msb_string()
+            == expected[index],
+        "casez/casex wildcard truth table");
+  }
+}
+
 void test_simir_wide_reduction_and_shift() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2502,6 +2557,7 @@ int main() {
     test_simir_expressions_and_edges();
     test_simir_noninitializing_static_process();
     test_simir_wide_truth_and_comparison();
+    test_simir_wildcard_case_matching();
     test_simir_wide_reduction_and_shift();
     test_simir_wide_unsigned_arithmetic();
     test_simir_wide_signed_arithmetic();

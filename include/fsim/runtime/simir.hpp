@@ -132,6 +132,10 @@ enum class BinaryOperator : std::uint8_t {
   modulo_signed,
   equal,
   case_equal,
+  // Statement-level wildcard matching. Both operands may supply wildcards;
+  // the result is always a known scalar.
+  casez_equal,
+  casex_equal,
   not_equal,
   less_unsigned,
   less_equal_unsigned,

@@ -2472,6 +2472,14 @@ module case_statement;
     end
     default: result = 2'b11;
   endcase
+  initial casez (selector)
+    2'b0?: result = 2'b01;
+    default: result = 2'b00;
+  endcase
+  initial casex (selector)
+    2'b0x: result = 2'b10;
+    default: result = 2'b00;
+  endcase
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -2493,6 +2501,15 @@ endmodule
           && statement.case_alternatives[2].is_default
           && statement.case_alternatives[2].choices.empty(),
       "case choices, block body, and default metadata");
+  require(
+      statement.case_match_kind == CaseMatchKind::Exact
+          && result.design.units.front().processes[1]
+                     .statements.front().case_match_kind
+                 == CaseMatchKind::WildcardZ
+          && result.design.units.front().processes[2]
+                     .statements.front().case_match_kind
+                 == CaseMatchKind::WildcardXZ,
+      "exact, casez, and casex matching modes remain distinct in HIR");
 
   const auto invalid = parse_text(
       "bad_case.sv",
@@ -2522,7 +2539,6 @@ endmodule
   require(!invalid.ok(), "unsupported and duplicate case forms must fail");
   for (const auto code : {
            std::string_view{"FSIM-SV-SEM-014"},
-           std::string_view{"FSIM-SV-UNSUPPORTED-016"},
            std::string_view{"FSIM-SV-UNSUPPORTED-017"},
            std::string_view{"FSIM-SV-UNSUPPORTED-018"}}) {
     require(

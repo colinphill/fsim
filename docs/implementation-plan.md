@@ -176,8 +176,9 @@ The following foundation is implemented:
   time-zero `always_comb`/`always_latch`, plus dynamic `@*`, with a
   four-process interpreter/O2 delta
   differential;
-- ordered exact Verilog/SystemVerilog `case`/`default` lowering with
-  comma-separated choices, four-state `X`/`Z` matching, width diagnostics,
+- ordered Verilog/SystemVerilog `case`/`casez`/`casex`/`default` lowering
+  with comma-separated choices, exact four-state matching, distinct
+  selector-or-choice `Z` versus `X`/`Z` wildcard policies, width diagnostics,
   and an interpreter/O2 differential;
 - bounded SystemVerilog conditional expressions with scalar four-state
   conditions, equal-width alternatives, exact unknown-condition merging,
@@ -305,6 +306,7 @@ Current Linux validation:
 | VHDL reusable contexts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive cross-library context/package visibility, missing/malformed/cycle diagnostics, interpreter/JIT/VCD equality, and context-only native-cache invalidation |
 | SystemVerilog package constants and packed types | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive imports, direct scoped constants/types, alias chains, parameterized ranges, explicit/implicit enum values, non-nested packed-struct layouts/member reads/writes, targeted legality failures, interpreter/JIT/VCD equality, unrelated-package reuse, and transitive native-cache invalidation |
 | SystemVerilog expression semantics | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for four-state logical/reduction/shift/arithmetic operations, complemented reductions/XNOR, and exact `===`/`!==` X/Z comparison |
+| SystemVerilog wildcard case semantics | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests for ordered `casez`/`casex`, selector- and choice-side wildcards, known-bit mismatch preservation, defensive HIR rejection, interpreter/JIT equivalence, LLVM O0/O2 truth tables, and operator-sensitive native-cache identity |
 | VHDL packed shifts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for `sll`/`srl`/`sra`, including X-containing data and arithmetic left-element fill |
 | Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional and labeled VHDL forms, named outer-loop transfers across static/runtime loops, opening/end label validation, guaranteed first execution, trailing-condition continue targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
 | Conditional and combined waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for all bounded VHDL wait-clause combinations and Verilog/SystemVerilog `wait (expression)`, first-suspend versus immediate-test semantics, event/timeout races, absolute-deadline rearming, engine-owned wake-result registers, multi-signal dependency rechecks, debugger-visible permanent suspension, append-only status 9, cache identity, and interpreter/JIT O0/O2 equivalence |
@@ -506,8 +508,8 @@ Completed groundwork:
   SystemVerilog any-change/scalar-edge procedural event controls;
 - inferred wildcard sensitivities for bounded `always @*`, `always_comb`,
   `always_latch`, and dynamic `@*`;
-- bounded exact Verilog/SystemVerilog `case` statements with ordered,
-  four-state alternatives and default fallback;
+- bounded Verilog/SystemVerilog `case`, `casez`, and `casex` statements with
+  ordered exact/wildcard four-state alternatives and default fallback;
 - bounded VHDL sequential `for` loops with locally static `to`/`downto`
   ranges and deterministic common-SimIR unrolling;
 - bounded SystemVerilog procedural `for` loops with canonical inline indices,

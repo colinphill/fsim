@@ -4683,6 +4683,59 @@ endmodule
                         case_equal;
         });
     assert(has_case_equality);
+
+    for (const auto& [keyword, expected_operator] :
+         std::array{
+             std::pair{
+                 std::string_view{"casez"},
+                 fsim::runtime::simir::BinaryOperator::casez_equal},
+             std::pair{
+                 std::string_view{"casex"},
+                 fsim::runtime::simir::BinaryOperator::casex_equal}}) {
+        const auto wildcard_case =
+            fsim::frontend::parse_text(
+                "wildcard_case.sv",
+                "module wildcard_case;\n"
+                "  logic [1:0] selector;\n"
+                "  logic result;\n"
+                "  always_comb "
+                    + std::string{keyword}
+                    + " (selector)\n"
+                      "    2'b0z: result = 1'b1;\n"
+                      "    default: result = 1'b0;\n"
+                      "  endcase\n"
+                      "endmodule\n",
+                fsim::frontend::Language::SystemVerilog2017);
+        assert(wildcard_case.ok());
+        const auto elaborated_wildcard_case =
+            fsim::elaboration::elaborate(
+                wildcard_case.design, "sv:work.wildcard_case");
+        assert(elaborated_wildcard_case.ok());
+        assert(std::any_of(
+            elaborated_wildcard_case.design->processes().front()
+                .operations.begin(),
+            elaborated_wildcard_case.design->processes().front()
+                .operations.end(),
+            [&](const fsim::runtime::simir::Operation& operation) {
+                const auto* binary =
+                    std::get_if<fsim::runtime::simir::Binary>(
+                        &operation);
+                return binary != nullptr
+                    && binary->operation == expected_operator;
+            }));
+    }
+
+    auto malformed_case_design = case_process.design;
+    malformed_case_design.units.front().processes.front()
+        .statements.front().case_match_kind =
+        static_cast<fsim::frontend::CaseMatchKind>(255);
+    const auto rejected_matching_mode =
+        fsim::elaboration::elaborate(
+            malformed_case_design, "sv:work.case_process");
+    assert(!rejected_matching_mode.ok());
+    assert(has_diagnostic(
+        rejected_matching_mode, "FSIM-ELAB-081"));
+
     auto case_interpreter =
         elaborated_case.design->create_interpreter();
     (void)case_interpreter->run();

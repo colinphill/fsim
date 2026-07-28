@@ -166,6 +166,11 @@ endmodule
 module case_app;
   logic [1:0] selector;
   logic [1:0] result;
+  logic casez_selector_wildcard;
+  logic casez_x_literal;
+  logic casez_item_wildcard;
+  logic casex_selector_wildcard;
+  logic casex_known_mismatch;
   always_comb case (selector)
     2'b00: result = 2'b00;
     2'b01, 2'b10: result = 2'b01;
@@ -174,6 +179,27 @@ module case_app;
     default: result = 2'b00;
   endcase
   initial begin
+    casez (2'b0z)
+      2'b00: casez_selector_wildcard = 1'b1;
+      default: casez_selector_wildcard = 1'b0;
+    endcase
+    casez (2'b0x)
+      2'b00: casez_x_literal = 1'b0;
+      2'b0x: casez_x_literal = 1'b1;
+      default: casez_x_literal = 1'b0;
+    endcase
+    casez (2'b00)
+      2'b0?: casez_item_wildcard = 1'b1;
+      default: casez_item_wildcard = 1'b0;
+    endcase
+    casex (2'b0x)
+      2'b00: casex_selector_wildcard = 1'b1;
+      default: casex_selector_wildcard = 1'b0;
+    endcase
+    casex (2'b1x)
+      2'b0z: casex_known_mismatch = 1'b1;
+      default: casex_known_mismatch = 1'b0;
+    endcase
     selector = 2'b00;
     #1 selector = 2'b10;
     #1 selector = 2'bx0;
@@ -4012,7 +4038,8 @@ end architecture rtl;
 #endif
   assert((
       case_hybrid.final_values
-      == std::vector<std::string>{"11", "00"}));
+      == std::vector<std::string>{
+          "11", "00", "1", "1", "1", "1", "0"}));
   assert(std::find(
              case_hybrid.changes.begin(),
              case_hybrid.changes.end(),

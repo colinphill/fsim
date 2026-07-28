@@ -636,6 +636,8 @@ validate_process(const Process &process,
               case BinaryOperator::modulo_signed:
               case BinaryOperator::equal:
               case BinaryOperator::case_equal:
+              case BinaryOperator::casez_equal:
+              case BinaryOperator::casex_equal:
               case BinaryOperator::not_equal:
               case BinaryOperator::less_unsigned:
               case BinaryOperator::less_equal_unsigned:
@@ -656,6 +658,8 @@ validate_process(const Process &process,
               unify_registers(operation.lhs, operation.rhs, index);
               if (operation.operation == BinaryOperator::equal
                   || operation.operation == BinaryOperator::case_equal
+                  || operation.operation == BinaryOperator::casez_equal
+                  || operation.operation == BinaryOperator::casex_equal
                   || operation.operation == BinaryOperator::not_equal
                   || operation.operation
                       == BinaryOperator::less_unsigned
@@ -1836,6 +1840,27 @@ struct EncodedBit {
         constant_i64(context, 0),
         1};
   }
+  case BinaryOperator::casez_equal:
+  case BinaryOperator::casex_equal: {
+    auto* wildcard = operation == BinaryOperator::casez_equal
+        ? builder.CreateOr(
+              builder.CreateAnd(
+                  builder.CreateNot(lhs.aval), lhs.bval),
+              builder.CreateAnd(
+                  builder.CreateNot(rhs.aval), rhs.bval))
+        : builder.CreateOr(lhs.bval, rhs.bval);
+    auto* mismatch = builder.CreateAnd(
+        builder.CreateOr(
+            builder.CreateXor(lhs.aval, rhs.aval),
+            builder.CreateXor(lhs.bval, rhs.bval)),
+        builder.CreateAnd(builder.CreateNot(wildcard), mask));
+    auto* equal = builder.CreateICmpEQ(
+        mismatch, constant_i64(context, 0));
+    return {
+        builder.CreateZExt(equal, llvm::Type::getInt64Ty(context)),
+        constant_i64(context, 0),
+        1};
+  }
   case BinaryOperator::not_equal:
   case BinaryOperator::less_unsigned:
   case BinaryOperator::less_equal_unsigned:
@@ -1911,6 +1936,8 @@ struct EncodedBit {
     case BinaryOperator::modulo_signed:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
+    case BinaryOperator::casez_equal:
+    case BinaryOperator::casex_equal:
       llvm_unreachable("not a comparison operator");
     }
     auto *compared = builder.CreateICmp(predicate, left, right);

@@ -74,8 +74,9 @@ The current tree contains:
   controls;
 - deterministic simple-expression sensitivity inference for `always @*`,
   time-zero `always_comb`/`always_latch`, and dynamic `@*`;
-- ordered Verilog/SystemVerilog exact `case`/`default` lowering with
-  comma-separated choices and four-state `X`/`Z` matching;
+- ordered Verilog/SystemVerilog `case`/`casez`/`casex`/`default` lowering
+  with comma-separated choices, exact four-state matching, and distinct
+  selector-or-choice `Z` versus `X`/`Z` wildcard policies;
 - nested VHDL `if`/`elsif`/`else` with Boolean typing and nested
   Verilog/SystemVerilog `if`/`else` with packed four-state truth conversion;
 - VHDL Boolean literals, equality/inequality, and `not`/`and`/`or`/`xor` plus

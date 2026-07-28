@@ -381,10 +381,20 @@ struct SignedDivision {
     }
     return result;
   }
-  if (operation == BinaryOperator::case_equal) {
+  if (operation == BinaryOperator::case_equal
+      || operation == BinaryOperator::casez_equal
+      || operation == BinaryOperator::casex_equal) {
     auto result = PackedLogic4(1, Logic4::one);
     for (std::size_t index = 0; index < lhs.width(); ++index) {
-      if (lhs.get(index) != rhs.get(index)) {
+      const auto left = lhs.get(index);
+      const auto right = rhs.get(index);
+      const auto wildcard =
+          operation == BinaryOperator::casez_equal
+              ? left == Logic4::z || right == Logic4::z
+              : operation == BinaryOperator::casex_equal
+                  && (left == Logic4::x || left == Logic4::z
+                      || right == Logic4::x || right == Logic4::z);
+      if (!wildcard && left != right) {
         result.set(0, Logic4::zero);
         break;
       }
@@ -470,6 +480,8 @@ struct SignedDivision {
     case BinaryOperator::modulo_signed:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
+    case BinaryOperator::casez_equal:
+    case BinaryOperator::casex_equal:
       break;
     }
     return PackedLogic4(
@@ -555,6 +567,8 @@ struct SignedDivision {
     case BinaryOperator::modulo_signed:
     case BinaryOperator::equal:
     case BinaryOperator::case_equal:
+    case BinaryOperator::casez_equal:
+    case BinaryOperator::casex_equal:
     case BinaryOperator::not_equal:
     case BinaryOperator::less_unsigned:
     case BinaryOperator::less_equal_unsigned:

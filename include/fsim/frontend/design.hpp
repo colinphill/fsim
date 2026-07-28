@@ -246,6 +246,12 @@ enum class StatementKind {
   Null,
 };
 
+enum class CaseMatchKind {
+  Exact,
+  WildcardZ,
+  WildcardXZ,
+};
+
 enum class AssertionSeverity {
   Note,
   Warning,
@@ -306,7 +312,9 @@ struct Statement {
   std::vector<Statement> statements;
   // The false branch of an If statement.
   std::vector<Statement> else_statements;
-  // Ordered alternatives of a SystemVerilog case statement.
+  // Ordered alternatives and matching policy of a Verilog/SystemVerilog case
+  // statement. VHDL sequential case retains the exact default.
+  CaseMatchKind case_match_kind{CaseMatchKind::Exact};
   std::vector<CaseAlternative> case_alternatives;
   // Declarations directly owned by a procedural block.
   std::vector<VariableDeclaration> declarations;

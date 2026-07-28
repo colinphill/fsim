@@ -317,13 +317,15 @@ zero before using the inferred static list; `always @*` waits for the first
 change, while dynamic `@*` installs an inferred `WaitOn`. Function/task body
 dependencies remain pending.
 
-Exact Verilog/SystemVerilog `case` evaluates its selector once, tests
-comma-separated choices in source order with a dedicated four-state
-case-equality operation, and executes `default` only when no choice matches.
-The comparison treats `X` and `Z` as exact values and always produces a
-two-state condition, so interpreter and LLVM branch behavior is identical.
-`casez`, `casex`, `case inside`, and `unique`/`unique0`/`priority`
-qualifiers remain targeted unsupported forms.
+Verilog/SystemVerilog `case`, `casez`, and `casex` evaluate their selector
+once, test comma-separated choices in source order with dedicated four-state
+matching operations, and execute `default` only when no choice matches.
+Exact `case` treats `X` and `Z` as values. `casez` treats `Z` (including the
+binary `?` spelling) in either the selector or choice as a wildcard, while
+`casex` treats both `X` and `Z` on either side as wildcards. Every comparison
+produces a two-state condition, so interpreter and LLVM branch behavior is
+identical. `case inside` and `unique`/`unique0`/`priority` qualifiers remain
+targeted unsupported forms.
 
 Sequential conditional statements lower recursively to explicit SimIR
 branches and exit jumps, preserving source order and the nearest-`else`

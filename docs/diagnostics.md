@@ -437,7 +437,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-012` | error | Integer objects are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-015` | error | A nested procedural block declaration requires unsupported local-scope semantics. |
-| `FSIM-SV-UNSUPPORTED-016` | error | `casez` or `casex` requires unsupported wildcard matching. |
 | `FSIM-SV-UNSUPPORTED-017` | error | A `case` statement uses an unsupported `unique`, `unique0`, or `priority` qualifier. |
 | `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
@@ -512,6 +511,7 @@ therefore excluded.
 | `FSIM-ELAB-078` | error | Loop-control HIR reached elaboration without an enclosing loop. |
 | `FSIM-ELAB-079` | error | A VHDL wait-until condition is not scalar Boolean. |
 | `FSIM-ELAB-080` | error | Targeted loop-control HIR names no enclosing loop. |
+| `FSIM-ELAB-081` | error | A case statement reached elaboration with an invalid internal matching mode. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

@@ -2866,9 +2866,11 @@ class VerilogParser final : private detail::ParserBase {
     }
   }
 
-  Statement parse_case_statement(const Token& start) {
+  Statement parse_case_statement(
+      const Token& start, const CaseMatchKind match_kind) {
     Statement statement;
     statement.kind = StatementKind::Case;
+    statement.case_match_kind = match_kind;
     expect(TokenKind::LeftParen, "'(' after case", "FSIM-SV-PARSE-046");
     statement.condition = parse_expression();
     expect(TokenKind::RightParen, "')' after case expression",
@@ -3178,16 +3180,14 @@ class VerilogParser final : private detail::ParserBase {
       error(qualifier, "FSIM-SV-UNSUPPORTED-017",
             "unique and priority case qualifiers are not implemented");
     }
-    if (keyword("casez") || keyword("casex")) {
-      const auto unsupported = advance();
-      error(unsupported, "FSIM-SV-UNSUPPORTED-016",
-            unsupported.text
-                + " wildcard matching is not implemented; use exact case");
-      skip_case_statement();
-      return std::nullopt;
-    }
     if (match_keyword("case")) {
-      return parse_case_statement(previous());
+      return parse_case_statement(previous(), CaseMatchKind::Exact);
+    }
+    if (match_keyword("casez")) {
+      return parse_case_statement(previous(), CaseMatchKind::WildcardZ);
+    }
+    if (match_keyword("casex")) {
+      return parse_case_statement(previous(), CaseMatchKind::WildcardXZ);
     }
     if (language_ == Language::SystemVerilog2017
         && match_keyword("for")) {
