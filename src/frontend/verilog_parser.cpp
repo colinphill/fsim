@@ -50,7 +50,8 @@ parse_output_format(const std::string_view text) {
       literal->push_back('%');
       continue;
     }
-    if ((text[index] != 'b' && text[index] != 'h')
+    if ((text[index] != 'b' && text[index] != 'h'
+         && text[index] != 'd')
         || result.format) {
       result.valid = false;
       return result;
@@ -58,7 +59,9 @@ parse_output_format(const std::string_view text) {
     result.format =
         text[index] == 'b'
             ? OutputFormat::Binary
-            : OutputFormat::Hexadecimal;
+        : text[index] == 'h'
+            ? OutputFormat::Hexadecimal
+            : OutputFormat::Decimal;
     literal = &result.suffix;
   }
   return result;
@@ -3848,7 +3851,7 @@ class VerilogParser final : private detail::ParserBase {
                   format_token,
                   "FSIM-SV-SEM-042",
                   "the current formatted-output slice supports one "
-                  "%b or %h conversion and %%");
+                  "%b, %h, or %d conversion and %%");
             } else if (match(TokenKind::Comma)) {
               if (postponed) {
                 error(

@@ -786,7 +786,8 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           operation->format,
           value,
           operation->newline,
-          operation->postponed);
+          operation->postponed,
+          operation->signed_decimal);
     } catch (...) {
       capture_failure(state);
     }

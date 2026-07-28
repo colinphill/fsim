@@ -2927,7 +2927,7 @@ void test_simir_display_output() {
   Interpreter report_interpreter;
   Process report_process;
   report_process.name = "reports";
-  report_process.register_count = 2;
+  report_process.register_count = 4;
   report_process.operations = {
       Report{
           "warning",
@@ -2944,6 +2944,25 @@ void test_simir_display_output() {
           "v=",
           "!",
           true,
+          false},
+      LoadConstant{
+          2, PackedLogic4::from_msb_string("11111111")},
+      FormatDisplay{
+          2,
+          OutputFormat::decimal,
+          "d=",
+          "",
+          true,
+          false,
+          true},
+      LoadConstant{3, PackedLogic4::from_msb_string("10xz")},
+      FormatDisplay{
+          3,
+          OutputFormat::decimal,
+          "u=",
+          "",
+          true,
+          false,
           false},
       LoadConstant{
           1, PackedLogic4::from_msb_string("10100101")},
@@ -3007,7 +3026,8 @@ void test_simir_display_output() {
           && reports[0].delta == 0
           && reports[1].severity == AssertionSeverity::error
           && formatted_output
-              == std::vector<std::string>{"v=10xz!", "h=a5"},
+              == std::vector<std::string>{
+                  "v=10xz!", "d=-1", "u=x", "h=a5"},
       "nonfatal report hook severity, source, and ordering");
 }
 

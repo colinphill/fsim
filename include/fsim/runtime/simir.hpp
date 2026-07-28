@@ -366,6 +366,7 @@ struct Display {
 enum class OutputFormat : std::uint8_t {
   binary,
   hexadecimal,
+  decimal,
 };
 
 /// Format one runtime value between literal prefix/suffix text.
@@ -376,6 +377,7 @@ struct FormatDisplay {
   std::string suffix;
   bool newline{true};
   bool postponed{};
+  bool signed_decimal{};
 };
 
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
@@ -600,6 +602,7 @@ public:
       std::string_view,
       OutputFormat,
       const PackedLogic4&,
+      bool,
       bool,
       bool) {}
   virtual void report(

@@ -266,6 +266,7 @@ enum class AssertionSeverity {
 enum class OutputFormat {
   Binary,
   Hexadecimal,
+  Decimal,
 };
 
 enum class EdgeKind {

@@ -88,7 +88,8 @@ The current tree contains:
   to their default decimal text before SimIR lowering;
 - declared-width signed based output literals interpreted as two's-complement
   decimal text;
-- runtime `$display`/`$write` `%b`/`%h` formatting for one packed expression,
+- runtime `$display`/`$write` `%b`/`%h`/`%d` formatting for one packed
+  expression,
   including four-state bits, literal prefix/suffix text, and `%%`;
 - decoded Verilog/SystemVerilog literal escapes in `$fatal` and immediate
   assertion `$error` diagnostics;

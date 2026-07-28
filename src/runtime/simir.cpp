@@ -31,7 +31,8 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 
 [[nodiscard]] std::string format_output_value(
     const PackedLogic4& value,
-    const OutputFormat format) {
+    const OutputFormat format,
+    const bool signed_decimal) {
   switch (format) {
   case OutputFormat::binary: {
     auto text = value.to_msb_string();
@@ -75,6 +76,48 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     }
     return text;
   }
+  case OutputFormat::decimal: {
+    for (std::size_t bit = 0; bit < value.width(); ++bit) {
+      const auto state = value.get(bit);
+      if (state == Logic4::x || state == Logic4::z) {
+        return "x";
+      }
+    }
+    auto magnitude = value;
+    bool negative =
+        signed_decimal
+        && value.get(value.width() - 1U) == Logic4::one;
+    if (negative) {
+      bool carry = true;
+      for (std::size_t bit = 0; bit < magnitude.width(); ++bit) {
+        const bool inverted = value.get(bit) == Logic4::zero;
+        const bool result = inverted != carry;
+        carry = inverted && carry;
+        magnitude.set(
+            bit, result ? Logic4::one : Logic4::zero);
+      }
+    }
+    std::string text{"0"};
+    for (std::size_t bit = magnitude.width(); bit-- > 0;) {
+      unsigned carry =
+          magnitude.get(bit) == Logic4::one ? 1U : 0U;
+      for (std::size_t digit = text.size(); digit-- > 0;) {
+        const auto value_digit =
+            static_cast<unsigned>(text[digit] - '0') * 2U
+            + carry;
+        text[digit] =
+            static_cast<char>('0' + (value_digit % 10U));
+        carry = value_digit / 10U;
+      }
+      if (carry != 0) {
+        text.insert(text.begin(), static_cast<char>('0' + carry));
+      }
+    }
+    if (negative && text != "0") {
+      text.insert(text.begin(), '-');
+    }
+    return text;
+  }
   }
   throw std::logic_error{"invalid formatted-output conversion"};
 }
@@ -83,8 +126,10 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     const std::string_view prefix,
     const std::string_view suffix,
     const OutputFormat format,
-    const PackedLogic4& value) {
-  auto formatted = format_output_value(value, format);
+    const PackedLogic4& value,
+    const bool signed_decimal) {
+  auto formatted =
+      format_output_value(value, format, signed_decimal);
   std::string result;
   result.reserve(prefix.size() + formatted.size() + suffix.size());
   result.append(prefix);
@@ -1754,9 +1799,11 @@ struct Interpreter::Impl::ExecutionContext final
       const OutputFormat format,
       const PackedLogic4& value,
       const bool newline,
-      const bool postponed) override {
+      const bool postponed,
+      const bool signed_decimal) override {
     auto text =
-        make_formatted_output(prefix, suffix, format, value);
+        make_formatted_output(
+            prefix, suffix, format, value, signed_decimal);
     if (postponed) {
       owner.scheduler.schedule(
           SchedulerPhase::postponed,
@@ -2518,7 +2565,8 @@ void Interpreter::Impl::execute(ProcessId id) {
                   op.prefix,
                   op.suffix,
                   op.format,
-                  get_register(process, op.source));
+                  get_register(process, op.source),
+                  op.signed_decimal);
               if (op.postponed) {
                 scheduler.schedule(
                     SchedulerPhase::postponed,

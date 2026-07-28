@@ -3067,6 +3067,9 @@ private:
                     format =
                         runtime::simir::OutputFormat::hexadecimal;
                     break;
+                case frontend::OutputFormat::Decimal:
+                    format = runtime::simir::OutputFormat::decimal;
+                    break;
                 }
                 process_.operations.emplace_back(
                     FormatDisplay{
@@ -3075,7 +3078,9 @@ private:
                         statement.output_prefix,
                         statement.output_suffix,
                         statement.output_newline,
-                        statement.output_postponed});
+                        statement.output_postponed,
+                        format == runtime::simir::OutputFormat::decimal
+                            && is_signed_expression(statement.value)});
             } else {
                 process_.operations.emplace_back(
                     Display{

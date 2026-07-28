@@ -826,9 +826,12 @@ The twentieth post-gate batch is in progress:
 3. The same runtime formatting operation now supports `%h`, retaining
    lowercase full-width nibbles, uniform X/Z nibbles, and conservative `x`
    output for mixed known/unknown nibbles.
+4. Runtime formatting now supports arbitrary-width `%d`, derives signed
+   two's-complement behavior from the typed expression, and emits `x` when
+   any operand bit is unknown or high impedance.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM, application, Tcl,
-native API, and diagnostic-catalog tests pass. This is feature 3 of 10, so the
+native API, and diagnostic-catalog tests pass. This is feature 4 of 10, so the
 interval full regression and remote push are not due yet.
 
 ## v1 release condition
