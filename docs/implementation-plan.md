@@ -742,7 +742,7 @@ Each iteration must add or update feature-matrix evidence and run through the
 interpreter/JIT differential harness once the affected operation is supported
 by both engines.
 
-## Most recent ten-feature regression batch
+## Recent ten-feature regression batches
 
 The eighteenth post-gate batch is implementation-complete:
 
@@ -808,12 +808,9 @@ application tests pass for the cross-language output slices. The interval LLVM
 including the 144.71-second broad application integration test. The batch ends
 at feature commit `7cd9fda`; the gate-record commit is pushed with the batch.
 
-The twentieth post-gate batch starts at 0 of 10 features. Its full regression
-and remote push are not due until feature 10.
-
 ### Twentieth post-gate batch
 
-The twentieth post-gate batch is in progress:
+The twentieth post-gate batch is complete:
 
 1. VHDL-2008 literal reports at `note`, `warning`, and `error` severity now
    lower to a distinct typed operation retaining source metadata, continue
@@ -848,8 +845,13 @@ The twentieth post-gate batch is in progress:
     same typed failure boundary in interpreter and LLVM execution.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM, application, Tcl,
-native API, and diagnostic-catalog tests pass. This is feature 10 of 10; the
-interval full regression and remote push are due.
+native API, and diagnostic-catalog tests pass. The interval LLVM 22 Debug
+regression passed all 21 tests in 141.45 seconds on 2026-07-28, including the
+141.44-second broad application integration test. The batch ends at feature
+commit `65ce752`; the gate-record commit is pushed with the batch.
+
+Development is paused at the completed batch boundary before the twenty-first
+post-gate batch begins, as requested by the user.
 
 ## v1 release condition
 
