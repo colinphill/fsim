@@ -118,6 +118,8 @@ The current tree contains:
 - nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, including
   conditional VHDL forms, with innermost-loop control across both statically
   unrolled and runtime loops;
+- VHDL opening/end loop labels plus `exit label` and `next label`, including
+  control transfers from runtime inner loops to static outer loops;
 - unconditional VHDL sequential loops and post-test SystemVerilog `do-while`
   loops, including correct trailing-condition targets for `continue`;
 - dependency-driven VHDL `wait until` and Verilog/SystemVerilog

@@ -278,6 +278,10 @@ struct Statement {
   // A VHDL sequential for-loop retains its implicit constant name and
   // locally-static discrete range until elaboration unrolls the body.
   std::string loop_variable;
+  // Canonical VHDL opening label for a loop, and the optional label selected
+  // by exit/next on a loop-control statement.
+  std::string loop_label;
+  std::string loop_control_label;
   Expression loop_initial;
   Expression loop_limit;
   bool loop_descending{};

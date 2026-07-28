@@ -6616,7 +6616,8 @@ entity vhdl_loop_control is
     trigger : in std_logic;
     static_ok : out boolean;
     runtime_ok : out boolean;
-    nested_ok : out boolean
+    nested_ok : out boolean;
+    targeted_ok : out boolean
   );
 end entity;
 architecture rtl of vhdl_loop_control is
@@ -6625,6 +6626,7 @@ begin
     variable static_result : boolean := false;
     variable runtime_result : boolean := false;
     variable nested_result : boolean := false;
+    variable targeted_result : boolean := false;
     variable keep_going : boolean := true;
     variable skipped : boolean := false;
   begin
@@ -6647,9 +6649,20 @@ begin
         exit;
       end loop;
     end loop;
+    outer_loop: for outer in 0 to 1 loop
+      inner_loop: loop
+        if outer = 0 then
+          next outer_loop;
+        end if;
+        targeted_result := true;
+        exit outer_loop;
+      end loop inner_loop;
+      targeted_result := false;
+    end loop outer_loop;
     static_ok <= static_result;
     runtime_ok <= runtime_result;
     nested_ok <= nested_result;
+    targeted_ok <= targeted_result;
   end process;
 end architecture;
 )",
@@ -6683,7 +6696,7 @@ end architecture;
         vhdl_loop_control_result.status
         == fsim::runtime::RunStatus::completed);
     for (const auto name :
-         {"static_ok", "runtime_ok", "nested_ok"}) {
+         {"static_ok", "runtime_ok", "nested_ok", "targeted_ok"}) {
         const auto signal =
             elaborated_vhdl_loop_control.design
                 ->find_signal(name);
@@ -6694,6 +6707,34 @@ end architecture;
                 .to_msb_string()
             == "1");
     }
+
+    const auto orphan_vhdl_loop_target =
+        fsim::frontend::parse_text(
+            "orphan_vhdl_loop_target.vhd",
+            R"(
+entity orphan_vhdl_loop_target is
+  port (trigger : in std_logic);
+end entity;
+architecture rtl of orphan_vhdl_loop_target is
+begin
+  execute: process(trigger)
+  begin
+    outer_loop: loop
+      exit missing_loop;
+    end loop outer_loop;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(!orphan_vhdl_loop_target.ok());
+    const auto rejected_orphan_vhdl_loop_target =
+        fsim::elaboration::elaborate(
+            orphan_vhdl_loop_target.design,
+            "vhdl:work.orphan_vhdl_loop_target(rtl)");
+    assert(!rejected_orphan_vhdl_loop_target.ok());
+    assert(has_diagnostic(
+        rejected_orphan_vhdl_loop_target,
+        "FSIM-ELAB-080"));
 
     const auto post_test_loop =
         fsim::frontend::parse_text(

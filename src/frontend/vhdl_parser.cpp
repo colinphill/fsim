@@ -1453,7 +1453,9 @@ class VhdlParser final : private detail::ParserBase {
       }
     }
     expect_keyword("begin", true, "FSIM-VHDL-PARSE-021");
+    sequential_loop_labels_seen_.clear();
     process.statements = parse_statement_list({"end"});
+    sequential_loop_labels_seen_.clear();
     const auto contains_explicit_wait =
         [&](const auto& self,
             const std::vector<Statement>& statements) -> bool {
@@ -1526,6 +1528,15 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   std::optional<Statement> parse_sequential_statement() {
+    std::optional<Token> opening_loop_label;
+    if (at(TokenKind::Identifier)
+        && at(TokenKind::Colon, 1)
+        && (keyword("for", 2, true)
+            || keyword("while", 2, true)
+            || keyword("loop", 2, true))) {
+      opening_loop_label = advance();
+      advance();
+    }
     if (match_keyword("wait", true)) {
       const auto start = previous();
       Statement statement;
@@ -1673,9 +1684,14 @@ class VhdlParser final : private detail::ParserBase {
       return statement;
     }
     if (match_keyword("for", true)) {
-      const auto start = previous();
+      const auto start =
+          opening_loop_label.value_or(previous());
       Statement statement;
       statement.kind = StatementKind::Loop;
+      statement.loop_label =
+          opening_loop_label
+              ? vhdl_name(opening_loop_label->text)
+              : std::string{};
       const auto variable =
           expect_identifier("for-loop parameter");
       statement.loop_variable = vhdl_name(variable.text);
@@ -1693,19 +1709,18 @@ class VhdlParser final : private detail::ParserBase {
       }
       statement.loop_limit = parse_expression();
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-102");
+      validate_opening_loop_label(
+          statement.loop_label,
+          opening_loop_label.value_or(start));
       ++sequential_loop_depth_;
+      sequential_loop_labels_.push_back(
+          statement.loop_label);
       statement.statements = parse_statement_list({"end"});
+      sequential_loop_labels_.pop_back();
       --sequential_loop_depth_;
       expect_keyword("end", true, "FSIM-VHDL-PARSE-103");
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-104");
-      if (at(TokenKind::Identifier)) {
-        const auto end_label = advance();
-        error(
-            end_label,
-            "FSIM-VHDL-UNSUPPORTED-025",
-            "labeled sequential loops are not implemented in this "
-            "frontend slice");
-      }
+      parse_loop_end_label(statement.loop_label);
       expect(
           TokenKind::Semicolon,
           "';' after sequential for loop",
@@ -1714,25 +1729,29 @@ class VhdlParser final : private detail::ParserBase {
       return statement;
     }
     if (match_keyword("while", true)) {
-      const auto start = previous();
+      const auto start =
+          opening_loop_label.value_or(previous());
       Statement statement;
       statement.kind = StatementKind::Loop;
+      statement.loop_label =
+          opening_loop_label
+              ? vhdl_name(opening_loop_label->text)
+              : std::string{};
       statement.loop_runtime = true;
       statement.condition = parse_expression();
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-106");
+      validate_opening_loop_label(
+          statement.loop_label,
+          opening_loop_label.value_or(start));
       ++sequential_loop_depth_;
+      sequential_loop_labels_.push_back(
+          statement.loop_label);
       statement.statements = parse_statement_list({"end"});
+      sequential_loop_labels_.pop_back();
       --sequential_loop_depth_;
       expect_keyword("end", true, "FSIM-VHDL-PARSE-107");
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-108");
-      if (at(TokenKind::Identifier)) {
-        const auto end_label = advance();
-        error(
-            end_label,
-            "FSIM-VHDL-UNSUPPORTED-025",
-            "labeled sequential loops are not implemented in this "
-            "frontend slice");
-      }
+      parse_loop_end_label(statement.loop_label);
       expect(
           TokenKind::Semicolon,
           "';' after sequential while loop",
@@ -1741,28 +1760,32 @@ class VhdlParser final : private detail::ParserBase {
       return statement;
     }
     if (match_keyword("loop", true)) {
-      const auto start = previous();
+      const auto start =
+          opening_loop_label.value_or(previous());
       Statement statement;
       statement.kind = StatementKind::Loop;
+      statement.loop_label =
+          opening_loop_label
+              ? vhdl_name(opening_loop_label->text)
+              : std::string{};
       statement.loop_runtime = true;
       statement.condition = Expression{
           ExpressionKind::BooleanLiteral,
           "true",
           {},
           start.span};
+      validate_opening_loop_label(
+          statement.loop_label,
+          opening_loop_label.value_or(start));
       ++sequential_loop_depth_;
+      sequential_loop_labels_.push_back(
+          statement.loop_label);
       statement.statements = parse_statement_list({"end"});
+      sequential_loop_labels_.pop_back();
       --sequential_loop_depth_;
       expect_keyword("end", true, "FSIM-VHDL-PARSE-111");
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-112");
-      if (at(TokenKind::Identifier)) {
-        const auto end_label = advance();
-        error(
-            end_label,
-            "FSIM-VHDL-UNSUPPORTED-025",
-            "labeled sequential loops are not implemented in this "
-            "frontend slice");
-      }
+      parse_loop_end_label(statement.loop_label);
       expect(
           TokenKind::Semicolon,
           "';' after unconditional sequential loop",
@@ -1781,20 +1804,28 @@ class VhdlParser final : private detail::ParserBase {
                 + (is_exit ? "exit" : "next")
                 + " statement must be nested in a sequential loop");
       }
-      if (at(TokenKind::Identifier)
-          && !keyword("when", 0, true)) {
-        const auto label = advance();
-        error(
-            label,
-            "FSIM-VHDL-UNSUPPORTED-026",
-            "targeted loop labels on VHDL exit and next statements are "
-            "not implemented in this frontend slice");
-      }
-
       Statement control;
       control.kind =
           is_exit ? StatementKind::Break : StatementKind::Continue;
       control.span = start.span;
+      if (at(TokenKind::Identifier)
+          && !keyword("when", 0, true)) {
+        const auto label = advance();
+        control.loop_control_label =
+            vhdl_name(label.text);
+        if (sequential_loop_depth_ != 0
+            && std::ranges::find(
+                   sequential_loop_labels_,
+                   control.loop_control_label)
+                == sequential_loop_labels_.end()) {
+          error(
+              label,
+              "FSIM-VHDL-SEM-024",
+              "target loop label '"
+                  + control.loop_control_label
+                  + "' is not visible at this exit or next statement");
+        }
+      }
       if (match_keyword("when", true)) {
         Statement conditional;
         conditional.kind = StatementKind::If;
@@ -1833,6 +1864,49 @@ class VhdlParser final : private detail::ParserBase {
               unsupported.text + "'");
     skip_to_semicolon();
     return std::nullopt;
+  }
+
+  void validate_opening_loop_label(
+      const std::string_view label,
+      const Token& token) {
+    if (label.empty()) {
+      return;
+    }
+    if (std::ranges::find(
+            sequential_loop_labels_seen_, label)
+        != sequential_loop_labels_seen_.end()) {
+      error(
+          token,
+          "FSIM-VHDL-SEM-026",
+          "sequential loop label '"
+              + std::string{label}
+              + "' duplicates another label in this process");
+      return;
+    }
+    sequential_loop_labels_seen_.emplace_back(label);
+  }
+
+  void parse_loop_end_label(
+      const std::string_view opening_label) {
+    if (!at(TokenKind::Identifier)) {
+      return;
+    }
+    const auto end_label = advance();
+    const auto canonical =
+        vhdl_name(end_label.text);
+    if (opening_label.empty()) {
+      error(
+          end_label,
+          "FSIM-VHDL-SEM-025",
+          "an end-loop label requires a matching opening loop label");
+    } else if (canonical != opening_label) {
+      error(
+          end_label,
+          "FSIM-VHDL-SEM-025",
+          "end-loop label '" + canonical
+              + "' does not match opening label '"
+              + std::string{opening_label} + "'");
+    }
   }
 
   Statement parse_if_branch(const Token& start) {
@@ -2105,6 +2179,8 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   std::size_t sequential_loop_depth_{};
+  std::vector<std::string> sequential_loop_labels_;
+  std::vector<std::string> sequential_loop_labels_seen_;
 };
 
 }  // namespace

@@ -3598,6 +3598,8 @@ private:
                 : value <= *limit;
         };
         loop_controls_.push_back({});
+        loop_controls_.back().label =
+            statement.loop_label;
         while (in_range()) {
             if (count++ == maximum_iterations) {
                 report(
@@ -3654,6 +3656,8 @@ private:
             DebugPointKind::statement, statement.span);
         if (statement.loop_post_test) {
             loop_controls_.push_back({});
+            loop_controls_.back().label =
+                statement.loop_label;
             lower_statements(statement.statements);
             auto loop_control =
                 std::move(loop_controls_.back());
@@ -3713,7 +3717,11 @@ private:
             static_cast<InstructionIndex>(
                 process_.operations.size());
         loop_controls_.push_back(
-            LoopControlContext{loop_start, {}, {}});
+            LoopControlContext{
+                loop_start,
+                {},
+                {},
+                statement.loop_label});
         lower_statements(statement.statements);
         auto loop_control = std::move(loop_controls_.back());
         loop_controls_.pop_back();
@@ -3739,20 +3747,40 @@ private:
                 statement.span);
             return;
         }
+        auto context = std::prev(loop_controls_.end());
+        if (!statement.loop_control_label.empty()) {
+            const auto found = std::find_if(
+                loop_controls_.rbegin(),
+                loop_controls_.rend(),
+                [&](const LoopControlContext& candidate) {
+                    return candidate.label
+                        == statement.loop_control_label;
+                });
+            if (found == loop_controls_.rend()) {
+                report(
+                    "FSIM-ELAB-080",
+                    "loop-control target '"
+                        + statement.loop_control_label
+                        + "' has no enclosing loop",
+                    statement.span);
+                return;
+            }
+            context = std::prev(found.base());
+        }
         const auto jump =
             static_cast<InstructionIndex>(
                 process_.operations.size());
         if (!is_break
-            && loop_controls_.back().continue_target) {
+            && context->continue_target) {
             process_.operations.emplace_back(
-                Jump{*loop_controls_.back().continue_target});
+                Jump{*context->continue_target});
             return;
         }
         process_.operations.emplace_back(Jump{0});
         auto& targets =
             is_break
-                ? loop_controls_.back().break_jumps
-                : loop_controls_.back().continue_jumps;
+                ? context->break_jumps
+                : context->continue_jumps;
         targets.push_back(jump);
     }
 
@@ -5186,6 +5214,7 @@ private:
         std::optional<InstructionIndex> continue_target;
         std::vector<InstructionIndex> continue_jumps;
         std::vector<InstructionIndex> break_jumps;
+        std::string label;
     };
     std::vector<LoopControlContext> loop_controls_;
     frontend::Language language_{frontend::Language::Vhdl2008};

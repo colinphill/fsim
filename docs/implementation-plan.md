@@ -216,6 +216,9 @@ The following foundation is implemented:
 - nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, including
   conditional VHDL forms, lowered through an innermost-loop target stack for
   both elaboration-unrolled and cyclic runtime CFGs;
+- VHDL opening/end loop labels and targeted `exit`/`next`, with
+  case-insensitive label resolution and named outer-loop CFG transfers across
+  static and runtime loop kinds;
 - unconditional VHDL sequential loops and SystemVerilog post-test `do-while`
   loops, with `continue` edges targeting the trailing condition;
 - dependency-driven VHDL `wait until` and Verilog/SystemVerilog condition
@@ -275,7 +278,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 589 unique current production diagnostic codes.
+- a stable catalog covering 591 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -301,7 +304,7 @@ Current Linux validation:
 | SystemVerilog package constants and packed types | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive imports, direct scoped constants/types, alias chains, parameterized ranges, explicit/implicit enum values, non-nested packed-struct layouts/member reads/writes, targeted legality failures, interpreter/JIT/VCD equality, unrelated-package reuse, and transitive native-cache invalidation |
 | SystemVerilog expression semantics | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for four-state logical/reduction/shift/arithmetic operations, complemented reductions/XNOR, and exact `===`/`!==` X/Z comparison |
 | VHDL packed shifts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for `sll`/`srl`/`sra`, including X-containing data and arithmetic left-element fill |
-| Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional VHDL forms, static-unrolled/runtime/unconditional/post-test loops, guaranteed first execution, trailing-condition continue targeting, innermost-loop targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
+| Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional and labeled VHDL forms, named outer-loop transfers across static/runtime loops, opening/end label validation, guaranteed first execution, trailing-condition continue targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
 | Conditional waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for VHDL `wait until` and Verilog/SystemVerilog `wait (expression)`, multi-signal dependency rechecks, SV unknown-as-false behavior, attached statements, debugger-visible permanent suspension, append-only status 9, process-group compilation, and interpreter/JIT O0/O2 equivalence |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
@@ -514,6 +517,7 @@ Completed groundwork:
   backedges;
 - nested SystemVerilog `break`/`continue` and VHDL `exit`/`next` control for
   statically unrolled and runtime loops;
+- VHDL labeled loops and targeted outer-loop `exit`/`next` control;
 - unconditional VHDL loops and post-test SystemVerilog `do-while` loops;
 - VHDL `wait until` and Verilog/SystemVerilog condition waits with
   dependency-driven re-evaluation and non-polling constant-false suspension;

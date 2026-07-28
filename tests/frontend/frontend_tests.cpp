@@ -949,23 +949,22 @@ architecture rtl of labeled_sequential_for is
 begin
   populate: process
   begin
-    for lane in 0 to 1 loop
+    populate_loop: for lane in 0 to 1 loop
       null;
-    end loop populate;
+    end loop populate_loop;
     wait for 1 ns;
   end process;
 end architecture;
 )",
       Language::Vhdl2008);
   require(
-      !labeled_end.ok()
-          && std::ranges::any_of(
-              labeled_end.diagnostics,
-              [](const Diagnostic& diagnostic) {
-                return diagnostic.code
-                    == "FSIM-VHDL-UNSUPPORTED-025";
-              }),
-      "labeled VHDL sequential loops receive a targeted diagnostic");
+      labeled_end.ok()
+          && labeled_end.design.units.back()
+                 .processes.front()
+                 .statements.front()
+                 .loop_label
+              == "populate_loop",
+      "matching opening and end labels are retained on VHDL loops");
 }
 
 void test_systemverilog_vertical_slice() {
@@ -2832,17 +2831,17 @@ architecture rtl of loop_control is
 begin
   exercise: process
   begin
-    for outer in 0 to 1 loop
-      next when outer = 0;
-      while true loop
-        exit;
-      end loop;
-      exit when outer = 1;
-    end loop;
-    loop
+    outer_loop: for outer in 0 to 1 loop
+      next outer_loop when outer = 0;
+      inner_loop: while true loop
+        exit inner_loop;
+      end loop inner_loop;
+      exit outer_loop when outer = 1;
+    end loop outer_loop;
+    plain_loop: loop
       next when false;
-      exit;
-    end loop;
+      exit plain_loop;
+    end loop plain_loop;
     wait for 1 ns;
   end process;
 end architecture;
@@ -2859,17 +2858,26 @@ end architecture;
       architecture->processes.front().statements[1];
   require(
       vhdl_loop.kind == StatementKind::Loop
+          && vhdl_loop.loop_label == "outer_loop"
           && vhdl_loop.statements.size() == 3
           && vhdl_loop.statements[0].kind == StatementKind::If
           && vhdl_loop.statements[0].statements.front().kind
               == StatementKind::Continue
+          && vhdl_loop.statements[0].statements.front()
+                 .loop_control_label
+              == "outer_loop"
           && vhdl_loop.statements[1].kind == StatementKind::Loop
+          && vhdl_loop.statements[1].loop_label == "inner_loop"
           && vhdl_loop.statements[1].statements.front().kind
               == StatementKind::Break
+          && vhdl_loop.statements[1].statements.front()
+                 .loop_control_label
+              == "inner_loop"
           && vhdl_loop.statements[2].kind == StatementKind::If
           && vhdl_loop.statements[2].statements.front().kind
               == StatementKind::Break
           && unconditional_vhdl_loop.kind == StatementKind::Loop
+          && unconditional_vhdl_loop.loop_label == "plain_loop"
           && unconditional_vhdl_loop.loop_runtime
           && unconditional_vhdl_loop.condition.kind
               == ExpressionKind::BooleanLiteral
@@ -2886,7 +2894,7 @@ begin
   begin
     exit;
     for lane in 0 to 1 loop
-      next outer when lane = 0
+      next missing_loop when lane = 0
     end loop;
     wait for 1 ns;
   end process;
@@ -2904,7 +2912,7 @@ end architecture;
               invalid_vhdl.diagnostics,
               [](const Diagnostic& diagnostic) {
                 return diagnostic.code
-                    == "FSIM-VHDL-UNSUPPORTED-026";
+                    == "FSIM-VHDL-SEM-024";
               })
           && std::ranges::any_of(
               invalid_vhdl.diagnostics,
@@ -2912,7 +2920,49 @@ end architecture;
                 return diagnostic.code
                     == "FSIM-VHDL-PARSE-110";
               }),
-      "out-of-loop, labeled, and malformed VHDL controls are diagnosed");
+      "out-of-loop, unknown-target, and malformed controls are diagnosed");
+
+  const auto invalid_labels = parse_text(
+      "invalid_loop_labels.vhd",
+      R"(
+architecture rtl of invalid_loop_labels is
+begin
+  exercise: process
+  begin
+    outer_loop: loop
+      outer_loop: loop
+        exit;
+      end loop wrong_loop;
+    end loop outer_loop;
+    sibling_loop: loop
+      exit;
+    end loop sibling_loop;
+    sibling_loop: loop
+      exit;
+    end loop sibling_loop;
+    loop
+      exit;
+    end loop orphan_label;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_labels.ok()
+          && std::ranges::any_of(
+              invalid_labels.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-025";
+              })
+          && std::ranges::any_of(
+              invalid_labels.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-026";
+              }),
+      "mismatched, orphan, and duplicate VHDL loop labels are diagnosed");
 
   const auto malformed_vhdl_loop = parse_text(
       "malformed_unconditional_loop.vhd",

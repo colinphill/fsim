@@ -624,6 +624,7 @@ architecture rtl of vhdl_conditional_statement_app is
   signal runtime_control_result : boolean;
   signal nested_control_result : boolean;
   signal unconditional_loop_result : boolean;
+  signal targeted_control_result : boolean;
   signal wait_gate : boolean;
   signal wait_observed : boolean;
 begin
@@ -639,6 +640,7 @@ begin
     variable skipped : boolean := false;
     variable unconditional_skipped : boolean := false;
     variable unconditional_result : boolean := false;
+    variable targeted_control : boolean := false;
   begin
     if true then
       true_case <= true;
@@ -716,6 +718,16 @@ begin
       unconditional_result := true;
       exit;
     end loop;
+    outer_loop: for outer in 0 to 1 loop
+      inner_loop: loop
+        if outer = 0 then
+          next outer_loop;
+        end if;
+        targeted_control := true;
+        exit outer_loop;
+      end loop inner_loop;
+      targeted_control := false;
+    end loop outer_loop;
     sequential_loop_result <= assembled;
     null_loop_result <= untouched;
     runtime_while_result <= while_result;
@@ -723,6 +735,7 @@ begin
     runtime_control_result <= runtime_control;
     nested_control_result <= nested_control;
     unconditional_loop_result <= unconditional_result;
+    targeted_control_result <= targeted_control;
   end process;
   wait_driver: process
   begin
@@ -4498,7 +4511,7 @@ end architecture rtl;
         != std::vector<std::string>{
             "X", "1", "1", "1", "1", "01",
             "0011", "00", "1", "1", "1", "1", "1",
-            "1", "1"}) {
+            "1", "1", "1"}) {
       for (const auto& value :
            vhdl_conditional_statement_hybrid.final_values) {
         std::cerr << value << ' ';
@@ -4510,7 +4523,7 @@ end architecture rtl;
         == std::vector<std::string>{
             "X", "1", "1", "1", "1", "01",
             "0011", "00", "1", "1", "1", "1", "1",
-            "1", "1"}));
+            "1", "1", "1"}));
   }
 
   auto partial_group_config = config;

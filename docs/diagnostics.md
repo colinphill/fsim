@@ -198,6 +198,9 @@ therefore excluded.
 | `FSIM-VHDL-SEM-021` | error | A sequential VHDL case statement contains more than one `others` alternative. |
 | `FSIM-VHDL-SEM-022` | error | A sequential VHDL case statement has an alternative after `others`. |
 | `FSIM-VHDL-SEM-023` | error | A VHDL `exit` or `next` statement appears outside a sequential loop. |
+| `FSIM-VHDL-SEM-024` | error | A VHDL `exit` or `next` targets a loop label that is not visible. |
+| `FSIM-VHDL-SEM-025` | error | An `end loop` label is orphaned or does not match its opening label. |
+| `FSIM-VHDL-SEM-026` | error | A VHDL loop label duplicates another sequential label in the enclosing process. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -220,8 +223,6 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package body or package declaration outside the bounded constant-only subset is not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
-| `FSIM-VHDL-UNSUPPORTED-025` | error | A sequential for loop uses an end label, which the bounded loop slice does not yet retain. |
-| `FSIM-VHDL-UNSUPPORTED-026` | error | A VHDL `exit` or `next` targets a loop label, which this frontend slice does not yet retain. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -511,6 +512,7 @@ therefore excluded.
 | `FSIM-ELAB-077` | error | A VHDL while condition is not scalar Boolean. |
 | `FSIM-ELAB-078` | error | Loop-control HIR reached elaboration without an enclosing loop. |
 | `FSIM-ELAB-079` | error | A VHDL wait-until condition is not scalar Boolean. |
+| `FSIM-ELAB-080` | error | Targeted loop-control HIR names no enclosing loop. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
