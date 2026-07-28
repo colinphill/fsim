@@ -91,6 +91,24 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 [[nodiscard]] PackedLogic4 reduce_value(
     const ReductionOperator operation,
     const PackedLogic4& source) {
+  if (operation == ReductionOperator::one_hot
+      || operation
+          == ReductionOperator::one_hot_or_zero) {
+    std::size_t one_count = 0;
+    for (std::size_t index = 0;
+         index < source.width() && one_count < 2;
+         ++index) {
+      if (source.get(index) == Logic4::one) {
+        ++one_count;
+      }
+    }
+    const auto matched =
+        operation == ReductionOperator::one_hot
+            ? one_count == 1
+            : one_count <= 1;
+    return PackedLogic4(
+        1, matched ? Logic4::one : Logic4::zero);
+  }
   auto result =
       operation == ReductionOperator::bit_and
           ? Logic4::one

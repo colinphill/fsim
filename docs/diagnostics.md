@@ -516,6 +516,9 @@ therefore excluded.
 | `FSIM-ELAB-082` | error | The bounded packed VHDL `abs` operator has a nonsigned operand. |
 | `FSIM-ELAB-083` | error | A SystemVerilog `$signed` or `$unsigned` cast does not have exactly one packed argument. |
 | `FSIM-ELAB-084` | error | `$isunknown` is used outside SystemVerilog or without exactly one packed argument. |
+| `FSIM-ELAB-085` | error | `$bits` is used outside SystemVerilog or without one statically sized packed argument. |
+| `FSIM-ELAB-086` | error | A packed array query is used outside SystemVerilog or without one representable one-dimensional packed argument. |
+| `FSIM-ELAB-087` | error | `$onehot` or `$onehot0` is used outside SystemVerilog or without exactly one packed argument. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

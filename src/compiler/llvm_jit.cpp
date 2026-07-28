@@ -556,6 +556,8 @@ validate_process(const Process &process,
               case ReductionOperator::bit_and:
               case ReductionOperator::bit_or:
               case ReductionOperator::bit_xor:
+              case ReductionOperator::one_hot:
+              case ReductionOperator::one_hot_or_zero:
                 break;
               default:
                 reject(
@@ -2313,6 +2315,49 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               const auto source =
                   load_register(
                       builder, registers, operation.source);
+              if (operation.operation
+                      == ReductionOperator::one_hot
+                  || operation.operation
+                      == ReductionOperator::one_hot_or_zero) {
+                llvm::Value* seen_one =
+                    llvm::ConstantInt::getFalse(context);
+                llvm::Value* multiple_ones =
+                    llvm::ConstantInt::getFalse(context);
+                for (std::uint32_t bit = 0;
+                     bit < source.width;
+                     ++bit) {
+                  const auto value =
+                      bit_at(builder, source, bit);
+                  auto* exact_one = builder.CreateAnd(
+                      value.aval,
+                      builder.CreateNot(value.bval));
+                  multiple_ones = builder.CreateOr(
+                      multiple_ones,
+                      builder.CreateAnd(seen_one, exact_one));
+                  seen_one =
+                      builder.CreateOr(seen_one, exact_one);
+                }
+                auto* matched =
+                    operation.operation
+                            == ReductionOperator::one_hot
+                        ? builder.CreateAnd(
+                              seen_one,
+                              builder.CreateNot(multiple_ones))
+                        : builder.CreateNot(multiple_ones);
+                store_register(
+                    builder,
+                    registers,
+                    operation.destination,
+                    EncodedValue{
+                        builder.CreateZExt(
+                            matched,
+                            llvm::Type::getInt64Ty(context)),
+                        llvm::ConstantInt::get(
+                            llvm::Type::getInt64Ty(context), 0),
+                        1});
+                branch_to_next();
+                return;
+              }
               EncodedBit result{
                   operation.operation == ReductionOperator::bit_and
                       ? llvm::ConstantInt::getTrue(context)

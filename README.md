@@ -85,6 +85,11 @@ The current tree contains:
 - SystemVerilog `$signed`/`$unsigned` casts that preserve packed bits and width
   while selecting signed or unsigned comparisons and arithmetic shifts;
 - SystemVerilog `$isunknown` detection across complete packed `X`/`Z` values;
+- SystemVerilog `$bits` queries for statically sized packed expressions;
+- SystemVerilog `$left`/`$right`/`$low`/`$high`/`$size` queries for
+  one-dimensional packed objects with ascending or descending ranges;
+- SystemVerilog `$onehot`/`$onehot0` packed bit-stream queries with exact
+  known-bit results across `X`/`Z` elements;
 - nested VHDL `if`/`elsif`/`else` with Boolean typing and nested
   Verilog/SystemVerilog `if`/`else` with packed four-state truth conversion;
 - VHDL Boolean literals, equality/inequality, and `not`/`and`/`or`/`xor` plus

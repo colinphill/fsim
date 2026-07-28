@@ -68,6 +68,8 @@ enum class ReductionOperator : std::uint8_t {
   bit_and,
   bit_or,
   bit_xor,
+  one_hot,
+  one_hot_or_zero,
 };
 
 /// SystemVerilog unary reduction over every bit of one packed operand.

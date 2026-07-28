@@ -670,6 +670,10 @@ void test_simir_wide_reduction_and_shift() {
       {"top.reduced_or", PackedLogic4::from_msb_string("X")});
   const auto reduced_xor = interpreter.add_signal(
       {"top.reduced_xor", PackedLogic4::from_msb_string("0")});
+  const auto one_hot = interpreter.add_signal(
+      {"top.one_hot", PackedLogic4::from_msb_string("0")});
+  const auto one_hot_or_zero = interpreter.add_signal(
+      {"top.one_hot_or_zero", PackedLogic4::from_msb_string("0")});
   const auto shifted_left = interpreter.add_signal(
       {"top.shifted_left", PackedLogic4(65, Logic4::x)});
   const auto shifted_right = interpreter.add_signal(
@@ -702,7 +706,7 @@ void test_simir_wide_reduction_and_shift() {
   Process process;
   process.id = 0;
   process.name = "wide_reduction_and_shift";
-  process.register_count = 18;
+  process.register_count = 20;
   process.operations = {
       LoadConstant{
           0, PackedLogic4::from_msb_string(source_text)},
@@ -714,6 +718,11 @@ void test_simir_wide_reduction_and_shift() {
       WriteBlocking{reduced_or, 3},
       Reduction{ReductionOperator::bit_xor, 4, 0},
       WriteBlocking{reduced_xor, 4},
+      Reduction{ReductionOperator::one_hot, 18, 0},
+      WriteBlocking{one_hot, 18},
+      Reduction{
+          ReductionOperator::one_hot_or_zero, 19, 0},
+      WriteBlocking{one_hot_or_zero, 19},
       Shift{ShiftOperator::logical_left, 5, 0, 1},
       WriteBlocking{shifted_left, 5},
       Shift{ShiftOperator::logical_right, 6, 0, 1},
@@ -755,6 +764,12 @@ void test_simir_wide_reduction_and_shift() {
           && interpreter.signal_value(reduced_xor).to_msb_string()
               == "X",
       "wide four-state reductions honor controlling values");
+  require(
+      interpreter.signal_value(one_hot).to_msb_string() == "1"
+          && interpreter.signal_value(one_hot_or_zero)
+                 .to_msb_string()
+              == "1",
+      "wide one-hot reductions count exact one bits and ignore X/Z");
   require(
       interpreter.signal_value(shifted_left).to_msb_string()
           == std::string(63, '0') + "Z0",

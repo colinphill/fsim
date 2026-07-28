@@ -425,6 +425,21 @@ SystemVerilog `$isunknown` compares an operand with itself using ordinary
 four-state equality, then case-compares that scalar result with `X`. The result
 is therefore a known one exactly when any operand bit is `X` or `Z`, and known
 zero otherwise, using operations shared by the interpreter and LLVM paths.
+SystemVerilog `$bits` asks the typed expression-width inference layer for its
+packed argument's complete static width and materializes that number as a
+known 32-bit two-state value. The operand is not evaluated. Type arguments,
+unpacked objects, and dynamically sized objects remain outside this bounded
+form.
+The bounded one-dimensional `$left`, `$right`, `$low`, `$high`, and `$size`
+queries additionally read the declared packed range retained in DesignIR.
+They preserve ascending versus descending source bounds and materialize a
+known signed 32-bit result. Explicit dimension arguments and unpacked or
+multidimensional arrays remain pending.
+`$onehot` and `$onehot0` lower to dedicated common reduction operators. They
+count exact `1` elements of the packed operand, ignore `X` and `Z` elements,
+and return a two-state bit indicating exactly one or at most one set element.
+The interpreter kernel scans arbitrary widths; LLVM emits an allocation-free
+single-word reduction for eligible compiled processes.
 
 A VHDL concurrent assertion becomes a common implicit process. Its condition
 dependencies form the static sensitivity set, its optional label becomes the

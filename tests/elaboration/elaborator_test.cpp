@@ -5181,6 +5181,16 @@ module signedness_casts;
   logic [3:0] unsigned_shift;
   logic known_is_unknown;
   logic xz_is_unknown;
+  logic [31:0] object_bits;
+  logic [31:0] concatenation_bits;
+  logic onehot_zero;
+  logic onehot_single;
+  logic onehot_multiple;
+  logic onehot_unknown;
+  logic onehot0_zero;
+  logic onehot0_single;
+  logic onehot0_multiple;
+  logic onehot0_unknown;
   always_comb begin
     signed_less = $signed(unsigned_value) < signed_value;
     unsigned_less = $unsigned(signed_value) < unsigned_value;
@@ -5188,6 +5198,16 @@ module signedness_casts;
     unsigned_shift = $unsigned(signed_value) >>> 1;
     known_is_unknown = $isunknown(unsigned_value);
     xz_is_unknown = $isunknown(4'b10xz);
+    object_bits = $bits(unsigned_value);
+    concatenation_bits = $bits({unsigned_value, signed_value});
+    onehot_zero = $onehot(4'b0000);
+    onehot_single = $onehot(4'b0010);
+    onehot_multiple = $onehot(4'b1010);
+    onehot_unknown = $onehot(4'bx001);
+    onehot0_zero = $onehot0(4'b0000);
+    onehot0_single = $onehot0(4'b0010);
+    onehot0_multiple = $onehot0(4'b1010);
+    onehot0_unknown = $onehot0(4'bz001);
   end
 endmodule
 )",
@@ -5216,7 +5236,27 @@ endmodule
         elaborated_signedness_casts.design->find_signal(
             "known_is_unknown"),
         elaborated_signedness_casts.design->find_signal(
-            "xz_is_unknown")};
+            "xz_is_unknown"),
+        elaborated_signedness_casts.design->find_signal(
+            "object_bits"),
+        elaborated_signedness_casts.design->find_signal(
+            "concatenation_bits"),
+        elaborated_signedness_casts.design->find_signal(
+            "onehot_zero"),
+        elaborated_signedness_casts.design->find_signal(
+            "onehot_single"),
+        elaborated_signedness_casts.design->find_signal(
+            "onehot_multiple"),
+        elaborated_signedness_casts.design->find_signal(
+            "onehot_unknown"),
+        elaborated_signedness_casts.design->find_signal(
+            "onehot0_zero"),
+        elaborated_signedness_casts.design->find_signal(
+            "onehot0_single"),
+        elaborated_signedness_casts.design->find_signal(
+            "onehot0_multiple"),
+        elaborated_signedness_casts.design->find_signal(
+            "onehot0_unknown")};
     assert(unsigned_cast_input && signed_cast_input);
     assert(std::ranges::all_of(
         signedness_cast_outputs,
@@ -5231,8 +5271,23 @@ endmodule
         *signed_cast_input,
         fsim::runtime::PackedLogic4::from_msb_string("0001"));
     (void)signedness_cast_interpreter->run();
-    const std::array<std::string_view, 6> expected_signedness_casts{
-        "1", "1", "1111", "0000", "0", "1"};
+    const std::array<std::string_view, 16> expected_signedness_casts{
+        "1",
+        "1",
+        "1111",
+        "0000",
+        "0",
+        "1",
+        "00000000000000000000000000000100",
+        "00000000000000000000000000001000",
+        "0",
+        "1",
+        "0",
+        "1",
+        "1",
+        "1",
+        "0",
+        "1"};
     for (std::size_t index = 0;
          index < signedness_cast_outputs.size();
          ++index) {
@@ -5297,6 +5352,155 @@ endmodule
     assert(!rejected_verilog_isunknown.ok());
     assert(has_diagnostic(
         rejected_verilog_isunknown, "FSIM-ELAB-084"));
+
+    const auto invalid_bits = fsim::frontend::parse_text(
+        "invalid_bits.sv",
+        R"(
+module invalid_bits;
+  logic [31:0] result;
+  always_comb result = $bits();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_bits.ok());
+    const auto rejected_bits =
+        fsim::elaboration::elaborate(
+            invalid_bits.design, "sv:work.invalid_bits");
+    assert(!rejected_bits.ok());
+    assert(has_diagnostic(
+        rejected_bits, "FSIM-ELAB-085"));
+
+    const auto verilog_bits = fsim::frontend::parse_text(
+        "verilog_bits.v",
+        R"(
+module verilog_bits;
+  reg [31:0] result;
+  always @* result = $bits(8'b0);
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(verilog_bits.ok());
+    const auto rejected_verilog_bits =
+        fsim::elaboration::elaborate(
+            verilog_bits.design, "sv:work.verilog_bits");
+    assert(!rejected_verilog_bits.ok());
+    assert(has_diagnostic(
+        rejected_verilog_bits, "FSIM-ELAB-085"));
+
+    const auto packed_array_queries =
+        fsim::frontend::parse_text(
+            "packed_array_queries.sv",
+            R"(
+module packed_array_queries;
+  logic [7:4] descending;
+  logic [2:5] ascending;
+  logic signed [31:0] descending_left;
+  logic signed [31:0] descending_right;
+  logic signed [31:0] descending_low;
+  logic signed [31:0] descending_high;
+  logic signed [31:0] descending_size;
+  logic signed [31:0] ascending_left;
+  logic signed [31:0] ascending_right;
+  logic signed [31:0] ascending_low;
+  logic signed [31:0] ascending_high;
+  logic signed [31:0] ascending_size;
+  always_comb begin
+    descending_left = $left(descending);
+    descending_right = $right(descending);
+    descending_low = $low(descending);
+    descending_high = $high(descending);
+    descending_size = $size(descending);
+    ascending_left = $left(ascending);
+    ascending_right = $right(ascending);
+    ascending_low = $low(ascending);
+    ascending_high = $high(ascending);
+    ascending_size = $size(ascending);
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(packed_array_queries.ok());
+    const auto elaborated_packed_array_queries =
+        fsim::elaboration::elaborate(
+            packed_array_queries.design,
+            "sv:work.packed_array_queries");
+    assert(elaborated_packed_array_queries.ok());
+    const std::array packed_query_names{
+        "descending_left",
+        "descending_right",
+        "descending_low",
+        "descending_high",
+        "descending_size",
+        "ascending_left",
+        "ascending_right",
+        "ascending_low",
+        "ascending_high",
+        "ascending_size"};
+    std::array<
+        std::optional<fsim::runtime::simir::SignalId>,
+        10>
+        packed_query_outputs;
+    for (std::size_t index = 0;
+         index < packed_query_names.size();
+         ++index) {
+        packed_query_outputs[index] =
+            elaborated_packed_array_queries.design
+                ->find_signal(packed_query_names[index]);
+        assert(packed_query_outputs[index]);
+    }
+    auto packed_query_interpreter =
+        elaborated_packed_array_queries.design
+            ->create_interpreter();
+    (void)packed_query_interpreter->run();
+    const std::array<std::uint32_t, 10> expected_packed_queries{
+        7, 4, 4, 7, 4, 2, 5, 2, 5, 4};
+    for (std::size_t index = 0;
+         index < packed_query_outputs.size();
+         ++index) {
+        assert(
+            packed_query_interpreter
+                ->signal_value(*packed_query_outputs[index])
+                .low_word()
+                .aval
+            == expected_packed_queries[index]);
+    }
+
+    const auto invalid_packed_query =
+        fsim::frontend::parse_text(
+            "invalid_packed_query.sv",
+            R"(
+module invalid_packed_query;
+  logic [3:0] value;
+  logic signed [31:0] result;
+  always_comb result = $left(value, 1);
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_packed_query.ok());
+    const auto rejected_packed_query =
+        fsim::elaboration::elaborate(
+            invalid_packed_query.design,
+            "sv:work.invalid_packed_query");
+    assert(!rejected_packed_query.ok());
+    assert(has_diagnostic(
+        rejected_packed_query, "FSIM-ELAB-086"));
+
+    const auto invalid_onehot = fsim::frontend::parse_text(
+        "invalid_onehot.sv",
+        R"(
+module invalid_onehot;
+  logic result;
+  always_comb result = $onehot();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_onehot.ok());
+    const auto rejected_onehot =
+        fsim::elaboration::elaborate(
+            invalid_onehot.design, "sv:work.invalid_onehot");
+    assert(!rejected_onehot.ok());
+    assert(has_diagnostic(
+        rejected_onehot, "FSIM-ELAB-087"));
 
     const auto logical_process = fsim::frontend::parse_text(
         "logical_process.sv",
