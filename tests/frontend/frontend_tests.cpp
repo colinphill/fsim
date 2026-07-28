@@ -807,8 +807,11 @@ module signed_ops;
   logic signed [31:0] low_bound;
   logic signed [31:0] high_bound;
   logic signed [31:0] packed_size;
+  logic signed [31:0] packed_increment;
   logic one_hot;
   logic one_hot_or_zero;
+  logic signed [31:0] one_count;
+  logic signed [31:0] selected_count;
   always_comb begin
     quotient = lhs / rhs;
     comparison = lhs < rhs;
@@ -821,8 +824,11 @@ module signed_ops;
     low_bound = $low(mixed);
     high_bound = $high(mixed);
     packed_size = $size(mixed);
+    packed_increment = $increment(mixed);
     one_hot = $onehot(mixed);
     one_hot_or_zero = $onehot0(mixed);
+    one_count = $countones(mixed);
+    selected_count = $countbits(mixed, 1'b0, 1'bx);
   end
 endmodule
 )",
@@ -832,14 +838,14 @@ endmodule
       "SystemVerilog signed arithmetic source must parse");
   const auto& unit = systemverilog.design.units.front();
   require(
-      unit.signals.size() == 16
+      unit.signals.size() == 19
           && unit.signals[0].type.is_signed
           && unit.signals[1].type.is_signed
           && !unit.signals[2].type.is_signed,
       "SystemVerilog explicit signedness metadata");
   require(
       unit.processes.size() == 1
-          && unit.processes.front().statements.size() == 13
+          && unit.processes.front().statements.size() == 16
           && unit.processes.front().statements[0].value.text == "/"
           && unit.processes.front().statements[1].value.text == "<"
           && unit.processes.front().statements[2].value.text == "<"
@@ -869,8 +875,17 @@ endmodule
           && unit.processes.front().statements[8].value.text == "$low"
           && unit.processes.front().statements[9].value.text == "$high"
           && unit.processes.front().statements[10].value.text == "$size"
-          && unit.processes.front().statements[11].value.text == "$onehot"
-          && unit.processes.front().statements[12].value.text == "$onehot0",
+          && unit.processes.front().statements[11].value.text
+              == "$increment"
+          && unit.processes.front().statements[12].value.text == "$onehot"
+          && unit.processes.front().statements[13].value.text == "$onehot0"
+          && unit.processes.front().statements[14].value.text
+              == "$countones"
+          && unit.processes.front().statements[15].value.text
+              == "$countbits"
+          && unit.processes.front().statements[15]
+                 .value.operands.size()
+              == 3,
       "SystemVerilog signed arithmetic, casts, and system-function nodes");
 }
 

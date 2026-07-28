@@ -7,6 +7,7 @@
 #include <cassert>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -5191,6 +5192,13 @@ module signedness_casts;
   logic onehot0_single;
   logic onehot0_multiple;
   logic onehot0_unknown;
+  logic signed [31:0] countones_zero;
+  logic signed [31:0] countones_single;
+  logic signed [31:0] countones_multiple;
+  logic signed [31:0] countones_unknown;
+  logic signed [31:0] countbits_known;
+  logic signed [31:0] countbits_unknown;
+  logic signed [31:0] countbits_zero_x;
   always_comb begin
     signed_less = $signed(unsigned_value) < signed_value;
     unsigned_less = $unsigned(signed_value) < unsigned_value;
@@ -5208,6 +5216,13 @@ module signedness_casts;
     onehot0_single = $onehot0(4'b0010);
     onehot0_multiple = $onehot0(4'b1010);
     onehot0_unknown = $onehot0(4'bz001);
+    countones_zero = $countones(4'b0000);
+    countones_single = $countones(4'b0010);
+    countones_multiple = $countones(4'b1011);
+    countones_unknown = $countones(4'bxz01);
+    countbits_known = $countbits(4'b10xz, 1'b0, 1'b1);
+    countbits_unknown = $countbits(4'b10xz, 1'bx, 1'bz);
+    countbits_zero_x = $countbits(4'b10xz, 1'b0, 1'bx);
   end
 endmodule
 )",
@@ -5256,7 +5271,21 @@ endmodule
         elaborated_signedness_casts.design->find_signal(
             "onehot0_multiple"),
         elaborated_signedness_casts.design->find_signal(
-            "onehot0_unknown")};
+            "onehot0_unknown"),
+        elaborated_signedness_casts.design->find_signal(
+            "countones_zero"),
+        elaborated_signedness_casts.design->find_signal(
+            "countones_single"),
+        elaborated_signedness_casts.design->find_signal(
+            "countones_multiple"),
+        elaborated_signedness_casts.design->find_signal(
+            "countones_unknown"),
+        elaborated_signedness_casts.design->find_signal(
+            "countbits_known"),
+        elaborated_signedness_casts.design->find_signal(
+            "countbits_unknown"),
+        elaborated_signedness_casts.design->find_signal(
+            "countbits_zero_x")};
     assert(unsigned_cast_input && signed_cast_input);
     assert(std::ranges::all_of(
         signedness_cast_outputs,
@@ -5271,7 +5300,7 @@ endmodule
         *signed_cast_input,
         fsim::runtime::PackedLogic4::from_msb_string("0001"));
     (void)signedness_cast_interpreter->run();
-    const std::array<std::string_view, 16> expected_signedness_casts{
+    const std::array<std::string_view, 23> expected_signedness_casts{
         "1",
         "1",
         "1111",
@@ -5287,7 +5316,14 @@ endmodule
         "1",
         "1",
         "0",
-        "1"};
+        "1",
+        "00000000000000000000000000000000",
+        "00000000000000000000000000000001",
+        "00000000000000000000000000000011",
+        "00000000000000000000000000000001",
+        "00000000000000000000000000000010",
+        "00000000000000000000000000000010",
+        "00000000000000000000000000000010"};
     for (std::size_t index = 0;
          index < signedness_cast_outputs.size();
          ++index) {
@@ -5399,22 +5435,26 @@ module packed_array_queries;
   logic signed [31:0] descending_low;
   logic signed [31:0] descending_high;
   logic signed [31:0] descending_size;
+  logic signed [31:0] descending_increment;
   logic signed [31:0] ascending_left;
   logic signed [31:0] ascending_right;
   logic signed [31:0] ascending_low;
   logic signed [31:0] ascending_high;
   logic signed [31:0] ascending_size;
+  logic signed [31:0] ascending_increment;
   always_comb begin
     descending_left = $left(descending);
     descending_right = $right(descending);
     descending_low = $low(descending);
     descending_high = $high(descending);
     descending_size = $size(descending);
+    descending_increment = $increment(descending);
     ascending_left = $left(ascending);
     ascending_right = $right(ascending);
     ascending_low = $low(ascending);
     ascending_high = $high(ascending);
     ascending_size = $size(ascending);
+    ascending_increment = $increment(ascending);
   end
 endmodule
 )",
@@ -5431,14 +5471,16 @@ endmodule
         "descending_low",
         "descending_high",
         "descending_size",
+        "descending_increment",
         "ascending_left",
         "ascending_right",
         "ascending_low",
         "ascending_high",
-        "ascending_size"};
+        "ascending_size",
+        "ascending_increment"};
     std::array<
         std::optional<fsim::runtime::simir::SignalId>,
-        10>
+        12>
         packed_query_outputs;
     for (std::size_t index = 0;
          index < packed_query_names.size();
@@ -5452,8 +5494,19 @@ endmodule
         elaborated_packed_array_queries.design
             ->create_interpreter();
     (void)packed_query_interpreter->run();
-    const std::array<std::uint32_t, 10> expected_packed_queries{
-        7, 4, 4, 7, 4, 2, 5, 2, 5, 4};
+    const std::array<std::uint32_t, 12> expected_packed_queries{
+        7,
+        4,
+        4,
+        7,
+        4,
+        1,
+        2,
+        5,
+        2,
+        5,
+        4,
+        std::numeric_limits<std::uint32_t>::max()};
     for (std::size_t index = 0;
          index < packed_query_outputs.size();
          ++index) {
@@ -5501,6 +5554,44 @@ endmodule
     assert(!rejected_onehot.ok());
     assert(has_diagnostic(
         rejected_onehot, "FSIM-ELAB-087"));
+
+    const auto invalid_countones = fsim::frontend::parse_text(
+        "invalid_countones.sv",
+        R"(
+module invalid_countones;
+  logic signed [31:0] result;
+  always_comb result = $countones();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_countones.ok());
+    const auto rejected_countones =
+        fsim::elaboration::elaborate(
+            invalid_countones.design,
+            "sv:work.invalid_countones");
+    assert(!rejected_countones.ok());
+    assert(has_diagnostic(
+        rejected_countones, "FSIM-ELAB-088"));
+
+    const auto invalid_countbits = fsim::frontend::parse_text(
+        "invalid_countbits.sv",
+        R"(
+module invalid_countbits;
+  logic [3:0] value;
+  logic control;
+  logic signed [31:0] result;
+  always_comb result = $countbits(value, control);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_countbits.ok());
+    const auto rejected_countbits =
+        fsim::elaboration::elaborate(
+            invalid_countbits.design,
+            "sv:work.invalid_countbits");
+    assert(!rejected_countbits.ok());
+    assert(has_diagnostic(
+        rejected_countbits, "FSIM-ELAB-089"));
 
     const auto logical_process = fsim::frontend::parse_text(
         "logical_process.sv",

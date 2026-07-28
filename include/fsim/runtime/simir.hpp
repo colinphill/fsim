@@ -79,6 +79,21 @@ struct Reduction {
   RegisterId source{};
 };
 
+/// Count exact `1` elements of one packed operand. `X` and `Z` do not
+/// contribute. The destination is a 32-bit two-state SystemVerilog `int`.
+struct CountOnes {
+  RegisterId destination{};
+  RegisterId source{};
+};
+
+/// Count elements whose exact four-state value is selected by state_mask.
+/// Bits 0 through 3 select `0`, `1`, `X`, and `Z`, respectively.
+struct CountBits {
+  RegisterId destination{};
+  RegisterId source{};
+  std::uint8_t state_mask{};
+};
+
 enum class ShiftOperator : std::uint8_t {
   logical_left,
   logical_right,
@@ -319,12 +334,12 @@ struct Halt {};
 
 using Operation =
     std::variant<LoadConstant, ReadSignal, CopyRegister, UnaryNot, LogicalNot,
-                 LogicalBinary, Reduction, Shift, Extract, Concatenate, Binary,
-                 Insert, ConditionalSelect, WriteBlocking, WriteUpdate,
-                 WriteAfter, WriteBlockingSlice, WriteUpdateSlice,
-                 WriteAfterSlice, WaitFor, WaitOn, WaitSensitivity,
-                 WaitForever, Yield, Jump, Branch, DebugPoint, Assert, Stop,
-                 Halt>;
+                 LogicalBinary, Reduction, CountOnes, CountBits, Shift,
+                 Extract, Concatenate, Binary, Insert, ConditionalSelect,
+                 WriteBlocking, WriteUpdate, WriteAfter, WriteBlockingSlice,
+                 WriteUpdateSlice, WriteAfterSlice, WaitFor, WaitOn,
+                 WaitSensitivity, WaitForever, Yield, Jump, Branch,
+                 DebugPoint, Assert, Stop, Halt>;
 
 struct Signal {
   std::string name;

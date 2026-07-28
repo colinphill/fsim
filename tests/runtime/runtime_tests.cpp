@@ -674,6 +674,10 @@ void test_simir_wide_reduction_and_shift() {
       {"top.one_hot", PackedLogic4::from_msb_string("0")});
   const auto one_hot_or_zero = interpreter.add_signal(
       {"top.one_hot_or_zero", PackedLogic4::from_msb_string("0")});
+  const auto one_count = interpreter.add_signal(
+      {"top.one_count", PackedLogic4(32, Logic4::zero)});
+  const auto selected_count = interpreter.add_signal(
+      {"top.selected_count", PackedLogic4(32, Logic4::zero)});
   const auto shifted_left = interpreter.add_signal(
       {"top.shifted_left", PackedLogic4(65, Logic4::x)});
   const auto shifted_right = interpreter.add_signal(
@@ -706,7 +710,7 @@ void test_simir_wide_reduction_and_shift() {
   Process process;
   process.id = 0;
   process.name = "wide_reduction_and_shift";
-  process.register_count = 20;
+  process.register_count = 22;
   process.operations = {
       LoadConstant{
           0, PackedLogic4::from_msb_string(source_text)},
@@ -723,6 +727,10 @@ void test_simir_wide_reduction_and_shift() {
       Reduction{
           ReductionOperator::one_hot_or_zero, 19, 0},
       WriteBlocking{one_hot_or_zero, 19},
+      CountOnes{20, 0},
+      WriteBlocking{one_count, 20},
+      CountBits{21, 0, 0x9U},
+      WriteBlocking{selected_count, 21},
       Shift{ShiftOperator::logical_left, 5, 0, 1},
       WriteBlocking{shifted_left, 5},
       Shift{ShiftOperator::logical_right, 6, 0, 1},
@@ -770,6 +778,17 @@ void test_simir_wide_reduction_and_shift() {
                  .to_msb_string()
               == "1",
       "wide one-hot reductions count exact one bits and ignore X/Z");
+  require(
+      interpreter.signal_value(one_count).low_word().aval == 1
+          && interpreter.signal_value(one_count).low_word().bval == 0,
+      "wide count-ones counts exact one bits and ignores X/Z");
+  require(
+      interpreter.signal_value(selected_count).low_word().aval == 64
+          && interpreter.signal_value(selected_count)
+                 .low_word()
+                 .bval
+              == 0,
+      "wide count-bits selects exact zero and Z states");
   require(
       interpreter.signal_value(shifted_left).to_msb_string()
           == std::string(63, '0') + "Z0",

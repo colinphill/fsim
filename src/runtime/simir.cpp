@@ -125,6 +125,47 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return PackedLogic4(1, result);
 }
 
+[[nodiscard]] PackedLogic4 count_ones_value(
+    const PackedLogic4& source) {
+  std::uint32_t count = 0;
+  for (std::size_t index = 0; index < source.width(); ++index) {
+    if (source.get(index) == Logic4::one) {
+      ++count;
+    }
+  }
+  PackedLogic4 result(32, Logic4::zero);
+  for (std::size_t bit = 0; bit < 32; ++bit) {
+    result.set(
+        bit,
+        ((count >> bit) & 1U) != 0
+            ? Logic4::one
+            : Logic4::zero);
+  }
+  return result;
+}
+
+[[nodiscard]] PackedLogic4 count_bits_value(
+    const PackedLogic4& source,
+    const std::uint8_t state_mask) {
+  std::uint32_t count = 0;
+  for (std::size_t index = 0; index < source.width(); ++index) {
+    const auto state =
+        static_cast<std::uint8_t>(source.get(index));
+    if ((state_mask & (std::uint8_t{1} << state)) != 0) {
+      ++count;
+    }
+  }
+  PackedLogic4 result(32, Logic4::zero);
+  for (std::size_t bit = 0; bit < 32; ++bit) {
+    result.set(
+        bit,
+        ((count >> bit) & 1U) != 0
+            ? Logic4::one
+            : Logic4::zero);
+  }
+  return result;
+}
+
 [[nodiscard]] PackedLogic4 shift_value(
     const ShiftOperator operation,
     const PackedLogic4& value,
@@ -1941,6 +1982,19 @@ void Interpreter::Impl::execute(ProcessId id) {
                   reduce_value(
                       op.operation,
                       get_register(process, op.source));
+              ++process.pc;
+            },
+            [&](const CountOnes& op) {
+              get_register(process, op.destination) =
+                  count_ones_value(
+                      get_register(process, op.source));
+              ++process.pc;
+            },
+            [&](const CountBits& op) {
+              get_register(process, op.destination) =
+                  count_bits_value(
+                      get_register(process, op.source),
+                      op.state_mask);
               ++process.pc;
             },
             [&](const Shift& op) {

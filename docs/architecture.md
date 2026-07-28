@@ -430,16 +430,25 @@ packed argument's complete static width and materializes that number as a
 known 32-bit two-state value. The operand is not evaluated. Type arguments,
 unpacked objects, and dynamically sized objects remain outside this bounded
 form.
-The bounded one-dimensional `$left`, `$right`, `$low`, `$high`, and `$size`
-queries additionally read the declared packed range retained in DesignIR.
-They preserve ascending versus descending source bounds and materialize a
-known signed 32-bit result. Explicit dimension arguments and unpacked or
-multidimensional arrays remain pending.
+The bounded one-dimensional `$left`, `$right`, `$low`, `$high`, `$size`, and
+`$increment` queries additionally read the declared packed range retained in
+DesignIR. They preserve ascending versus descending source bounds and
+materialize a known signed 32-bit result; `$increment` returns `1` for a
+descending range and `-1` for an ascending range. Explicit dimension
+arguments and unpacked or multidimensional arrays remain pending.
 `$onehot` and `$onehot0` lower to dedicated common reduction operators. They
 count exact `1` elements of the packed operand, ignore `X` and `Z` elements,
 and return a two-state bit indicating exactly one or at most one set element.
 The interpreter kernel scans arbitrary widths; LLVM emits an allocation-free
 single-word reduction for eligible compiled processes.
+`$countones` uses a separate common operation with a signed 32-bit result. The
+interpreter scans the packed value once without allocating intermediate
+registers. LLVM counts exact known-one bits from the `aval`/`bval` planes for
+eligible single-word processes; `X` and `Z` never contribute to the count.
+`$countbits` carries a four-bit `0`/`1`/`X`/`Z` selection mask in its common
+operation and native-cache identity. The interpreter compares each packed
+element with that exact-state mask. LLVM derives each selected state directly
+from the two value planes and accumulates a known signed 32-bit result.
 
 A VHDL concurrent assertion becomes a common implicit process. Its condition
 dependencies form the static sensitivity set, its optional label becomes the

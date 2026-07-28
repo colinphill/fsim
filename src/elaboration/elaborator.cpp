@@ -4761,7 +4761,8 @@ private:
                 || expression.text == "$right"
                 || expression.text == "$low"
                 || expression.text == "$high"
-                || expression.text == "$size")) {
+                || expression.text == "$size"
+                || expression.text == "$increment")) {
             if (language_
                     != frontend::Language::SystemVerilog2017
                 || expression.operands.size() != 1) {
@@ -4802,6 +4803,9 @@ private:
                 result = std::min(range->left, range->right);
             } else if (expression.text == "$high") {
                 result = std::max(range->left, range->right);
+            } else if (expression.text == "$increment") {
+                result =
+                    range->left >= range->right ? 1 : -1;
             } else {
                 result = static_cast<std::int64_t>(*operand_width);
             }
@@ -4854,6 +4858,100 @@ private:
                     : ReductionOperator::one_hot_or_zero,
                 destination,
                 *source});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$countones") {
+            if (language_
+                    != frontend::Language::SystemVerilog2017
+                || expression.operands.size() != 1) {
+                report(
+                    "FSIM-ELAB-088",
+                    "$countones requires SystemVerilog and exactly one "
+                    "packed argument",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source_width =
+                infer_width(expression.operands.front());
+            if (!source_width || *source_width == 0
+                || *source_width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-088",
+                    "$countones cannot infer a representable static "
+                    "packed width for its argument",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto source = lower_expression(
+                expression.operands.front(), *source_width);
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                32, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                CountOnes{destination, *source});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$countbits") {
+            if (language_
+                    != frontend::Language::SystemVerilog2017
+                || expression.operands.size() < 2) {
+                report(
+                    "FSIM-ELAB-089",
+                    "$countbits requires SystemVerilog, one packed "
+                    "expression, and at least one constant one-bit "
+                    "control",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source_width =
+                infer_width(expression.operands.front());
+            if (!source_width || *source_width == 0
+                || *source_width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-089",
+                    "$countbits cannot infer a representable static "
+                    "packed width for its expression",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            std::uint8_t state_mask = 0;
+            for (std::size_t index = 1;
+                 index < expression.operands.size();
+                 ++index) {
+                const auto control = literal_value(
+                    expression.operands[index],
+                    1,
+                    frontend::Language::SystemVerilog2017);
+                if (!control || control->value.width() != 1) {
+                    report(
+                        "FSIM-ELAB-089",
+                        "$countbits controls must be constant one-bit "
+                        "0, 1, X, or Z values",
+                        expression.operands[index].span);
+                    return std::nullopt;
+                }
+                const auto state = static_cast<std::uint8_t>(
+                    control->value.get(0));
+                state_mask |=
+                    static_cast<std::uint8_t>(
+                        std::uint8_t{1} << state);
+            }
+            const auto source = lower_expression(
+                expression.operands.front(), *source_width);
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                32, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                CountBits{
+                    destination, *source, state_mask});
             return destination;
         }
         if (expression.kind == ExpressionKind::Call
@@ -5460,13 +5558,22 @@ private:
                 || expression.text == "$right"
                 || expression.text == "$low"
                 || expression.text == "$high"
-                || expression.text == "$size")) {
+                || expression.text == "$size"
+                || expression.text == "$increment")) {
             return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call
             && (expression.text == "$onehot"
                 || expression.text == "$onehot0")) {
             return std::size_t{1};
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$countones") {
+            return std::size_t{32};
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$countbits") {
+            return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
@@ -5618,7 +5725,20 @@ private:
                     || expression.text == "$right"
                     || expression.text == "$low"
                     || expression.text == "$high"
-                    || expression.text == "$size")) {
+                    || expression.text == "$size"
+                    || expression.text == "$increment")) {
+                return true;
+            }
+            if (language_
+                    == frontend::Language::SystemVerilog2017
+                && expression.operands.size() == 1
+                && expression.text == "$countones") {
+                return true;
+            }
+            if (language_
+                    == frontend::Language::SystemVerilog2017
+                && expression.operands.size() >= 2
+                && expression.text == "$countbits") {
                 return true;
             }
             if (language_ == frontend::Language::Vhdl2008

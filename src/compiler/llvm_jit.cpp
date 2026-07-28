@@ -50,6 +50,8 @@ using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
 using runtime::simir::Concatenate;
 using runtime::simir::ConditionalSelect;
+using runtime::simir::CountOnes;
+using runtime::simir::CountBits;
 using runtime::simir::CopyRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::EdgeKind;
@@ -567,6 +569,25 @@ validate_process(const Process &process,
               record_definition(operation.destination, index);
               record_use(operation.source, index);
               constrain_width(operation.destination, 1U, index);
+            },
+            [&](const CountOnes& operation) {
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              constrain_width(operation.destination, 32U, index);
+            },
+            [&](const CountBits& operation) {
+              if (operation.state_mask == 0
+                  || (operation.state_mask
+                      & static_cast<std::uint8_t>(~0x0FU))
+                      != 0) {
+                reject(
+                    process,
+                    index,
+                    "CountBits has an invalid state mask");
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              constrain_width(operation.destination, 32U, index);
             },
             [&](const Shift& operation) {
               switch (operation.operation) {
@@ -1240,6 +1261,17 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                       value.operation));
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "source", value.source);
+            },
+            [&](const CountOnes& value) {
+              builder.add("operation", "CountOnes");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const CountBits& value) {
+              builder.add("operation", "CountBits");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "state-mask", value.state_mask);
             },
             [&](const Shift& value) {
               builder.add("operation", "Shift");
@@ -2386,6 +2418,87 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                           result.bval,
                           llvm::Type::getInt64Ty(context)),
                       1});
+              branch_to_next();
+            },
+            [&](const CountOnes& operation) {
+              const auto source = load_register(
+                  builder, registers, operation.source);
+              llvm::Value* count = llvm::ConstantInt::get(
+                  llvm::Type::getInt64Ty(context), 0);
+              for (std::uint32_t bit = 0;
+                   bit < source.width;
+                   ++bit) {
+                const auto value =
+                    bit_at(builder, source, bit);
+                auto* exact_one = builder.CreateAnd(
+                    value.aval,
+                    builder.CreateNot(value.bval));
+                count = builder.CreateAdd(
+                    count,
+                    builder.CreateZExt(
+                        exact_one,
+                        llvm::Type::getInt64Ty(context)));
+              }
+              store_register(
+                  builder,
+                  registers,
+                  operation.destination,
+                  EncodedValue{
+                      count,
+                      llvm::ConstantInt::get(
+                          llvm::Type::getInt64Ty(context), 0),
+                      32});
+              branch_to_next();
+            },
+            [&](const CountBits& operation) {
+              const auto source = load_register(
+                  builder, registers, operation.source);
+              llvm::Value* count = llvm::ConstantInt::get(
+                  llvm::Type::getInt64Ty(context), 0);
+              for (std::uint32_t bit = 0;
+                   bit < source.width;
+                   ++bit) {
+                const auto value =
+                    bit_at(builder, source, bit);
+                auto* not_aval = builder.CreateNot(value.aval);
+                auto* not_bval = builder.CreateNot(value.bval);
+                llvm::Value* selected =
+                    llvm::ConstantInt::getFalse(context);
+                if ((operation.state_mask & 0x1U) != 0) {
+                  selected = builder.CreateOr(
+                      selected,
+                      builder.CreateAnd(not_aval, not_bval));
+                }
+                if ((operation.state_mask & 0x2U) != 0) {
+                  selected = builder.CreateOr(
+                      selected,
+                      builder.CreateAnd(value.aval, not_bval));
+                }
+                if ((operation.state_mask & 0x4U) != 0) {
+                  selected = builder.CreateOr(
+                      selected,
+                      builder.CreateAnd(value.aval, value.bval));
+                }
+                if ((operation.state_mask & 0x8U) != 0) {
+                  selected = builder.CreateOr(
+                      selected,
+                      builder.CreateAnd(not_aval, value.bval));
+                }
+                count = builder.CreateAdd(
+                    count,
+                    builder.CreateZExt(
+                        selected,
+                        llvm::Type::getInt64Ty(context)));
+              }
+              store_register(
+                  builder,
+                  registers,
+                  operation.destination,
+                  EncodedValue{
+                      count,
+                      llvm::ConstantInt::get(
+                          llvm::Type::getInt64Ty(context), 0),
+                      32});
               branch_to_next();
             },
             [&](const Shift& operation) {

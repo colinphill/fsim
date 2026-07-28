@@ -286,7 +286,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 597 unique current production diagnostic codes.
+- a stable catalog covering 599 unique current production diagnostic codes.
 
 Current and most recent aggregate Linux regression snapshots:
 
@@ -320,8 +320,10 @@ Current and most recent aggregate Linux regression snapshots:
 | SystemVerilog signedness casts | Exact LLVM 22 frontend/elaboration plus the fast expression application target for bit/width-preserving `$signed`/`$unsigned`, arity rejection, signed/unsigned comparisons, signedness-sensitive `>>>`, and interpreter/LLVM O0/O2 equivalence |
 | SystemVerilog unknown detection | Exact LLVM 22 frontend/elaboration plus the fast expression application target for `$isunknown`, known and X/Z-packed operands, arity/language-version rejection, and interpreter/LLVM O0/O2 equivalence |
 | SystemVerilog packed width query | Exact LLVM 22 frontend/elaboration plus the fast expression application target for 32-bit `$bits` results over packed objects and concatenations, arity/language-version rejection, and interpreter/LLVM O0/O2 equivalence |
-| SystemVerilog packed array queries | Exact LLVM 22 frontend/elaboration plus the fast expression application target for `$left`/`$right`/`$low`/`$high`/`$size`, ascending and descending declared bounds, unsupported dimension arguments, and interpreter/LLVM O0/O2 equivalence |
+| SystemVerilog packed array queries | Exact LLVM 22 frontend/elaboration plus the fast expression application target for `$left`/`$right`/`$low`/`$high`/`$size`/`$increment`, ascending and descending declared bounds and increments, unsupported dimension arguments, and interpreter/LLVM O0/O2 equivalence |
 | SystemVerilog one-hot queries | Exact LLVM 22 frontend/elaboration/runtime plus the fast expression application target for `$onehot`/`$onehot0`, zero/single/multiple-one inputs, X/Z elements, wide interpreter execution, arity rejection, and LLVM O0/O2 equivalence |
+| SystemVerilog one-count query | Exact LLVM 22 frontend/elaboration/runtime plus the fast expression application target for the dedicated `$countones` SimIR operation, zero/single/multiple-one inputs, X/Z elements, wide interpreter execution, arity rejection, and LLVM O0/O2 equivalence |
+| SystemVerilog selected-state count query | Exact LLVM 22 frontend/elaboration/runtime plus the fast expression application target for the state-mask-bearing `$countbits` SimIR operation, known/unknown/mixed controls, dynamic-control rejection, wide interpreter execution, and LLVM O0/O2 equivalence |
 | Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional and labeled VHDL forms, named outer-loop transfers across static/runtime loops, opening/end label validation, guaranteed first execution, trailing-condition continue targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
 | Conditional and combined waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for all bounded VHDL wait-clause combinations and Verilog/SystemVerilog `wait (expression)`, first-suspend versus immediate-test semantics, event/timeout races, absolute-deadline rearming, engine-owned wake-result registers, multi-signal dependency rechecks, debugger-visible permanent suspension, append-only status 9, cache identity, and interpreter/JIT O0/O2 equivalence |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |

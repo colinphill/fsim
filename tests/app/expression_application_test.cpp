@@ -359,7 +359,7 @@ void test_systemverilog_signedness_casts(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 26> signal_paths{
+  const std::array<std::string, 35> signal_paths{
       "signedness_cast_app.signed_less",
       "signedness_cast_app.unsigned_less",
       "signedness_cast_app.signed_shift",
@@ -373,11 +373,13 @@ void test_systemverilog_signedness_casts(
       "signedness_cast_app.descending_low",
       "signedness_cast_app.descending_high",
       "signedness_cast_app.descending_size",
+      "signedness_cast_app.descending_increment",
       "signedness_cast_app.ascending_left",
       "signedness_cast_app.ascending_right",
       "signedness_cast_app.ascending_low",
       "signedness_cast_app.ascending_high",
       "signedness_cast_app.ascending_size",
+      "signedness_cast_app.ascending_increment",
       "signedness_cast_app.onehot_zero",
       "signedness_cast_app.onehot_single",
       "signedness_cast_app.onehot_multiple",
@@ -385,7 +387,14 @@ void test_systemverilog_signedness_casts(
       "signedness_cast_app.onehot0_zero",
       "signedness_cast_app.onehot0_single",
       "signedness_cast_app.onehot0_multiple",
-      "signedness_cast_app.onehot0_unknown"};
+      "signedness_cast_app.onehot0_unknown",
+      "signedness_cast_app.countones_zero",
+      "signedness_cast_app.countones_single",
+      "signedness_cast_app.countones_multiple",
+      "signedness_cast_app.countones_unknown",
+      "signedness_cast_app.countbits_known",
+      "signedness_cast_app.countbits_unknown",
+      "signedness_cast_app.countbits_zero_x"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -416,11 +425,13 @@ void test_systemverilog_signedness_casts(
           "00000000000000000000000000000100",
           "00000000000000000000000000000111",
           "00000000000000000000000000000100",
+          "00000000000000000000000000000001",
           "00000000000000000000000000000010",
           "00000000000000000000000000000101",
           "00000000000000000000000000000010",
           "00000000000000000000000000000101",
           "00000000000000000000000000000100",
+          "11111111111111111111111111111111",
           "0",
           "1",
           "0",
@@ -428,7 +439,14 @@ void test_systemverilog_signedness_casts(
           "1",
           "1",
           "0",
-          "1"}));
+          "1",
+          "00000000000000000000000000000000",
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000011",
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000010",
+          "00000000000000000000000000000010",
+          "00000000000000000000000000000010"}));
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
   assert(compiled.compiled_modules == 1);
@@ -615,11 +633,13 @@ module signedness_cast_app;
   logic signed [31:0] descending_low;
   logic signed [31:0] descending_high;
   logic signed [31:0] descending_size;
+  logic signed [31:0] descending_increment;
   logic signed [31:0] ascending_left;
   logic signed [31:0] ascending_right;
   logic signed [31:0] ascending_low;
   logic signed [31:0] ascending_high;
   logic signed [31:0] ascending_size;
+  logic signed [31:0] ascending_increment;
   logic onehot_zero;
   logic onehot_single;
   logic onehot_multiple;
@@ -628,6 +648,13 @@ module signedness_cast_app;
   logic onehot0_single;
   logic onehot0_multiple;
   logic onehot0_unknown;
+  logic signed [31:0] countones_zero;
+  logic signed [31:0] countones_single;
+  logic signed [31:0] countones_multiple;
+  logic signed [31:0] countones_unknown;
+  logic signed [31:0] countbits_known;
+  logic signed [31:0] countbits_unknown;
+  logic signed [31:0] countbits_zero_x;
   initial begin
     unsigned_value = 4'b1111;
     signed_value = 4'b0001;
@@ -644,11 +671,13 @@ module signedness_cast_app;
     descending_low = $low(descending);
     descending_high = $high(descending);
     descending_size = $size(descending);
+    descending_increment = $increment(descending);
     ascending_left = $left(ascending);
     ascending_right = $right(ascending);
     ascending_low = $low(ascending);
     ascending_high = $high(ascending);
     ascending_size = $size(ascending);
+    ascending_increment = $increment(ascending);
     onehot_zero = $onehot(4'b0000);
     onehot_single = $onehot(4'b0010);
     onehot_multiple = $onehot(4'b1010);
@@ -657,6 +686,13 @@ module signedness_cast_app;
     onehot0_single = $onehot0(4'b0010);
     onehot0_multiple = $onehot0(4'b1010);
     onehot0_unknown = $onehot0(4'bz001);
+    countones_zero = $countones(4'b0000);
+    countones_single = $countones(4'b0010);
+    countones_multiple = $countones(4'b1011);
+    countones_unknown = $countones(4'bxz01);
+    countbits_known = $countbits(4'b10xz, 1'b0, 1'b1);
+    countbits_unknown = $countbits(4'b10xz, 1'bx, 1'bz);
+    countbits_zero_x = $countbits(4'b10xz, 1'b0, 1'bx);
     $finish;
   end
 endmodule
