@@ -2973,6 +2973,13 @@ void test_simir_display_output() {
           "",
           true,
           false},
+      FormatDisplay{
+          1,
+          OutputFormat::character,
+          "c=",
+          "",
+          true,
+          false},
       Halt{},
   };
   const auto report_process_id =
@@ -3027,7 +3034,7 @@ void test_simir_display_output() {
           && reports[1].severity == AssertionSeverity::error
           && formatted_output
               == std::vector<std::string>{
-                  "v=10xz!", "d=-1", "u=x", "h=a5"},
+                  "v=10xz!", "d=-1", "u=x", "h=a5", "c=\xA5"},
       "nonfatal report hook severity, source, and ordering");
 }
 

@@ -51,7 +51,8 @@ parse_output_format(const std::string_view text) {
       continue;
     }
     if ((text[index] != 'b' && text[index] != 'h'
-         && text[index] != 'o' && text[index] != 'd')
+         && text[index] != 'o' && text[index] != 'd'
+         && text[index] != 'c')
         || result.format) {
       result.valid = false;
       return result;
@@ -63,7 +64,9 @@ parse_output_format(const std::string_view text) {
             ? OutputFormat::Hexadecimal
         : text[index] == 'o'
             ? OutputFormat::Octal
-            : OutputFormat::Decimal;
+        : text[index] == 'd'
+            ? OutputFormat::Decimal
+            : OutputFormat::Character;
     literal = &result.suffix;
   }
   return result;
@@ -3853,7 +3856,7 @@ class VerilogParser final : private detail::ParserBase {
                   format_token,
                   "FSIM-SV-SEM-042",
                   "the current formatted-output slice supports one "
-                  "%b, %h, %o, or %d conversion and %%");
+                  "%b, %h, %o, %d, or %c conversion and %%");
             } else if (match(TokenKind::Comma)) {
               if (monitor) {
                 error(

@@ -62,16 +62,18 @@ width. Unknown-state literals, unformatted dynamic operands, and additional
 operands remain deferred.
 
 Dynamic output status update: `$display` and `$write` accept one `%b`, `%h`,
-`%o`, or `%d`
+`%o`, `%d`, or `%c`
 conversion with one packed runtime expression, literal prefix/suffix text,
 and `%%`. Binary output preserves full declared width and four-state bits;
 hex output retains `ceil(width/4)` lowercase digits, preserving uniform X/Z
 nibbles and mapping mixed known/unknown nibbles to `x`; octal uses the same
 policy over `ceil(width/3)` digits. Decimal output handles
 arbitrary packed widths, respects typed signedness through two's-complement,
-and renders a value containing X/Z as `x`. Additional arguments, other
-conversions, format width/precision modifiers, and dynamic `$monitor` remain
-targeted. `$strobe` accepts the same single conversion/value form, captures
+and renders a value containing X/Z as `x`. Character output uses the
+least-significant eight bits and renders an unknown byte as `x`. Additional
+arguments, other conversions, format width/precision modifiers, and dynamic
+`$monitor` remain targeted. `$strobe` accepts the same single
+conversion/value form, captures
 the formatted result when called, and publishes it in the postponed phase.
 
 Literal `$fatal` and immediate-assertion `$error` messages use the same

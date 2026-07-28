@@ -3073,6 +3073,9 @@ private:
                 case frontend::OutputFormat::Decimal:
                     format = runtime::simir::OutputFormat::decimal;
                     break;
+                case frontend::OutputFormat::Character:
+                    format = runtime::simir::OutputFormat::character;
+                    break;
                 }
                 process_.operations.emplace_back(
                     FormatDisplay{

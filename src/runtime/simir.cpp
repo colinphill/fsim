@@ -149,6 +149,21 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     }
     return text;
   }
+  case OutputFormat::character: {
+    unsigned character{};
+    const auto bit_count =
+        std::min<std::size_t>(8U, value.width());
+    for (std::size_t bit = 0; bit < bit_count; ++bit) {
+      const auto state = value.get(bit);
+      if (state == Logic4::x || state == Logic4::z) {
+        return "x";
+      }
+      if (state == Logic4::one) {
+        character |= 1U << bit;
+      }
+    }
+    return std::string(1, static_cast<char>(character));
+  }
   }
   throw std::logic_error{"invalid formatted-output conversion"};
 }
