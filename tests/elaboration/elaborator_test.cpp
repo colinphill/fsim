@@ -5320,6 +5320,30 @@ end architecture;
     assert(has_diagnostic(
         rejected_vhdl_power, "FSIM-ELAB-091"));
 
+    const auto invalid_vhdl_conditional =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_conditional.vhd",
+            R"(
+entity invalid_vhdl_conditional is
+end entity;
+
+architecture rtl of invalid_vhdl_conditional is
+  signal choose : std_logic;
+  signal result : std_logic;
+begin
+  result <= '1' when choose else '0';
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_conditional.ok());
+    const auto rejected_vhdl_conditional =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_conditional.design,
+            "vhdl:work.invalid_vhdl_conditional(rtl)");
+    assert(!rejected_vhdl_conditional.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_conditional, "FSIM-ELAB-092"));
+
     const auto signedness_casts = fsim::frontend::parse_text(
         "signedness_casts.sv",
         R"(

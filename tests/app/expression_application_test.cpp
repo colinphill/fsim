@@ -204,7 +204,7 @@ void test_vhdl_shift_rotate(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 14> signal_paths{
+  const std::array<std::string, 18> signal_paths{
       "shift_rotate_app.arithmetic_left",
       "shift_rotate_app.rotated_left",
       "shift_rotate_app.rotated_right",
@@ -218,7 +218,11 @@ void test_vhdl_shift_rotate(
       "shift_rotate_app.absolute_known",
       "shift_rotate_app.power_positive",
       "shift_rotate_app.power_negative",
-      "shift_rotate_app.power_zero"};
+      "shift_rotate_app.power_zero",
+      "shift_rotate_app.conditional_true",
+      "shift_rotate_app.conditional_false",
+      "shift_rotate_app.conditional_chain",
+      "shift_rotate_app.conditional_selected"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -249,7 +253,11 @@ void test_vhdl_shift_rotate(
           "00000101",
           "01010001",
           "11111000",
-          "00000001"}));
+          "00000001",
+          "10100101",
+          "01011010",
+          "00000010",
+          "XXXX0110"}));
   assert(reference.compiled_processes == 0);
   assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
@@ -757,6 +765,10 @@ architecture rtl of shift_rotate_app is
   signal power_positive : unsigned(7 downto 0);
   signal power_negative : signed(7 downto 0);
   signal power_zero : unsigned(7 downto 0);
+  signal conditional_true : std_logic_vector(7 downto 0);
+  signal conditional_false : std_logic_vector(7 downto 0);
+  signal conditional_chain : std_logic_vector(7 downto 0);
+  signal conditional_selected : std_logic_vector(7 downto 0);
 begin
   value <= "10X0000Z";
   known_value <= "11111011";
@@ -776,6 +788,16 @@ begin
     power_positive <= "00000011" ** 4;
     power_negative <= "11111110" ** 3;
     power_zero <= "00000111" ** 0;
+    conditional_true <=
+      "10100101" when true else "01011010";
+    conditional_false <=
+      "10100101" when false else "01011010";
+    conditional_chain <=
+      "00000001" when false else
+      "00000010" when true else
+      "00000011";
+    conditional_selected(3 downto 0) <=
+      "0110" when true else "1001";
   end process;
 end architecture;
 )";

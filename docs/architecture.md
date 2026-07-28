@@ -348,13 +348,15 @@ SystemVerilog assertions use the same normalization but retain the
 indeterminate scalar so the assertion fails. Both interpreter and LLVM paths
 execute the resulting common logical and branch operations.
 
-Bounded SystemVerilog conditional expressions lower to a typed SimIR select.
-A scalar `0` or `1` chooses its corresponding equal-width alternative. An
-`X` or `Z` condition compares the alternatives bit by bit, preserves identical
-four-state bits, and produces `X` where they differ. This operation has the
-same interpreter and allocation-free LLVM single-word implementation.
-Vector truth conversion and the standard's complete expression sizing rules
-remain pending.
+Bounded SystemVerilog conditional expressions and VHDL-2008 conditional
+assignments lower to a typed SimIR select. A scalar `0` or `1` chooses its
+corresponding equal-width alternative. An `X` or `Z` SystemVerilog condition
+compares the alternatives bit by bit, preserves identical four-state bits, and
+produces `X` where they differ; VHDL conditions must instead have type
+`boolean`. Chained VHDL `when`/`else` alternatives nest from left to right so
+the first true condition wins. This operation has the same interpreter and
+allocation-free LLVM single-word implementation. Vector truth conversion and
+the standards' complete expression sizing rules remain pending.
 
 SystemVerilog logical negation reduces a packed operand using four-state truth
 semantics: any known `1` makes `!` false, an otherwise unknown-containing

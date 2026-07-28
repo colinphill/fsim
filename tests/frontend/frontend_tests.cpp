@@ -1158,6 +1158,85 @@ endmodule
       "procedural compound assignments must remain SystemVerilog-only");
 }
 
+void test_vhdl_conditional_assignments() {
+  const auto result = parse_text(
+      "conditional_assignment.vhd",
+      R"(
+entity conditional_assignment is
+end entity;
+
+architecture rtl of conditional_assignment is
+  signal select_a : boolean;
+  signal select_b : boolean;
+  signal a : std_logic_vector(3 downto 0);
+  signal b : std_logic_vector(3 downto 0);
+  signal c : std_logic_vector(3 downto 0);
+  signal concurrent_result : std_logic_vector(3 downto 0);
+  signal sequential_result : std_logic_vector(3 downto 0);
+begin
+  concurrent_result <=
+      a when select_a else
+      b when select_b else
+      c;
+
+  choose: process(a, b, select_a)
+  begin
+    sequential_result <= a when select_a else b;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "VHDL conditional assignments must parse");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture
+          && architecture->concurrent_statements.size() == 1
+          && architecture->processes.size() == 1,
+      "VHDL conditional assignments must retain their statement contexts");
+  const auto& concurrent =
+      architecture->concurrent_statements.front().value;
+  const auto& sequential =
+      architecture->processes.front().statements.front().value;
+  require(
+      concurrent.kind == ExpressionKind::Call
+          && concurrent.text == "?:"
+          && concurrent.operands.size() == 3
+          && concurrent.operands[2].kind == ExpressionKind::Call
+          && concurrent.operands[2].text == "?:",
+      "chained VHDL conditional assignments must nest in source order");
+  require(
+      sequential.kind == ExpressionKind::Call
+          && sequential.text == "?:"
+          && sequential.operands.size() == 3,
+      "sequential VHDL-2008 conditional assignments must use common HIR");
+
+  const auto missing_else = parse_text(
+      "conditional_missing_else.vhd",
+      R"(
+entity conditional_missing_else is
+end entity;
+
+architecture rtl of conditional_missing_else is
+  signal choose : boolean;
+  signal a : std_logic;
+  signal result : std_logic;
+begin
+  result <= a when choose;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !missing_else.ok()
+          && std::ranges::any_of(
+              missing_else.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-115";
+              }),
+      "a VHDL conditional assignment without else must be diagnosed");
+}
+
 void test_vhdl_case_statements() {
   const auto result = parse_text(
       "case_statement.vhd",
@@ -4769,6 +4848,7 @@ int main() {
     test_signed_type_and_expression_nodes();
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
+    test_vhdl_conditional_assignments();
     test_vhdl_case_statements();
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();

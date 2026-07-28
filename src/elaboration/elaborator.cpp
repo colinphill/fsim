@@ -5081,6 +5081,16 @@ private:
                     expression.operands[0].span);
                 return std::nullopt;
             }
+            if (language_ == frontend::Language::Vhdl2008
+                && register_domain(*condition)
+                    != frontend::ValueDomain::Boolean) {
+                report(
+                    "FSIM-ELAB-092",
+                    "a VHDL conditional-assignment condition must have "
+                    "type boolean",
+                    expression.operands[0].span);
+                return std::nullopt;
+            }
             const auto value_width =
                 infer_width(expression.operands[1])
                     .value_or(

@@ -286,7 +286,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 603 unique current production diagnostic codes.
+- a stable catalog covering 605 unique current production diagnostic codes.
 
 Current and most recent aggregate Linux regression snapshots:
 
@@ -294,7 +294,7 @@ Current and most recent aggregate Linux regression snapshots:
 |---|---|
 | GCC Debug, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
 | GCC Release, LLVM disabled | Previous 13/13 baseline passes; the fast expression target was added afterward |
-| LLVM 22.1.8 Debug, warnings-as-errors | 15/15 tests pass after the SystemVerilog bit-count/dimension-query and VHDL falling-edge batches (138.81 seconds wall time with four-way CTest parallelism) |
+| LLVM 22.1.8 Debug, warnings-as-errors | 15/15 tests pass after the mixed-language exponentiation, SystemVerilog procedural-update, and VHDL conditional-assignment batches (143.87 seconds wall time with four-way CTest parallelism) |
 | LLVM 22.1.8 Release, warnings-as-errors | Previous 14/14 baseline passes; the fast expression target was added afterward |
 | Concurrent LLVM Debug and Release suites | Previous paired baseline passes; cache-test paths are isolated |
 | GCC ASan/UBSan | 14/14 tests pass after the three-feature batch, with no ASan/UBSan findings |
@@ -318,6 +318,7 @@ Current and most recent aggregate Linux regression snapshots:
 | VHDL packed signed `abs` | GCC Debug and exact LLVM 22 frontend/elaboration plus the fast expression application target pass for known negative, positive, and X/Z-containing values, same-width wrapping, unsigned rejection, and interpreter/LLVM O0/O2 equivalence |
 | Mixed-language packed exponentiation | Exact LLVM 22 frontend/elaboration/runtime plus the fast expression application target for left-associative Verilog-2005/SystemVerilog `**`, VHDL factor/sign precedence and parenthesization, checked constant folding, 65-bit interpreter execution, zero/positive/negative/X cases, VHDL negative-exponent rejection, and interpreter/LLVM O0/O2 equivalence |
 | SystemVerilog procedural updates | Exact LLVM 22 frontend/diagnostic-catalog plus the fast expression application target for all arithmetic/bitwise/logical-shift/arithmetic-shift compound assignments, standalone prefix/postfix increment/decrement, whole and selected targets, signed shifts, X propagation, Verilog-2005 rejection, and interpreter/LLVM O0/O2 equivalence |
+| VHDL conditional assignments | Exact LLVM 22 frontend/elaboration/diagnostic-catalog plus the fast expression application target for concurrent and sequential VHDL-2008 `when`/`else` assignments, chained source-order alternatives, Boolean-condition enforcement, missing-else recovery, and interpreter/LLVM O0/O2 equivalence |
 | VHDL clock-edge guards | Exact LLVM 22 frontend/elaboration plus the fast expression application target for sole outer `rising_edge`/`falling_edge` sensitivity refinement, negative-edge scheduling, and interpreter/LLVM O0/O2 equivalence |
 | VHDL concurrent assertions | Exact LLVM 22 frontend/elaboration plus the fast expression application target for labeled assertion HIR, stable process naming, inferred condition sensitivity, event-driven interpreter failure metadata, and interpreter/LLVM O0/O2 execution |
 | SystemVerilog signedness casts | Exact LLVM 22 frontend/elaboration plus the fast expression application target for bit/width-preserving `$signed`/`$unsigned`, arity rejection, signed/unsigned comparisons, signedness-sensitive `>>>`, and interpreter/LLVM O0/O2 equivalence |

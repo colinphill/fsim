@@ -104,6 +104,8 @@ The current tree contains:
   processes with inferred condition sensitivity and retained diagnostics;
 - ordered VHDL sequential packed `case` statements with `|` choices and
   `others`, lowered through common exact case-equality branches;
+- concurrent and sequential VHDL-2008 conditional assignments with chained
+  Boolean `when`/`else` alternatives;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and

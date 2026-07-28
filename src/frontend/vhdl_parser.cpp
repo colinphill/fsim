@@ -1959,7 +1959,7 @@ class VhdlParser final : private detail::ParserBase {
     statement.kind = StatementKind::Assignment;
     statement.assignment_kind = kind;
     statement.target = std::move(target);
-    statement.value = parse_expression();
+    statement.value = parse_conditional_assignment_value();
     if (match_keyword("after", true)) {
       statement.delay = parse_vhdl_delay(previous());
     }
@@ -1967,6 +1967,26 @@ class VhdlParser final : private detail::ParserBase {
            "FSIM-VHDL-PARSE-029");
     statement.span = span_from(start, previous());
     return statement;
+  }
+
+  Expression parse_conditional_assignment_value() {
+    auto when_true = parse_expression();
+    if (!match_keyword("when", true)) {
+      return when_true;
+    }
+    const auto begin_span = when_true.span;
+    auto condition = parse_expression();
+    expect_keyword("else", true, "FSIM-VHDL-PARSE-115");
+    auto when_false = parse_conditional_assignment_value();
+    const auto span = cover(begin_span, when_false.span);
+    return Expression{
+        ExpressionKind::Call,
+        "?:",
+        {
+            std::move(condition),
+            std::move(when_true),
+            std::move(when_false)},
+        span};
   }
 
   Delay parse_vhdl_delay(const Token& start) {
