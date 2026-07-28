@@ -63,6 +63,10 @@ The following foundation is implemented:
   mutation, run control, breakpoints, all four stepping modes, structured
   diagnostics, live VCD selection, and synchronous safe-point/value/lifecycle
   callbacks with callback-safe stop/resume;
+- composable scheduler safe-point observers that preserve Tcl callbacks while
+  the debugger or Ctrl-C control hook is replaced, transactional Tcl project
+  replacement, runtime trace configuration, and assertion
+  callback/diagnostic metadata;
 - packed 2-, 4-, and 9-state value kernels;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
@@ -703,8 +707,10 @@ The next development iterations should occur in this order:
    mutation, script arguments, and deterministic batch exit status use the
    common application/debug engines. Structured diagnostics, live trace
    selection, callback-safe stop/resume, and synchronous
-   safe-point/value/lifecycle callbacks are present. Remaining Tcl work
-   includes assertion callbacks and runtime project replacement.
+   safe-point/value/lifecycle/assertion callbacks are present. Project loading
+   is transactional, resets live/poisoned sessions, and retains Tcl callback
+   registrations; runtime trace paths and filters may be configured before
+   simulation starts.
 7. **Harden for release:** Windows LLVM gates, fuzzing, Unicode/path behavior,
    cache eviction/fingerprinting, benchmarks, and full feature-matrix closure.
 
@@ -719,26 +725,29 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The fourth post-gate batch is implementation-complete:
+The fifth post-gate batch is implementation-complete:
 
-1. stable Tcl diagnostic dictionaries;
-2. explicit diagnostic clearing;
-3. callback-safe Tcl stop requests and resumable stopped sessions;
-4. live trace enumeration;
-5. trace-selection clear/all operations;
-6. per-signal trace add/remove operations;
-7. synchronous safe-point callbacks with named scheduler phases;
-8. synchronous canonical value-change callbacks;
-9. simulation started/stopped/time-limit/finished lifecycle callbacks with
-   command-prefix registration, enumeration, and removal; and
-10. callback reentrancy guards plus failure containment as catchable Tcl
-    errors.
+1. composable scheduler safe-point observers;
+2. preservation of Tcl safe-point callbacks while debugger/interrupt primary
+   hooks change;
+3. runtime `fsim::project load` from the interactive or batch shell;
+4. transactional failed-load behavior that preserves the current project;
+5. deterministic reset of built, live, terminal, or poisoned sessions on
+   successful project replacement while callback registrations persist;
+6. runtime trace-file configuration and disable before simulation;
+7. trace-status dictionaries and ordered filter configuration;
+8. rejection of late trace reconfiguration after simulation starts;
+9. synchronous assertion callbacks with retained command-prefix arguments,
+   process, severity, message, path, line, and column; and
+10. assertion diagnostics plus started/stopped lifecycle and poisoned-session
+    state.
 
-Every item has focused application evidence. Trace selection produces and
-checks a real VCD artifact; callbacks stop at tick 1, resume to terminal tick
-2, and preserve the distinction between scheduler return status and terminal
-simulation state. The interval LLVM 22 Debug regression passed all 16 tests in
-157.46 seconds. This batch is ready to commit and push.
+Every item has focused application evidence. A debugger safe callback stops at
+tick 1 and resumes to terminal tick 2; failed and successful project
+replacement are both exercised; a real configured trace is opened with its
+filter; and a source assertion is checked through callback, diagnostic, CLI
+rendering, and poisoned lifecycle state. The interval LLVM 22 Debug regression
+passed all 16 tests in 154.61 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 

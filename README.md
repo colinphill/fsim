@@ -321,9 +321,14 @@ structured diagnostic lifecycle, callback-safe stop requests, and live
 add/remove/all/clear/list VCD selection. `fsim::on`, `fsim::off`, and
 `fsim::callbacks` register synchronous safe-point, value-change, and lifecycle
 command-prefix callbacks; callback failures stop the run and become catchable
-Tcl errors. Assertion callbacks and runtime project replacement remain to be
-added. Interactive and batch Python support is planned later, after the Tcl
-and native control contracts stabilize.
+Tcl errors. Safe-point observers compose with debugger and interrupt control,
+so callback-driven stops also work during `fsim::debug` runs. Assertion
+callbacks receive process, severity, message, and source metadata while adding
+a structured diagnostic. `fsim::project load` transactionally replaces the
+manifest and resets any live, finished, or poisoned session, while
+`fsim::trace configure|disable|status` controls the next debugger trace before
+simulation starts. Interactive and batch Python support is planned later,
+after the Tcl and native control contracts stabilize.
 
 ## Build and test
 

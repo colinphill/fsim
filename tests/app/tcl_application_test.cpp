@@ -203,6 +203,36 @@ puts "diagnostics-ok"
         << "max_deltas = 100000\n"
         << "trace_file = \"debug.vcd\"\n";
   }
+  const auto assertion_source = directory / "assertion.sv";
+  {
+    std::ofstream file(assertion_source);
+    file
+        << "module assertion_tb;\n"
+        << "  initial begin\n"
+        << "    assert (1'b0) else $error(\"tcl assertion\");\n"
+        << "  end\n"
+        << "endmodule\n";
+  }
+  const auto assertion_manifest = directory / "assertion.toml";
+  {
+    std::ofstream file(assertion_manifest);
+    file
+        << "schema = 1\n"
+        << "[project]\n"
+        << "name = \"tcl-assertion\"\n"
+        << "top = \"sv:work.assertion_tb\"\n"
+        << "time_resolution = \"1ns\"\n"
+        << "[[source_set]]\n"
+        << "language = \"systemverilog\"\n"
+        << "standard = \"2017\"\n"
+        << "library = \"work\"\n"
+        << "files = [\"assertion.sv\"]\n"
+        << "[build]\n"
+        << "optimization = \"O2\"\n"
+        << "cache_path = \"assertion-cache\"\n"
+        << "[run]\n"
+        << "max_deltas = 100000\n";
+  }
   {
     const std::string control_script = R"(
 set project [fsim::project]
@@ -504,6 +534,183 @@ puts "callback-error-ok"
     }
     assert(
         output.str().find("callback-error-ok") != std::string::npos);
+    assert(error.str().empty());
+  }
+  {
+    const std::string project_script =
+        "set control_manifest {"
+        + manifest.string()
+        + "}\nset assertion_manifest {"
+        + assertion_manifest.string()
+        + R"FSIM_TCL(}
+if {![catch {fsim::project load definitely-missing.toml} load_error]} {
+  error "missing project unexpectedly loaded"
+}
+if {[dict get [fsim::project] name] ne "tcl"} {
+  error "failed load mutated the current project"
+}
+set loaded [fsim::project load $control_manifest]
+if {[dict get $loaded name] ne "tcl-control"} {
+  error "valid project load failed"
+}
+set trace_path [fsim::trace configure runtime-debug.vcd tb.q]
+set trace_status [fsim::trace status]
+if {[dict get $trace_status file] ne $trace_path ||
+    [dict get $trace_status filters] ne "tb.q"} {
+  error "bad runtime trace configuration: $trace_status"
+}
+if {[fsim::trace list] ne "tb.q"} {
+  error "runtime trace filter was not applied"
+}
+if {![catch {fsim::trace configure too-late.vcd} trace_error]} {
+  error "live trace reconfiguration unexpectedly succeeded"
+}
+set replaced [fsim::project load $assertion_manifest]
+if {[dict get $replaced name] ne "tcl-assertion" ||
+    [dict get [fsim::status] state] ne "unbuilt"} {
+  error "project replacement did not reset the live session"
+}
+if {[dict get [fsim::trace status] file] ne ""} {
+  error "replacement project retained old trace configuration"
+}
+set control_again [fsim::project load $control_manifest]
+if {[dict get $control_again name] ne "tcl-control"} {
+  error "second project replacement failed"
+}
+puts "project-load-ok"
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {"fsim", "tcl", "-c", project_script},
+        input,
+        output,
+        error);
+    if (result != 0) {
+      throw std::runtime_error(
+          "Tcl project-load test failed:\n" + error.str()
+          + "\nTcl output:\n" + output.str());
+    }
+    assert(output.str().find("project-load-ok") != std::string::npos);
+    assert(error.str().empty());
+  }
+  {
+    const std::string assertion_script =
+        "set assertion_manifest {"
+        + assertion_manifest.string()
+        + R"FSIM_TCL(}
+set ::assertion_event {}
+set ::assertion_lifecycle {}
+proc record_assertion {tag process severity message path line column} {
+  set ::assertion_event \
+      [list $tag $process $severity $message $path $line $column]
+}
+proc record_assertion_lifecycle {event} {
+  lappend ::assertion_lifecycle $event
+}
+fsim::on assertion {record_assertion tagged}
+fsim::on lifecycle record_assertion_lifecycle
+if {[dict get [fsim::callbacks] assertion] ne \
+        "record_assertion tagged"} {
+  error "assertion command prefix was not retained"
+}
+fsim::project load $assertion_manifest
+if {![catch {fsim::run} assertion_error]} {
+  error "failing assertion did not fail the Tcl run"
+}
+if {[string first "tcl assertion" $assertion_error] < 0} {
+  error "bad assertion run error: $assertion_error"
+}
+if {[llength $::assertion_event] != 7 ||
+    [lindex $::assertion_event 0] ne "tagged" ||
+    [lindex $::assertion_event 2] ne "error" ||
+    [string first "tcl assertion" [lindex $::assertion_event 3]] < 0 ||
+    [lindex $::assertion_event 5] != 3} {
+  error "bad assertion callback metadata: $::assertion_event"
+}
+if {[lsearch -exact $::assertion_lifecycle "started"] < 0 ||
+    [lsearch -exact $::assertion_lifecycle "stopped"] < 0} {
+  error "bad assertion lifecycle: $::assertion_lifecycle"
+}
+set diagnostics [fsim::diagnostics]
+set last [lindex $diagnostics end]
+if {[dict get $last code] ne "FSIM-TCL-ASSERT-0001" ||
+    [dict get $last line] != 3 ||
+    [dict get $last severity] ne "error"} {
+  error "bad assertion diagnostic: $last"
+}
+if {[dict get [fsim::status] state] ne "poisoned"} {
+  error "assertion did not poison the failed session"
+}
+puts "assertion-callback-ok"
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {"fsim", "tcl", "-c", assertion_script},
+        input,
+        output,
+        error);
+    if (result != 0) {
+      throw std::runtime_error(
+          "Tcl assertion callback test failed:\n" + error.str()
+          + "\nTcl output:\n" + output.str());
+    }
+    assert(
+        output.str().find("assertion-callback-ok")
+        != std::string::npos);
+    assert(
+        error.str().find("error[FSIM-TCL-ASSERT-0001]")
+        != std::string::npos);
+    assert(error.str().find("tcl assertion") != std::string::npos);
+  }
+  {
+    const std::string debug_callback_script = R"FSIM_TCL(
+set ::debug_safe_points 0
+proc stop_debug_at_one {time delta phase} {
+  incr ::debug_safe_points
+  if {$time >= 1} {
+    fsim::stop
+  }
+}
+fsim::on safe_point stop_debug_at_one
+set stopped [fsim::debug run]
+if {[string first "stopped at time 1" $stopped] < 0 ||
+    $::debug_safe_points == 0} {
+  error "debugger replaced the Tcl safe-point callback: $stopped"
+}
+fsim::off safe_point
+set finished [fsim::debug run]
+if {[string first "simulation finished" $finished] < 0 ||
+    [string first "time 2" $finished] < 0} {
+  error "debugger did not resume after callback stop: $finished"
+}
+puts "debug-callback-ok"
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {
+            "fsim",
+            "tcl",
+            "-p",
+            manifest.string(),
+            "-c",
+            debug_callback_script,
+        },
+        input,
+        output,
+        error);
+    if (result != 0) {
+      throw std::runtime_error(
+          "Tcl debugger callback test failed:\n" + error.str()
+          + "\nTcl output:\n" + output.str());
+    }
+    assert(
+        output.str().find("debug-callback-ok") != std::string::npos);
     assert(error.str().empty());
   }
   {

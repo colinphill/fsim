@@ -3921,6 +3921,27 @@ struct Simulation::Impl {
             }
           }
         });
+    interpreter->scheduler().set_safe_point_hook(
+        [this](
+            runtime::Scheduler& scheduler,
+            const runtime::SchedulerPhase phase) {
+          if (safe_point_hook) {
+            safe_point_hook(scheduler, phase);
+          }
+          if (safe_point_observers.empty()) {
+            return;
+          }
+          // Observers may synchronously remove themselves.
+          std::vector<SafePointHook> callbacks;
+          callbacks.reserve(safe_point_observers.size());
+          for (const auto& [token, callback] : safe_point_observers) {
+            (void)token;
+            callbacks.push_back(callback);
+          }
+          for (const auto& callback : callbacks) {
+            callback(scheduler, phase);
+          }
+        });
   }
 
   void validate_external_value(
@@ -3994,6 +4015,9 @@ struct Simulation::Impl {
   SignalChangeHook signal_change_hook;
   std::map<std::uint64_t, SignalChangeHook> signal_observers;
   std::uint64_t next_signal_observer{1};
+  SafePointHook safe_point_hook;
+  std::map<std::uint64_t, SafePointHook> safe_point_observers;
+  std::uint64_t next_safe_point_observer{1};
   Lifecycle lifecycle{Lifecycle::ready};
   bool systemc_start_attempted{};
   bool systemc_ended{};
@@ -4170,8 +4194,24 @@ void Simulation::remove_signal_change_hook(const std::uint64_t token) noexcept {
   impl_->signal_observers.erase(token);
 }
 
-void Simulation::set_safe_point_hook(runtime::Scheduler::SafePointHook hook) {
-  impl_->interpreter->scheduler().set_safe_point_hook(std::move(hook));
+void Simulation::set_safe_point_hook(SafePointHook hook) {
+  impl_->safe_point_hook = std::move(hook);
+}
+
+std::uint64_t Simulation::add_safe_point_hook(SafePointHook hook) {
+  if (!hook) {
+    throw std::invalid_argument("safe-point observer cannot be empty");
+  }
+  if (impl_->next_safe_point_observer == 0) {
+    throw std::overflow_error("safe-point observer token space exhausted");
+  }
+  const auto token = impl_->next_safe_point_observer++;
+  impl_->safe_point_observers.emplace(token, std::move(hook));
+  return token;
+}
+
+void Simulation::remove_safe_point_hook(const std::uint64_t token) noexcept {
+  impl_->safe_point_observers.erase(token);
 }
 
 void Simulation::set_execution_point_hook(ExecutionPointHook hook) {

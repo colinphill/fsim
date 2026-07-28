@@ -109,6 +109,7 @@ class Simulation final {
       std::uint64_t)>;
   using ExecutionPointHook =
       runtime::simir::Interpreter::ExecutionPointHook;
+  using SafePointHook = runtime::Scheduler::SafePointHook;
 
   Simulation(
       BuiltProject project,
@@ -165,7 +166,11 @@ class Simulation final {
   /// The returned token remains valid until removed or the Simulation dies.
   [[nodiscard]] std::uint64_t add_signal_change_hook(SignalChangeHook hook);
   void remove_signal_change_hook(std::uint64_t token) noexcept;
-  void set_safe_point_hook(runtime::Scheduler::SafePointHook hook);
+  void set_safe_point_hook(SafePointHook hook);
+  /// Add an independent scheduler safe-point observer without replacing the
+  /// debugger, interrupt, or API control hook.
+  [[nodiscard]] std::uint64_t add_safe_point_hook(SafePointHook hook);
+  void remove_safe_point_hook(std::uint64_t token) noexcept;
   void set_execution_point_hook(ExecutionPointHook hook);
 
  private:

@@ -46,7 +46,7 @@ using TclInterpreter = std::unique_ptr<Tcl_Interp, TclInterpreterDeleter>;
 
 struct TclContext {
   const cli::Invocation& invocation;
-  const project::Config& config;
+  project::Config config;
   diagnostic::Engine& diagnostics;
   Tcl_Interp* interpreter;
   std::ostream& output;
@@ -57,8 +57,9 @@ struct TclContext {
   std::unique_ptr<std::ostringstream> debug_output;
   std::unique_ptr<std::ostringstream> debug_error;
   std::unique_ptr<DebuggerControl> debugger;
-  std::array<std::vector<std::string>, 3> callbacks;
+  std::array<std::vector<std::string>, 4> callbacks;
   std::uint64_t signal_callback_token{};
+  std::uint64_t safe_point_callback_token{};
   std::size_t callback_depth{};
   bool callbacks_attached{};
   bool lifecycle_started{};
@@ -352,6 +353,7 @@ Tcl_Obj* unsigned_object(const std::uint64_t value) {
 enum class TclCallback : std::size_t {
   safe_point,
   value_change,
+  assertion,
   lifecycle,
 };
 
@@ -361,6 +363,9 @@ std::optional<TclCallback> callback_kind(const std::string_view name) {
   }
   if (name == "value_change") {
     return TclCallback::value_change;
+  }
+  if (name == "assertion") {
+    return TclCallback::assertion;
   }
   if (name == "lifecycle") {
     return TclCallback::lifecycle;
@@ -374,6 +379,8 @@ std::string_view callback_name(const TclCallback callback) {
       return "safe_point";
     case TclCallback::value_change:
       return "value_change";
+    case TclCallback::assertion:
+      return "assertion";
     case TclCallback::lifecycle:
       return "lifecycle";
   }
@@ -475,20 +482,35 @@ void attach_callbacks(TclContext& context) {
                     std::to_string(delta),
                 });
           });
-  context.simulation->set_safe_point_hook(
-      [state](
-          runtime::Scheduler& scheduler,
-          const runtime::SchedulerPhase phase) {
-        (void)invoke_callback(
-            *state,
-            TclCallback::safe_point,
-            {
-                std::to_string(scheduler.now()),
-                std::to_string(scheduler.delta()),
-                runtime::phase_name(phase),
-            });
-      });
+  context.safe_point_callback_token =
+      context.simulation->add_safe_point_hook(
+          [state](
+              runtime::Scheduler& scheduler,
+              const runtime::SchedulerPhase phase) {
+            (void)invoke_callback(
+                *state,
+                TclCallback::safe_point,
+                {
+                    std::to_string(scheduler.now()),
+                    std::to_string(scheduler.delta()),
+                    runtime::phase_name(phase),
+                });
+          });
   context.callbacks_attached = true;
+}
+
+void reset_session(TclContext& context) {
+  context.debugger.reset();
+  context.debug_output.reset();
+  context.debug_error.reset();
+  context.simulation.reset();
+  context.simulation_engine.reset();
+  context.built.reset();
+  context.signal_callback_token = 0;
+  context.safe_point_callback_token = 0;
+  context.callbacks_attached = false;
+  context.lifecycle_started = false;
+  context.callback_error.reset();
 }
 
 std::string simulation_state(const TclContext& context) {
@@ -564,8 +586,25 @@ int project_command(
     Tcl_Interp* interpreter,
     const int argument_count,
     Tcl_Obj* const arguments[]) {
-  if (argument_count != 1) {
-    Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
+  if (argument_count == 3
+      && std::string_view{Tcl_GetString(arguments[1])} == "load") {
+    diagnostic::Engine load_diagnostics;
+    auto loaded = project::load(
+        std::filesystem::path{Tcl_GetString(arguments[2])},
+        load_diagnostics);
+    if (!loaded) {
+      context.diagnostics.clear();
+      for (const auto& entry : load_diagnostics.diagnostics()) {
+        context.diagnostics.report(entry);
+      }
+      return command_diagnostic_error(
+          context, interpreter, "fsim project load failed");
+    }
+    reset_session(context);
+    context.diagnostics.clear();
+    context.config = std::move(*loaded);
+  } else if (argument_count != 1) {
+    Tcl_WrongNumArgs(interpreter, 1, arguments, "?load MANIFEST?");
     return TCL_ERROR;
   }
   Tcl_Obj* result = Tcl_NewDictObj();
@@ -641,15 +680,7 @@ int build_command(
     return command_diagnostic_error(
         context, interpreter, "fsim project build failed");
   }
-  context.debugger.reset();
-  context.debug_output.reset();
-  context.debug_error.reset();
-  context.simulation.reset();
-  context.simulation_engine.reset();
-  context.signal_callback_token = 0;
-  context.callbacks_attached = false;
-  context.lifecycle_started = false;
-  context.callback_error.reset();
+  reset_session(context);
   context.built = std::move(*built);
   Tcl_Obj* result = Tcl_NewDictObj();
   dict_put(
@@ -871,7 +902,8 @@ int on_command(
   if (!kind) {
     return command_error(
         interpreter,
-        "callback event must be safe_point, value_change, or lifecycle");
+        "callback event must be safe_point, value_change, assertion, or "
+        "lifecycle");
   }
   int word_count{};
   Tcl_Obj** words{};
@@ -909,7 +941,8 @@ int off_command(
   if (!kind) {
     return command_error(
         interpreter,
-        "callback event must be safe_point, value_change, or lifecycle");
+        "callback event must be safe_point, value_change, assertion, or "
+        "lifecycle");
   }
   context.callbacks.at(static_cast<std::size_t>(*kind)).clear();
   return set_result(interpreter, event);
@@ -928,6 +961,7 @@ int callbacks_command(
   for (const auto kind : {
            TclCallback::safe_point,
            TclCallback::value_change,
+           TclCallback::assertion,
            TclCallback::lifecycle,
        }) {
     Tcl_Obj* prefix = Tcl_NewListObj(0, nullptr);
@@ -959,6 +993,78 @@ int stop_command(
   }
   context.simulation->request_stop();
   return set_result(interpreter, "stop_requested");
+}
+
+std::string_view assertion_severity_name(
+    const runtime::simir::AssertionSeverity severity) {
+  switch (severity) {
+    case runtime::simir::AssertionSeverity::note:
+      return "note";
+    case runtime::simir::AssertionSeverity::warning:
+      return "warning";
+    case runtime::simir::AssertionSeverity::error:
+      return "error";
+    case runtime::simir::AssertionSeverity::failure:
+      return "failure";
+  }
+  return "error";
+}
+
+diagnostic::Severity assertion_diagnostic_severity(
+    const runtime::simir::AssertionSeverity severity) {
+  switch (severity) {
+    case runtime::simir::AssertionSeverity::note:
+      return diagnostic::Severity::note;
+    case runtime::simir::AssertionSeverity::warning:
+      return diagnostic::Severity::warning;
+    case runtime::simir::AssertionSeverity::error:
+      return diagnostic::Severity::error;
+    case runtime::simir::AssertionSeverity::failure:
+      return diagnostic::Severity::fatal;
+  }
+  return diagnostic::Severity::error;
+}
+
+int report_assertion(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const runtime::simir::AssertionError& error) {
+  const auto& source = error.source();
+  diagnostic::SourceSpan span;
+  span.path = source.path;
+  span.begin.line = source.line;
+  span.begin.column = source.column;
+  span.end = span.begin;
+  context.diagnostics.report(diagnostic::Diagnostic{
+      assertion_diagnostic_severity(error.severity()),
+      "FSIM-TCL-ASSERT-0001",
+      error.what(),
+      std::move(span),
+      {}});
+  std::string process = std::to_string(error.process());
+  if (error.process() < context.simulation->design().processes().size()) {
+    process =
+        context.simulation->design().processes().at(error.process()).name;
+  }
+  (void)invoke_callback(
+      context,
+      TclCallback::assertion,
+      {
+          std::move(process),
+          std::string{assertion_severity_name(error.severity())},
+          error.what(),
+          source.path,
+          std::to_string(source.line),
+          std::to_string(source.column),
+      });
+  (void)invoke_callback(
+      context, TclCallback::lifecycle, {"stopped"});
+  if (context.callback_error) {
+    auto callback_error = std::move(*context.callback_error);
+    context.callback_error.reset();
+    return command_error(interpreter, callback_error);
+  }
+  return command_error(interpreter, error.what());
 }
 
 int run_command(
@@ -997,7 +1103,12 @@ int run_command(
       return command_error(interpreter, error);
     }
   }
-  const auto run = context.simulation->run(until);
+  runtime::RunResult run;
+  try {
+    run = context.simulation->run(until);
+  } catch (const runtime::simir::AssertionError& error) {
+    return report_assertion(context, interpreter, error);
+  }
   Tcl_Obj* result = Tcl_NewDictObj();
   std::string_view status = "stopped";
   if (run.status == runtime::RunStatus::completed) {
@@ -1100,6 +1211,64 @@ int trace_command(
     Tcl_WrongNumArgs(
         interpreter, 1, arguments, "add|remove SIGNAL | all|clear|list");
     return TCL_ERROR;
+  }
+  const std::string_view operation{Tcl_GetString(arguments[1])};
+  if (operation == "configure") {
+    if (argument_count < 3) {
+      Tcl_WrongNumArgs(
+          interpreter, 2, arguments, "FILE ?FILTER ...?");
+      return TCL_ERROR;
+    }
+    if (context.simulation) {
+      return command_error(
+          interpreter,
+          "trace output must be configured before simulation starts");
+    }
+    std::filesystem::path path{Tcl_GetString(arguments[2])};
+    if (path.is_relative()) {
+      path = context.config.base_directory / path;
+    }
+    context.config.run.trace_file = path.lexically_normal();
+    context.config.run.trace_filters.clear();
+    for (int index = 3; index < argument_count; ++index) {
+      context.config.run.trace_filters.emplace_back(
+          Tcl_GetString(arguments[index]));
+    }
+    return set_result(
+        interpreter,
+        path_utf8(*context.config.run.trace_file));
+  }
+  if (operation == "disable" && argument_count == 2) {
+    if (context.simulation) {
+      return command_error(
+          interpreter,
+          "trace output must be disabled before simulation starts");
+    }
+    context.config.run.trace_file.reset();
+    context.config.run.trace_filters.clear();
+    return set_result(interpreter, "");
+  }
+  if (operation == "status" && argument_count == 2) {
+    Tcl_Obj* result = Tcl_NewDictObj();
+    dict_put(
+        interpreter,
+        result,
+        "file",
+        string_object(
+            context.config.run.trace_file
+                ? path_utf8(*context.config.run.trace_file)
+                : std::string{}));
+    Tcl_Obj* filters = Tcl_NewListObj(0, nullptr);
+    for (const auto& filter : context.config.run.trace_filters) {
+      if (Tcl_ListObjAppendElement(
+              interpreter, filters, string_object(filter))
+          != TCL_OK) {
+        return TCL_ERROR;
+      }
+    }
+    dict_put(interpreter, result, "filters", filters);
+    Tcl_SetObjResult(interpreter, result);
+    return TCL_OK;
   }
   std::vector<std::string> command{"trace"};
   command.reserve(static_cast<std::size_t>(argument_count));
@@ -1489,6 +1658,7 @@ int handle_tcl(
       nullptr,
       nullptr,
       {},
+      0,
       0,
       0,
       false,

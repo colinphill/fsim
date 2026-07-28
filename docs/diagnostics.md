@@ -25,6 +25,7 @@ therefore excluded.
 | `FSIM-TCL-0002` | error | The Tcl interpreter, standard library, fsim namespace, or standard channels could not be initialized. |
 | `FSIM-TCL-0003` | error | A batch Tcl command or script failed during evaluation. |
 | `FSIM-TCL-0004` | error | Interactive input ended with an incomplete Tcl command. |
+| `FSIM-TCL-ASSERT-0001` | note/warning/error/fatal | An HDL assertion failed while a Tcl-controlled simulation was running. |
 | `FSIM-API-0002` | error | A C API check or build was requested before loading a project. |
 | `FSIM-API-0003` | error | A C API operation requires a successfully built design. |
 | `FSIM-API-ASSERT-0001` | assertion severity | A false HDL assertion stopped simulation through the C API; the diagnostic carries its process, source location, severity, and message. |
