@@ -280,6 +280,7 @@ syntax is diagnosed rather than silently accepted.
 - CMake 3.28 or newer
 - LLVM **22.1.8** for the supported compiled-code configuration
 - Boost.Context **1.91.0** for executable SystemC threads
+- Tcl development files, or network access for CMake's pinned fallback
 
 LLVM is isolated behind one adapter. Frontend, interpreter, and most unit tests
 can be developed without LLVM by configuring `FSIM_LLVM_MODE=OFF`. The
@@ -301,10 +302,19 @@ source archive with SHA-256 verification. Set
 `FSIM_SYSTEMC_FIBER_MODE=OFF` only for a dependency-free build that
 intentionally diagnoses `SC_THREAD`/`SC_CTHREAD` as non-executable.
 
-The v1 automation roadmap includes a first-class Tcl interface for both an
-interactive shell and batch scripts, backed by the same project/session/debug
-operations as the CLI and native C API. Interactive and batch Python support
-is planned later, after the Tcl and native control contracts stabilize.
+CMake also prefers an installed Tcl development package and otherwise
+downloads the pinned Tcl 8.6.18 source archive, verifies its SHA-256 digest,
+and builds the static core with Tcl's native Linux or MSVC build. Set
+`FSIM_TCL_MODE=OFF` only when intentionally building without the Tcl command.
+
+The first Tcl slice supports `fsim tcl` for a multiline interactive shell,
+`fsim tcl -c SCRIPT` for repeatable batch commands, and
+`fsim tcl FILE [ARG ...]` for scripts with standard Tcl argument variables.
+It exposes `fsim::version`, project metadata, check/build, signal enumeration
+and reads, deposit/force/release, run, and status commands over the same native
+application model. Breakpoint, step, trace, and callback Tcl commands remain
+to be added. Interactive and batch Python support is planned later, after the
+Tcl and native control contracts stabilize.
 
 ## Build and test
 
@@ -357,6 +367,7 @@ fsim check
 fsim build
 fsim run
 fsim debug
+fsim tcl
 ```
 
 For example:
@@ -366,6 +377,7 @@ build/dev/fsim check -p examples/vertical_slice/fsim.toml
 build/dev/fsim build -p examples/vertical_slice/fsim.toml
 build/dev/fsim run   -p examples/vertical_slice/fsim.toml
 build/dev/fsim debug -p examples/vertical_slice/fsim.toml
+build/dev/fsim tcl -c 'puts [fsim::version]'
 ```
 
 Direct source files are also accepted:

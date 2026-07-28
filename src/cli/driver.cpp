@@ -48,6 +48,8 @@ std::string_view command_name(const Command command) {
       return "run";
     case Command::debug:
       return "debug";
+    case Command::tcl:
+      return "tcl";
   }
   return "check";
 }
@@ -64,6 +66,9 @@ std::optional<Command> parse_command(const std::string_view spelling) {
   }
   if (spelling == "debug") {
     return Command::debug;
+  }
+  if (spelling == "tcl") {
+    return Command::tcl;
   }
   return std::nullopt;
 }
@@ -312,13 +317,15 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
 
 void print_help(std::ostream& output, const std::string_view program) {
   output
-      << "Usage: " << program << " <check|build|run|debug> [options] [files...]\n"
+      << "Usage: " << program
+      << " <check|build|run|debug|tcl> [options] [files...]\n"
       << "\n"
       << "Commands:\n"
       << "  check   Parse and analyze sources\n"
       << "  build   Elaborate and populate the native-code cache\n"
       << "  run     Build incrementally and simulate in optimized mode\n"
       << "  debug   Build incrementally and enter the interactive debugger\n"
+      << "  tcl     Enter Tcl or evaluate a Tcl script/command batch\n"
       << "\n"
       << "Project and source options:\n"
       << "  -p, --project PATH       Project manifest (default: fsim.toml)\n"
@@ -337,6 +344,11 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "      --trace PATH\n"
       << "      --seed COUNT|random\n"
       << "      --diagnostics text|json\n"
+      << "\n"
+      << "Tcl options:\n"
+      << "  -c, --command SCRIPT    Evaluate Tcl text (repeatable)\n"
+      << "  SCRIPT [ARG...]         Evaluate a Tcl file with argv/argc set\n"
+      << "                          Omit both forms for interactive Tcl\n"
       << "  -h, --help\n"
       << "      --version\n";
 }
@@ -362,6 +374,8 @@ const Handler* select_handler(const Services& services, const Command command) {
       return &services.run;
     case Command::debug:
       return &services.debug;
+    case Command::tcl:
+      return &services.tcl;
   }
   return nullptr;
 }
@@ -599,6 +613,13 @@ std::optional<Invocation> parse_arguments(
           argument_error(diagnostics, "diagnostics must be 'text' or 'json'");
           return std::nullopt;
         }
+      } else if (is_option(argument, "-c", "--command")) {
+        const auto value =
+            take_value(index, argc, argv, argument, "--command", diagnostics);
+        if (!value.has_value()) {
+          return std::nullopt;
+        }
+        invocation.tcl_commands.emplace_back(*value);
       } else {
         argument_error(diagnostics, "unknown option '" + std::string(argument) + "'");
         return std::nullopt;
@@ -612,18 +633,41 @@ std::optional<Invocation> parse_arguments(
         argument_error(
             diagnostics,
             "unknown command '" + std::string(argument) +
-                "'; expected check, build, run, or debug");
+                "'; expected check, build, run, debug, or tcl");
         return std::nullopt;
       }
       invocation.command = *command;
       command_selected = true;
+    } else if (invocation.command == Command::tcl) {
+      if (!invocation.tcl_script.has_value()) {
+        invocation.tcl_script =
+            std::filesystem::path{std::string(argument)};
+      } else {
+        invocation.tcl_arguments.emplace_back(argument);
+      }
     } else {
       invocation.files.emplace_back(std::string(argument));
     }
   }
 
   if (!command_selected && !invocation.help && !invocation.version) {
-    argument_error(diagnostics, "missing command; expected check, build, run, or debug");
+    argument_error(
+        diagnostics,
+        "missing command; expected check, build, run, debug, or tcl");
+    return std::nullopt;
+  }
+  if (invocation.command != Command::tcl
+      && !invocation.tcl_commands.empty()) {
+    argument_error(
+        diagnostics, "--command is available only with the tcl command");
+    return std::nullopt;
+  }
+  if (invocation.command == Command::tcl
+      && invocation.tcl_script.has_value()
+      && !invocation.tcl_commands.empty()) {
+    argument_error(
+        diagnostics,
+        "a Tcl script file cannot be combined with --command");
     return std::nullopt;
   }
   if (invocation.manifest_explicit && !invocation.files.empty()) {
@@ -658,7 +702,19 @@ int run(
     }
 
     std::optional<project::Config> config;
-    if (invocation->files.empty()) {
+    if (invocation->command == Command::tcl
+        && !invocation->manifest_explicit) {
+      project::Config tcl_config;
+      tcl_config.manifest_path = "<tcl>";
+      std::error_code current_error;
+      tcl_config.base_directory =
+          std::filesystem::current_path(current_error);
+      if (current_error) {
+        tcl_config.base_directory = ".";
+      }
+      tcl_config.project.name = "tcl";
+      config = std::move(tcl_config);
+    } else if (invocation->files.empty()) {
       config = project::load(invocation->manifest, diagnostics);
       if (config.has_value()) {
         apply_overrides(*invocation, *config);

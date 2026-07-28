@@ -33,6 +33,7 @@ include(CTest)
 include(cmake/FsimWarnings.cmake)
 include(cmake/FsimDependencies.cmake)
 include(cmake/FsimBoostContext.cmake)
+include(cmake/FsimTcl.cmake)
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
@@ -51,6 +52,13 @@ set(
   "SystemC fiber selection: AUTO discovers Boost.Context 1.91.0, ON requires it, OFF disables it"
 )
 set_property(CACHE FSIM_SYSTEMC_FIBER_MODE PROPERTY STRINGS AUTO ON OFF)
+set(
+  FSIM_TCL_MODE
+  "AUTO"
+  CACHE STRING
+  "Tcl interface selection: AUTO/ON discovers or downloads Tcl, OFF disables it"
+)
+set_property(CACHE FSIM_TCL_MODE PROPERTY STRINGS AUTO ON OFF)
 
 string(TOUPPER "${FSIM_LLVM_MODE}" FSIM_LLVM_MODE_NORMALIZED)
 if(NOT FSIM_LLVM_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
@@ -164,6 +172,40 @@ if(NOT FSIM_SYSTEMC_FIBER_MODE_NORMALIZED STREQUAL "OFF")
   endif()
 else()
   message(STATUS "fsim SystemC fibers disabled by FSIM_SYSTEMC_FIBER_MODE=OFF")
+endif()
+
+string(TOUPPER "${FSIM_TCL_MODE}" FSIM_TCL_MODE_NORMALIZED)
+if(NOT FSIM_TCL_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
+  message(
+    FATAL_ERROR
+    "FSIM_TCL_MODE must be AUTO, ON, or OFF "
+    "(received '${FSIM_TCL_MODE}')"
+  )
+endif()
+
+set(FSIM_WITH_TCL OFF)
+if(NOT FSIM_TCL_MODE_NORMALIZED STREQUAL "OFF")
+  find_package(TCL QUIET)
+  if(TCL_FOUND)
+    add_library(fsim_tcl_dependency UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(
+      fsim_tcl_dependency
+      PROPERTIES
+        IMPORTED_LOCATION "${TCL_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${TCL_INCLUDE_PATH}"
+    )
+    message(STATUS "fsim Tcl interface: ${TCL_LIBRARY}")
+  else()
+    message(
+      STATUS
+      "Tcl development files were not found; fetching Tcl "
+      "${FSIM_TCL_VERSION}"
+    )
+    fsim_add_fetched_tcl()
+  endif()
+  set(FSIM_WITH_TCL ON)
+else()
+  message(STATUS "fsim Tcl interface disabled by FSIM_TCL_MODE=OFF")
 endif()
 
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -357,7 +399,12 @@ if(FSIM_WITH_LLVM)
 endif()
 
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
-  add_library(fsim_application STATIC src/app/application.cpp)
+  add_library(
+    fsim_application
+    STATIC
+      src/app/application.cpp
+      src/app/tcl.cpp
+  )
   add_library(fsim::application ALIAS fsim_application)
   fsim_configure_library(fsim_application)
   target_link_libraries(
@@ -371,6 +418,10 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   if(FSIM_WITH_LLVM)
     target_link_libraries(fsim_application PRIVATE fsim_llvm)
     target_compile_definitions(fsim_application PUBLIC FSIM_HAS_LLVM=1)
+  endif()
+  if(FSIM_WITH_TCL)
+    target_link_libraries(fsim_application PRIVATE fsim_tcl_dependency)
+    target_compile_definitions(fsim_application PUBLIC FSIM_HAS_TCL=1)
   endif()
   target_link_libraries(fsim_api PUBLIC fsim_application)
 endif()

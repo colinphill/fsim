@@ -57,6 +57,8 @@ The following foundation is implemented:
 
 - C++20 project structure for Linux and Windows x86-64, with CMake 3.28
   presets, warning policy, Apache-2.0 licensing, and dependency-version policy;
+- embedded Tcl command/script/interactive execution with fsim-owned standard
+  streams and an installed-or-SHA-256-pinned-source CMake dependency path;
 - packed 2-, 4-, and 9-state value kernels;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
@@ -381,8 +383,8 @@ Completed:
   configuration checks;
 - exact LLVM 22.1.8 discovery behind a narrow adapter target;
 - central version policy for CLI11 2.6.2, toml++ 3.4.0, Boost.Context 1.91.0,
-  and Catch2 3.15.2, with exact installed-or-fetched Boost.Context
-  consumption;
+  Tcl 8.6.18, and Catch2 3.15.2, with installed-or-pinned-source
+  Boost.Context and Tcl consumption;
 - source spans, structured diagnostics, schema-1 manifest loading, glob/order
   handling, and a diagnostic catalog consistency test;
 - versioned C API and SystemC plug-in ABI skeletons;
@@ -585,6 +587,10 @@ Completed groundwork:
   asynchronous stop/resume coverage, including terminal `$finish` precedence
   when it coincides with an external step stop;
 - buffered committed-change VCD with packed and nine-state mapping;
+- embedded Tcl batch commands, script arguments/exit status, and a multiline
+  interactive shell with standard streams owned by the fsim invocation,
+  including project/check/build, hierarchy/value, mutation, run, and status
+  commands over the shared application objects;
 - SystemC values, signals, ports, exports, time/event/process declarations in
   the compatibility facade;
 - versioned plug-in registration, exception containment, dynamic loading, and
@@ -686,10 +692,10 @@ The next development iterations should occur in this order:
    SystemC hierarchy directions, and delay/delta/NBA matrices.
 5. **Implement procedural testbenches and the SystemC kernel:** dynamic data,
    files/random/events, factories, channels, methods, and fibers.
-6. **Complete visibility and automation:** source-level debugger behavior,
-   trace selection, public API metadata, interactive `fsim tcl`, batch
-   `fsim tcl SCRIPT [ARG ...]`, and normalized differential trace/control
-   tests. Tcl commands cover project load/check/build, hierarchy/value access,
+6. **Complete visibility and automation:** finish source-level debugger
+   behavior, trace selection, public API metadata, and normalized differential
+   trace/control tests. The embedded interactive/batch Tcl shell is present;
+   its remaining commands cover project load/check/build, hierarchy/value access,
    run/stop/step, breakpoints, force/deposit/release, trace selection,
    diagnostics, callbacks, and deterministic batch exit status.
 7. **Harden for release:** Windows LLVM gates, fuzzing, Unicode/path behavior,
@@ -703,6 +709,26 @@ post-v1 scope.
 Each iteration must add or update feature-matrix evidence and run through the
 interpreter/JIT differential harness once the affected operation is supported
 by both engines.
+
+## Current ten-feature regression batch
+
+The second post-gate batch is implementation- and regression-complete:
+
+1. installed-or-pinned-source Tcl dependency resolution;
+2. repeatable Tcl command batches;
+3. Tcl script files, arguments, and deterministic exit status;
+4. multiline interactive Tcl plus fsim-owned standard channels;
+5. Tcl project metadata;
+6. Tcl source checking;
+7. Tcl elaborated builds;
+8. Tcl signal enumeration and canonical reads;
+9. Tcl deposit/force/release semantics; and
+10. Tcl time-limited/completion runs and lifecycle status.
+
+Every item has focused application evidence. The pinned 8.6.18 fallback was
+also configured, downloaded with checksum verification, statically built,
+linked, and executed on Linux. The interval LLVM 22 Debug regression passed
+all 16 tests in 152.93 seconds. This checkpoint is ready to commit and push.
 
 ## v1 release condition
 

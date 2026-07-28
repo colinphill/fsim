@@ -157,6 +157,26 @@ if(TARGET fsim_application)
   target_link_libraries(fsim_application_tests PRIVATE fsim_application)
   add_test(NAME fsim.application COMMAND fsim_application_tests)
 
+  if(FSIM_WITH_TCL)
+    add_executable(
+      fsim_tcl_application_tests
+      app/tcl_application_test.cpp
+    )
+    fsim_configure_test(fsim_tcl_application_tests)
+    target_link_libraries(
+      fsim_tcl_application_tests
+      PRIVATE fsim_application
+    )
+    add_test(
+      NAME fsim.application.tcl
+      COMMAND fsim_tcl_application_tests
+    )
+    set_tests_properties(
+      fsim.application.tcl
+      PROPERTIES LABELS "fast;tcl"
+    )
+  endif()
+
   add_executable(fsim_api_tests api/api_test.cpp)
   fsim_configure_test(fsim_api_tests)
   target_link_libraries(fsim_api_tests PRIVATE fsim_api)

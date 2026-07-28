@@ -739,6 +739,28 @@ to terminal completion, and restore a preinstalled handler. The `locals`
 command reads declared packed process variables through an engine-neutral
 interface; nested scopes, richer types, and C API local objects remain planned.
 
+## Tcl automation
+
+`fsim tcl` embeds Tcl behind the application/CLI boundary. With no additional
+argument it reads complete multiline commands interactively; repeatable `-c`
+arguments and `SCRIPT [ARG ...]` provide deterministic batch forms. The host
+replaces Tcl's terminating `exit` behavior with a returned process status and
+connects Tcl stdin/stdout/stderr to the streams owned by the fsim invocation,
+which keeps embedding and automated tests isolated from process-global C++
+streams.
+
+The namespace exposes version and project metadata, check/build, lexical
+signal enumeration and packed reads, deposit/force/release, absolute-time or
+completion runs, and lifecycle status. These commands own a lazily built
+`BuiltProject`/`Simulation` pair and call the same application methods as the
+CLI; they do not create another kernel. Breakpoint, stepping, trace-selection,
+diagnostic-query, and callback commands remain milestone-four work.
+
+CMake first discovers a Tcl development package. If none is present, the Tcl
+adapter downloads the pinned 8.6.18 source archive with SHA-256 verification,
+builds only the native static core, and installs its headers and script
+library into the build tree. `FSIM_TCL_MODE=OFF` is the explicit opt-out.
+
 ## Platform boundary
 
 The supported release targets are Linux x86-64 with GCC and Windows x86-64 with

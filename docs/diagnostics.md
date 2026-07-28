@@ -21,6 +21,10 @@ therefore excluded.
 | `FSIM-CLI-0001` | error | Invalid command-line argument, option, value, command, or direct-source combination. |
 | `FSIM-CLI-0002` | error | The selected command has no connected implementation in this build. |
 | `FSIM-CLI-0003` | error | An exception escaped command dispatch. |
+| `FSIM-TCL-0001` | error | The selected build has no embedded Tcl interface. |
+| `FSIM-TCL-0002` | error | The Tcl interpreter, standard library, fsim namespace, or standard channels could not be initialized. |
+| `FSIM-TCL-0003` | error | A batch Tcl command or script failed during evaluation. |
+| `FSIM-TCL-0004` | error | Interactive input ended with an incomplete Tcl command. |
 | `FSIM-API-0002` | error | A C API check or build was requested before loading a project. |
 | `FSIM-API-0003` | error | A C API operation requires a successfully built design. |
 | `FSIM-API-ASSERT-0001` | assertion severity | A false HDL assertion stopped simulation through the C API; the diagnostic carries its process, source location, severity, and message. |

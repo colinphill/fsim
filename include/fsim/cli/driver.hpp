@@ -19,6 +19,7 @@ enum class Command {
   build,
   run,
   debug,
+  tcl,
 };
 
 enum class DiagnosticFormat {
@@ -45,6 +46,9 @@ struct Invocation {
   bool random_seed{false};
   std::optional<std::uint32_t> jobs;
   std::optional<project::Optimization> optimization;
+  std::optional<std::filesystem::path> tcl_script;
+  std::vector<std::string> tcl_arguments;
+  std::vector<std::string> tcl_commands;
   DiagnosticFormat diagnostic_format{DiagnosticFormat::text};
   bool help{false};
   bool version{false};
@@ -62,6 +66,7 @@ struct Services {
   Handler build;
   Handler run;
   Handler debug;
+  Handler tcl;
 };
 
 [[nodiscard]] std::optional<Invocation> parse_arguments(

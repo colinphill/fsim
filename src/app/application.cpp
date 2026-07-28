@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 
+#include "tcl.hpp"
+
 #include "fsim/compiler/object_cache.hpp"
 #if defined(FSIM_HAS_LLVM)
 #include "fsim/compiler/llvm_jit.hpp"
@@ -4223,7 +4225,27 @@ cli::Services make_cli_services(std::istream& input) {
         return handle_debug(
             invocation, config, diagnostics, input, output, error);
       };
-  return {handle_check, handle_build, handle_run, std::move(debug)};
+  cli::Handler tcl =
+      [&input](
+          const cli::Invocation& invocation,
+          const project::Config& config,
+          diagnostic::Engine& diagnostics,
+          std::ostream& output,
+          std::ostream& error) {
+        return handle_tcl(
+            invocation,
+            config,
+            diagnostics,
+            input,
+            output,
+            error);
+      };
+  return {
+      handle_check,
+      handle_build,
+      handle_run,
+      std::move(debug),
+      std::move(tcl)};
 }
 
 cli::Services make_cli_services() {
