@@ -807,6 +807,39 @@ module generated_shadow_loop;
     end
   endgenerate
 endmodule
+
+module generated_sv_case_selected #(
+  parameter MODE = 2
+);
+  generate
+    case (MODE)
+      0: begin : zero
+        generated_sv_internal_leaf #(.VALUE(1)) child();
+      end
+      1, 2: begin : selected
+        generated_case_foreign #(.VALUE(8)) child();
+      end
+      default: begin : fallback
+        generated_sv_internal_leaf #(.VALUE(4)) child();
+      end
+    endcase
+  endgenerate
+endmodule
+
+module generated_sv_case_default #(
+  parameter MODE = 9
+);
+  generate
+    case (MODE)
+      0: begin : zero
+        generated_sv_internal_leaf #(.VALUE(1)) child();
+      end
+      default: begin : fallback
+        generated_sv_internal_leaf #(.VALUE(4)) child();
+      end
+    endcase
+  endgenerate
+endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     auto generated_vhdl = fsim::frontend::parse_text(
@@ -889,6 +922,35 @@ begin
       )
       port map ();
   end generate lanes;
+end architecture;
+
+entity generated_vhdl_case_top is
+  generic (
+    mode : integer := 1
+  );
+end entity;
+architecture rtl of generated_vhdl_case_top is
+begin
+  selection: case mode generate
+    zero: when 0 =>
+      child: entity work.generated_vhdl_internal_leaf(rtl)
+        generic map (
+          value => 1
+        )
+        port map ();
+    selected: when 1 | 2 =>
+      child: entity work.generated_case_foreign(rtl)
+        generic map (
+          value => 7
+        )
+        port map ();
+    fallback: when others =>
+      child: entity work.generated_vhdl_internal_leaf(rtl)
+        generic map (
+          value => 3
+        )
+        port map ();
+  end generate selection;
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -1113,6 +1175,103 @@ end architecture;
           == vhdl_loop_values[index]);
     }
 
+    const std::vector<fsim::elaboration::Binding>
+        generated_sv_case_binding{
+            {"generated_sv_case_selected.selected.child",
+             "vhdl:work.generated_vhdl_internal_leaf(rtl)",
+             std::nullopt},
+        };
+    const auto generated_sv_case =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_case_selected",
+            generated_sv_case_binding);
+    assert(generated_sv_case.ok());
+    assert(generated_sv_case.design->specializations().size() == 2);
+    assert(
+        generated_sv_case.design->specializations()[1].instance
+        == "generated_sv_case_selected.selected.child");
+    assert((
+        generated_sv_case.design->specializations()[1]
+            .parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"value", "8"}}));
+    const auto generated_sv_case_q =
+        generated_sv_case.design->find_signal(
+            "generated_sv_case_selected.selected.child.q");
+    assert(generated_sv_case_q);
+    auto generated_sv_case_interpreter =
+        generated_sv_case.design->create_interpreter();
+    assert(
+        generated_sv_case_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_sv_case_interpreter
+            ->signal_value(*generated_sv_case_q)
+            .to_msb_string()
+        == "1000");
+
+    const auto generated_sv_case_default =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_case_default");
+    assert(generated_sv_case_default.ok());
+    assert(
+        generated_sv_case_default.design
+            ->specializations()[1]
+            .instance
+        == "generated_sv_case_default.fallback.child");
+    const auto generated_sv_case_default_q =
+        generated_sv_case_default.design->find_signal(
+            "generated_sv_case_default.fallback.child.q");
+    assert(generated_sv_case_default_q);
+    auto generated_sv_case_default_interpreter =
+        generated_sv_case_default.design->create_interpreter();
+    assert(
+        generated_sv_case_default_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_sv_case_default_interpreter
+            ->signal_value(*generated_sv_case_default_q)
+            .to_msb_string()
+        == "0100");
+
+    const std::vector<fsim::elaboration::Binding>
+        generated_vhdl_case_binding{
+            {"generated_vhdl_case_top.selected.child",
+             "sv:work.generated_sv_internal_leaf",
+             std::nullopt},
+        };
+    const auto generated_vhdl_case =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_case_top(rtl)",
+            generated_vhdl_case_binding);
+    assert(generated_vhdl_case.ok());
+    assert(generated_vhdl_case.design->specializations().size() == 2);
+    assert(
+        generated_vhdl_case.design->specializations()[1].instance
+        == "generated_vhdl_case_top.selected.child");
+    assert((
+        generated_vhdl_case.design->specializations()[1]
+            .parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"VALUE", "7"}}));
+    const auto generated_vhdl_case_q =
+        generated_vhdl_case.design->find_signal(
+            "generated_vhdl_case_top.selected.child.q");
+    assert(generated_vhdl_case_q);
+    auto generated_vhdl_case_interpreter =
+        generated_vhdl_case.design->create_interpreter();
+    assert(
+        generated_vhdl_case_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_vhdl_case_interpreter
+            ->signal_value(*generated_vhdl_case_q)
+            .to_msb_string()
+        == "0111");
+
     auto unevaluable_generate_design = generated_design;
     const auto unevaluable_unit = std::find_if(
         unevaluable_generate_design.units.begin(),
@@ -1227,6 +1386,95 @@ end architecture;
     assert(!shadowed_loop.ok());
     assert(has_diagnostic(
         shadowed_loop, "FSIM-ELAB-GEN-007"));
+
+    const auto generated_case_unit =
+        [](fsim::frontend::ParsedDesign& design)
+        -> fsim::frontend::DesignUnit& {
+          const auto found = std::find_if(
+              design.units.begin(),
+              design.units.end(),
+              [](const auto& unit) {
+                return unit.name
+                    == "generated_sv_case_selected";
+              });
+          assert(found != design.units.end());
+          assert(!found->generate_regions.empty());
+          return *found;
+        };
+    auto invalid_case_selector_design = generated_design;
+    auto& invalid_case_selector =
+        generated_case_unit(invalid_case_selector_design)
+            .generate_regions.front()
+            .condition;
+    invalid_case_selector.kind =
+        fsim::frontend::ExpressionKind::Identifier;
+    invalid_case_selector.text = "MISSING_CASE_SELECTOR";
+    invalid_case_selector.operands.clear();
+    const auto invalid_case_selector_result =
+        fsim::elaboration::elaborate(
+            invalid_case_selector_design,
+            "sv:work.generated_sv_case_selected");
+    assert(!invalid_case_selector_result.ok());
+    assert(has_diagnostic(
+        invalid_case_selector_result, "FSIM-ELAB-GEN-008"));
+
+    auto invalid_case_choice_design = generated_design;
+    auto& invalid_case_choice =
+        generated_case_unit(invalid_case_choice_design)
+            .generate_regions.front()
+            .alternatives.front()
+            .choices.front();
+    invalid_case_choice.kind =
+        fsim::frontend::ExpressionKind::Identifier;
+    invalid_case_choice.text = "MISSING_CASE_CHOICE";
+    invalid_case_choice.operands.clear();
+    const auto invalid_case_choice_result =
+        fsim::elaboration::elaborate(
+            invalid_case_choice_design,
+            "sv:work.generated_sv_case_selected");
+    assert(!invalid_case_choice_result.ok());
+    assert(has_diagnostic(
+        invalid_case_choice_result, "FSIM-ELAB-GEN-009"));
+
+    auto overlapping_case_design = generated_design;
+    auto& overlapping_choice =
+        generated_case_unit(overlapping_case_design)
+            .generate_regions.front()
+            .alternatives.front()
+            .choices.front();
+    overlapping_choice.text = "2";
+    const auto overlapping_case =
+        fsim::elaboration::elaborate(
+            overlapping_case_design,
+            "sv:work.generated_sv_case_selected");
+    assert(!overlapping_case.ok());
+    assert(has_diagnostic(
+        overlapping_case, "FSIM-ELAB-GEN-010"));
+
+    auto unmatched_case_design = generated_design;
+    const auto unmatched_case_unit = std::find_if(
+        unmatched_case_design.units.begin(),
+        unmatched_case_design.units.end(),
+        [](const auto& unit) {
+          return unit.name == "generated_sv_case_default";
+        });
+    assert(unmatched_case_unit != unmatched_case_design.units.end());
+    auto& unmatched_alternatives =
+        unmatched_case_unit->generate_regions.front().alternatives;
+    unmatched_alternatives.erase(
+        std::remove_if(
+            unmatched_alternatives.begin(),
+            unmatched_alternatives.end(),
+            [](const auto& alternative) {
+              return alternative.is_default;
+            }),
+        unmatched_alternatives.end());
+    const auto unmatched_case =
+        fsim::elaboration::elaborate(
+            unmatched_case_design,
+            "sv:work.generated_sv_case_default");
+    assert(unmatched_case.ok());
+    assert(unmatched_case.design->specializations().size() == 1);
 
     constexpr std::string_view vhdl_source = R"(
 entity counter_vhdl is

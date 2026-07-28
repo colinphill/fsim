@@ -2208,6 +2208,25 @@ module generated_loop #(parameter COUNT = 3) (
     end
   endgenerate
 endmodule
+
+module generated_case #(parameter MODE = 1) (
+  input logic value,
+  output logic result
+);
+  generate
+    case (MODE)
+      0: begin : zero
+        leaf child(.value(value), .result(result));
+      end
+      1, 2: begin : selected
+        leaf child(.value(value), .result(result));
+      end
+      default: begin : fallback
+        leaf child(.value(value), .result(result));
+      end
+    endcase
+  endgenerate
+endmodule
 )",
       Language::SystemVerilog2017);
   require(
@@ -2264,6 +2283,24 @@ endmodule
                 return signal.name == "i";
               }),
       "SystemVerilog canonical genvar-for region");
+  const auto* sv_case_unit =
+      systemverilog.design.find(
+          UnitKind::VerilogModule, "generated_case");
+  require(
+      sv_case_unit != nullptr
+          && sv_case_unit->generate_regions.size() == 1,
+      "SystemVerilog case-generate HIR count");
+  const auto& sv_case = sv_case_unit->generate_regions.front();
+  require(
+      sv_case.kind == GenerateKind::Selection
+          && sv_case.condition.text == "MODE"
+          && sv_case.alternatives.size() == 3
+          && sv_case.alternatives[0].scope == "zero"
+          && sv_case.alternatives[1].scope == "selected"
+          && sv_case.alternatives[1].choices.size() == 2
+          && sv_case.alternatives[2].scope == "fallback"
+          && sv_case.alternatives[2].is_default,
+      "SystemVerilog case-generate alternatives");
 
   const auto vhdl = parse_text(
       "generate.vhd",
@@ -2308,6 +2345,29 @@ begin
     child: entity work.leaf(rtl)
       port map (value => value, result => result);
   end generate lanes;
+end architecture;
+
+entity generated_case is
+  generic (mode : integer := 1);
+  port (
+    value : in std_logic;
+    result : out std_logic
+  );
+end entity;
+
+architecture rtl of generated_case is
+begin
+  selection: case mode generate
+    zero: when 0 =>
+      child: entity work.leaf(rtl)
+        port map (value => value, result => result);
+    selected: when 1 | 2 =>
+      child: entity work.leaf(rtl)
+        port map (value => value, result => result);
+    fallback: when others =>
+      child: entity work.leaf(rtl)
+        port map (value => value, result => result);
+  end generate selection;
 end architecture;
 )",
       Language::Vhdl2008);
@@ -2357,6 +2417,29 @@ end architecture;
           && vhdl_loop.iteration.text == "-"
           && vhdl_loop.then_instances.front().name == "child",
       "VHDL descending for-generate region");
+  const auto vhdl_case_unit = std::find_if(
+      vhdl.design.units.begin(),
+      vhdl.design.units.end(),
+      [](const auto& unit) {
+        return unit.kind == UnitKind::VhdlArchitecture
+            && unit.primary_name == "generated_case";
+      });
+  require(
+      vhdl_case_unit != vhdl.design.units.end()
+          && vhdl_case_unit->generate_regions.size() == 1,
+      "VHDL case-generate HIR count");
+  const auto& vhdl_case =
+      vhdl_case_unit->generate_regions.front();
+  require(
+      vhdl_case.kind == GenerateKind::Selection
+          && vhdl_case.condition.text == "mode"
+          && vhdl_case.alternatives.size() == 3
+          && vhdl_case.alternatives[0].scope == "zero"
+          && vhdl_case.alternatives[1].scope == "selected"
+          && vhdl_case.alternatives[1].choices.size() == 2
+          && vhdl_case.alternatives[2].scope == "fallback"
+          && vhdl_case.alternatives[2].is_default,
+      "VHDL case-generate alternatives");
 
   const auto unlabeled_systemverilog = parse_text(
       "unlabeled_generate.sv",
@@ -2442,6 +2525,74 @@ end architecture;
                 return diagnostic.code == "FSIM-VHDL-PARSE-063";
               }),
       "missing VHDL generate range direction is targeted");
+
+  const auto duplicate_systemverilog_default = parse_text(
+      "duplicate_case_generate.sv",
+      R"(
+module duplicate_case_generate #(parameter MODE = 0);
+  generate
+    case (MODE)
+      default: begin : first
+      end
+      default: begin : second
+      end
+    endcase
+  endgenerate
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !duplicate_systemverilog_default.ok()
+          && std::any_of(
+              duplicate_systemverilog_default.diagnostics.begin(),
+              duplicate_systemverilog_default.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-021";
+              }),
+      "duplicate SystemVerilog generate default is targeted");
+
+  const auto unlabeled_vhdl_alternative = parse_text(
+      "unlabeled_case_generate.vhd",
+      R"(
+architecture rtl of invalid_case is
+begin
+  selection: case 0 generate
+    when 0 =>
+  end generate selection;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !unlabeled_vhdl_alternative.ok()
+          && std::any_of(
+              unlabeled_vhdl_alternative.diagnostics.begin(),
+              unlabeled_vhdl_alternative.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-PARSE-070";
+              }),
+      "unlabeled VHDL case-generate alternative is targeted");
+
+  const auto nonfinal_vhdl_others = parse_text(
+      "nonfinal_case_generate_others.vhd",
+      R"(
+architecture rtl of invalid_case is
+begin
+  selection: case 0 generate
+    fallback: when others =>
+    late: when 0 =>
+  end generate selection;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !nonfinal_vhdl_others.ok()
+          && std::any_of(
+              nonfinal_vhdl_others.diagnostics.begin(),
+              nonfinal_vhdl_others.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-018";
+              }),
+      "nonfinal VHDL case-generate others is targeted");
 }
 
 }  // namespace

@@ -578,6 +578,12 @@ class VhdlParser final : private detail::ParserBase {
               *label_token, previous()));
       return;
     }
+    if (label_token && match_keyword("case", true)) {
+      unit.generate_regions.push_back(
+          parse_vhdl_selection_generate(
+              *label_token, previous()));
+      return;
+    }
     if (label_token &&
         (keyword("entity", 0, true) ||
          (at(TokenKind::Identifier) &&
@@ -713,11 +719,103 @@ class VhdlParser final : private detail::ParserBase {
     return result;
   }
 
+  GenerateRegion parse_vhdl_selection_generate(
+      const Token& label,
+      const Token& start) {
+    GenerateRegion result;
+    result.kind = GenerateKind::Selection;
+    result.condition = parse_expression();
+    expect_keyword("generate", true, "FSIM-VHDL-PARSE-069");
+    bool saw_default = false;
+    while (!at_end() && !keyword("end", 0, true)) {
+      GenerateAlternative alternative;
+      const auto alternative_start = current();
+      if (saw_default) {
+        error(
+            current(),
+            "FSIM-VHDL-SEM-018",
+            "an others case-generate alternative must be last");
+      }
+      if (!(at(TokenKind::Identifier)
+            && at(TokenKind::Colon, 1)
+            && keyword("when", 2, true))) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-070",
+            "a case-generate alternative must have a stable label");
+      }
+      const auto alternative_label =
+          expect_identifier("case-generate alternative label");
+      alternative.scope = vhdl_name(alternative_label.text);
+      expect(
+          TokenKind::Colon,
+          "':' after case-generate alternative label",
+          "FSIM-VHDL-PARSE-071");
+      expect_keyword("when", true, "FSIM-VHDL-PARSE-071");
+      if (match_keyword("others", true)) {
+        alternative.is_default = true;
+        if (saw_default) {
+          error(
+              previous(),
+              "FSIM-VHDL-SEM-017",
+              "case generate contains more than one others "
+              "alternative");
+        }
+        saw_default = true;
+      } else {
+        do {
+          alternative.choices.push_back(parse_expression());
+        } while (match(TokenKind::Pipe));
+        if (alternative.choices.empty()) {
+          error(
+              current(),
+              "FSIM-VHDL-PARSE-072",
+              "case-generate alternative requires a choice");
+        }
+      }
+      expect(
+          TokenKind::Arrow,
+          "'=>' after case-generate choices",
+          "FSIM-VHDL-PARSE-073");
+      (void)match_keyword("begin", true);
+      parse_vhdl_generate_branch(
+          alternative.instances,
+          alternative.generate_regions,
+          true);
+      alternative.span =
+          span_from(alternative_start, previous());
+      result.alternatives.push_back(std::move(alternative));
+    }
+    expect_keyword("end", true, "FSIM-VHDL-PARSE-074");
+    expect_keyword("generate", true, "FSIM-VHDL-PARSE-075");
+    if (at(TokenKind::Identifier)) {
+      const auto end_label = advance();
+      if (vhdl_name(end_label.text) != vhdl_name(label.text)) {
+        error(
+            end_label,
+            "FSIM-VHDL-PARSE-076",
+            "generate end label does not match '"
+                + vhdl_name(label.text) + "'");
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after case generate",
+        "FSIM-VHDL-PARSE-077");
+    result.span = span_from(start, previous());
+    return result;
+  }
+
   void parse_vhdl_generate_branch(
       std::vector<Instance>& instances,
-      std::vector<GenerateRegion>& nested) {
+      std::vector<GenerateRegion>& nested,
+      const bool stop_at_case_alternative = false) {
     while (!at_end() && !keyword("else", 0, true)
-           && !keyword("end", 0, true)) {
+           && !keyword("end", 0, true)
+           && !(stop_at_case_alternative
+                && at(TokenKind::Identifier)
+                && at(TokenKind::Colon, 1)
+                && keyword("when", 2, true))) {
       if (!(at(TokenKind::Identifier)
             && at(TokenKind::Colon, 1))) {
         const auto unsupported = advance();
@@ -725,7 +823,7 @@ class VhdlParser final : private detail::ParserBase {
             unsupported,
             "FSIM-VHDL-UNSUPPORTED-020",
             "generate branches currently admit only labeled instances "
-            "and nested if/for-generate regions");
+            "and nested if/for/case-generate regions");
         skip_to_semicolon();
         continue;
       }
@@ -738,6 +836,10 @@ class VhdlParser final : private detail::ParserBase {
       } else if (match_keyword("for", true)) {
         nested.push_back(
             parse_vhdl_iterative_generate(
+                label, previous()));
+      } else if (match_keyword("case", true)) {
+        nested.push_back(
+            parse_vhdl_selection_generate(
                 label, previous()));
       } else if (
           keyword("entity", 0, true)

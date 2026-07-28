@@ -24,7 +24,7 @@ The architectural invariants are:
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots plus include/macro ancestry are current for Verilog/SV; VHDL source spans are current |
 | Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers plus a bounded multi-root SV preprocessor are current; typed semantic HIR is partial |
-| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, conditional/iterative instance-generate expansion, construction-actual transfer across all three languages, explicit mixed bindings, port aliasing, and boundary checks are current; general generic/parameter typing and complete driver semantics are planned |
+| Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, conditional/iterative/selection instance-generate expansion, construction-actual transfer across all three languages, explicit mixed bindings, port aliasing, and boundary checks are current; general generic/parameter typing and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
@@ -46,12 +46,13 @@ SystemC factory boundaries in both directions. Complete generic/parameter
 typing and reusable code-specialization deduplication remain planned.
 
 The current hierarchy builder recursively follows direct VHDL/SV instances
-and bounded conditional/iterative instance-generate regions. Generate
-conditions and loop controls are constant-evaluated after generic/parameter
-substitution for each occurrence. Only selected branches and realized
-iterations enter DesignIR. Declared block labels become stable path
-components; loop iterations use the common `label[index]` spelling so explicit
-mixed-language bindings do not depend on source-language hierarchy syntax.
+and bounded conditional/iterative/selection instance-generate regions.
+Generate conditions, loop controls, selectors, and choices are
+constant-evaluated after generic/parameter substitution for each occurrence.
+Only selected branches/alternatives and realized iterations enter DesignIR.
+Declared block/alternative labels become stable path components; loop
+iterations use the common `label[index]` spelling so explicit mixed-language
+bindings do not depend on source-language hierarchy syntax.
 Same-language children resolve within the parsed units. A manifest
 binding may override an instance with a language-qualified VHDL or SV target;
 the builder then connects named or positional whole-signal actuals by aliasing

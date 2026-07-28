@@ -843,6 +843,38 @@ module generated_loop_top #(
 endmodule
 )";
   }
+  const auto generated_case_sv_top_source =
+      directory / "generated_case_top.sv";
+  {
+    std::ofstream output(generated_case_sv_top_source);
+    output << R"(
+module generated_case_local_leaf #(
+  parameter VALUE = 4
+);
+  logic [3:0] q;
+  initial q = VALUE;
+endmodule
+
+module generated_case_top #(
+  parameter MODE = 2
+);
+  generate
+    case (MODE)
+      0: begin : zero
+        generated_case_local_leaf #(.VALUE(1)) child();
+      end
+      1, 2: begin : selected
+        generated_case_bound #(.VALUE(10)) child();
+      end
+      default: begin : fallback
+        generated_case_local_leaf #(.VALUE(4)) child();
+      end
+    endcase
+  endgenerate
+  initial #1 $finish;
+endmodule
+)";
+  }
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -5101,6 +5133,118 @@ end architecture rtl;
       generated_loop_warm.simulation.native_cache.hits == 4);
   assert(
       generated_loop_warm.simulation.native_cache.misses == 0);
+#endif
+
+  auto generated_case_config = config;
+  generated_case_config.project.name =
+      "generated-case-mixed-hierarchy-test";
+  generated_case_config.project.top =
+      "sv:work.generated_case_top";
+  generated_case_config.build.optimization =
+      fsim::project::Optimization::o2;
+  generated_case_config.build.cache_path =
+      directory / "generated-case-mixed-hierarchy-cache";
+  generated_case_config.source_sets.clear();
+  fsim::project::SourceSet generated_case_vhdl_sources;
+  generated_case_vhdl_sources.language =
+      fsim::project::Language::vhdl;
+  generated_case_vhdl_sources.standard = "2008";
+  generated_case_vhdl_sources.library = "work";
+  generated_case_vhdl_sources.compilation_unit = "file";
+  generated_case_vhdl_sources.files = {
+      generated_loop_vhdl_source};
+  generated_case_config.source_sets.push_back(
+      std::move(generated_case_vhdl_sources));
+  fsim::project::SourceSet generated_case_sv_sources;
+  generated_case_sv_sources.language =
+      fsim::project::Language::system_verilog;
+  generated_case_sv_sources.standard = "2017";
+  generated_case_sv_sources.library = "work";
+  generated_case_sv_sources.compilation_unit = "file";
+  generated_case_sv_sources.files = {
+      generated_case_sv_top_source};
+  generated_case_config.source_sets.push_back(
+      std::move(generated_case_sv_sources));
+  generated_case_config.bindings = {
+      {"generated_case_top.selected.child",
+       "vhdl:work.generated_loop_child(rtl)",
+       std::nullopt},
+  };
+  const auto run_generated_case =
+      [&](const fsim::app::SimulationEngine engine) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            generated_case_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 2);
+        assert(project->specialization_cache_keys.size() == 2);
+        ParameterRun result;
+        for (std::size_t index = 0;
+             index < project->design.specializations().size();
+             ++index) {
+          const auto& specialization =
+              project->design.specializations()[index];
+          result.keys.emplace_back(
+              specialization.instance,
+              project->specialization_cache_keys[index]);
+          if (index == 1) {
+            assert(
+                specialization.instance
+                == "generated_case_top.selected.child");
+            assert((
+                specialization.parameter_values
+                == std::vector<
+                    std::pair<std::string, std::string>>{
+                    {"value", "10"}}));
+          }
+        }
+        result.simulation =
+            capture_simulation(std::move(*project), engine);
+        return result;
+      };
+
+  const auto generated_case_reference =
+      run_generated_case(
+          fsim::app::SimulationEngine::interpreter);
+  const auto generated_case_cold =
+      run_generated_case(
+          fsim::app::SimulationEngine::compiled);
+  compare_captures(
+      generated_case_reference.simulation,
+      generated_case_cold.simulation);
+  assert(
+      generated_case_cold.simulation.result.status
+      == fsim::runtime::RunStatus::stopped);
+  assert(generated_case_cold.simulation.result.time == 1);
+  assert((
+      generated_case_cold.simulation.final_values
+      == std::vector<std::string>{"1010"}));
+  assert(generated_case_cold.simulation.process_count == 2);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      generated_case_cold.simulation.compiled_processes == 2);
+  assert(
+      generated_case_cold.simulation.compiled_modules == 2);
+  assert(
+      generated_case_cold.simulation.native_cache.hits == 0);
+  assert(
+      generated_case_cold.simulation.native_cache.misses == 2);
+  assert(
+      generated_case_cold.simulation.native_cache.stores == 2);
+#endif
+  const auto generated_case_warm =
+      run_generated_case(
+          fsim::app::SimulationEngine::compiled);
+  assert(generated_case_warm.keys == generated_case_cold.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      generated_case_warm.simulation.native_cache.hits == 2);
+  assert(
+      generated_case_warm.simulation.native_cache.misses == 0);
 #endif
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit

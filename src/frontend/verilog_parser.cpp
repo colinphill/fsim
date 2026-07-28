@@ -738,14 +738,20 @@ class VerilogParser final : private detail::ParserBase {
             parse_iterative_generate(previous()));
         continue;
       }
+      if (match_keyword("case")) {
+        unit.generate_regions.push_back(
+            parse_selection_generate(previous()));
+        continue;
+      }
       const auto unsupported = advance();
       error(
           unsupported,
           "FSIM-SV-UNSUPPORTED-021",
-          "only conditional and canonical genvar-for instance "
+          "only conditional, canonical genvar-for, and case instance "
           "generate regions are executable");
       while (!at_end() && !keyword("endgenerate")
-             && !keyword("if") && !keyword("for")) {
+             && !keyword("if") && !keyword("for")
+             && !keyword("case")) {
         advance();
       }
     }
@@ -837,6 +843,53 @@ class VerilogParser final : private detail::ParserBase {
     return result;
   }
 
+  GenerateRegion parse_selection_generate(const Token& start) {
+    GenerateRegion result;
+    result.kind = GenerateKind::Selection;
+    expect(
+        TokenKind::LeftParen,
+        "'(' after generate case",
+        "FSIM-SV-PARSE-073");
+    result.condition = parse_expression();
+    expect(
+        TokenKind::RightParen,
+        "')' after generate case selector",
+        "FSIM-SV-PARSE-074");
+    bool saw_default = false;
+    while (!at_end() && !keyword("endcase")) {
+      GenerateAlternative alternative;
+      const auto alternative_start = current();
+      if (match_keyword("default")) {
+        alternative.is_default = true;
+        if (saw_default) {
+          error(
+              previous(),
+              "FSIM-SV-SEM-021",
+              "generate case contains more than one default item");
+        }
+        saw_default = true;
+      } else {
+        do {
+          alternative.choices.push_back(parse_expression());
+        } while (match(TokenKind::Comma));
+      }
+      expect(
+          TokenKind::Colon,
+          "':' after generate case choices",
+          "FSIM-SV-PARSE-075");
+      parse_generate_branch(
+          alternative.scope,
+          alternative.instances,
+          alternative.generate_regions);
+      alternative.span =
+          span_from(alternative_start, previous());
+      result.alternatives.push_back(std::move(alternative));
+    }
+    expect_keyword("endcase", false, "FSIM-SV-PARSE-076");
+    result.span = span_from(start, previous());
+    return result;
+  }
+
   void parse_generate_branch(
       std::string& scope,
       std::vector<Instance>& instances,
@@ -862,6 +915,9 @@ class VerilogParser final : private detail::ParserBase {
       } else if (match_keyword("for")) {
         nested.push_back(
             parse_iterative_generate(previous()));
+      } else if (match_keyword("case")) {
+        nested.push_back(
+            parse_selection_generate(previous()));
       } else if (
           at(TokenKind::Identifier)
           && ((at(TokenKind::Identifier, 1)
@@ -875,7 +931,8 @@ class VerilogParser final : private detail::ParserBase {
             unsupported,
             "FSIM-SV-UNSUPPORTED-021",
             "generate branches currently admit only instances and "
-            "nested conditional or canonical genvar-for regions");
+            "nested conditional, canonical genvar-for, or case "
+            "regions");
         skip_to_semicolon();
       }
     }

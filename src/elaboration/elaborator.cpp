@@ -837,6 +837,25 @@ void substitute_parameters(
             body_environment,
             body_domains,
             language);
+        for (auto& alternative : generate.alternatives) {
+            for (auto& choice : alternative.choices) {
+                substitute_parameters(
+                    choice,
+                    body_environment,
+                    body_domains,
+                    language);
+            }
+            substitute_parameters(
+                alternative.instances,
+                body_environment,
+                body_domains,
+                language);
+            substitute_parameters(
+                alternative.generate_regions,
+                body_environment,
+                body_domains,
+                language);
+        }
     }
 }
 
@@ -867,6 +886,95 @@ void expand_generate_regions(
     std::vector<frontend::Instance>& instances,
     std::vector<Diagnostic>& diagnostics) {
     for (const auto& generate : generates) {
+        if (generate.kind == frontend::GenerateKind::Selection) {
+            std::string error;
+            const auto selector = evaluate_constant_expression(
+                generate.condition, environment, error);
+            if (!selector) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-008",
+                    "cannot evaluate selection-generate expression: "
+                        + error,
+                    generate.condition.span});
+                continue;
+            }
+            const frontend::GenerateAlternative* selected = nullptr;
+            const frontend::GenerateAlternative* default_alternative =
+                nullptr;
+            bool invalid = false;
+            std::unordered_set<std::int64_t> choice_values;
+            for (const auto& alternative : generate.alternatives) {
+                if (alternative.is_default) {
+                    if (default_alternative != nullptr) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-GEN-010",
+                            "selection generate has more than one "
+                            "default alternative",
+                            alternative.span});
+                        invalid = true;
+                    } else {
+                        default_alternative = &alternative;
+                    }
+                    continue;
+                }
+                bool alternative_matches = false;
+                for (const auto& choice : alternative.choices) {
+                    error.clear();
+                    const auto value = evaluate_constant_expression(
+                        choice, environment, error);
+                    if (!value) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-GEN-009",
+                            "cannot evaluate selection-generate choice: "
+                                + error,
+                            choice.span});
+                        invalid = true;
+                        continue;
+                    }
+                    if (!choice_values.insert(*value).second) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-GEN-010",
+                            "selection generate has overlapping "
+                            "constant choices",
+                            choice.span});
+                        invalid = true;
+                    }
+                    alternative_matches =
+                        alternative_matches || *value == *selector;
+                }
+                if (alternative_matches) {
+                    if (selected != nullptr) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-GEN-010",
+                            "selection generate has overlapping matching "
+                            "alternatives",
+                            alternative.span});
+                        invalid = true;
+                    } else {
+                        selected = &alternative;
+                    }
+                }
+            }
+            if (invalid) {
+                continue;
+            }
+            if (selected == nullptr) {
+                selected = default_alternative;
+            }
+            if (selected != nullptr) {
+                append_generated_branch(
+                    selected->instances,
+                    selected->generate_regions,
+                    environment,
+                    domains,
+                    language,
+                    generated_scope(
+                        parent_scope, selected->scope),
+                    instances,
+                    diagnostics);
+            }
+            continue;
+        }
         if (generate.kind == frontend::GenerateKind::Iterative) {
             if (environment.contains(generate.variable)) {
                 diagnostics.push_back({

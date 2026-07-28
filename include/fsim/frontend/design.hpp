@@ -264,11 +264,24 @@ struct Process {
 enum class GenerateKind {
   Conditional,
   Iterative,
+  Selection,
+};
+
+struct GenerateRegion;
+
+struct GenerateAlternative {
+  std::string scope;
+  std::vector<Expression> choices;
+  bool is_default{};
+  std::vector<Instance> instances;
+  std::vector<GenerateRegion> generate_regions;
+  SourceSpan span;
 };
 
 /// Elaboration-time hierarchy region. Conditional regions use `condition`
 /// and both branches. Iterative regions use `variable`, `initial`,
 /// `condition`, and `iteration`, with their body in the `then_*` fields.
+/// Selection regions use `condition` as the selector plus `alternatives`.
 /// Regions recursively compose while the current executable subset admits
 /// module/entity instances as leaf items.
 struct GenerateRegion {
@@ -283,6 +296,7 @@ struct GenerateRegion {
   std::vector<Instance> else_instances;
   std::vector<GenerateRegion> then_generates;
   std::vector<GenerateRegion> else_generates;
+  std::vector<GenerateAlternative> alternatives;
   SourceSpan span;
 };
 
