@@ -1566,6 +1566,10 @@ package base_values;
     logic [WIDTH-1:0] payload;
     bit valid;
   } packet_t;
+  typedef union packed {
+    logic [WIDTH-1:0] payload;
+    logic [WIDTH-1:0] mirror;
+  } overlay_t;
 endpackage : base_values
 
 import base_values::*;
@@ -1574,7 +1578,8 @@ package derived_values;
   typedef base_values::word_t derived_word_t;
 endpackage : derived_values
 
-import base_values::WIDTH, base_values::packet_t, derived_values::NEXT;
+import base_values::WIDTH, base_values::packet_t,
+       base_values::overlay_t, derived_values::NEXT;
 import derived_values::derived_word_t;
 module package_user #(
   parameter derived_word_t INITIAL = NEXT
@@ -1582,6 +1587,7 @@ module package_user #(
   typedef derived_word_t local_word_t;
   local_word_t staged;
   base_values::packet_t packet;
+  base_values::overlay_t overlay;
   generate
     if (WIDTH) begin : typed
       base_values::word_t generated;
@@ -1592,6 +1598,7 @@ module package_user #(
     staged = local_value;
     packet.payload = local_value;
     packet.valid = 1'b1;
+    overlay.payload = local_value;
   end
   assign observed = staged;
 endmodule
@@ -1615,7 +1622,7 @@ endmodule
               == "BASE",
       "package parameters are immutable declaration-ordered constants");
   require(
-      parsed.design.units[0].type_aliases.size() == 4
+      parsed.design.units[0].type_aliases.size() == 5
           && parsed.design.units[0].type_aliases.front()
                  .name
               == "word_t"
@@ -1654,6 +1661,15 @@ endmodule
           && packet_type.packed_members[1].name == "valid"
           && packet_type.domain == ValueDomain::Logic4,
       "parameterized packed struct members survive typed HIR parsing");
+  const auto& overlay_type =
+      parsed.design.units[0].type_aliases[4].type;
+  require(
+      overlay_type.packed_aggregate
+              == PackedAggregateKind::Union
+          && overlay_type.packed_members.size() == 2
+          && overlay_type.packed_members[0].lsb_offset == 0
+          && overlay_type.packed_members[1].lsb_offset == 0,
+      "packed union members retain a shared overlay layout");
   require(
       parsed.design.units[1].systemverilog_imports.size() == 1
           && parsed.design.units[1]
@@ -1661,7 +1677,7 @@ endmodule
                  .name.empty()
           && parsed.design.units[2]
                  .systemverilog_imports.size()
-              == 5,
+              == 6,
       "compilation-unit wildcard and selected imports reach later units");
   require(
       parsed.design.units[2].ports.front().type.named_type
@@ -1678,6 +1694,9 @@ endmodule
           && parsed.design.units[2].signals[1]
                  .type.named_type
               == "base_values::packet_t"
+          && parsed.design.units[2].signals[2]
+                 .type.named_type
+              == "base_values::overlay_t"
           && parsed.design.units[2].generate_regions.front()
                  .then_body.signals.front().type.named_type
               == "base_values::word_t"

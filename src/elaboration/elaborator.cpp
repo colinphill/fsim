@@ -673,7 +673,11 @@ void substitute_parameters(
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
     if (!type.packed_members.empty()) {
+        const bool is_union =
+            type.packed_aggregate
+            == frontend::PackedAggregateKind::Union;
         std::uint64_t total_width = 0;
+        std::optional<std::uint64_t> union_width;
         bool valid = true;
         for (auto& member : type.packed_members) {
             if (member.packed_range_expression) {
@@ -702,19 +706,44 @@ void substitute_parameters(
                 member.packed_range_expression.reset();
             }
             const auto width = member.width();
-            if (!width || *width == 0
-                || *width
-                    > std::numeric_limits<std::uint64_t>::max()
-                        - total_width) {
+            if (!width || *width == 0) {
                 diagnostics.push_back({
                     "FSIM-ELAB-SVSTRUCT-001",
-                    "packed struct member '" + member.name
+                    "packed aggregate member '" + member.name
                         + "' has an invalid or overflowing width",
                     member.span});
                 valid = false;
                 continue;
             }
-            total_width += *width;
+            if (is_union) {
+                if (union_width && *union_width != *width) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-SVUNION-001",
+                        "packed union member '" + member.name
+                            + "' has width "
+                            + std::to_string(*width)
+                            + " but every member must have width "
+                            + std::to_string(*union_width),
+                        member.span});
+                    valid = false;
+                    continue;
+                }
+                union_width = *width;
+                total_width = *width;
+            } else {
+                if (*width
+                    > std::numeric_limits<std::uint64_t>::max()
+                        - total_width) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-SVSTRUCT-001",
+                        "packed struct member '" + member.name
+                            + "' overflows the aggregate width",
+                        member.span});
+                    valid = false;
+                    continue;
+                }
+                total_width += *width;
+            }
         }
         if (!valid || total_width == 0
             || total_width - 1U
@@ -723,16 +752,22 @@ void substitute_parameters(
             if (valid) {
                 diagnostics.push_back({
                     "FSIM-ELAB-SVSTRUCT-001",
-                    "packed struct total width exceeds the supported range",
+                    "packed aggregate total width exceeds the supported range",
                     type.packed_members.front().span});
             }
             type.packed_range.reset();
             return;
         }
-        auto offset = total_width;
-        for (auto& member : type.packed_members) {
-            offset -= *member.width();
-            member.lsb_offset = offset;
+        if (!is_union) {
+            auto offset = total_width;
+            for (auto& member : type.packed_members) {
+                offset -= *member.width();
+                member.lsb_offset = offset;
+            }
+        } else {
+            for (auto& member : type.packed_members) {
+                member.lsb_offset = 0;
+            }
         }
         type.packed_range = frontend::PackedRange{
             static_cast<std::int64_t>(total_width - 1U),

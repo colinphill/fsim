@@ -100,6 +100,12 @@ struct PackedMember {
   [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
 
+enum class PackedAggregateKind {
+  None,
+  Struct,
+  Union,
+};
+
 struct Type {
   ValueDomain domain{ValueDomain::Unknown};
   std::string spelling;
@@ -113,9 +119,10 @@ struct Type {
   // elaboration resolves the alias in the owning specialization.
   std::string named_type;
   SourceSpan named_type_span;
-  // Non-empty for a bounded SystemVerilog packed struct. Nested aggregates
-  // are intentionally excluded from the current member representation.
+  // Non-empty for a bounded SystemVerilog packed struct or union. Nested
+  // aggregates are intentionally excluded from the current representation.
   std::vector<PackedMember> packed_members;
+  PackedAggregateKind packed_aggregate{PackedAggregateKind::None};
 
   Type() = default;
   Type(

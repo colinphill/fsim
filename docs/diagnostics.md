@@ -331,10 +331,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-083` | error | Expected `{` before the literals of a bounded enum typedef. |
 | `FSIM-SV-PARSE-084` | error | Expected `}` after the literals of a bounded enum typedef. |
 | `FSIM-SV-PARSE-085` | error | A bounded enum typedef has no literals. |
-| `FSIM-SV-PARSE-086` | error | Expected `{` before bounded packed-struct members. |
-| `FSIM-SV-PARSE-087` | error | Expected `}` after bounded packed-struct members. |
-| `FSIM-SV-PARSE-088` | error | Expected `;` after a packed-struct member declaration. |
-| `FSIM-SV-PARSE-089` | error | A bounded packed struct has no members. |
+| `FSIM-SV-PARSE-086` | error | Expected `{` before bounded packed-aggregate members. |
+| `FSIM-SV-PARSE-087` | error | Expected `}` after bounded packed-aggregate members. |
+| `FSIM-SV-PARSE-088` | error | Expected `;` after a packed-aggregate member declaration. |
+| `FSIM-SV-PARSE-089` | error | A bounded packed aggregate has no members. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -371,7 +371,7 @@ therefore excluded.
 | `FSIM-SV-SEM-022` | error | A module-scope `genvar` declaration is duplicated or conflicts with another object. |
 | `FSIM-SV-SEM-023` | error | A package declaration end name does not match its opening name. |
 | `FSIM-SV-SEM-024` | error | A bounded scope declares the same typedef name more than once. |
-| `FSIM-SV-SEM-025` | error | A bounded packed struct declares the same member name more than once. |
+| `FSIM-SV-SEM-025` | error | A bounded packed aggregate declares the same member name more than once. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -488,6 +488,7 @@ therefore excluded.
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
 | `FSIM-ELAB-SVSTRUCT-002` | error | A packed-struct member read/write has no executable normalized layout. |
+| `FSIM-ELAB-SVUNION-001` | error | Packed-union members do not specialize to one common nonzero supported width. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |
@@ -560,7 +561,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-046` | error | A SystemC port/channel binding references an unknown internal signal or aliases one internal signal to conflicting parent signals. |
 | `FSIM-ELAB-BIND-047` | error | A constructed native SystemC child has an inconsistent parent handle or direct-child path. |
 | `FSIM-ELAB-BIND-048` | error | A typed SystemC export is unbound, cyclic, references an unknown object, or conflicts with another hierarchy alias. |
-| `FSIM-ELAB-BIND-049` | error | A packed struct crosses a language boundary without a same-language scalar/vector wrapper. |
+| `FSIM-ELAB-BIND-049` | error | A packed aggregate crosses a language boundary without a same-language scalar/vector wrapper. |
 
 ## Time, runtime, trace, and design cache
 

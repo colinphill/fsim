@@ -5092,6 +5092,10 @@ end architecture rtl;
                << "    logic [WIDTH-1:0] payload;\n"
                << "    bit valid;\n"
                << "  } packet_t;\n"
+               << "  typedef union packed {\n"
+               << "    logic [WIDTH-1:0] payload;\n"
+               << "    logic [WIDTH-1:0] mirror;\n"
+               << "  } overlay_t;\n"
                << "endpackage : base_values\n";
       };
   write_systemverilog_base_package(5, 4);
@@ -5121,16 +5125,19 @@ endpackage : derived_values
         systemverilog_package_user_source);
     output << R"(
 import derived_values::NEXT, derived_values::result_t;
-import base_values::ACTIVE, base_values::packet_t;
+import base_values::ACTIVE, base_values::packet_t,
+       base_values::overlay_t;
 module systemverilog_package_user(
   output result_t observed
 );
   packet_t packet;
+  overlay_t overlay;
   initial begin
     packet.payload = ACTIVE;
     packet.valid = 1'b1;
+    overlay.payload = ACTIVE;
   end
-  assign observed = packet.payload;
+  assign observed = overlay.mirror;
 endmodule
 )";
   }
@@ -5210,7 +5217,7 @@ endmodule
       systemverilog_package_cold.simulation);
   assert((
       systemverilog_package_cold.simulation.final_values
-      == std::vector<std::string>{"0110", "01101"}));
+      == std::vector<std::string>{"0110", "01101", "0110"}));
   assert(
       systemverilog_package_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
@@ -5266,7 +5273,8 @@ endmodule
       != systemverilog_package_cold.specialization_key);
   assert((
       systemverilog_package_changed.simulation.final_values
-      == std::vector<std::string>{"01010", "010101"}));
+      == std::vector<std::string>{
+          "01010", "010101", "01010"}));
 #if defined(FSIM_HAS_LLVM)
   assert(
       systemverilog_package_changed.simulation.native_cache.misses

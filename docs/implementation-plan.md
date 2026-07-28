@@ -114,8 +114,9 @@ The following foundation is implemented:
   compilation-unit and unit-local wildcard/selected imports, recursive
   case-sensitive visibility, direct scoped constants/types, parameterized
   alias ranges, packed enums with explicit/implicit enumerators and legality
-  checks, non-nested parameterized packed structs with executable member
-  reads/writes, and precise source/cache provenance;
+  checks, non-nested parameterized packed structs and equal-width packed
+  unions with executable member reads/writes, and precise source/cache
+  provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -240,7 +241,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 523 unique current production diagnostic codes.
+- a stable catalog covering 524 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -408,8 +409,8 @@ Early groundwork:
   statements;
 - SV modules, common declarations, simple hierarchy, basic procedural and
   continuous statements, bounded integral parameter specialization and
-  bounded integral packages/imports/packed typedef aliases, enums, and
-  non-nested packed structs,
+  bounded integral packages/imports/packed typedef aliases, enums,
+  non-nested packed structs, and equal-width packed unions,
   executable explicit/implicit conditional, inline/module-genvar iterative,
   selection, and direct/named static generate bodies, and bounded
   `` `timescale`` handling;

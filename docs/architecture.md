@@ -84,12 +84,14 @@ Bounded `typedef enum` declarations use an explicit packed `bit`, `logic`, or
 `reg` base; their explicit or implicit enumerator values enter the same
 declaration-ordered constant environment and are checked for base-width fit
 and duplicate values during specialization.
-Bounded packed structs contain non-aggregate `bit`, `logic`, or `reg` members.
-Parameterized member ranges are specialized before a declaration-order layout
-maps the first member to the most-significant bits and the last member to the
-least-significant bits. Member reads/writes lower to the common SimIR
-`Extract`/`Insert` and sliced-write operations, retaining interpreter/LLVM
-semantic equivalence without a backend-specific aggregate ABI.
+Bounded packed structs and unions contain non-aggregate `bit`, `logic`, or
+`reg` members. Parameterized member ranges are specialized before layout.
+Struct layout maps the first member to the most-significant bits and the last
+member to the least-significant bits. Union members must specialize to the same
+width and all map to offset zero, so writes through one member are immediately
+visible through every other member. Member reads/writes lower to the common
+SimIR `Extract`/`Insert` and sliced-write operations, retaining
+interpreter/LLVM semantic equivalence without a backend-specific aggregate ABI.
 Compilation-unit and unit-local `import package::*` or
 `import package::name` clauses inject case-sensitive direct constants and
 types, while `package::name` remains explicitly scoped. Alias chains resolve

@@ -1972,27 +1972,36 @@ class VerilogParser final : private detail::ParserBase {
         ParameterDeclaration,
         Token>> enum_parameters;
     std::vector<EnumLiteralDeclaration> enum_literals;
-    if (match_keyword("struct")) {
+    if (keyword("struct") || keyword("union")) {
+      const bool is_union = match_keyword("union");
+      if (!is_union) {
+        (void)match_keyword("struct");
+      }
       if (!match_keyword("packed")) {
         error(
             current(),
             "FSIM-SV-UNSUPPORTED-027",
-            "bounded struct typedefs require the packed qualifier");
+            "bounded struct/union typedefs require the packed qualifier");
         skip_to_semicolon();
         return;
       }
-      type.spelling = "struct packed";
+      type.spelling =
+          is_union ? "union packed" : "struct packed";
+      type.packed_aggregate =
+          is_union
+              ? PackedAggregateKind::Union
+              : PackedAggregateKind::Struct;
       type.domain = ValueDomain::Bit2;
       parse_optional_signedness(type);
       expect(
           TokenKind::LeftBrace,
-          "'{' before packed struct members",
+          "'{' before packed aggregate members",
           "FSIM-SV-PARSE-086");
       if (at(TokenKind::RightBrace)) {
         error(
             current(),
             "FSIM-SV-PARSE-089",
-            "bounded packed structs require at least one member");
+            "bounded packed aggregates require at least one member");
       }
       std::unordered_set<std::string> member_names;
       while (!at_end() && !at(TokenKind::RightBrace)) {
@@ -2012,19 +2021,19 @@ class VerilogParser final : private detail::ParserBase {
           error(
               current(),
               "FSIM-SV-UNSUPPORTED-028",
-              "packed struct members require a non-aggregate bit, logic, "
+              "packed aggregate members require a non-aggregate bit, logic, "
               "or reg type");
           skip_to_semicolon();
           continue;
         }
         for (;;) {
           const auto member =
-              expect_identifier("packed struct member name");
+              expect_identifier("packed aggregate member name");
           if (at(TokenKind::LeftBracket)) {
             error(
                 current(),
                 "FSIM-SV-UNSUPPORTED-029",
-                "unpacked struct member dimensions are not implemented");
+                "unpacked aggregate member dimensions are not implemented");
             skip_balanced(
                 TokenKind::LeftBracket,
                 TokenKind::RightBracket);
@@ -2034,13 +2043,13 @@ class VerilogParser final : private detail::ParserBase {
             error(
                 member,
                 "FSIM-SV-UNSUPPORTED-029",
-                "packed struct member initializers are not implemented");
+                "packed aggregate member initializers are not implemented");
           }
           if (!member_names.insert(member.text).second) {
             error(
                 member,
                 "FSIM-SV-SEM-025",
-                "duplicate packed struct member '"
+                "duplicate packed aggregate member '"
                     + member.text + "'");
           } else {
             type.packed_members.push_back(PackedMember{
@@ -2062,34 +2071,49 @@ class VerilogParser final : private detail::ParserBase {
         }
         expect(
             TokenKind::Semicolon,
-            "';' after packed struct member declaration",
+            "';' after packed aggregate member declaration",
             "FSIM-SV-PARSE-088");
       }
       expect(
           TokenKind::RightBrace,
-          "'}' after packed struct members",
+          "'}' after packed aggregate members",
           "FSIM-SV-PARSE-087");
       std::uint64_t total_width = 0;
+      std::optional<std::uint64_t> union_width;
       bool concrete = !type.packed_members.empty();
       for (const auto& member : type.packed_members) {
         const auto width = member.width();
-        if (!width || *width == 0
-            || *width
-                > std::numeric_limits<std::uint64_t>::max()
-                    - total_width) {
+        if (!width || *width == 0) {
           concrete = false;
           break;
         }
-        total_width += *width;
+        if (is_union) {
+          if (union_width && *union_width != *width) {
+            concrete = false;
+            break;
+          }
+          union_width = *width;
+          total_width = *width;
+        } else {
+          if (*width
+              > std::numeric_limits<std::uint64_t>::max()
+                    - total_width) {
+            concrete = false;
+            break;
+          }
+          total_width += *width;
+        }
       }
       if (concrete
           && total_width - 1U
               <= static_cast<std::uint64_t>(
                   std::numeric_limits<std::int64_t>::max())) {
-        auto offset = total_width;
-        for (auto& member : type.packed_members) {
-          offset -= *member.width();
-          member.lsb_offset = offset;
+        if (!is_union) {
+          auto offset = total_width;
+          for (auto& member : type.packed_members) {
+            offset -= *member.width();
+            member.lsb_offset = offset;
+          }
         }
         type.packed_range = PackedRange{
             static_cast<std::int64_t>(total_width - 1U),

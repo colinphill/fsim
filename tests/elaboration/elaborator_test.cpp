@@ -371,6 +371,10 @@ package base_values;
     logic [WIDTH-1:0] payload;
     bit valid;
   } packet_t;
+  typedef union packed {
+    logic [WIDTH-1:0] payload;
+    logic [WIDTH-1:0] mirror;
+  } overlay_t;
 endpackage : base_values
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -390,7 +394,8 @@ endpackage : derived_values
             "systemverilog_package_user.sv",
             R"(
 import derived_values::NEXT, derived_values::result_t;
-import base_values::ACTIVE, base_values::packet_t;
+import base_values::ACTIVE, base_values::packet_t,
+       base_values::overlay_t;
 module systemverilog_package_user #(
   parameter result_t INITIAL = ACTIVE
 )(
@@ -398,6 +403,8 @@ module systemverilog_package_user #(
 );
   typedef result_t local_result_t;
   packet_t packet;
+  overlay_t overlay;
+  result_t struct_payload;
   generate
     if (1) begin : typed
       local_result_t staged;
@@ -409,11 +416,13 @@ module systemverilog_package_user #(
     local_packet.payload = INITIAL;
     local_packet.valid = 1'b1;
     packet = local_packet;
+    overlay.payload = INITIAL;
   end
   packet_passthrough u_passthrough(
     .packet(packet),
-    .payload(observed)
+    .payload(struct_payload)
   );
+  assign observed = overlay.mirror;
 endmodule
 
 module packet_passthrough(
@@ -483,6 +492,24 @@ endmodule
             == "valid"
         && systemverilog_packet_info.packed_members[1].lsb_offset
             == 0);
+    const auto systemverilog_package_overlay =
+        systemverilog_package_elaborated.design->find_signal(
+            "systemverilog_package_user.overlay");
+    assert(systemverilog_package_overlay);
+    const auto& systemverilog_overlay_info =
+        systemverilog_package_elaborated.design->signals().at(
+            *systemverilog_package_overlay);
+    assert(systemverilog_overlay_info.width == 4);
+    assert(systemverilog_overlay_info.packed_members.size() == 2);
+    assert(
+        systemverilog_overlay_info.packed_members[0].lsb_offset
+            == 0
+        && systemverilog_overlay_info.packed_members[1].lsb_offset
+            == 0);
+    const auto systemverilog_struct_payload =
+        systemverilog_package_elaborated.design->find_signal(
+            "systemverilog_package_user.struct_payload");
+    assert(systemverilog_struct_payload);
     const auto& systemverilog_package_dependencies =
         systemverilog_package_elaborated.design
             ->specializations()
@@ -514,6 +541,16 @@ endmodule
             ->signal_value(*systemverilog_package_packet)
             .to_msb_string()
         == "01101");
+    assert(
+        systemverilog_package_interpreter
+            ->signal_value(*systemverilog_package_overlay)
+            .to_msb_string()
+        == "0110");
+    assert(
+        systemverilog_package_interpreter
+            ->signal_value(*systemverilog_struct_payload)
+            .to_msb_string()
+        == "0110");
 
     const auto invalid_systemverilog_packages =
         fsim::frontend::parse_text(
@@ -553,6 +590,12 @@ package invalid_struct_layout;
     logic [MISSING-1:0] payload;
   } invalid_packet_t;
 endpackage
+package invalid_union_layout;
+  typedef union packed {
+    logic [3:0] wide;
+    logic [2:0] narrow;
+  } invalid_union_t;
+endpackage
 import duplicate_values::MISSING;
 import missing_values::*;
 import first_values::*;
@@ -560,6 +603,7 @@ import alpha_values::*, beta_values::*;
 import broken_values::*;
 import invalid_enum_values::*;
 import invalid_struct_layout::invalid_packet_t;
+import invalid_union_layout::*;
 module invalid_systemverilog_package_user;
   logic value;
   missing_t missing_value;
@@ -592,7 +636,8 @@ endmodule
              "FSIM-ELAB-SVENUM-001",
              "FSIM-ELAB-SVENUM-002",
              "FSIM-ELAB-SVSTRUCT-001",
-             "FSIM-ELAB-SVSTRUCT-002"}) {
+             "FSIM-ELAB-SVSTRUCT-002",
+             "FSIM-ELAB-SVUNION-001"}) {
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));
     }
