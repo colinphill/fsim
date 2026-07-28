@@ -468,10 +468,22 @@ class Lexer {
         emit(TokenKind::Percent, begin);
         return;
       case '^':
-        emit(TokenKind::Caret, begin);
+        if (!is_vhdl() && consume_if('~')) {
+          emit(TokenKind::CaretTilde, begin);
+        } else {
+          emit(TokenKind::Caret, begin);
+        }
         return;
       case '~':
-        emit(TokenKind::Tilde, begin);
+        if (!is_vhdl() && consume_if('&')) {
+          emit(TokenKind::TildeAmpersand, begin);
+        } else if (!is_vhdl() && consume_if('|')) {
+          emit(TokenKind::TildePipe, begin);
+        } else if (!is_vhdl() && consume_if('^')) {
+          emit(TokenKind::TildeCaret, begin);
+        } else {
+          emit(TokenKind::Tilde, begin);
+        }
         return;
       default:
         diagnose("FSIM-FE-LEX-001",
@@ -595,6 +607,14 @@ const char* to_string(TokenKind kind) noexcept {
       return "'|'";
     case TokenKind::Caret:
       return "'^'";
+    case TokenKind::TildeAmpersand:
+      return "'~&'";
+    case TokenKind::TildePipe:
+      return "'~|'";
+    case TokenKind::TildeCaret:
+      return "'~^'";
+    case TokenKind::CaretTilde:
+      return "'^~'";
     case TokenKind::Tilde:
       return "'~'";
     case TokenKind::Bang:

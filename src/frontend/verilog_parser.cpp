@@ -3098,8 +3098,9 @@ class VerilogParser final : private detail::ParserBase {
     if (at(TokenKind::Pipe)) {
       return BinaryOperation{3, "|"};
     }
-    if (at(TokenKind::Caret)) {
-      return BinaryOperation{4, "^"};
+    if (at(TokenKind::Caret) || at(TokenKind::TildeCaret)
+        || at(TokenKind::CaretTilde)) {
+      return BinaryOperation{4, current().text};
     }
     if (at(TokenKind::Ampersand)) {
       return BinaryOperation{5, "&"};
@@ -3159,7 +3160,9 @@ class VerilogParser final : private detail::ParserBase {
     if (at(TokenKind::Plus) || at(TokenKind::Minus) ||
         at(TokenKind::Bang) || at(TokenKind::Tilde) ||
         at(TokenKind::Ampersand) || at(TokenKind::Pipe) ||
-        at(TokenKind::Caret)) {
+        at(TokenKind::Caret) || at(TokenKind::TildeAmpersand) ||
+        at(TokenKind::TildePipe) || at(TokenKind::TildeCaret) ||
+        at(TokenKind::CaretTilde)) {
       const auto operation = advance();
       Expression operand = parse_unary();
       return Expression{ExpressionKind::Unary, operation.text,

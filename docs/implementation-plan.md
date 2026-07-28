@@ -120,8 +120,9 @@ The following foundation is implemented:
   checked constant evaluator, plus normalized constant `+:`/`-:` indexed
   selects for ascending and descending ranges and checked constant replication
   concatenations with logarithmic SimIR expansion, plus signedness-sensitive
-  four-state arithmetic shifts in the interpreter and LLVM, and precise
-  source/cache provenance;
+  four-state arithmetic shifts and complemented unary reductions/binary XNOR
+  spellings through shared interpreter/LLVM kernels, and precise source/cache
+  provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -186,9 +187,10 @@ The following foundation is implemented:
   propagation and interpreter/O0/O2 evidence;
 - mixed-width SystemVerilog logical conjunction/disjunction with controlling
   known-value truth tables and interpreter/O0/O2 evidence;
-- SystemVerilog unary reductions and mixed-width logical left/right shifts
-  with four-state unknown and oversized-amount semantics tested across the
-  interpreter and LLVM O0/O2 paths;
+- SystemVerilog unary reductions, including complemented
+  `~&`/`~|`/`~^`/`^~` forms, binary `~^`/`^~` XNOR, and mixed-width logical
+  left/right shifts with four-state unknown and oversized-amount semantics
+  tested across the interpreter and LLVM O0/O2 paths;
 - equal-width signed/unsigned packed arithmetic and relational comparisons for
   VHDL and SystemVerilog, including distinct signed remainder/modulo,
   arbitrary-width interpreter algorithms, guarded LLVM lowering, and
@@ -417,7 +419,8 @@ Early groundwork:
   bounded integral packages/imports/packed typedef aliases, enums,
   non-nested packed structs, equal-width packed unions, constant
   aggregate-member bit/part-selects, constant indexed part-selects, and
-  constant replication concatenations plus arithmetic shifts,
+  constant replication concatenations, arithmetic shifts, complemented
+  reductions, and binary XNOR,
   executable explicit/implicit conditional, inline/module-genvar iterative,
   selection, and direct/named static generate bodies, and bounded
   `` `timescale`` handling;

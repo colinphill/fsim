@@ -67,6 +67,10 @@ enum class TokenKind {
   Ampersand,
   Pipe,
   Caret,
+  TildeAmpersand,
+  TildePipe,
+  TildeCaret,
+  CaretTilde,
   Tilde,
   Bang,
 

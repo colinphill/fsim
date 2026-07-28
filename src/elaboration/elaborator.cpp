@@ -587,6 +587,9 @@ std::optional<std::int64_t> evaluate_constant_expression(
     if (expression.text == "^") {
         return *left ^ *right;
     }
+    if (expression.text == "~^" || expression.text == "^~") {
+        return ~(*left ^ *right);
+    }
     if (expression.text == "&&") {
         return *right != 0 ? 1 : 0;
     }
@@ -3873,7 +3876,11 @@ private:
             && expression.operands.size() == 1
             && (expression.text == "&"
                 || expression.text == "|"
-                || expression.text == "^")) {
+                || expression.text == "^"
+                || expression.text == "~&"
+                || expression.text == "~|"
+                || expression.text == "~^"
+                || expression.text == "^~")) {
             const auto source_width =
                 infer_width(expression.operands[0])
                     .value_or(expected_width);
@@ -3891,15 +3898,25 @@ private:
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic4;
             auto operation = ReductionOperator::bit_xor;
-            if (expression.text == "&") {
+            if (expression.text == "&"
+                || expression.text == "~&") {
                 operation = ReductionOperator::bit_and;
-            } else if (expression.text == "|") {
+            } else if (expression.text == "|"
+                       || expression.text == "~|") {
                 operation = ReductionOperator::bit_or;
             }
             const auto destination =
                 allocate_register(1, result_domain);
             process_.operations.emplace_back(
                 Reduction{operation, destination, *source});
+            if (expression.text.starts_with("~")
+                || expression.text == "^~") {
+                const auto inverted =
+                    allocate_register(1, result_domain);
+                process_.operations.emplace_back(
+                    UnaryNot{inverted, destination});
+                return inverted;
+            }
             return destination;
         }
         if (expression.kind == ExpressionKind::Unary
@@ -4129,9 +4146,14 @@ private:
                 operation = BinaryOperator::bit_or;
                 invert_result = expression.text == "nor";
             } else if (expression.text == "^" || expression.text == "xor"
-                       || expression.text == "xnor") {
+                       || expression.text == "xnor"
+                       || expression.text == "~^"
+                       || expression.text == "^~") {
                 operation = BinaryOperator::bit_xor;
-                invert_result = expression.text == "xnor";
+                invert_result =
+                    expression.text == "xnor"
+                    || expression.text == "~^"
+                    || expression.text == "^~";
             } else if (expression.text == "+") {
                 operation = BinaryOperator::add_unsigned;
             } else if (expression.text == "-") {
@@ -4578,7 +4600,11 @@ private:
                 || expression.text == "!"
                 || expression.text == "&"
                 || expression.text == "|"
-                || expression.text == "^") {
+                || expression.text == "^"
+                || expression.text == "~&"
+                || expression.text == "~|"
+                || expression.text == "~^"
+                || expression.text == "^~") {
                 return false;
             }
             return is_signed_expression(expression.operands[0]);

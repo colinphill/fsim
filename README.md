@@ -42,8 +42,9 @@ The current tree contains:
   types/enumerators plus non-nested packed struct and equal-width packed union
   types with executable member, constant member-select, and constant
   `+:`/`-:` indexed-select reads/writes plus checked constant replication
-  concatenations and signed/unsigned arithmetic shifts; wildcard or selected
-  imports; direct
+  concatenations, signed/unsigned arithmetic shifts, complemented unary
+  reductions, and both binary XNOR spellings; wildcard or selected imports;
+  direct
   `package::constant`/`package::type` references; recursive dependency
   diagnostics; and precise specialization provenance;
 - Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
@@ -81,9 +82,9 @@ The current tree contains:
   equality/relational comparisons with four-state unknown propagation;
 - mixed-width SystemVerilog logical conjunction/disjunction with controlling
   known-value and four-state indeterminate semantics;
-- SystemVerilog unary reductions and mixed-width logical shifts, including
-  four-state reduction rules and deterministic unknown/oversized shift
-  handling;
+- SystemVerilog unary reductions (including `~&`, `~|`, `~^`, and `^~`),
+  binary `~^`/`^~` XNOR, and mixed-width logical shifts, including four-state
+  reduction rules and deterministic unknown/oversized shift handling;
 - fixed-width signed and unsigned packed arithmetic/comparison for VHDL and
   SystemVerilog, including distinct VHDL `rem`/`mod`, SystemVerilog
   mixed-signedness rules, deterministic `X/Z`/zero-divisor behavior, and

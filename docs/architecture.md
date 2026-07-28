@@ -358,11 +358,14 @@ side-effect free; observable function/task short-circuit behavior remains
 pending with executable calls.
 
 Unary reduction `&`, `|`, and `^` fold every packed source bit into one
-four-state result. Logical `<<` and `>>` preserve the left operand's width and
-four-state data independently of the shift-amount width. A known amount at
-least as large as the value width produces zero; any `X` or `Z` bit in the
-amount produces an all-`X` result. These rules are implemented identically in
-the interpreter and the LLVM single-word path.
+four-state result. The complemented SystemVerilog forms `~&`, `~|`, `~^`, and
+`^~` apply four-state inversion to that scalar result. Binary `~^` and `^~`
+likewise lower to bitwise XOR followed by four-state inversion, keeping both
+spellings on the same SimIR path. Logical `<<` and `>>` preserve the left
+operand's width and four-state data independently of the shift-amount width. A
+known amount at least as large as the value width produces zero; any `X` or
+`Z` bit in the amount produces an all-`X` result. These rules are implemented
+identically in the interpreter and the LLVM single-word path.
 
 Fixed-width unsigned arithmetic supports addition, subtraction,
 multiplication, division, and remainder, with overflow truncated to the

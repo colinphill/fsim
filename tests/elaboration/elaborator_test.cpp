@@ -4707,12 +4707,24 @@ module reduction_shift_process;
   logic reduced_and;
   logic reduced_or;
   logic reduced_xor;
+  logic reduced_nand;
+  logic reduced_nor;
+  logic reduced_xnor;
+  logic reduced_xnor_alias;
+  logic [3:0] xnor_value;
+  logic [3:0] xnor_value_alias;
   logic [3:0] shifted_left;
   logic [3:0] shifted_right;
   always_comb begin
     reduced_and = &value;
     reduced_or = |value;
     reduced_xor = ^value;
+    reduced_nand = ~&value;
+    reduced_nor = ~|value;
+    reduced_xnor = ~^value;
+    reduced_xnor_alias = ^~value;
+    xnor_value = value ~^ 4'b1010;
+    xnor_value_alias = value ^~ 4'b1010;
     shifted_left = value << amount;
     shifted_right = value >> amount;
   end
@@ -4735,14 +4747,30 @@ endmodule
         elaborated_reduction_shift.design->find_signal("reduced_or");
     const auto reduced_xor =
         elaborated_reduction_shift.design->find_signal("reduced_xor");
+    const auto reduced_nand =
+        elaborated_reduction_shift.design->find_signal("reduced_nand");
+    const auto reduced_nor =
+        elaborated_reduction_shift.design->find_signal("reduced_nor");
+    const auto reduced_xnor =
+        elaborated_reduction_shift.design->find_signal("reduced_xnor");
+    const auto reduced_xnor_alias =
+        elaborated_reduction_shift.design->find_signal(
+            "reduced_xnor_alias");
+    const auto xnor_value =
+        elaborated_reduction_shift.design->find_signal("xnor_value");
+    const auto xnor_value_alias =
+        elaborated_reduction_shift.design->find_signal(
+            "xnor_value_alias");
     const auto shifted_left =
         elaborated_reduction_shift.design->find_signal("shifted_left");
     const auto shifted_right =
         elaborated_reduction_shift.design->find_signal("shifted_right");
     assert(
         reduction_value && shift_amount && reduced_and
-        && reduced_or && reduced_xor && shifted_left
-        && shifted_right);
+        && reduced_or && reduced_xor && reduced_nand
+        && reduced_nor && reduced_xnor
+        && reduced_xnor_alias && xnor_value
+        && xnor_value_alias && shifted_left && shifted_right);
     auto reduction_shift_interpreter =
         elaborated_reduction_shift.design->create_interpreter();
     const auto run_reduction_shift =
@@ -4751,6 +4779,10 @@ endmodule
             const std::string_view expected_and,
             const std::string_view expected_or,
             const std::string_view expected_xor,
+            const std::string_view expected_nand,
+            const std::string_view expected_nor,
+            const std::string_view expected_xnor,
+            const std::string_view expected_xnor_value,
             const std::string_view expected_left,
             const std::string_view expected_right) {
           reduction_shift_interpreter->deposit_signal(
@@ -4777,6 +4809,36 @@ endmodule
               == expected_xor);
           assert(
               reduction_shift_interpreter
+                  ->signal_value(*reduced_nand)
+                  .to_msb_string()
+              == expected_nand);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*reduced_nor)
+                  .to_msb_string()
+              == expected_nor);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*reduced_xnor)
+                  .to_msb_string()
+              == expected_xnor);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*reduced_xnor_alias)
+                  .to_msb_string()
+              == expected_xnor);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*xnor_value)
+                  .to_msb_string()
+              == expected_xnor_value);
+          assert(
+              reduction_shift_interpreter
+                  ->signal_value(*xnor_value_alias)
+                  .to_msb_string()
+              == expected_xnor_value);
+          assert(
+              reduction_shift_interpreter
                   ->signal_value(*shifted_left)
                   .to_msb_string()
               == expected_left);
@@ -4787,17 +4849,23 @@ endmodule
               == expected_right);
         };
     run_reduction_shift(
-        "1111", "001", "1", "1", "0", "1110", "0111");
+        "1111", "001", "1", "1", "0", "0", "0", "1",
+        "1010", "1110", "0111");
     run_reduction_shift(
-        "1011", "000", "0", "1", "1", "1011", "1011");
+        "1011", "000", "0", "1", "1", "1", "0", "0",
+        "1110", "1011", "1011");
     run_reduction_shift(
-        "10X1", "001", "0", "1", "X", "0X10", "010X");
+        "10X1", "001", "0", "1", "X", "1", "0", "X",
+        "11X0", "0X10", "010X");
     run_reduction_shift(
-        "11X1", "011", "X", "1", "X", "1000", "0001");
+        "11X1", "011", "X", "1", "X", "X", "0", "X",
+        "10X0", "1000", "0001");
     run_reduction_shift(
-        "00X0", "0X1", "0", "X", "X", "XXXX", "XXXX");
+        "00X0", "0X1", "0", "X", "X", "1", "X", "X",
+        "01X1", "XXXX", "XXXX");
     run_reduction_shift(
-        "Z001", "100", "0", "1", "X", "0000", "0000");
+        "Z001", "100", "0", "1", "X", "1", "0", "X",
+        "X100", "0000", "0000");
 
     const auto arithmetic_process =
         fsim::frontend::parse_text(

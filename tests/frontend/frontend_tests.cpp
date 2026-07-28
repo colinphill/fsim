@@ -2345,6 +2345,12 @@ module comparisons;
     result = &lhs;
     result = |lhs;
     result = ^lhs;
+    result = ~&lhs;
+    result = ~|lhs;
+    result = ~^lhs;
+    result = ^~lhs;
+    shifted = lhs ~^ rhs;
+    shifted = lhs ^~ rhs;
     shifted = lhs << amount;
     shifted = lhs >> amount;
   end
@@ -2356,7 +2362,7 @@ endmodule
   const auto& statements =
       result.design.units.front().processes.front().statements;
   require(
-      statements.size() == 13
+      statements.size() == 19
           && statements[0].value.kind == ExpressionKind::Unary
           && statements[0].value.text == "!",
       "logical-negation expression node");
@@ -2385,10 +2391,26 @@ endmodule
           && statements[10].value.text == "^",
       "reduction expression nodes");
   require(
-      statements[11].value.kind == ExpressionKind::Binary
-          && statements[11].value.text == "<<"
-          && statements[12].value.kind == ExpressionKind::Binary
-          && statements[12].value.text == ">>",
+      statements[11].value.kind == ExpressionKind::Unary
+          && statements[11].value.text == "~&"
+          && statements[12].value.kind == ExpressionKind::Unary
+          && statements[12].value.text == "~|"
+          && statements[13].value.kind == ExpressionKind::Unary
+          && statements[13].value.text == "~^"
+          && statements[14].value.kind == ExpressionKind::Unary
+          && statements[14].value.text == "^~",
+      "complemented reduction expression nodes");
+  require(
+      statements[15].value.kind == ExpressionKind::Binary
+          && statements[15].value.text == "~^"
+          && statements[16].value.kind == ExpressionKind::Binary
+          && statements[16].value.text == "^~",
+      "binary XNOR expression nodes");
+  require(
+      statements[17].value.kind == ExpressionKind::Binary
+          && statements[17].value.text == "<<"
+          && statements[18].value.kind == ExpressionKind::Binary
+          && statements[18].value.text == ">>",
       "logical-shift expression nodes");
 }
 
