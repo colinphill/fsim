@@ -106,6 +106,8 @@ The current tree contains:
   `others`, lowered through common exact case-equality branches;
 - concurrent and sequential VHDL-2008 conditional assignments with chained
   Boolean `when`/`else` alternatives;
+- VHDL `with`/`select` concurrent signal assignments with grouped exact
+  choices, a final `others`, inferred sensitivity, and optional waveform delay;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and

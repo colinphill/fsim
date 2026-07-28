@@ -179,6 +179,10 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-113` | error | Expected `;` after an unconditional VHDL sequential loop. |
 | `FSIM-VHDL-PARSE-114` | error | A VHDL exponent has an unparenthesized sign or an exponentiation chain omits required parentheses. |
 | `FSIM-VHDL-PARSE-115` | error | A VHDL conditional assignment is missing its `else` alternative. |
+| `FSIM-VHDL-PARSE-116` | error | Expected `select` after a VHDL selected-assignment selector. |
+| `FSIM-VHDL-PARSE-117` | error | Expected `<=` before selected-assignment waveforms. |
+| `FSIM-VHDL-PARSE-118` | error | Expected `when` after a selected-assignment waveform. |
+| `FSIM-VHDL-PARSE-119` | error | Expected `;` after a selected signal assignment. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -203,6 +207,9 @@ therefore excluded.
 | `FSIM-VHDL-SEM-024` | error | A VHDL `exit` or `next` targets a loop label that is not visible. |
 | `FSIM-VHDL-SEM-025` | error | An `end loop` label is orphaned or does not match its opening label. |
 | `FSIM-VHDL-SEM-026` | error | A VHDL loop label duplicates another sequential label in the enclosing process. |
+| `FSIM-VHDL-SEM-027` | error | A selected assignment contains more than one `others` alternative. |
+| `FSIM-VHDL-SEM-028` | error | A selected-assignment alternative follows `others`. |
+| `FSIM-VHDL-SEM-029` | error | The bounded selected-assignment form has no final `others` alternative. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |

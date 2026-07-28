@@ -762,6 +762,14 @@ class VhdlParser final : private detail::ParserBase {
       unit.concurrent_statements.push_back(std::move(statement));
       return;
     }
+    if (match_keyword("with", true)) {
+      auto statement = parse_vhdl_selected_assignment(previous());
+      if (label_token) {
+        statement.label = vhdl_name(label_token->text);
+      }
+      unit.concurrent_statements.push_back(std::move(statement));
+      return;
+    }
     if (label_token && match_keyword("if", true)) {
       unit.generate_regions.push_back(
           parse_vhdl_conditional_generate(
@@ -1965,6 +1973,75 @@ class VhdlParser final : private detail::ParserBase {
     }
     expect(TokenKind::Semicolon, "';' after assignment",
            "FSIM-VHDL-PARSE-029");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
+  Statement parse_vhdl_selected_assignment(const Token& start) {
+    Statement statement;
+    statement.kind = StatementKind::Case;
+    statement.condition = parse_expression();
+    expect_keyword("select", true, "FSIM-VHDL-PARSE-116");
+    const auto target = parse_lvalue();
+    expect(
+        TokenKind::LessEqual,
+        "'<=' in selected signal assignment",
+        "FSIM-VHDL-PARSE-117");
+
+    bool saw_others = false;
+    do {
+      CaseAlternative alternative;
+      const auto alternative_start = current();
+      Statement assignment;
+      assignment.kind = StatementKind::Assignment;
+      assignment.assignment_kind = AssignmentKind::Continuous;
+      assignment.target = target;
+      assignment.value = parse_expression();
+      if (match_keyword("after", true)) {
+        assignment.delay = parse_vhdl_delay(previous());
+      }
+      expect_keyword("when", true, "FSIM-VHDL-PARSE-118");
+      if (match_keyword("others", true)) {
+        alternative.is_default = true;
+        if (saw_others) {
+          error(
+              previous(),
+              "FSIM-VHDL-SEM-027",
+              "a selected assignment contains more than one others "
+              "alternative");
+        }
+        saw_others = true;
+      } else {
+        if (saw_others) {
+          error(
+              current(),
+              "FSIM-VHDL-SEM-028",
+              "the others alternative must be last in a selected "
+              "assignment");
+        }
+        do {
+          alternative.choices.push_back(parse_expression());
+        } while (match(TokenKind::Pipe));
+      }
+      assignment.span =
+          cover(alternative_start.span, previous().span);
+      alternative.statements.push_back(std::move(assignment));
+      alternative.span =
+          cover(alternative_start.span, previous().span);
+      statement.case_alternatives.push_back(
+          std::move(alternative));
+    } while (match(TokenKind::Comma));
+    if (!saw_others) {
+      error(
+          current(),
+          "FSIM-VHDL-SEM-029",
+          "the bounded selected-assignment form requires a final others "
+          "alternative");
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after selected signal assignment",
+        "FSIM-VHDL-PARSE-119");
     statement.span = span_from(start, previous());
     return statement;
   }

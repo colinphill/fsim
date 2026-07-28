@@ -358,6 +358,15 @@ the first true condition wins. This operation has the same interpreter and
 allocation-free LLVM single-word implementation. Vector truth conversion and
 the standards' complete expression sizing rules remain pending.
 
+VHDL selected concurrent assignments normalize to one exact-case process.
+Each source alternative owns a normal continuous assignment, so whole and
+constant-selected targets, update-phase writes, and optional single-waveform
+delays reuse the ordinary assignment path. The generated process is sensitive
+to the selector and every alternative value dependency; choice expressions
+also participate defensively, although the supported source form expects
+locally static exact choices. A final `others` is required by the bounded form
+to guarantee that every evaluation schedules exactly one alternative.
+
 SystemVerilog logical negation reduces a packed operand using four-state truth
 semantics: any known `1` makes `!` false, an otherwise unknown-containing
 operand produces `X`, and an all-zero operand produces true. Unsigned

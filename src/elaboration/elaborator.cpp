@@ -2643,8 +2643,18 @@ public:
         std::set<std::string> dependencies;
         if (statement.kind == StatementKind::Assert) {
             collect_identifiers(statement.condition, dependencies);
-        } else {
+        } else if (statement.kind == StatementKind::Assignment) {
             collect_identifiers(statement.value, dependencies);
+        } else if (statement.kind == StatementKind::Case) {
+            collect_identifiers(statement.condition, dependencies);
+            for (const auto& alternative :
+                 statement.case_alternatives) {
+                for (const auto& choice : alternative.choices) {
+                    collect_identifiers(choice, dependencies);
+                }
+                collect_statement_identifiers(
+                    alternative.statements, dependencies);
+            }
         }
         for (const auto& dependency : dependencies) {
             if (const auto found = signals_.find(dependency); found != signals_.end()) {

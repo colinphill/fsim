@@ -1237,6 +1237,106 @@ end architecture;
       "a VHDL conditional assignment without else must be diagnosed");
 }
 
+void test_vhdl_selected_assignments() {
+  const auto result = parse_text(
+      "selected_assignment.vhd",
+      R"(
+entity selected_assignment is
+end entity;
+
+architecture rtl of selected_assignment is
+  signal selector : std_logic_vector(1 downto 0);
+  signal a : std_logic_vector(3 downto 0);
+  signal b : std_logic_vector(3 downto 0);
+  signal result : std_logic_vector(3 downto 0);
+begin
+  choose: with selector select
+    result <=
+      a after 2 ns when "00" | "01",
+      b when others;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "VHDL selected signal assignments must parse");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture
+          && architecture->concurrent_statements.size() == 1,
+      "a selected signal assignment must be retained as one statement");
+  const auto& selected =
+      architecture->concurrent_statements.front();
+  require(
+      selected.kind == StatementKind::Case
+          && selected.label == "choose"
+          && selected.condition.text == "selector"
+          && selected.case_alternatives.size() == 2
+          && selected.case_alternatives[0].choices.size() == 2
+          && selected.case_alternatives[0].statements.size() == 1
+          && selected.case_alternatives[0]
+                 .statements.front().delay
+                 .has_value()
+          && selected.case_alternatives[0]
+                 .statements.front().delay->magnitude
+              == 2
+          && selected.case_alternatives[1].is_default,
+      "selected assignment choices, waveform delay, default, and label");
+
+  const auto missing_others = parse_text(
+      "selected_missing_others.vhd",
+      R"(
+entity selected_missing_others is
+end entity;
+architecture rtl of selected_missing_others is
+  signal selector : std_logic;
+  signal result : std_logic;
+begin
+  with selector select result <= '0' when '0';
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !missing_others.ok()
+          && std::ranges::any_of(
+              missing_others.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-029";
+              }),
+      "bounded selected assignments without others must be diagnosed");
+
+  const auto invalid_others = parse_text(
+      "selected_invalid_others.vhd",
+      R"(
+entity selected_invalid_others is
+end entity;
+architecture rtl of selected_invalid_others is
+  signal selector : std_logic;
+  signal result : std_logic;
+begin
+  with selector select
+    result <= '0' when others, '1' when '1', '0' when others;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_others.ok()
+          && std::ranges::any_of(
+              invalid_others.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-027";
+              })
+          && std::ranges::any_of(
+              invalid_others.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-028";
+              }),
+      "duplicate and nonfinal selected-assignment others alternatives "
+      "must be diagnosed");
+}
+
 void test_vhdl_case_statements() {
   const auto result = parse_text(
       "case_statement.vhd",
@@ -4849,6 +4949,7 @@ int main() {
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
     test_vhdl_conditional_assignments();
+    test_vhdl_selected_assignments();
     test_vhdl_case_statements();
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();

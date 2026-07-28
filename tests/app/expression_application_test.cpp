@@ -204,7 +204,7 @@ void test_vhdl_shift_rotate(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 18> signal_paths{
+  const std::array<std::string, 21> signal_paths{
       "shift_rotate_app.arithmetic_left",
       "shift_rotate_app.rotated_left",
       "shift_rotate_app.rotated_right",
@@ -222,7 +222,10 @@ void test_vhdl_shift_rotate(
       "shift_rotate_app.conditional_true",
       "shift_rotate_app.conditional_false",
       "shift_rotate_app.conditional_chain",
-      "shift_rotate_app.conditional_selected"};
+      "shift_rotate_app.conditional_selected",
+      "shift_rotate_app.selected_choice",
+      "shift_rotate_app.selected_default",
+      "shift_rotate_app.selected_dynamic"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -257,11 +260,14 @@ void test_vhdl_shift_rotate(
           "10100101",
           "01011010",
           "00000010",
-          "XXXX0110"}));
+          "XXXX0110",
+          "10100101",
+          "01011010",
+          "01011010"}));
   assert(reference.compiled_processes == 0);
   assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 3);
+  assert(compiled.compiled_processes == 7);
   assert(compiled.compiled_modules == 1);
 #else
   assert(compiled.compiled_processes == 0);
@@ -769,6 +775,10 @@ architecture rtl of shift_rotate_app is
   signal conditional_false : std_logic_vector(7 downto 0);
   signal conditional_chain : std_logic_vector(7 downto 0);
   signal conditional_selected : std_logic_vector(7 downto 0);
+  signal selected_choice : std_logic_vector(7 downto 0);
+  signal selected_default : std_logic_vector(7 downto 0);
+  signal dynamic_selector : std_logic_vector(1 downto 0);
+  signal selected_dynamic : std_logic_vector(7 downto 0);
 begin
   value <= "10X0000Z";
   known_value <= "11111011";
@@ -799,6 +809,29 @@ begin
     conditional_selected(3 downto 0) <=
       "0110" when true else "1001";
   end process;
+
+  choose_known: with "01" select
+    selected_choice <=
+      "10100101" when "00" | "01",
+      "01011010" when others;
+
+  choose_default: with "10" select
+    selected_default <=
+      "10100101" when "00" | "01",
+      "01011010" when others;
+
+  drive_selector: process
+  begin
+    dynamic_selector <= "00";
+    wait for 1 ns;
+    dynamic_selector <= "10";
+    wait;
+  end process;
+
+  choose_dynamic: with dynamic_selector select
+    selected_dynamic <=
+      "10100101" when "00" | "01",
+      "01011010" when others;
 end architecture;
 )";
   }
