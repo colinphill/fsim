@@ -5132,6 +5132,8 @@ module systemverilog_package_user(
 );
   packet_t packet;
   overlay_t overlay;
+  logic signed [WIDTH-1:0] signed_shift;
+  logic [WIDTH-1:0] unsigned_shift;
   initial begin
     packet.payload = ACTIVE;
     packet.valid = 1'b1;
@@ -5141,6 +5143,11 @@ module systemverilog_package_user(
       packet.payload[base_values::WIDTH-1 -: WIDTH-1];
     overlay.payload[0] = packet.payload[0 +: 1];
     overlay.payload = overlay.payload & {WIDTH{1'b1}};
+    signed_shift = {1'b1, {WIDTH-1{1'b0}}};
+    signed_shift = signed_shift >>> 1;
+    unsigned_shift = {1'b1, {WIDTH-1{1'b0}}};
+    unsigned_shift = unsigned_shift >>> 1;
+    overlay.payload = overlay.payload <<< 0;
   end
   assign observed = {
     overlay.mirror[WIDTH-1:1],
@@ -5225,7 +5232,8 @@ endmodule
       systemverilog_package_cold.simulation);
   assert((
       systemverilog_package_cold.simulation.final_values
-      == std::vector<std::string>{"0110", "01101", "0110"}));
+      == std::vector<std::string>{
+          "0110", "01101", "0110", "1100", "0100"}));
   assert(
       systemverilog_package_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
@@ -5282,7 +5290,7 @@ endmodule
   assert((
       systemverilog_package_changed.simulation.final_values
       == std::vector<std::string>{
-          "01010", "010101", "01010"}));
+          "01010", "010101", "01010", "11000", "01000"}));
 #if defined(FSIM_HAS_LLVM)
   assert(
       systemverilog_package_changed.simulation.native_cache.misses

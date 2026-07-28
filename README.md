@@ -42,7 +42,8 @@ The current tree contains:
   types/enumerators plus non-nested packed struct and equal-width packed union
   types with executable member, constant member-select, and constant
   `+:`/`-:` indexed-select reads/writes plus checked constant replication
-  concatenations; wildcard or selected imports; direct
+  concatenations and signed/unsigned arithmetic shifts; wildcard or selected
+  imports; direct
   `package::constant`/`package::type` references; recursive dependency
   diagnostics; and precise specialization provenance;
 - Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI

@@ -128,7 +128,11 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     amount |= std::size_t{1} << index;
   }
 
-  PackedLogic4 result(value.width(), Logic4::zero);
+  const auto fill =
+      operation == ShiftOperator::arithmetic_right
+          ? value.get(value.width() - 1U)
+          : Logic4::zero;
+  PackedLogic4 result(value.width(), fill);
   if (amount >= value.width()) {
     return result;
   }

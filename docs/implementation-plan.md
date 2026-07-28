@@ -119,8 +119,9 @@ The following foundation is implemented:
   bit/part-selects whose specialized parameter/package-constant bounds use the
   checked constant evaluator, plus normalized constant `+:`/`-:` indexed
   selects for ascending and descending ranges and checked constant replication
-  concatenations with logarithmic SimIR expansion, and precise source/cache
-  provenance;
+  concatenations with logarithmic SimIR expansion, plus signedness-sensitive
+  four-state arithmetic shifts in the interpreter and LLVM, and precise
+  source/cache provenance;
 - bidirectional bounded VHDL/SystemVerilog construction-actual transfer across
   explicit bindings, with parent-language association rules,
   case-insensitive VHDL name matching, ambiguity rejection, specialization
@@ -416,7 +417,7 @@ Early groundwork:
   bounded integral packages/imports/packed typedef aliases, enums,
   non-nested packed structs, equal-width packed unions, constant
   aggregate-member bit/part-selects, constant indexed part-selects, and
-  constant replication concatenations,
+  constant replication concatenations plus arithmetic shifts,
   executable explicit/implicit conditional, inline/module-genvar iterative,
   selection, and direct/named static generate bodies, and bounded
   `` `timescale`` handling;

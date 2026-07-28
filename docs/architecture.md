@@ -106,6 +106,12 @@ constant count and a statically sized nonempty operand group. The lowerer
 builds the repeated value with binary doubling, requiring logarithmically many
 two-operand `Concatenate` operations rather than materializing one operand per
 copy. Expanded widths are checked against the SimIR limit before allocation.
+SystemVerilog `<<<` uses the logical-left kernel. For `>>>`, elaboration
+selects arithmetic-right only when the left operand is signed; unsigned
+operands retain logical-right behavior. Arithmetic right shifts replicate the
+four-state sign bit, including `X` and `Z`, and an oversized shift fills the
+entire result with that bit. The interpreter supports wide packed values and
+the LLVM path emits equivalent signed shifts for values up to 64 bits.
 Compilation-unit and unit-local `import package::*` or
 `import package::name` clauses inject case-sensitive direct constants and
 types, while `package::name` remains explicitly scoped. Alias chains resolve

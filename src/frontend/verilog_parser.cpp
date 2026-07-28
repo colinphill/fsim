@@ -3112,7 +3112,10 @@ class VerilogParser final : private detail::ParserBase {
         at(TokenKind::Greater) || at(TokenKind::GreaterEqual)) {
       return BinaryOperation{7, current().text};
     }
-    if (at(TokenKind::ShiftLeft) || at(TokenKind::ShiftRight)) {
+    if (at(TokenKind::ShiftLeft)
+        || at(TokenKind::ShiftRight)
+        || at(TokenKind::ArithmeticShiftLeft)
+        || at(TokenKind::ArithmeticShiftRight)) {
       return BinaryOperation{8, current().text};
     }
     if (at(TokenKind::Plus) || at(TokenKind::Minus)) {

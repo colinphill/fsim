@@ -49,6 +49,8 @@ enum class TokenKind {
   Scope,
   ShiftLeft,
   ShiftRight,
+  ArithmeticShiftLeft,
+  ArithmeticShiftRight,
   AndAnd,
   OrOr,
   Plus,

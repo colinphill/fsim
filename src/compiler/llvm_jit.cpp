@@ -569,6 +569,7 @@ validate_process(const Process &process,
               switch (operation.operation) {
               case ShiftOperator::logical_left:
               case ShiftOperator::logical_right:
+              case ShiftOperator::arithmetic_right:
                 break;
               default:
                 reject(
@@ -2222,21 +2223,65 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   amount_too_large,
                   constant_i64(context, 0),
                   amount_bits);
+              const auto shift_component =
+                  [&](llvm::Value* component) {
+                    if (operation.operation
+                        == ShiftOperator::logical_left) {
+                      return builder.CreateShl(
+                          component, safe_amount);
+                    }
+                    if (operation.operation
+                        == ShiftOperator::logical_right) {
+                      return builder.CreateLShr(
+                          component, safe_amount);
+                    }
+                    const auto extension_shift =
+                        64U - value.width;
+                    auto* sign_extended = builder.CreateAShr(
+                        builder.CreateShl(
+                            component,
+                            constant_i64(
+                                context, extension_shift)),
+                        constant_i64(
+                            context, extension_shift));
+                    return builder.CreateAShr(
+                        sign_extended, safe_amount);
+                  };
               auto* shifted_aval =
-                  operation.operation == ShiftOperator::logical_left
-                      ? builder.CreateShl(value.aval, safe_amount)
-                      : builder.CreateLShr(value.aval, safe_amount);
+                  shift_component(value.aval);
               auto* shifted_bval =
-                  operation.operation == ShiftOperator::logical_left
-                      ? builder.CreateShl(value.bval, safe_amount)
-                      : builder.CreateLShr(value.bval, safe_amount);
+                  shift_component(value.bval);
+              llvm::Value* oversized_aval =
+                  constant_i64(context, 0);
+              llvm::Value* oversized_bval =
+                  constant_i64(context, 0);
+              if (operation.operation
+                  == ShiftOperator::arithmetic_right) {
+                const auto sign_offset = value.width - 1U;
+                const auto sign_fill =
+                    [&](llvm::Value* component) {
+                      auto* sign = builder.CreateAnd(
+                          builder.CreateLShr(
+                              component,
+                              constant_i64(
+                                  context, sign_offset)),
+                          constant_i64(context, 1));
+                      return builder.CreateSelect(
+                          builder.CreateICmpNE(
+                              sign, constant_i64(context, 0)),
+                          value_mask,
+                          constant_i64(context, 0));
+                    };
+                oversized_aval = sign_fill(value.aval);
+                oversized_bval = sign_fill(value.bval);
+              }
               auto* known_aval = builder.CreateSelect(
                   amount_too_large,
-                  constant_i64(context, 0),
+                  oversized_aval,
                   builder.CreateAnd(shifted_aval, value_mask));
               auto* known_bval = builder.CreateSelect(
                   amount_too_large,
-                  constant_i64(context, 0),
+                  oversized_bval,
                   builder.CreateAnd(shifted_bval, value_mask));
               store_register(
                   builder, registers, operation.destination,

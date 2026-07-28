@@ -80,9 +80,10 @@ struct Reduction {
 enum class ShiftOperator : std::uint8_t {
   logical_left,
   logical_right,
+  arithmetic_right,
 };
 
-/// Logical shift with independently sized value and shift-count operands.
+/// Packed shift with independently sized value and shift-count operands.
 struct Shift {
   ShiftOperator operation{ShiftOperator::logical_left};
   RegisterId destination{};

@@ -492,13 +492,19 @@ void test_simir_wide_reduction_and_shift() {
       {"top.shifted_unknown", PackedLogic4(65, Logic4::zero)});
   const auto shifted_oversized = interpreter.add_signal(
       {"top.shifted_oversized", PackedLogic4(65, Logic4::x)});
+  const auto shifted_arithmetic = interpreter.add_signal(
+      {"top.shifted_arithmetic", PackedLogic4(65, Logic4::x)});
+  const auto shifted_arithmetic_oversized =
+      interpreter.add_signal(
+          {"top.shifted_arithmetic_oversized",
+           PackedLogic4(65, Logic4::x)});
 
   const auto source_text =
       "1" + std::string(63, '0') + "Z";
   Process process;
   process.id = 0;
   process.name = "wide_reduction_and_shift";
-  process.register_count = 11;
+  process.register_count = 13;
   process.operations = {
       LoadConstant{
           0, PackedLogic4::from_msb_string(source_text)},
@@ -522,6 +528,10 @@ void test_simir_wide_reduction_and_shift() {
           9, PackedLogic4::from_msb_string("1000001")},
       Shift{ShiftOperator::logical_right, 10, 0, 9},
       WriteBlocking{shifted_oversized, 10},
+      Shift{ShiftOperator::arithmetic_right, 11, 0, 1},
+      WriteBlocking{shifted_arithmetic, 11},
+      Shift{ShiftOperator::arithmetic_right, 12, 0, 9},
+      WriteBlocking{shifted_arithmetic_oversized, 12},
       Halt{},
   };
   (void)interpreter.add_process(std::move(process));
@@ -553,6 +563,15 @@ void test_simir_wide_reduction_and_shift() {
       interpreter.signal_value(shifted_oversized).to_msb_string()
           == std::string(65, '0'),
       "wide oversized shift produces zero");
+  require(
+      interpreter.signal_value(shifted_arithmetic).to_msb_string()
+          == "11" + std::string(63, '0'),
+      "wide arithmetic right shift replicates the sign bit");
+  require(
+      interpreter.signal_value(shifted_arithmetic_oversized)
+              .to_msb_string()
+          == std::string(65, '1'),
+      "wide oversized arithmetic right shift fills with the sign bit");
 }
 
 void test_simir_wide_unsigned_arithmetic() {

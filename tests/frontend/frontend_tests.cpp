@@ -1606,6 +1606,8 @@ module package_user #(
     overlay.mirror[WIDTH-1 -: 2] =
       local_value[WIDTH-1 -: 2];
     overlay.payload = {WIDTH/2{2'b10}};
+    staged = staged >>> 1;
+    staged = staged <<< 1;
   end
   assign observed = staged;
 endmodule
@@ -1718,7 +1720,7 @@ endmodule
   const auto& aggregate_statements =
       parsed.design.units[2].processes.front().statements;
   require(
-      aggregate_statements.size() == 9
+      aggregate_statements.size() == 11
           && aggregate_statements[4].target.kind
               == ExpressionKind::Slice
           && aggregate_statements[4].target.operands.front().text
@@ -1743,9 +1745,15 @@ endmodule
               == ExpressionKind::Replication
           && aggregate_statements[8].value.operands.size() == 2
           && aggregate_statements[8].value.operands[0].kind
-              == ExpressionKind::Binary,
+              == ExpressionKind::Binary
+          && aggregate_statements[9].value.kind
+              == ExpressionKind::Binary
+          && aggregate_statements[9].value.text == ">>>"
+          && aggregate_statements[10].value.kind
+              == ExpressionKind::Binary
+          && aggregate_statements[10].value.text == "<<<",
       "packed aggregate members retain fixed/indexed selects and "
-      "replication concatenations");
+      "replication/shift expressions");
 
   const auto invalid = parse_text(
       "invalid_packages.sv",

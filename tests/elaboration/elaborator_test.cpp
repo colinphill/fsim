@@ -410,6 +410,8 @@ module systemverilog_package_user #(
   ascending_packet_t ascending_packet;
   result_t struct_payload;
   result_t replicated;
+  logic signed [3:0] signed_shift;
+  logic [3:0] unsigned_shift;
   generate
     if (1) begin : typed
       local_result_t staged;
@@ -431,6 +433,11 @@ module systemverilog_package_user #(
       ascending_packet.payload[0 +: 2];
     replicated = {WIDTH/2{1'b1, 1'b0}};
     replicated = {2'd2{2'b10}};
+    signed_shift = 4'b1000;
+    signed_shift = signed_shift >>> 1;
+    unsigned_shift = 4'b1000;
+    unsigned_shift = unsigned_shift >>> 1;
+    overlay.payload = overlay.payload <<< 0;
   end
   packet_passthrough u_passthrough(
     .packet(packet),
@@ -535,6 +542,14 @@ endmodule
         systemverilog_package_elaborated.design->find_signal(
             "systemverilog_package_user.replicated");
     assert(systemverilog_replicated);
+    const auto systemverilog_signed_shift =
+        systemverilog_package_elaborated.design->find_signal(
+            "systemverilog_package_user.signed_shift");
+    const auto systemverilog_unsigned_shift =
+        systemverilog_package_elaborated.design->find_signal(
+            "systemverilog_package_user.unsigned_shift");
+    assert(systemverilog_signed_shift);
+    assert(systemverilog_unsigned_shift);
     const auto& systemverilog_package_dependencies =
         systemverilog_package_elaborated.design
             ->specializations()
@@ -586,6 +601,16 @@ endmodule
             ->signal_value(*systemverilog_replicated)
             .to_msb_string()
         == "1010");
+    assert(
+        systemverilog_package_interpreter
+            ->signal_value(*systemverilog_signed_shift)
+            .to_msb_string()
+        == "1100");
+    assert(
+        systemverilog_package_interpreter
+            ->signal_value(*systemverilog_unsigned_shift)
+            .to_msb_string()
+        == "0100");
 
     const auto invalid_systemverilog_packages =
         fsim::frontend::parse_text(

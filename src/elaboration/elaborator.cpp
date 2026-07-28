@@ -557,13 +557,17 @@ std::optional<std::int64_t> evaluate_constant_expression(
             ? *left / *right
             : *left % *right;
     }
-    if (expression.text == "<<" || expression.text == ">>") {
+    if (expression.text == "<<"
+        || expression.text == ">>"
+        || expression.text == "<<<"
+        || expression.text == ">>>") {
         if (*left < 0 || *right < 0 || *right >= 63) {
             error = "constant shifts require a nonnegative value and an "
                     "amount from 0 through 62";
             return std::nullopt;
         }
-        if (expression.text == "<<") {
+        if (expression.text == "<<"
+            || expression.text == "<<<") {
             if (*left
                 > (std::numeric_limits<std::int64_t>::max()
                    >> static_cast<unsigned>(*right))) {
@@ -4052,7 +4056,9 @@ private:
         if (expression.kind == ExpressionKind::Binary
             && expression.operands.size() == 2
             && (expression.text == "<<"
-                || expression.text == ">>")) {
+                || expression.text == ">>"
+                || expression.text == "<<<"
+                || expression.text == ">>>")) {
             const auto value_width =
                 infer_width(expression.operands[0])
                     .value_or(expected_width);
@@ -4082,9 +4088,14 @@ private:
                 allocate_register(
                     register_width(*value), result_domain);
             process_.operations.emplace_back(Shift{
-                expression.text == "<<"
-                    ? ShiftOperator::logical_left
-                    : ShiftOperator::logical_right,
+                expression.text == ">>"
+                    || (expression.text == ">>>"
+                        && !is_signed_expression(
+                            expression.operands[0]))
+                    ? ShiftOperator::logical_right
+                    : expression.text == ">>>"
+                        ? ShiftOperator::arithmetic_right
+                        : ShiftOperator::logical_left,
                 destination,
                 *value,
                 *amount});
@@ -4589,7 +4600,9 @@ private:
                 return false;
             }
             if (expression.text == "<<"
-                || expression.text == ">>") {
+                || expression.text == ">>"
+                || expression.text == "<<<"
+                || expression.text == ">>>") {
                 return is_signed_expression(expression.operands[0]);
             }
             if (expression.text == "=="

@@ -389,7 +389,11 @@ class Lexer {
         if (consume_if('=')) {
           emit(TokenKind::LessEqual, begin);
         } else if (consume_if('<')) {
-          emit(TokenKind::ShiftLeft, begin);
+          emit(
+              !is_vhdl() && consume_if('<')
+                  ? TokenKind::ArithmeticShiftLeft
+                  : TokenKind::ShiftLeft,
+              begin);
         } else {
           emit(TokenKind::Less, begin);
         }
@@ -398,7 +402,11 @@ class Lexer {
         if (consume_if('=')) {
           emit(TokenKind::GreaterEqual, begin);
         } else if (consume_if('>')) {
-          emit(TokenKind::ShiftRight, begin);
+          emit(
+              !is_vhdl() && consume_if('>')
+                  ? TokenKind::ArithmeticShiftRight
+                  : TokenKind::ShiftRight,
+              begin);
         } else {
           emit(TokenKind::Greater, begin);
         }
@@ -551,6 +559,10 @@ const char* to_string(TokenKind kind) noexcept {
       return "'<<'";
     case TokenKind::ShiftRight:
       return "'>>'";
+    case TokenKind::ArithmeticShiftLeft:
+      return "'<<<'";
+    case TokenKind::ArithmeticShiftRight:
+      return "'>>>'";
     case TokenKind::AndAnd:
       return "'&&'";
     case TokenKind::OrOr:
