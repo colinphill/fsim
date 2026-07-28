@@ -1726,6 +1726,36 @@ class VhdlParser final : private detail::ParserBase {
       statement.span = span_from(start, previous());
       return statement;
     }
+    if (match_keyword("loop", true)) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::Loop;
+      statement.loop_runtime = true;
+      statement.condition = Expression{
+          ExpressionKind::BooleanLiteral,
+          "true",
+          {},
+          start.span};
+      ++sequential_loop_depth_;
+      statement.statements = parse_statement_list({"end"});
+      --sequential_loop_depth_;
+      expect_keyword("end", true, "FSIM-VHDL-PARSE-111");
+      expect_keyword("loop", true, "FSIM-VHDL-PARSE-112");
+      if (at(TokenKind::Identifier)) {
+        const auto end_label = advance();
+        error(
+            end_label,
+            "FSIM-VHDL-UNSUPPORTED-025",
+            "labeled sequential loops are not implemented in this "
+            "frontend slice");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after unconditional sequential loop",
+          "FSIM-VHDL-PARSE-113");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     if (keyword("exit", 0, true) || keyword("next", 0, true)) {
       const auto start = advance();
       const auto is_exit = detail::iequals(start.text, "exit");

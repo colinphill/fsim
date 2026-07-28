@@ -3584,6 +3584,49 @@ private:
                 process_.operations.size());
         emit_debug_point(
             DebugPointKind::statement, statement.span);
+        if (statement.loop_post_test) {
+            loop_controls_.push_back({});
+            lower_statements(statement.statements);
+            auto loop_control =
+                std::move(loop_controls_.back());
+            loop_controls_.pop_back();
+            const auto condition_start =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            for (const auto jump :
+                 loop_control.continue_jumps) {
+                process_.operations[jump] =
+                    Jump{condition_start};
+            }
+            const auto condition = lower_condition(
+                statement.condition,
+                "FSIM-ELAB-048",
+                "do-while");
+            if (!condition) {
+                return;
+            }
+            const auto branch_index =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            const auto unknown_policy =
+                language_ == frontend::Language::Vhdl2008
+                    ? UnknownBranchPolicy::error
+                    : UnknownBranchPolicy::when_false;
+            process_.operations.emplace_back(
+                Branch{
+                    *condition,
+                    loop_start,
+                    branch_index + 1,
+                    unknown_policy});
+            const auto end =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            for (const auto jump :
+                 loop_control.break_jumps) {
+                process_.operations[jump] = Jump{end};
+            }
+            return;
+        }
         const auto condition = lower_condition(
             statement.condition, "FSIM-ELAB-077", "while");
         if (!condition) {

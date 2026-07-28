@@ -6506,6 +6506,118 @@ end architecture;
             == "1");
     }
 
+    const auto post_test_loop =
+        fsim::frontend::parse_text(
+            "post_test_loop.sv",
+            R"(
+module post_test_loop;
+  logic [3:0] controlled;
+  logic [3:0] executes_once;
+  initial begin
+    controlled = 4'b0000;
+    do begin
+      controlled = controlled + 1;
+      if (controlled == 1) continue;
+      if (controlled == 4) break;
+      controlled = controlled + 1;
+    end while (controlled < 6);
+    executes_once = 4'b0000;
+    do executes_once = executes_once + 1;
+    while (1'b0);
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(post_test_loop.ok());
+    const auto elaborated_post_test_loop =
+        fsim::elaboration::elaborate(
+            post_test_loop.design,
+            "sv:work.post_test_loop");
+    if (!elaborated_post_test_loop.ok()) {
+        for (const auto& diagnostic :
+             elaborated_post_test_loop.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_post_test_loop.ok());
+    auto post_test_loop_interpreter =
+        elaborated_post_test_loop.design
+            ->create_interpreter();
+    const auto post_test_loop_result =
+        post_test_loop_interpreter->run();
+    assert(
+        post_test_loop_result.status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto& [name, expected] :
+         std::initializer_list<std::pair<
+             std::string_view, std::string_view>>{
+             {"controlled", "0100"},
+             {"executes_once", "0001"}}) {
+        const auto signal =
+            elaborated_post_test_loop.design
+                ->find_signal(name);
+        assert(signal);
+        assert(
+            post_test_loop_interpreter
+                ->signal_value(*signal)
+                .to_msb_string()
+            == expected);
+    }
+
+    const auto unconditional_vhdl_loop =
+        fsim::frontend::parse_text(
+            "unconditional_vhdl_loop.vhd",
+            R"(
+entity unconditional_vhdl_loop is
+  port (
+    trigger : in std_logic;
+    observed : out boolean
+  );
+end entity;
+architecture rtl of unconditional_vhdl_loop is
+begin
+  execute: process(trigger)
+    variable skipped : boolean := false;
+    variable result : boolean := false;
+  begin
+    loop
+      if not skipped then
+        skipped := true;
+        next;
+      end if;
+      result := true;
+      exit;
+    end loop;
+    observed <= result;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(unconditional_vhdl_loop.ok());
+    const auto elaborated_unconditional_vhdl_loop =
+        fsim::elaboration::elaborate(
+            unconditional_vhdl_loop.design,
+            "vhdl:work.unconditional_vhdl_loop(rtl)");
+    assert(elaborated_unconditional_vhdl_loop.ok());
+    auto unconditional_vhdl_loop_interpreter =
+        elaborated_unconditional_vhdl_loop.design
+            ->create_interpreter();
+    const auto unconditional_vhdl_loop_result =
+        unconditional_vhdl_loop_interpreter->run();
+    assert(
+        unconditional_vhdl_loop_result.status
+        == fsim::runtime::RunStatus::completed);
+    const auto unconditional_vhdl_loop_observed =
+        elaborated_unconditional_vhdl_loop.design
+            ->find_signal("observed");
+    assert(unconditional_vhdl_loop_observed);
+    assert(
+        unconditional_vhdl_loop_interpreter
+            ->signal_value(*unconditional_vhdl_loop_observed)
+            .to_msb_string()
+        == "1");
+
     const auto invalid_vhdl_runtime_loop =
         fsim::frontend::parse_text(
             "invalid_vhdl_runtime_loop.vhd",

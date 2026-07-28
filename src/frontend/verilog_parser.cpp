@@ -3102,6 +3102,31 @@ class VerilogParser final : private detail::ParserBase {
     return statement;
   }
 
+  Statement parse_do_while_statement(const Token& start) {
+    Statement statement;
+    statement.kind = StatementKind::Loop;
+    statement.loop_runtime = true;
+    statement.loop_post_test = true;
+    parse_procedural_loop_body(start, statement);
+    expect_keyword(
+        "while", false, "FSIM-SV-PARSE-105");
+    expect(
+        TokenKind::LeftParen,
+        "'(' after do-while body",
+        "FSIM-SV-PARSE-106");
+    statement.condition = parse_expression();
+    expect(
+        TokenKind::RightParen,
+        "')' after do-while condition",
+        "FSIM-SV-PARSE-107");
+    expect(
+        TokenKind::Semicolon,
+        "';' after do-while statement",
+        "FSIM-SV-PARSE-108");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   Statement parse_forever_statement(const Token& start) {
     Statement statement;
     statement.kind = StatementKind::Loop;
@@ -3173,6 +3198,10 @@ class VerilogParser final : private detail::ParserBase {
     }
     if (match_keyword("while")) {
       return parse_while_statement(previous());
+    }
+    if (language_ == Language::SystemVerilog2017
+        && match_keyword("do")) {
+      return parse_do_while_statement(previous());
     }
     if (match_keyword("forever")) {
       return parse_forever_statement(previous());

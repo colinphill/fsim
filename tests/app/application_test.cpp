@@ -509,6 +509,8 @@ module conditional_statement_app;
   logic forever_clock;
   logic [3:0] static_continue_result;
   logic [3:0] runtime_control_result;
+  logic [3:0] post_test_control_result;
+  logic [3:0] post_test_once_result;
   always_comb begin
     if (selector) begin
       if (selector[3])
@@ -547,6 +549,16 @@ module conditional_statement_app;
       if (runtime_control_result == 5) break;
       runtime_control_result = runtime_control_result + 1;
     end
+    post_test_control_result = 4'b0000;
+    do begin
+      post_test_control_result = post_test_control_result + 1;
+      if (post_test_control_result == 1) continue;
+      if (post_test_control_result == 4) break;
+      post_test_control_result = post_test_control_result + 1;
+    end while (post_test_control_result < 6);
+    post_test_once_result = 4'b0000;
+    do post_test_once_result = post_test_once_result + 1;
+    while (1'b0);
     if (4'b0000)
       zero_case = 1'b1;
     else
@@ -592,6 +604,7 @@ architecture rtl of vhdl_conditional_statement_app is
   signal static_control_result : boolean;
   signal runtime_control_result : boolean;
   signal nested_control_result : boolean;
+  signal unconditional_loop_result : boolean;
 begin
   choose: process(trigger)
     variable assembled : std_logic_vector(3 downto 0) := "0000";
@@ -603,6 +616,8 @@ begin
     variable nested_control : boolean := false;
     variable keep_controlling : boolean := true;
     variable skipped : boolean := false;
+    variable unconditional_skipped : boolean := false;
+    variable unconditional_result : boolean := false;
   begin
     if true then
       true_case <= true;
@@ -672,12 +687,21 @@ begin
         exit;
       end loop;
     end loop;
+    loop
+      if not unconditional_skipped then
+        unconditional_skipped := true;
+        next;
+      end if;
+      unconditional_result := true;
+      exit;
+    end loop;
     sequential_loop_result <= assembled;
     null_loop_result <= untouched;
     runtime_while_result <= while_result;
     static_control_result <= static_control;
     runtime_control_result <= runtime_control;
     nested_control_result <= nested_control;
+    unconditional_loop_result <= unconditional_result;
   end process;
 end architecture;
 )";
@@ -4358,7 +4382,7 @@ end architecture rtl;
         != std::vector<std::string>{
             "1000", "0", "1", "0", "0001",
             "0011", "00", "011", "011", "0",
-            "0011", "0101"}) {
+            "0011", "0101", "0100", "0001"}) {
       for (const auto& value :
            conditional_statement_hybrid.final_values) {
         std::cerr << value << ' ';
@@ -4370,7 +4394,7 @@ end architecture rtl;
         == std::vector<std::string>{
             "1000", "0", "1", "0", "0001",
             "0011", "00", "011", "011", "0",
-            "0011", "0101"}));
+            "0011", "0101", "0100", "0001"}));
   }
 
   auto vhdl_conditional_statement_config = config;
@@ -4433,7 +4457,7 @@ end architecture rtl;
     if (vhdl_conditional_statement_hybrid.final_values
         != std::vector<std::string>{
             "X", "1", "1", "1", "1", "01",
-            "0011", "00", "1", "1", "1", "1"}) {
+            "0011", "00", "1", "1", "1", "1", "1"}) {
       for (const auto& value :
            vhdl_conditional_statement_hybrid.final_values) {
         std::cerr << value << ' ';
@@ -4444,7 +4468,7 @@ end architecture rtl;
         vhdl_conditional_statement_hybrid.final_values
         == std::vector<std::string>{
             "X", "1", "1", "1", "1", "01",
-            "0011", "00", "1", "1", "1", "1"}));
+            "0011", "00", "1", "1", "1", "1", "1"}));
   }
 
   auto partial_group_config = config;

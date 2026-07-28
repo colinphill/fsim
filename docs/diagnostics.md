@@ -174,6 +174,9 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-108` | error | Expected `loop` after a sequential VHDL while-loop body. |
 | `FSIM-VHDL-PARSE-109` | error | Expected `;` after a sequential VHDL while loop. |
 | `FSIM-VHDL-PARSE-110` | error | Expected `;` after a VHDL `exit` or `next` statement. |
+| `FSIM-VHDL-PARSE-111` | error | Expected `end` after an unconditional VHDL sequential-loop body. |
+| `FSIM-VHDL-PARSE-112` | error | Expected `loop` after `end` for an unconditional VHDL sequential loop. |
+| `FSIM-VHDL-PARSE-113` | error | Expected `;` after an unconditional VHDL sequential loop. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -372,6 +375,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-102` | error | Expected `(` after a procedural `while`. |
 | `FSIM-SV-PARSE-103` | error | Expected `)` after a procedural while condition. |
 | `FSIM-SV-PARSE-104` | error | Expected `;` after a SystemVerilog `break` or `continue` statement. |
+| `FSIM-SV-PARSE-105` | error | Expected `while` after a SystemVerilog `do` body. |
+| `FSIM-SV-PARSE-106` | error | Expected `(` before a SystemVerilog do-while condition. |
+| `FSIM-SV-PARSE-107` | error | Expected `)` after a SystemVerilog do-while condition. |
+| `FSIM-SV-PARSE-108` | error | Expected `;` after a SystemVerilog do-while statement. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |

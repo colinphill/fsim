@@ -118,6 +118,8 @@ The current tree contains:
 - nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, including
   conditional VHDL forms, with innermost-loop control across both statically
   unrolled and runtime loops;
+- unconditional VHDL sequential loops and post-test SystemVerilog `do-while`
+  loops, including correct trailing-condition targets for `continue`;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

@@ -2799,6 +2799,10 @@ begin
       end loop;
       exit when outer = 1;
     end loop;
+    loop
+      next when false;
+      exit;
+    end loop;
     wait for 1 ns;
   end process;
 end architecture;
@@ -2811,6 +2815,8 @@ end architecture;
       vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
   const auto& vhdl_loop =
       architecture->processes.front().statements.front();
+  const auto& unconditional_vhdl_loop =
+      architecture->processes.front().statements[1];
   require(
       vhdl_loop.kind == StatementKind::Loop
           && vhdl_loop.statements.size() == 3
@@ -2822,8 +2828,14 @@ end architecture;
               == StatementKind::Break
           && vhdl_loop.statements[2].kind == StatementKind::If
           && vhdl_loop.statements[2].statements.front().kind
-              == StatementKind::Break,
-      "conditional VHDL loop controls lower to conditional HIR nodes");
+              == StatementKind::Break
+          && unconditional_vhdl_loop.kind == StatementKind::Loop
+          && unconditional_vhdl_loop.loop_runtime
+          && unconditional_vhdl_loop.condition.kind
+              == ExpressionKind::BooleanLiteral
+          && unconditional_vhdl_loop.condition.text == "true"
+          && unconditional_vhdl_loop.statements.size() == 2,
+      "conditional controls and unconditional VHDL loops retain HIR");
 
   const auto invalid_vhdl = parse_text(
       "invalid_loop_control.vhd",
@@ -2861,6 +2873,91 @@ end architecture;
                     == "FSIM-VHDL-PARSE-110";
               }),
       "out-of-loop, labeled, and malformed VHDL controls are diagnosed");
+
+  const auto malformed_vhdl_loop = parse_text(
+      "malformed_unconditional_loop.vhd",
+      R"(
+architecture rtl of malformed_unconditional_loop is
+begin
+  exercise: process
+  begin
+    loop
+      exit;
+    end loop
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !malformed_vhdl_loop.ok()
+          && std::ranges::any_of(
+              malformed_vhdl_loop.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-113";
+              }),
+      "malformed unconditional VHDL loops receive a stable diagnostic");
+}
+
+void test_systemverilog_do_while_statements() {
+  const auto result = parse_text(
+      "do_while.sv",
+      R"(
+module do_while;
+  logic [2:0] count;
+  initial begin
+    do begin
+      count = count + 1;
+      if (count == 1) continue;
+      if (count == 2) break;
+    end while (count < 3);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "SystemVerilog do-while statements must parse");
+  const auto& statement =
+      result.design.units.front()
+          .processes.front()
+          .statements.front();
+  require(
+      statement.kind == StatementKind::Loop
+          && statement.loop_runtime
+          && statement.loop_post_test
+          && statement.condition.kind == ExpressionKind::Binary
+          && statement.condition.text == "<"
+          && statement.statements.size() == 3
+          && statement.statements[1].statements.front().kind
+              == StatementKind::Continue
+          && statement.statements[2].statements.front().kind
+              == StatementKind::Break,
+      "do-while retains its post-test condition and loop controls");
+
+  const auto malformed = parse_text(
+      "malformed_do_while.sv",
+      R"(
+module malformed_do_while;
+  initial do ; (1'b0)
+  initial do ; while 1'b0;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!malformed.ok(), "malformed do-while statements must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-PARSE-105"},
+           std::string_view{"FSIM-SV-PARSE-106"},
+           std::string_view{"FSIM-SV-PARSE-107"},
+           std::string_view{"FSIM-SV-PARSE-108"}}) {
+    require(
+        std::ranges::any_of(
+            malformed.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted SystemVerilog do-while diagnostic");
+  }
 }
 
 void test_systemverilog_conditional_expression() {
@@ -4135,6 +4232,7 @@ int main() {
     test_verilog_repeat_statements();
     test_runtime_loop_statements();
     test_loop_control_statements();
+    test_systemverilog_do_while_statements();
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
     test_systemverilog_arithmetic_expressions();

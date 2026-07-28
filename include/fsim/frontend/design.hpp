@@ -286,9 +286,12 @@ struct Statement {
   // Verilog/SystemVerilog repeat statements use an anonymous ascending loop
   // from zero to the exclusive, locally-static repeat count.
   bool loop_repeat{};
-  // While/forever statements lower to an executable SimIR backedge instead
-  // of elaboration-time unrolling. Their condition is stored in `condition`.
+  // Runtime loop forms lower to an executable SimIR backedge instead of
+  // elaboration-time unrolling. Their condition is stored in `condition`.
   bool loop_runtime{};
+  // SystemVerilog do-while evaluates its condition after the body. Other
+  // runtime loops use the default pre-test form.
+  bool loop_post_test{};
   std::optional<Delay> delay;
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;
