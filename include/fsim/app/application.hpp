@@ -184,6 +184,12 @@ class DebuggerControl final {
       Simulation& simulation,
       std::ostream& output,
       std::ostream& error);
+  DebuggerControl(
+      Simulation& simulation,
+      std::ostream& output,
+      std::ostream& error,
+      const project::Config& config,
+      diagnostic::Engine& diagnostics);
   ~DebuggerControl();
   DebuggerControl(DebuggerControl&&) noexcept;
   DebuggerControl& operator=(DebuggerControl&&) noexcept;

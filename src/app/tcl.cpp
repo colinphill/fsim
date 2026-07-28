@@ -48,6 +48,7 @@ struct TclContext {
   const cli::Invocation& invocation;
   const project::Config& config;
   diagnostic::Engine& diagnostics;
+  Tcl_Interp* interpreter;
   std::ostream& output;
   std::ostream& error;
   std::optional<BuiltProject> built;
@@ -56,6 +57,12 @@ struct TclContext {
   std::unique_ptr<std::ostringstream> debug_output;
   std::unique_ptr<std::ostringstream> debug_error;
   std::unique_ptr<DebuggerControl> debugger;
+  std::array<std::vector<std::string>, 3> callbacks;
+  std::uint64_t signal_callback_token{};
+  std::size_t callback_depth{};
+  bool callbacks_attached{};
+  bool lifecycle_started{};
+  std::optional<std::string> callback_error;
   bool exit_requested{};
   int exit_code{};
 };
@@ -342,6 +349,148 @@ Tcl_Obj* unsigned_object(const std::uint64_t value) {
   return string_object(std::to_string(value));
 }
 
+enum class TclCallback : std::size_t {
+  safe_point,
+  value_change,
+  lifecycle,
+};
+
+std::optional<TclCallback> callback_kind(const std::string_view name) {
+  if (name == "safe_point") {
+    return TclCallback::safe_point;
+  }
+  if (name == "value_change") {
+    return TclCallback::value_change;
+  }
+  if (name == "lifecycle") {
+    return TclCallback::lifecycle;
+  }
+  return std::nullopt;
+}
+
+std::string_view callback_name(const TclCallback callback) {
+  switch (callback) {
+    case TclCallback::safe_point:
+      return "safe_point";
+    case TclCallback::value_change:
+      return "value_change";
+    case TclCallback::lifecycle:
+      return "lifecycle";
+  }
+  return "unknown";
+}
+
+bool invoke_callback(
+    TclContext& context,
+    const TclCallback callback,
+    const std::vector<std::string>& arguments) noexcept {
+  try {
+    const auto& prefix =
+        context.callbacks.at(static_cast<std::size_t>(callback));
+    if (prefix.empty() || context.callback_error) {
+      return !context.callback_error;
+    }
+    if (context.callback_depth != 0) {
+      context.callback_error =
+          "recursive Tcl simulation callbacks are not allowed";
+      if (context.simulation) {
+        context.simulation->request_stop();
+      }
+      return false;
+    }
+    std::vector<Tcl_Obj*> objects;
+    objects.reserve(prefix.size() + arguments.size());
+    for (const auto& word : prefix) {
+      objects.push_back(string_object(word));
+    }
+    for (const auto& word : arguments) {
+      objects.push_back(string_object(word));
+    }
+    for (auto* object : objects) {
+      Tcl_IncrRefCount(object);
+    }
+    ++context.callback_depth;
+    const int result = Tcl_EvalObjv(
+        context.interpreter,
+        static_cast<int>(objects.size()),
+        objects.data(),
+        TCL_EVAL_GLOBAL);
+    --context.callback_depth;
+    for (auto* object : objects) {
+      Tcl_DecrRefCount(object);
+    }
+    if (result != TCL_OK) {
+      context.callback_error =
+          "Tcl " + std::string{callback_name(callback)}
+          + " callback failed: "
+          + std::string{Tcl_GetStringResult(context.interpreter)};
+      if (context.simulation) {
+        context.simulation->request_stop();
+      }
+    }
+    return result == TCL_OK;
+  } catch (const std::exception& error) {
+    try {
+      context.callback_error =
+          "Tcl callback dispatch failed: " + std::string{error.what()};
+    } catch (...) {
+    }
+    if (context.simulation) {
+      context.simulation->request_stop();
+    }
+    return false;
+  } catch (...) {
+    try {
+      context.callback_error = "unknown Tcl callback dispatch failure";
+    } catch (...) {
+    }
+    if (context.simulation) {
+      context.simulation->request_stop();
+    }
+    return false;
+  }
+}
+
+void attach_callbacks(TclContext& context) {
+  if (context.callbacks_attached || !context.simulation) {
+    return;
+  }
+  auto* state = &context;
+  context.signal_callback_token =
+      context.simulation->add_signal_change_hook(
+          [state](
+              const runtime::simir::SignalId signal,
+              const runtime::PackedLogic4& value,
+              const runtime::SimulationTick time,
+              const std::uint64_t delta) {
+            const auto& info =
+                state->simulation->design().signals().at(signal);
+            (void)invoke_callback(
+                *state,
+                TclCallback::value_change,
+                {
+                    info.name,
+                    value.to_msb_string(),
+                    std::to_string(time),
+                    std::to_string(delta),
+                });
+          });
+  context.simulation->set_safe_point_hook(
+      [state](
+          runtime::Scheduler& scheduler,
+          const runtime::SchedulerPhase phase) {
+        (void)invoke_callback(
+            *state,
+            TclCallback::safe_point,
+            {
+                std::to_string(scheduler.now()),
+                std::to_string(scheduler.delta()),
+                runtime::phase_name(phase),
+            });
+      });
+  context.callbacks_attached = true;
+}
+
 std::string simulation_state(const TclContext& context) {
   if (!context.simulation) {
     return context.built ? "built" : "unbuilt";
@@ -395,6 +544,7 @@ bool ensure_simulation(
       engine);
   context.built.reset();
   context.simulation_engine = engine;
+  attach_callbacks(context);
   return true;
 }
 
@@ -496,6 +646,10 @@ int build_command(
   context.debug_error.reset();
   context.simulation.reset();
   context.simulation_engine.reset();
+  context.signal_callback_token = 0;
+  context.callbacks_attached = false;
+  context.lifecycle_started = false;
+  context.callback_error.reset();
   context.built = std::move(*built);
   Tcl_Obj* result = Tcl_NewDictObj();
   dict_put(
@@ -656,6 +810,157 @@ int status_command(
   return TCL_OK;
 }
 
+int diagnostics_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const int argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count == 2
+      && std::string_view{Tcl_GetString(arguments[1])} == "clear") {
+    context.diagnostics.clear();
+    return set_result(interpreter, "0");
+  }
+  if (argument_count != 1) {
+    Tcl_WrongNumArgs(interpreter, 1, arguments, "?clear?");
+    return TCL_ERROR;
+  }
+  Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
+  for (const auto& entry : context.diagnostics.diagnostics()) {
+    Tcl_Obj* item = Tcl_NewDictObj();
+    dict_put(
+        interpreter,
+        item,
+        "severity",
+        string_object(diagnostic::to_string(entry.severity)));
+    dict_put(
+        interpreter, item, "code", string_object(entry.code));
+    dict_put(
+        interpreter, item, "message", string_object(entry.message));
+    dict_put(
+        interpreter, item, "path", string_object(entry.span.path));
+    dict_put(
+        interpreter,
+        item,
+        "line",
+        unsigned_object(entry.span.begin.line));
+    dict_put(
+        interpreter,
+        item,
+        "column",
+        unsigned_object(entry.span.begin.column));
+    if (Tcl_ListObjAppendElement(interpreter, result, item) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  Tcl_SetObjResult(interpreter, result);
+  return TCL_OK;
+}
+
+int on_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const int argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count != 3) {
+    Tcl_WrongNumArgs(
+        interpreter, 1, arguments, "EVENT COMMAND_PREFIX");
+    return TCL_ERROR;
+  }
+  const std::string_view event{Tcl_GetString(arguments[1])};
+  const auto kind = callback_kind(event);
+  if (!kind) {
+    return command_error(
+        interpreter,
+        "callback event must be safe_point, value_change, or lifecycle");
+  }
+  int word_count{};
+  Tcl_Obj** words{};
+  if (Tcl_ListObjGetElements(
+          interpreter, arguments[2], &word_count, &words)
+      != TCL_OK) {
+    return TCL_ERROR;
+  }
+  if (word_count == 0) {
+    return command_error(
+        interpreter, "callback command prefix cannot be empty");
+  }
+  auto& callback =
+      context.callbacks.at(static_cast<std::size_t>(*kind));
+  callback.clear();
+  callback.reserve(static_cast<std::size_t>(word_count));
+  for (int index = 0; index < word_count; ++index) {
+    callback.emplace_back(Tcl_GetString(words[index]));
+  }
+  attach_callbacks(context);
+  return set_result(interpreter, event);
+}
+
+int off_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const int argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count != 2) {
+    Tcl_WrongNumArgs(interpreter, 1, arguments, "EVENT");
+    return TCL_ERROR;
+  }
+  const std::string_view event{Tcl_GetString(arguments[1])};
+  const auto kind = callback_kind(event);
+  if (!kind) {
+    return command_error(
+        interpreter,
+        "callback event must be safe_point, value_change, or lifecycle");
+  }
+  context.callbacks.at(static_cast<std::size_t>(*kind)).clear();
+  return set_result(interpreter, event);
+}
+
+int callbacks_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const int argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count != 1) {
+    Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
+    return TCL_ERROR;
+  }
+  Tcl_Obj* result = Tcl_NewDictObj();
+  for (const auto kind : {
+           TclCallback::safe_point,
+           TclCallback::value_change,
+           TclCallback::lifecycle,
+       }) {
+    Tcl_Obj* prefix = Tcl_NewListObj(0, nullptr);
+    for (const auto& word :
+         context.callbacks.at(static_cast<std::size_t>(kind))) {
+      if (Tcl_ListObjAppendElement(
+              interpreter, prefix, string_object(word))
+          != TCL_OK) {
+        return TCL_ERROR;
+      }
+    }
+    dict_put(interpreter, result, callback_name(kind), prefix);
+  }
+  Tcl_SetObjResult(interpreter, result);
+  return TCL_OK;
+}
+
+int stop_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const int argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count != 1) {
+    Tcl_WrongNumArgs(interpreter, 1, arguments, nullptr);
+    return TCL_ERROR;
+  }
+  if (!ensure_simulation(context, interpreter)) {
+    return TCL_ERROR;
+  }
+  context.simulation->request_stop();
+  return set_result(interpreter, "stop_requested");
+}
+
 int run_command(
     TclContext& context,
     Tcl_Interp* interpreter,
@@ -683,6 +988,15 @@ int run_command(
     return command_error(interpreter, "simulation has finished");
   }
   context.simulation->clear_stop();
+  if (!context.lifecycle_started) {
+    context.lifecycle_started = true;
+    if (!invoke_callback(
+            context, TclCallback::lifecycle, {"started"})) {
+      auto error = std::move(*context.callback_error);
+      context.callback_error.reset();
+      return command_error(interpreter, error);
+    }
+  }
   const auto run = context.simulation->run(until);
   Tcl_Obj* result = Tcl_NewDictObj();
   std::string_view status = "stopped";
@@ -699,20 +1013,26 @@ int run_command(
       result,
       "callbacks",
       unsigned_object(run.callbacks_executed));
+  const std::string lifecycle_event =
+      context.simulation->finished()
+      ? "finished"
+      : run.status == runtime::RunStatus::time_limit ? "time_limit"
+                                                    : "stopped";
+  (void)invoke_callback(
+      context, TclCallback::lifecycle, {lifecycle_event});
+  if (context.callback_error) {
+    auto error = std::move(*context.callback_error);
+    context.callback_error.reset();
+    return command_error(interpreter, error);
+  }
   Tcl_SetObjResult(interpreter, result);
   return TCL_OK;
 }
 
-int debug_command(
+int execute_debug_command(
     TclContext& context,
     Tcl_Interp* interpreter,
-    const int argument_count,
-    Tcl_Obj* const arguments[]) {
-  if (argument_count < 2) {
-    Tcl_WrongNumArgs(
-        interpreter, 1, arguments, "command ?argument ...?");
-    return TCL_ERROR;
-  }
+    const std::vector<std::string>& command) {
   if (!ensure_simulation(
           context, interpreter, SimulationEngine::debug)) {
     return TCL_ERROR;
@@ -726,19 +1046,21 @@ int debug_command(
     context.debugger = std::make_unique<DebuggerControl>(
         *context.simulation,
         *context.debug_output,
-        *context.debug_error);
+        *context.debug_error,
+        context.config,
+        context.diagnostics);
   }
 
   context.debug_output->str({});
   context.debug_output->clear();
   context.debug_error->str({});
   context.debug_error->clear();
-  std::vector<std::string> command;
-  command.reserve(static_cast<std::size_t>(argument_count - 1));
-  for (int index = 1; index < argument_count; ++index) {
-    command.emplace_back(Tcl_GetString(arguments[index]));
-  }
   context.debugger->execute(command);
+  if (context.callback_error) {
+    auto callback_error = std::move(*context.callback_error);
+    context.callback_error.reset();
+    return command_error(interpreter, callback_error);
+  }
   const auto error = context.debug_error->str();
   if (!error.empty()) {
     return command_error(interpreter, error);
@@ -751,6 +1073,42 @@ int debug_command(
   return set_result(interpreter, output);
 }
 
+int debug_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const int argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count < 2) {
+    Tcl_WrongNumArgs(
+        interpreter, 1, arguments, "command ?argument ...?");
+    return TCL_ERROR;
+  }
+  std::vector<std::string> command;
+  command.reserve(static_cast<std::size_t>(argument_count - 1));
+  for (int index = 1; index < argument_count; ++index) {
+    command.emplace_back(Tcl_GetString(arguments[index]));
+  }
+  return execute_debug_command(context, interpreter, command);
+}
+
+int trace_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const int argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count < 2) {
+    Tcl_WrongNumArgs(
+        interpreter, 1, arguments, "add|remove SIGNAL | all|clear|list");
+    return TCL_ERROR;
+  }
+  std::vector<std::string> command{"trace"};
+  command.reserve(static_cast<std::size_t>(argument_count));
+  for (int index = 1; index < argument_count; ++index) {
+    command.emplace_back(Tcl_GetString(arguments[index]));
+  }
+  return execute_debug_command(context, interpreter, command);
+}
+
 int fsim_command(
     void* client_data,
     Tcl_Interp* interpreter,
@@ -759,6 +1117,23 @@ int fsim_command(
   auto& context = *static_cast<TclContext*>(client_data);
   try {
     const std::string_view command{Tcl_GetString(arguments[0])};
+    if (context.callback_depth != 0
+        && command != "::fsim::project"
+        && command != "fsim::project"
+        && command != "::fsim::signals"
+        && command != "fsim::signals"
+        && command != "::fsim::read"
+        && command != "fsim::read"
+        && command != "::fsim::status"
+        && command != "fsim::status"
+        && command != "::fsim::diagnostics"
+        && command != "fsim::diagnostics"
+        && command != "::fsim::stop"
+        && command != "fsim::stop") {
+      return command_error(
+          interpreter,
+          "this fsim command is not safe inside a simulation callback");
+    }
     if (command == "::fsim::project" || command == "fsim::project") {
       return project_command(
           context, interpreter, argument_count, arguments);
@@ -809,6 +1184,32 @@ int fsim_command(
     }
     if (command == "::fsim::status" || command == "fsim::status") {
       return status_command(
+          context, interpreter, argument_count, arguments);
+    }
+    if (command == "::fsim::diagnostics"
+        || command == "fsim::diagnostics") {
+      return diagnostics_command(
+          context, interpreter, argument_count, arguments);
+    }
+    if (command == "::fsim::on" || command == "fsim::on") {
+      return on_command(
+          context, interpreter, argument_count, arguments);
+    }
+    if (command == "::fsim::off" || command == "fsim::off") {
+      return off_command(
+          context, interpreter, argument_count, arguments);
+    }
+    if (command == "::fsim::callbacks"
+        || command == "fsim::callbacks") {
+      return callbacks_command(
+          context, interpreter, argument_count, arguments);
+    }
+    if (command == "::fsim::stop" || command == "fsim::stop") {
+      return stop_command(
+          context, interpreter, argument_count, arguments);
+    }
+    if (command == "::fsim::trace" || command == "fsim::trace") {
+      return trace_command(
           context, interpreter, argument_count, arguments);
     }
     if (command == "::fsim::debug" || command == "fsim::debug") {
@@ -1078,6 +1479,7 @@ int handle_tcl(
       invocation,
       config,
       diagnostics,
+      interpreter.get(),
       output,
       error,
       std::nullopt,
@@ -1086,6 +1488,12 @@ int handle_tcl(
       nullptr,
       nullptr,
       nullptr,
+      {},
+      0,
+      0,
+      false,
+      false,
+      std::nullopt,
       false,
       0};
   if (Tcl_CreateNamespace(
@@ -1108,6 +1516,12 @@ int handle_tcl(
       "::fsim::release",
       "::fsim::run",
       "::fsim::status",
+      "::fsim::diagnostics",
+      "::fsim::on",
+      "::fsim::off",
+      "::fsim::callbacks",
+      "::fsim::stop",
+      "::fsim::trace",
       "::fsim::debug"};
   bool commands_ok = true;
   for (const char* command : fsim_commands) {

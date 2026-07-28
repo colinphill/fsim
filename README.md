@@ -316,9 +316,14 @@ application model. The stateful `fsim::debug COMMAND ?ARG ...?` adapter also
 exposes scope/signal/local inspection, debugger mutation, relative and absolute
 runs, source/time/conditional-signal breakpoints, and
 statement/process/delta/time stepping through the same O0 debugger engine used
-by the CLI. Tcl stop, trace-selection, diagnostics, and callback commands
-remain to be added. Interactive and batch Python support is planned later,
-after the Tcl and native control contracts stabilize.
+by the CLI. `fsim::diagnostics`, `fsim::stop`, and `fsim::trace` provide
+structured diagnostic lifecycle, callback-safe stop requests, and live
+add/remove/all/clear/list VCD selection. `fsim::on`, `fsim::off`, and
+`fsim::callbacks` register synchronous safe-point, value-change, and lifecycle
+command-prefix callbacks; callback failures stop the run and become catchable
+Tcl errors. Assertion callbacks and runtime project replacement remain to be
+added. Interactive and batch Python support is planned later, after the Tcl
+and native control contracts stabilize.
 
 ## Build and test
 

@@ -125,6 +125,39 @@ int main() {
     assert(error.str().find("deliberate") != std::string::npos);
   }
   {
+    const std::string diagnostic_script = R"FSIM_TCL(
+if {![catch {fsim::check} check_error]} {
+  error "empty project unexpectedly passed"
+}
+set diagnostics [fsim::diagnostics]
+if {[llength $diagnostics] != 1} {
+  error "missing project diagnostic: $diagnostics"
+}
+set diagnostic [lindex $diagnostics 0]
+if {[dict get $diagnostic severity] ne "error" ||
+    [dict get $diagnostic code] ne "FSIM-FE-0001" ||
+    [dict get $diagnostic message] eq ""} {
+  error "malformed diagnostic dictionary: $diagnostic"
+}
+fsim::diagnostics clear
+if {[llength [fsim::diagnostics]] != 0} {
+  error "diagnostics were not cleared"
+}
+puts "diagnostics-ok"
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {"fsim", "tcl", "-c", diagnostic_script},
+        input,
+        output,
+        error);
+    assert(result == 0);
+    assert(output.str().find("diagnostics-ok") != std::string::npos);
+    assert(error.str().empty());
+  }
+  {
     std::istringstream input{"set unfinished {\n"};
     std::ostringstream output;
     std::ostringstream error;
@@ -167,13 +200,20 @@ int main() {
         << "optimization = \"O2\"\n"
         << "cache_path = \"cache\"\n"
         << "[run]\n"
-        << "max_deltas = 100000\n";
+        << "max_deltas = 100000\n"
+        << "trace_file = \"debug.vcd\"\n";
   }
   {
     const std::string control_script = R"(
 set project [fsim::project]
 if {[dict get $project name] ne "tcl-control"} {error "bad project"}
 if {[dict get $project top] ne "sv:work.tb"} {error "bad top"}
+if {[llength [fsim::diagnostics]] != 0} {
+  error "unexpected initial diagnostics"
+}
+if {[fsim::diagnostics clear] != 0} {
+  error "diagnostic clear failed"
+}
 set checked [fsim::check]
 if {[dict get $checked sources] != 1} {error "bad source count"}
 set built [fsim::build]
@@ -190,6 +230,7 @@ if {[fsim::read tb.q] ne "1"} {error "bad tick-1 value"}
 set final [fsim::run]
 if {[dict get $final time] != 2} {error "bad final time"}
 if {[dict get [fsim::status] state] ne "finished"} {error "not finished"}
+if {[fsim::stop] ne "stop_requested"} {error "stop request failed"}
 if {![catch {fsim::debug where} mode_error]} {
   error "debug accepted a compiled-mode session"
 }
@@ -230,6 +271,23 @@ if {[fsim::debug scopes] ne "(no child scopes)"} {
 set initial_signals [fsim::debug signals]
 if {![string match "*tb.q = *" $initial_signals]} {
   error "missing debug signal: $initial_signals"
+}
+if {[fsim::trace list] ne "tb.q"} {error "bad initial trace list"}
+if {[fsim::trace clear] ne "cleared trace selection"} {
+  error "trace clear failed"
+}
+if {[fsim::trace list] ne "(no traced signals)"} {
+  error "trace was not cleared"
+}
+if {[fsim::trace add tb.q] ne "tracing tb.q"} {
+  error "trace add failed"
+}
+if {[fsim::trace list] ne "tb.q"} {error "trace add not retained"}
+if {[fsim::trace remove tb.q] ne "stopped tracing tb.q"} {
+  error "trace remove failed"
+}
+if {[fsim::trace all] ne "tracing all signals"} {
+  error "trace all failed"
 }
 fsim::debug deposit tb.q 0
 if {[fsim::debug show tb.q] ne "tb.q = 0"} {
@@ -325,6 +383,137 @@ puts "debug-control-ok"
     assert(
         output.str().find("debug-control-ok") != std::string::npos);
     assert(error.str().empty());
+  }
+  {
+    const std::string callback_script = R"FSIM_TCL(
+set ::lifecycle_events {}
+set ::value_events {}
+set ::safe_points 0
+proc record_lifecycle {event} {
+  lappend ::lifecycle_events $event
+}
+proc record_value {path value time delta} {
+  lappend ::value_events [list $path $value $time $delta]
+}
+proc stop_at_tick_one {time delta phase} {
+  incr ::safe_points
+  if {$time >= 1} {
+    fsim::stop
+  }
+}
+if {[fsim::on lifecycle record_lifecycle] ne "lifecycle"} {
+  error "lifecycle registration failed"
+}
+fsim::on value_change record_value
+fsim::on safe_point stop_at_tick_one
+set registered [fsim::callbacks]
+if {[dict get $registered lifecycle] ne "record_lifecycle"} {
+  error "bad lifecycle callback listing"
+}
+if {[dict get $registered value_change] ne "record_value"} {
+  error "bad value callback listing"
+}
+set stopped [fsim::run]
+if {[dict get $stopped status] ne "stopped"} {
+  error "callback stop did not stop simulation: $stopped"
+}
+if {[dict get $stopped time] != 1} {
+  error "callback stopped at wrong time: $stopped"
+}
+if {$::safe_points == 0} {error "safe-point callback did not run"}
+if {[lsearch -exact $::lifecycle_events "started"] < 0 ||
+    [lsearch -exact $::lifecycle_events "stopped"] < 0} {
+  error "missing lifecycle events: $::lifecycle_events"
+}
+if {[llength $::value_events] == 0} {
+  error "value-change callback did not run"
+}
+if {[fsim::off safe_point] ne "safe_point"} {
+  error "callback removal failed"
+}
+if {[dict get [fsim::callbacks] safe_point] ne ""} {
+  error "safe-point callback still registered"
+}
+set finished [fsim::run]
+if {[dict get $finished time] != 2 ||
+    [dict get [fsim::status] state] ne "finished"} {
+  error "callback resume failed: $finished"
+}
+if {[lsearch -exact $::lifecycle_events "finished"] < 0} {
+  error "missing finished lifecycle event"
+}
+puts "callbacks-ok"
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {
+            "fsim",
+            "tcl",
+            "-p",
+            manifest.string(),
+            "-c",
+            callback_script,
+        },
+        input,
+        output,
+        error);
+    if (result != 0) {
+      throw std::runtime_error(
+          "Tcl callback test failed:\n" + error.str()
+          + "\nTcl output:\n" + output.str());
+    }
+    assert(output.str().find("callbacks-ok") != std::string::npos);
+    assert(error.str().empty());
+  }
+  {
+    const std::string callback_error_script = R"FSIM_TCL(
+proc fail_callback {time delta phase} {
+  error "deliberate callback failure"
+}
+fsim::on safe_point fail_callback
+if {![catch {fsim::run} callback_error]} {
+  error "callback failure escaped containment"
+}
+if {[string first "Tcl safe_point callback failed" $callback_error] < 0 ||
+    [string first "deliberate callback failure" $callback_error] < 0} {
+  error "bad callback diagnostic: $callback_error"
+}
+puts "callback-error-ok"
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {
+            "fsim",
+            "tcl",
+            "-p",
+            manifest.string(),
+            "-c",
+            callback_error_script,
+        },
+        input,
+        output,
+        error);
+    if (result != 0) {
+      throw std::runtime_error(
+          "Tcl callback containment test failed:\n" + error.str()
+          + "\nTcl output:\n" + output.str());
+    }
+    assert(
+        output.str().find("callback-error-ok") != std::string::npos);
+    assert(error.str().empty());
+  }
+  {
+    std::ifstream trace(directory / "debug.vcd", std::ios::binary);
+    assert(trace);
+    std::ostringstream contents;
+    contents << trace.rdbuf();
+    assert(contents.str().find("$timescale 1ns $end") != std::string::npos);
+    assert(contents.str().find("$var") != std::string::npos);
+    assert(contents.str().find("q $end") != std::string::npos);
   }
 
   std::error_code remove_error;

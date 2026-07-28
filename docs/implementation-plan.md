@@ -60,7 +60,9 @@ The following foundation is implemented:
 - embedded Tcl command/script/interactive execution with fsim-owned standard
   streams, an installed-or-SHA-256-pinned-source CMake dependency path, and a
   stateful adapter over the common O0 debugger for hierarchy/value inspection,
-  mutation, run control, breakpoints, and all four stepping modes;
+  mutation, run control, breakpoints, all four stepping modes, structured
+  diagnostics, live VCD selection, and synchronous safe-point/value/lifecycle
+  callbacks with callback-safe stop/resume;
 - packed 2-, 4-, and 9-state value kernels;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
@@ -699,8 +701,10 @@ The next development iterations should occur in this order:
    trace/control tests. The embedded interactive/batch Tcl shell is present;
    project/check/build, hierarchy/value access, debug run/step, breakpoints,
    mutation, script arguments, and deterministic batch exit status use the
-   common application/debug engines. Remaining Tcl work is stop control, trace
-   selection, diagnostics, and callbacks.
+   common application/debug engines. Structured diagnostics, live trace
+   selection, callback-safe stop/resume, and synchronous
+   safe-point/value/lifecycle callbacks are present. Remaining Tcl work
+   includes assertion callbacks and runtime project replacement.
 7. **Harden for release:** Windows LLVM gates, fuzzing, Unicode/path behavior,
    cache eviction/fingerprinting, benchmarks, and full feature-matrix closure.
 
@@ -715,25 +719,26 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The third post-gate batch is implementation-complete:
+The fourth post-gate batch is implementation-complete:
 
-1. a stateful Tcl adapter over the existing O0 command-line debugger;
-2. Tcl debugger scope and hierarchy navigation;
-3. Tcl debugger signal, packed-value, force-state, and local inspection;
-4. Tcl debugger deposit, force, and release;
-5. Tcl source, absolute-time, and conditional-signal breakpoints with
-   persistent list/delete/clear management;
-6. Tcl relative-time debug runs;
-7. Tcl absolute-time `run-until` control;
-8. Tcl statement stepping;
-9. Tcl process stepping; and
-10. Tcl delta and time stepping.
+1. stable Tcl diagnostic dictionaries;
+2. explicit diagnostic clearing;
+3. callback-safe Tcl stop requests and resumable stopped sessions;
+4. live trace enumeration;
+5. trace-selection clear/all operations;
+6. per-signal trace add/remove operations;
+7. synchronous safe-point callbacks with named scheduler phases;
+8. synchronous canonical value-change callbacks;
+9. simulation started/stopped/time-limit/finished lifecycle callbacks with
+   command-prefix registration, enumeration, and removal; and
+10. callback reentrancy guards plus failure containment as catchable Tcl
+    errors.
 
-Every item has focused application evidence, including deliberate rebuild of a
-live debugger session and reuse of the same application `Simulation` and
-`DebuggerSession` semantics as the CLI. The interval LLVM 22 Debug regression
-passed all 16 tests in 151.79 seconds. This checkpoint is ready to commit and
-push.
+Every item has focused application evidence. Trace selection produces and
+checks a real VCD artifact; callbacks stop at tick 1, resume to terminal tick
+2, and preserve the distinction between scheduler return status and terminal
+simulation state. The interval LLVM 22 Debug regression passed all 16 tests in
+157.46 seconds. This batch is ready to commit and push.
 
 ## v1 release condition
 
