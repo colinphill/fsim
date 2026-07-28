@@ -83,6 +83,8 @@ The current tree contains:
   postponed `$strobe` routed through CLI/Tcl output with newline/no-newline
   semantics, decoded control/quote/backslash/octal escapes, and
   interpreter/LLVM O0/O2 equivalence;
+- VHDL-2008 literal `report` statements at default/explicit `note` severity
+  routed through the same interpreter/LLVM and embedding output path;
 - deterministic simple-expression sensitivity inference for `always @*`,
   time-zero `always_comb`/`always_latch`, and dynamic `@*`;
 - ordered Verilog/SystemVerilog `case`/`casez`/`casex`/`default` lowering

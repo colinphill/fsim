@@ -153,6 +153,54 @@ void test_display(
   assert(compiled.compiled_processes == 1);
 }
 
+void test_vhdl_report(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "report-test";
+  config.project.top = "vhdl:work.reporter(rtl)";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "report-cache-o0"
+             : "report-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  assert(reference_project && compiled_project);
+  const auto reference = execute(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter);
+  const auto compiled = execute(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled);
+  assert(reference.result.status == fsim::runtime::RunStatus::completed);
+  assert(compiled.result.status == fsim::runtime::RunStatus::completed);
+  assert(reference.output == compiled.output);
+  assert(reference.output.size() == 2);
+  assert(reference.output[0].text == "vhdl \"quote\"");
+  assert(reference.output[0].newline);
+  assert(reference.output[1].text.empty());
+  assert(reference.output[1].newline);
+  assert(reference.compiled_processes == 0);
+  assert(compiled.compiled_processes == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -177,6 +225,24 @@ module display_test;
     $finish;
   end
 endmodule
+)";
+  }
+
+  const auto report_source = directory.path / "report.vhd";
+  {
+    std::ofstream output(report_source);
+    output << R"(
+entity reporter is
+end entity;
+architecture rtl of reporter is
+begin
+  process
+  begin
+    report "vhdl ""quote""" severity note;
+    report "";
+    wait;
+  end process;
+end architecture;
 )";
   }
 
@@ -222,5 +288,13 @@ endmodule
       directory.path, source, fsim::project::Optimization::o0);
   test_display(
       directory.path, source, fsim::project::Optimization::o2);
+  test_vhdl_report(
+      directory.path,
+      report_source,
+      fsim::project::Optimization::o0);
+  test_vhdl_report(
+      directory.path,
+      report_source,
+      fsim::project::Optimization::o2);
   std::cout << "display application tests passed\n";
 }

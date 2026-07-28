@@ -112,7 +112,20 @@ class VhdlParser final : private detail::ParserBase {
   static std::string string_literal_text(const Token& token) {
     if (token.text.size() >= 2 && token.text.front() == '"'
         && token.text.back() == '"') {
-      return token.text.substr(1, token.text.size() - 2);
+      const auto spelling =
+          token.text.substr(1, token.text.size() - 2);
+      std::string result;
+      result.reserve(spelling.size());
+      for (std::size_t index = 0;
+           index < spelling.size();
+           ++index) {
+        result.push_back(spelling[index]);
+        if (spelling[index] == '"' && index + 1 < spelling.size()
+            && spelling[index + 1] == '"') {
+          ++index;
+        }
+      }
+      return result;
     }
     return token.text;
   }
@@ -1607,6 +1620,33 @@ class VhdlParser final : private detail::ParserBase {
     }
     if (match_keyword("assert", true)) {
       return parse_vhdl_assertion(previous());
+    }
+    if (match_keyword("report", true)) {
+      const auto start = previous();
+      Statement statement;
+      statement.kind = StatementKind::Display;
+      const auto message = expect(
+          TokenKind::StringLiteral,
+          "literal string after report",
+          "FSIM-VHDL-PARSE-121");
+      statement.output_text = string_literal_text(message);
+      if (match_keyword("severity", true)) {
+        const auto severity =
+            expect_identifier("report severity");
+        if (!detail::iequals(severity.text, "note")) {
+          error(
+              severity,
+              "FSIM-VHDL-SEM-031",
+              "the current VHDL report slice supports only note "
+              "severity");
+        }
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after report statement",
+          "FSIM-VHDL-PARSE-122");
+      statement.span = span_from(start, previous());
+      return statement;
     }
     if (match_keyword("if", true)) {
       const auto start = previous();

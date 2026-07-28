@@ -785,11 +785,14 @@ The nineteenth post-gate batch is in progress:
 5. Output-task literals now decode newline, tab, quote, backslash, and
    one-byte octal escapes in the frontend and retain the resulting exact byte
    string through interpreter, LLVM O0/O2, CLI, and Tcl output routing.
+6. VHDL-2008 literal `report` at default or explicit `note` severity now
+   decodes doubled quotes and reuses the common typed immediate output path;
+   higher severities are targeted until stop-threshold policy is implemented.
 
 The forced no-system-Tcl dependency build and its isolated staged relocation
 probe pass; the ordinary installed-Tcl application regression also passes.
 Focused frontend, elaboration, runtime, C ABI, LLVM, Tcl, and output
-application tests pass for the output-task slices. This is feature 5
+application tests pass for the cross-language output slices. This is feature 6
 of 10, so the interval full regression and remote push are not due yet.
 
 ## v1 release condition

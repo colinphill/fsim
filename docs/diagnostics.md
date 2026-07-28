@@ -190,6 +190,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-118` | error | Expected `when` after a selected-assignment waveform. |
 | `FSIM-VHDL-PARSE-119` | error | Expected `;` after a selected signal assignment. |
 | `FSIM-VHDL-PARSE-120` | error | Expected `)` after a VHDL array-attribute dimension. |
+| `FSIM-VHDL-PARSE-121` | error | Expected a literal string after a bounded VHDL `report`. |
+| `FSIM-VHDL-PARSE-122` | error | Expected `;` after a VHDL `report` statement. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -218,6 +220,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-028` | error | A selected-assignment alternative follows `others`. |
 | `FSIM-VHDL-SEM-029` | error | The bounded selected-assignment form has no final `others` alternative. |
 | `FSIM-VHDL-SEM-030` | error | The selected VHDL attribute is outside the bounded supported array-attribute set. |
+| `FSIM-VHDL-SEM-031` | error | A bounded VHDL `report` explicitly uses a severity other than `note`. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |

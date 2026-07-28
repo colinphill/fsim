@@ -342,6 +342,10 @@ Formatting operands and `$monitor` remain subsequent slices.
 Output-task literal spelling is decoded once in the frontend for newline, tab,
 quote, backslash, and one-byte octal escapes; SimIR and generated code retain
 the exact byte string, including embedded NUL bytes.
+Bounded VHDL literal `report` statements at `note` severity reuse the same
+immediate typed operation and output hook. VHDL doubled quotes are decoded in
+the frontend. Higher report severities remain separate from this output-only
+slice so their future stop-threshold behavior is not silently discarded.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

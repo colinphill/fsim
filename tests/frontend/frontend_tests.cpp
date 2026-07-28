@@ -2928,6 +2928,64 @@ endmodule
       "$fatal must remain SystemVerilog-only");
 }
 
+void test_vhdl_literal_report() {
+  const auto parsed = parse_text(
+      "report.vhd",
+      R"(
+entity reporter is
+end entity;
+architecture rtl of reporter is
+begin
+  process
+  begin
+    report "vhdl ""quote""" severity note;
+    report "";
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "literal VHDL report statements must parse");
+  const auto* architecture =
+      parsed.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->processes.front().statements.size() == 3
+          && architecture->processes.front().statements[0].kind
+              == StatementKind::Display
+          && architecture->processes.front().statements[0].output_text
+              == "vhdl \"quote\""
+          && architecture->processes.front().statements[0].output_newline
+          && architecture->processes.front().statements[1].kind
+              == StatementKind::Display
+          && architecture->processes.front().statements[1].output_text.empty(),
+      "VHDL report literal HIR and doubled-quote decoding");
+
+  const auto unsupported = parse_text(
+      "report_warning.vhd",
+      R"(
+entity reporter is end entity;
+architecture rtl of reporter is
+begin
+  process
+  begin
+    report "warning" severity warning;
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      std::any_of(
+          unsupported.diagnostics.begin(),
+          unsupported.diagnostics.end(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-VHDL-SEM-031";
+          }),
+      "non-note VHDL report severity needs a targeted diagnostic");
+}
+
 void test_process_variable_declarations() {
   const auto vhdl = parse_text(
       "locals.vhd",
@@ -5615,6 +5673,7 @@ int main() {
     test_systemverilog_parameters();
     test_systemverilog_packages();
     test_immediate_assertions();
+    test_vhdl_literal_report();
     test_process_variable_declarations();
     test_systemverilog_procedural_block_scopes();
     test_procedural_wait_statements();

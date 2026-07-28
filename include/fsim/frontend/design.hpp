@@ -313,8 +313,9 @@ struct Statement {
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;
   AssertionSeverity assertion_severity{AssertionSeverity::Error};
-  // Bounded literal output used by the initial Verilog/SystemVerilog display
-  // task slice. Formatting operands are added separately.
+  // Bounded literal language output used by Verilog/SystemVerilog output
+  // tasks and VHDL report statements. Formatting operands are added
+  // separately.
   std::string output_text;
   bool output_newline{true};
   bool output_postponed{};
