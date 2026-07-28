@@ -1061,11 +1061,16 @@ The ten implementation features in this batch are:
     diagnostics, reports, and debug points, with interpreter/LLVM O0/O2 and
     native-cache differential evidence.
 
-Focused frontend and application tests pass. The preprocessor cache identity
-advances to v4 because logical source mapping now affects parsed and generated
-debug metadata. The full local regression and checkpoint commit/push remain
-pending until the batch gate is run. GitHub Actions state is not part of this
-local gate and is not queried.
+Focused frontend, diagnostic-catalog, application, interpreter, LLVM O0/O2,
+and native-cache tests pass. The preprocessor cache identity advances to v4
+because logical source mapping now affects parsed and generated debug
+metadata. The installed-static Tcl path now carries its Unix Threads, zlib,
+dynamic-loader, and math link dependencies just as the fetched target does.
+The exact LLVM 22.1.8 warnings-as-errors regression then passed all 25 tests in
+204.31 seconds on 2026-07-28, including enabled Boost.Context SystemC fibers
+and installed Tcl 9.0.4. The fetched-Tcl relocation companion also passed.
+The batch ends at feature commit `f8717ce`; GitHub Actions state was not
+queried for this local gate.
 
 ## v1 release condition
 
