@@ -5495,19 +5495,19 @@ endmodule
             std::find(
                 dependencies.begin(),
                 dependencies.end(),
-                systemverilog_base_package_source.string())
+                systemverilog_base_package_source.generic_string())
             != dependencies.end());
         assert(
             std::find(
                 dependencies.begin(),
                 dependencies.end(),
-                systemverilog_derived_package_source.string())
+                systemverilog_derived_package_source.generic_string())
             != dependencies.end());
         assert(
             std::find(
                 dependencies.begin(),
                 dependencies.end(),
-                systemverilog_unused_package_source.string())
+                systemverilog_unused_package_source.generic_string())
             == dependencies.end());
         auto key = project->specialization_cache_keys.front();
         auto simulation = capture_simulation(
