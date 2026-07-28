@@ -1540,6 +1540,10 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                   builder,
                   "signed-decimal",
                   value.signed_decimal ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "suppress-leading-zero",
+                  value.suppress_leading_zero ? 1U : 0U);
             },
             [&](const Report& value) {
               builder.add("operation", "Report");

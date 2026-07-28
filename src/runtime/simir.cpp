@@ -32,7 +32,20 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 [[nodiscard]] std::string format_output_value(
     const PackedLogic4& value,
     const OutputFormat format,
-    const bool signed_decimal) {
+    const bool signed_decimal,
+    const bool suppress_leading_zero) {
+  const auto maybe_suppress_leading_zero =
+      [suppress_leading_zero](std::string text) {
+        if (!suppress_leading_zero || text.size() <= 1U) {
+          return text;
+        }
+        const auto first = text.find_first_not_of('0');
+        if (first == std::string::npos) {
+          return std::string{"0"};
+        }
+        text.erase(0, first);
+        return text;
+      };
   switch (format) {
   case OutputFormat::binary: {
     auto text = value.to_msb_string();
@@ -43,7 +56,7 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
         [](const unsigned char character) {
           return static_cast<char>(std::tolower(character));
         });
-    return text;
+    return maybe_suppress_leading_zero(std::move(text));
   }
   case OutputFormat::hexadecimal: {
     constexpr std::string_view digits{"0123456789abcdef"};
@@ -74,7 +87,7 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
                         : digits[known_value];
       text[digit_count - digit - 1U] = character;
     }
-    return text;
+    return maybe_suppress_leading_zero(std::move(text));
   }
   case OutputFormat::octal: {
     constexpr std::string_view digits{"01234567"};
@@ -105,7 +118,7 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
                         : digits[known_value];
       text[digit_count - digit - 1U] = character;
     }
-    return text;
+    return maybe_suppress_leading_zero(std::move(text));
   }
   case OutputFormat::decimal: {
     for (std::size_t bit = 0; bit < value.width(); ++bit) {
@@ -202,9 +215,11 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     const std::string_view suffix,
     const OutputFormat format,
     const PackedLogic4& value,
-    const bool signed_decimal) {
+    const bool signed_decimal,
+    const bool suppress_leading_zero) {
   auto formatted =
-      format_output_value(value, format, signed_decimal);
+      format_output_value(
+          value, format, signed_decimal, suppress_leading_zero);
   std::string result;
   result.reserve(prefix.size() + formatted.size() + suffix.size());
   result.append(prefix);
@@ -1875,10 +1890,16 @@ struct Interpreter::Impl::ExecutionContext final
       const PackedLogic4& value,
       const bool newline,
       const bool postponed,
-      const bool signed_decimal) override {
+      const bool signed_decimal,
+      const bool suppress_leading_zero) override {
     auto text =
         make_formatted_output(
-            prefix, suffix, format, value, signed_decimal);
+            prefix,
+            suffix,
+            format,
+            value,
+            signed_decimal,
+            suppress_leading_zero);
     if (postponed) {
       owner.scheduler.schedule(
           SchedulerPhase::postponed,
@@ -2641,7 +2662,8 @@ void Interpreter::Impl::execute(ProcessId id) {
                   op.suffix,
                   op.format,
                   get_register(process, op.source),
-                  op.signed_decimal);
+                  op.signed_decimal,
+                  op.suppress_leading_zero);
               if (op.postponed) {
                 scheduler.schedule(
                     SchedulerPhase::postponed,

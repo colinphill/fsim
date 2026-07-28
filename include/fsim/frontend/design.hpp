@@ -332,6 +332,7 @@ struct Statement {
   std::optional<OutputFormat> output_format;
   std::string output_prefix;
   std::string output_suffix;
+  bool output_suppress_leading_zero{};
 
   // Block contents or the true branch/delayed statement.
   std::vector<Statement> statements;

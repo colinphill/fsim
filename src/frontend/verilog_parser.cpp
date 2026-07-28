@@ -31,6 +31,7 @@ struct ParsedOutputFormat {
   std::optional<OutputFormat> format;
   std::string prefix;
   std::string suffix;
+  bool suppress_leading_zero{};
 };
 
 [[nodiscard]] ParsedOutputFormat
@@ -50,10 +51,22 @@ parse_output_format(const std::string_view text) {
       literal->push_back('%');
       continue;
     }
+    if (text[index] == '0') {
+      result.suppress_leading_zero = true;
+      if (++index >= text.size()) {
+        result.valid = false;
+        return result;
+      }
+    }
     if ((text[index] != 'b' && text[index] != 'h'
          && text[index] != 'o' && text[index] != 'd'
          && text[index] != 'c' && text[index] != 's')
         || result.format) {
+      result.valid = false;
+      return result;
+    }
+    if (result.suppress_leading_zero
+        && (text[index] == 'c' || text[index] == 's')) {
       result.valid = false;
       return result;
     }
@@ -3877,6 +3890,8 @@ class VerilogParser final : private detail::ParserBase {
                 statement.output_format = parsed_format.format;
                 statement.output_prefix = parsed_format.prefix;
                 statement.output_suffix = parsed_format.suffix;
+                statement.output_suppress_leading_zero =
+                    parsed_format.suppress_leading_zero;
                 statement.value = parse_expression();
               }
               if (match(TokenKind::Comma)) {

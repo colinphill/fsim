@@ -88,9 +88,9 @@ The current tree contains:
   to their default decimal text before SimIR lowering;
 - declared-width signed based output literals interpreted as two's-complement
   decimal text;
-- runtime `$display`/`$write` `%b`/`%h`/`%o`/`%d`/`%c`/`%s` formatting for one packed
-  expression,
-  including four-state bits, literal prefix/suffix text, and `%%`;
+- runtime `$display`/`$write` `%b`/`%h`/`%o`/`%d`/`%c`/`%s` formatting for one
+  packed expression, including four-state bits, literal prefix/suffix text,
+  `%%`, and `%0b`/`%0h`/`%0o` leading-zero suppression;
 - formatted `$strobe` captures its evaluated value in the active phase and
   publishes the resulting text in the postponed phase;
 - decoded Verilog/SystemVerilog literal escapes in `$fatal` and immediate

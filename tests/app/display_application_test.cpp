@@ -157,7 +157,7 @@ void test_display(
   assert(reference.result.time == 2);
   assert(compiled.result.time == 2);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 18);
+  assert(reference.output.size() == 19);
   assert(reference.output[0].process == 0);
   assert(reference.output[0].text == "first\t");
   assert(!reference.output[0].newline);
@@ -203,21 +203,24 @@ void test_display(
   assert(reference.output[12].text == "text=test");
   assert(reference.output[12].newline);
   assert(reference.output[12].time == 0);
-  assert(reference.output[13].text == "post=10xz");
+  assert(reference.output[13].text == "compact=a5");
   assert(reference.output[13].newline);
   assert(reference.output[13].time == 0);
-  assert(reference.output[14].text == "monitored");
+  assert(reference.output[14].text == "post=10xz");
   assert(reference.output[14].newline);
   assert(reference.output[14].time == 0);
-  assert(reference.output[15].text == "second");
-  assert(!reference.output[15].newline);
-  assert(reference.output[15].time == 2);
-  assert(reference.output[16].text.empty());
+  assert(reference.output[15].text == "monitored");
+  assert(reference.output[15].newline);
+  assert(reference.output[15].time == 0);
+  assert(reference.output[16].text == "second");
   assert(!reference.output[16].newline);
   assert(reference.output[16].time == 2);
   assert(reference.output[17].text.empty());
-  assert(reference.output[17].newline);
+  assert(!reference.output[17].newline);
   assert(reference.output[17].time == 2);
+  assert(reference.output[18].text.empty());
+  assert(reference.output[18].newline);
+  assert(reference.output[18].time == 2);
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 1);
 }
@@ -317,6 +320,7 @@ module display_test;
     $display("u=%d", q);
     $display("c=%c", 8'd65);
     $display("text=%s", 32'h74657374);
+    $display("compact=%0h", 16'h00a5);
     $strobe("post=%b", q);
     q = 4'b0011;
     $monitor("monitored");
@@ -383,7 +387,8 @@ end architecture;
         output.str().find(
             "first\t+line\nembedded \"quote\" \\ A\n"
             "42\n-1\nq=%:10xz!\n[10xz]h=x\no=245\n"
-            "d=165\ns=-1\nu=x\nc=A\ntext=test\npost=10xz\n"
+            "d=165\ns=-1\nu=x\nc=A\ntext=test\ncompact=a5\n"
+            "post=10xz\n"
             "monitored\nsecond\n"
             "simulation stopped at tick 2")
         != std::string::npos);

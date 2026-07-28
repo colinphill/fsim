@@ -3089,7 +3089,8 @@ private:
                         statement.output_newline,
                         statement.output_postponed,
                         format == runtime::simir::OutputFormat::decimal
-                            && is_signed_expression(statement.value)});
+                            && is_signed_expression(statement.value),
+                        statement.output_suppress_leading_zero});
             } else {
                 process_.operations.emplace_back(
                     Display{

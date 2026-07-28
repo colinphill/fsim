@@ -5507,6 +5507,7 @@ module formatted_display;
     $display("%d", q);
     $display("%c", q);
     $display("%s", q);
+    $display("%0h", q);
   end
 endmodule
 )",
@@ -5514,7 +5515,7 @@ endmodule
   require(
       formatted.ok()
           && formatted.design.units.front().processes.front()
-                 .statements.size() == 7
+                 .statements.size() == 8
           && formatted.design.units.front().processes.front()
                  .statements[0].output_format
               == OutputFormat::Binary
@@ -5540,8 +5541,13 @@ endmodule
               == OutputFormat::Character
           && formatted.design.units.front().processes.front()
                  .statements[6].output_format
-              == OutputFormat::String,
-      "single-value %b/%h/%o/%d/%c/%s display/write HIR and %% decoding");
+              == OutputFormat::String
+          && formatted.design.units.front().processes.front()
+                 .statements[7].output_format
+              == OutputFormat::Hexadecimal
+          && formatted.design.units.front().processes.front()
+                 .statements[7].output_suppress_leading_zero,
+      "single-value formats, %0 suppression, and %% decoding");
 
   const auto unsupported = parse_text(
       "unsupported_format.sv",

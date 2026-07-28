@@ -73,10 +73,12 @@ and renders a value containing X/Z as `x`. Character output uses the
 least-significant eight bits and renders an unknown byte as `x`.
 Packed-string output emits bytes most-significant first, omits leading zero
 padding, and renders an X/Z-containing byte as `x`. Additional arguments,
-other conversions, format width/precision modifiers, and dynamic
+other conversions, general width/precision modifiers, and dynamic
 `$monitor` remain targeted. `$strobe` accepts the same single
 conversion/value form, captures
 the formatted result when called, and publishes it in the postponed phase.
+The `%0b`, `%0h`, and `%0o` forms suppress leading known-zero digits while
+retaining at least one digit.
 
 Literal `$fatal` and immediate-assertion `$error` messages use the same
 Verilog/SystemVerilog escape decoding as output tasks, including byte-exact

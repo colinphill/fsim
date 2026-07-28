@@ -2927,7 +2927,7 @@ void test_simir_display_output() {
   Interpreter report_interpreter;
   Process report_process;
   report_process.name = "reports";
-  report_process.register_count = 5;
+  report_process.register_count = 6;
   report_process.operations = {
       Report{
           "warning",
@@ -2990,6 +2990,17 @@ void test_simir_display_output() {
           "",
           true,
           false},
+      LoadConstant{
+          5, PackedLogic4::from_msb_string("0000000010100101")},
+      FormatDisplay{
+          5,
+          OutputFormat::hexadecimal,
+          "z=",
+          "",
+          true,
+          false,
+          false,
+          true},
       Halt{},
   };
   const auto report_process_id =
@@ -3045,7 +3056,7 @@ void test_simir_display_output() {
           && formatted_output
               == std::vector<std::string>{
                   "v=10xz!", "d=-1", "u=x", "h=a5", "c=\xA5",
-                  "s=test"},
+                  "s=test", "z=a5"},
       "nonfatal report hook severity, source, and ordering");
 }
 

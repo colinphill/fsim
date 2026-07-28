@@ -381,6 +381,7 @@ struct FormatDisplay {
   bool newline{true};
   bool postponed{};
   bool signed_decimal{};
+  bool suppress_leading_zero{};
 };
 
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
@@ -605,6 +606,7 @@ public:
       std::string_view,
       OutputFormat,
       const PackedLogic4&,
+      bool,
       bool,
       bool,
       bool) {}

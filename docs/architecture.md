@@ -377,6 +377,8 @@ Character formatting consumes the least-significant eight bits and emits one
 byte; an X/Z in those bits renders the deterministic text `x`.
 Packed-string formatting emits bytes most-significant first, omits leading
 zero-padding bytes, and renders each X/Z-containing byte as `x`.
+The `%0b`, `%0h`, and `%0o` forms retain a typed suppression flag and remove
+only leading known-zero digits, always leaving at least one digit.
 Decimal formatting uses an arbitrary-width binary-to-decimal kernel, derives
 two's-complement interpretation from the typed expression, and renders any
 four-state unknown value as `x`.
