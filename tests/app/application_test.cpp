@@ -5491,24 +5491,26 @@ endmodule
             project->design.specializations()
                 .front()
                 .source_dependencies;
+        const auto has_dependency =
+            [&](const std::filesystem::path& expected) {
+              return std::any_of(
+                  dependencies.begin(),
+                  dependencies.end(),
+                  [&](const std::string& dependency) {
+                    std::error_code comparison_error;
+                    return std::filesystem::equivalent(
+                               std::filesystem::path{dependency},
+                               expected,
+                               comparison_error)
+                        && !comparison_error;
+                  });
+            };
         assert(
-            std::find(
-                dependencies.begin(),
-                dependencies.end(),
-                systemverilog_base_package_source.generic_string())
-            != dependencies.end());
+            has_dependency(systemverilog_base_package_source));
         assert(
-            std::find(
-                dependencies.begin(),
-                dependencies.end(),
-                systemverilog_derived_package_source.generic_string())
-            != dependencies.end());
+            has_dependency(systemverilog_derived_package_source));
         assert(
-            std::find(
-                dependencies.begin(),
-                dependencies.end(),
-                systemverilog_unused_package_source.generic_string())
-            == dependencies.end());
+            !has_dependency(systemverilog_unused_package_source));
         auto key = project->specialization_cache_keys.front();
         auto simulation = capture_simulation(
             std::move(*project), engine);
