@@ -913,6 +913,184 @@ void substitute_parameters(
     }
 }
 
+using QualifiedIdentifierMap =
+    std::unordered_map<std::string, frontend::SourceSpan>;
+
+void collect_qualified_identifiers(
+    const Expression& expression,
+    QualifiedIdentifierMap& identifiers) {
+    if (expression.kind == ExpressionKind::Identifier
+        && expression.text.find('.') != std::string::npos) {
+        identifiers.try_emplace(
+            expression.text, expression.span);
+    }
+    for (const auto& operand : expression.operands) {
+        collect_qualified_identifiers(operand, identifiers);
+    }
+}
+
+void collect_qualified_identifiers(
+    const frontend::Type& type,
+    QualifiedIdentifierMap& identifiers) {
+    if (!type.packed_range_expression) {
+        return;
+    }
+    collect_qualified_identifiers(
+        type.packed_range_expression->left, identifiers);
+    collect_qualified_identifiers(
+        type.packed_range_expression->right, identifiers);
+}
+
+void collect_qualified_identifiers(
+    const std::vector<Statement>& statements,
+    QualifiedIdentifierMap& identifiers) {
+    for (const auto& statement : statements) {
+        collect_qualified_identifiers(
+            statement.target, identifiers);
+        collect_qualified_identifiers(
+            statement.value, identifiers);
+        collect_qualified_identifiers(
+            statement.condition, identifiers);
+        for (const auto& declaration : statement.declarations) {
+            collect_qualified_identifiers(
+                declaration.type, identifiers);
+            if (declaration.initializer) {
+                collect_qualified_identifiers(
+                    *declaration.initializer, identifiers);
+            }
+        }
+        for (const auto& alternative :
+             statement.case_alternatives) {
+            for (const auto& choice : alternative.choices) {
+                collect_qualified_identifiers(
+                    choice, identifiers);
+            }
+            collect_qualified_identifiers(
+                alternative.statements, identifiers);
+        }
+        collect_qualified_identifiers(
+            statement.statements, identifiers);
+        collect_qualified_identifiers(
+            statement.else_statements, identifiers);
+    }
+}
+
+void collect_qualified_identifiers(
+    const std::vector<frontend::GenerateRegion>& generates,
+    QualifiedIdentifierMap& identifiers);
+
+void collect_qualified_identifiers(
+    const frontend::GenerateBody& body,
+    QualifiedIdentifierMap& identifiers) {
+    for (const auto& constant : body.constants) {
+        collect_qualified_identifiers(
+            constant.type, identifiers);
+        collect_qualified_identifiers(
+            constant.default_value, identifiers);
+    }
+    for (const auto& signal : body.signals) {
+        collect_qualified_identifiers(signal.type, identifiers);
+    }
+    collect_qualified_identifiers(
+        body.concurrent_statements, identifiers);
+    for (const auto& process : body.processes) {
+        for (const auto& variable : process.variables) {
+            collect_qualified_identifiers(
+                variable.type, identifiers);
+            if (variable.initializer) {
+                collect_qualified_identifiers(
+                    *variable.initializer, identifiers);
+            }
+        }
+        collect_qualified_identifiers(
+            process.statements, identifiers);
+    }
+    for (const auto& instance : body.instances) {
+        for (const auto& override :
+             instance.parameter_overrides) {
+            collect_qualified_identifiers(
+                override.value, identifiers);
+        }
+        for (const auto& connection : instance.connections) {
+            collect_qualified_identifiers(
+                connection.value, identifiers);
+        }
+    }
+    collect_qualified_identifiers(
+        body.generate_regions, identifiers);
+}
+
+void collect_qualified_identifiers(
+    const std::vector<frontend::GenerateRegion>& generates,
+    QualifiedIdentifierMap& identifiers) {
+    for (const auto& generate : generates) {
+        collect_qualified_identifiers(
+            generate.initial, identifiers);
+        collect_qualified_identifiers(
+            generate.condition, identifiers);
+        collect_qualified_identifiers(
+            generate.iteration, identifiers);
+        collect_qualified_identifiers(
+            generate.then_body, identifiers);
+        collect_qualified_identifiers(
+            generate.else_body, identifiers);
+        for (const auto& alternative :
+             generate.alternatives) {
+            for (const auto& choice : alternative.choices) {
+                collect_qualified_identifiers(
+                    choice.left, identifiers);
+                if (choice.right) {
+                    collect_qualified_identifiers(
+                        *choice.right, identifiers);
+                }
+            }
+            collect_qualified_identifiers(
+                alternative.body, identifiers);
+        }
+    }
+}
+
+QualifiedIdentifierMap qualified_identifiers(
+    const DesignUnit& unit) {
+    QualifiedIdentifierMap result;
+    for (const auto& parameter : unit.parameters) {
+        collect_qualified_identifiers(parameter.type, result);
+        collect_qualified_identifiers(
+            parameter.default_value, result);
+    }
+    for (const auto& port : unit.ports) {
+        collect_qualified_identifiers(port.type, result);
+    }
+    for (const auto& signal : unit.signals) {
+        collect_qualified_identifiers(signal.type, result);
+    }
+    collect_qualified_identifiers(
+        unit.concurrent_statements, result);
+    for (const auto& process : unit.processes) {
+        for (const auto& variable : process.variables) {
+            collect_qualified_identifiers(variable.type, result);
+            if (variable.initializer) {
+                collect_qualified_identifiers(
+                    *variable.initializer, result);
+            }
+        }
+        collect_qualified_identifiers(process.statements, result);
+    }
+    for (const auto& instance : unit.instances) {
+        for (const auto& override :
+             instance.parameter_overrides) {
+            collect_qualified_identifiers(
+                override.value, result);
+        }
+        for (const auto& connection : instance.connections) {
+            collect_qualified_identifiers(
+                connection.value, result);
+        }
+    }
+    collect_qualified_identifiers(unit.generate_regions, result);
+    return result;
+}
+
 std::string generated_scope(
     const std::string_view parent_scope,
     const std::string_view local_scope) {
@@ -4374,55 +4552,13 @@ private:
                          ? std::string{"work"}
                          : package->library)
                     + "." + package->name;
-                if (std::find(
-                        import_stack.begin(),
-                        import_stack.end(),
-                        &*package)
-                    != import_stack.end()) {
-                    std::string cycle;
-                    for (const auto* imported : import_stack) {
-                        if (!cycle.empty()) {
-                            cycle += " -> ";
-                        }
-                        cycle +=
-                            (imported->library.empty()
-                                 ? std::string{"work"}
-                                 : imported->library)
-                            + "." + imported->name;
-                    }
-                    cycle += " -> " + package_owner;
-                    report(
-                        "FSIM-ELAB-PKG-007",
-                        "cyclic VHDL package visibility: " + cycle,
-                        item.span);
+                auto specialized_package =
+                    specialize_vhdl_package(
+                        *package, import_stack, item.span);
+                if (!specialized_package) {
                     continue;
                 }
-                import_stack.push_back(&*package);
-                auto effective_package = *package;
-                std::vector<frontend::VhdlContextItem>
-                    expanded_package_context;
-                std::vector<const DesignUnit*> context_stack;
-                const auto package_library =
-                    effective_package.library.empty()
-                        ? std::string{"work"}
-                        : effective_package.library;
-                expand_vhdl_context_references(
-                    effective_package,
-                    package->vhdl_context,
-                    expanded_package_context,
-                    context_stack,
-                    package_library);
-                import_vhdl_package_constants(
-                    effective_package,
-                    expanded_package_context,
-                    import_stack);
-                auto specialized = specialize_unit(
-                    effective_package,
-                    {},
-                    {},
-                    frontend::Language::Vhdl2008,
-                    diagnostics_);
-                import_stack.pop_back();
+                auto& specialized = *specialized_package;
                 const bool import_all = parts[2] == "all";
                 bool found_selected = import_all;
                 for (const auto& declaration :
@@ -4507,6 +4643,189 @@ private:
         unit.parameters = std::move(imports);
     }
 
+    std::optional<SpecializedUnit> specialize_vhdl_package(
+        const DesignUnit& package,
+        std::vector<const DesignUnit*>& import_stack,
+        const frontend::SourceSpan& reference_span) {
+        if (std::find(
+                import_stack.begin(),
+                import_stack.end(),
+                &package)
+            != import_stack.end()) {
+            std::string cycle;
+            for (const auto* imported : import_stack) {
+                if (!cycle.empty()) {
+                    cycle += " -> ";
+                }
+                cycle +=
+                    (imported->library.empty()
+                         ? std::string{"work"}
+                         : imported->library)
+                    + "." + imported->name;
+            }
+            cycle += " -> "
+                + (package.library.empty()
+                       ? std::string{"work"}
+                       : package.library)
+                + "." + package.name;
+            report(
+                "FSIM-ELAB-PKG-007",
+                "cyclic VHDL package visibility: " + cycle,
+                reference_span);
+            return std::nullopt;
+        }
+        import_stack.push_back(&package);
+        auto effective_package = package;
+        std::vector<frontend::VhdlContextItem>
+            expanded_package_context;
+        std::vector<const DesignUnit*> context_stack;
+        const auto package_library =
+            effective_package.library.empty()
+                ? std::string{"work"}
+                : effective_package.library;
+        expand_vhdl_context_references(
+            effective_package,
+            package.vhdl_context,
+            expanded_package_context,
+            context_stack,
+            package_library);
+        import_vhdl_package_constants(
+            effective_package,
+            expanded_package_context,
+            import_stack);
+        import_qualified_vhdl_package_constants(
+            effective_package, import_stack);
+        auto specialized = specialize_unit(
+            effective_package,
+            {},
+            {},
+            frontend::Language::Vhdl2008,
+            diagnostics_);
+        import_stack.pop_back();
+        return specialized;
+    }
+
+    void import_qualified_vhdl_package_constants(
+        DesignUnit& unit,
+        std::vector<const DesignUnit*>& import_stack) {
+        auto identifiers = qualified_identifiers(unit);
+        std::vector<std::string> ordered;
+        ordered.reserve(identifiers.size());
+        for (const auto& [identifier, span] : identifiers) {
+            (void)span;
+            ordered.push_back(identifier);
+        }
+        std::sort(ordered.begin(), ordered.end());
+        const auto owner_library =
+            unit.library.empty()
+                ? std::string{"work"}
+                : unit.library;
+        std::vector<frontend::ParameterDeclaration> imports;
+        std::unordered_set<std::string> dependencies;
+        for (const auto& identifier : ordered) {
+            const auto& reference_span =
+                identifiers.at(identifier);
+            const auto parts = selected_name_parts(identifier);
+            if (parts.size() != 2 && parts.size() != 3) {
+                report(
+                    "FSIM-ELAB-PKG-008",
+                    "a selected package constant must be "
+                    "package.constant or library.package.constant",
+                    reference_span);
+                continue;
+            }
+            const auto package_name =
+                parts[parts.size() - 2];
+            const auto constant_name = parts.back();
+            const auto requested_library =
+                parts.size() == 2
+                    ? owner_library
+                    : parts.front() == "work"
+                        ? owner_library
+                        : parts.front();
+            const auto package = std::find_if(
+                parsed_.units.begin(),
+                parsed_.units.end(),
+                [&](const DesignUnit& candidate) {
+                    const auto candidate_library =
+                        candidate.library.empty()
+                            ? std::string_view{"work"}
+                            : std::string_view{
+                                  candidate.library};
+                    return candidate.kind
+                            == frontend::UnitKind::VhdlPackage
+                        && candidate.name == package_name
+                        && candidate_library
+                            == requested_library;
+                });
+            if (package == parsed_.units.end()) {
+                report(
+                    "FSIM-ELAB-PKG-009",
+                    "VHDL package '"
+                        + requested_library + "."
+                        + package_name + "' was not found",
+                    reference_span);
+                continue;
+            }
+            auto specialized_package =
+                specialize_vhdl_package(
+                    *package, import_stack, reference_span);
+            if (!specialized_package) {
+                continue;
+            }
+            const auto declaration = std::find_if(
+                package->parameters.begin(),
+                package->parameters.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == constant_name;
+                });
+            if (declaration == package->parameters.end()) {
+                report(
+                    "FSIM-ELAB-PKG-010",
+                    "VHDL package '" + requested_library
+                        + "." + package_name
+                        + "' has no constant '"
+                        + constant_name + "'",
+                    reference_span);
+                continue;
+            }
+            const auto value =
+                specialized_package->environment.find(
+                    constant_name);
+            if (value
+                == specialized_package->environment.end()) {
+                continue;
+            }
+            imports.push_back({
+                identifier,
+                declaration->type,
+                constant_expression(
+                    value->second,
+                    declaration->span,
+                    declaration->type.domain,
+                    frontend::Language::Vhdl2008),
+                true,
+                declaration->span});
+            if (dependencies.insert(
+                    package->span.source_name).second) {
+                unit.source_dependencies.push_back(
+                    package->span.source_name);
+            }
+            for (const auto& dependency :
+                 specialized_package->unit.source_dependencies) {
+                if (dependencies.insert(dependency).second) {
+                    unit.source_dependencies.push_back(
+                        dependency);
+                }
+            }
+        }
+        imports.insert(
+            imports.end(),
+            std::make_move_iterator(unit.parameters.begin()),
+            std::make_move_iterator(unit.parameters.end()));
+        unit.parameters = std::move(imports);
+    }
+
     DesignUnit effective_unit(const DesignUnit& selected) {
         auto result = selected;
         if (selected.kind
@@ -4554,6 +4873,8 @@ private:
         std::vector<const DesignUnit*> import_stack;
         import_vhdl_package_constants(
             result, expanded_context, import_stack);
+        import_qualified_vhdl_package_constants(
+            result, import_stack);
         return result;
     }
 

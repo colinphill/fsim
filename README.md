@@ -31,8 +31,9 @@ The current tree contains:
   deliberately small executable subset;
 - bounded VHDL package declarations with declaration-ordered scalar
   integer/Boolean/bit constants, explicit `use library.package.all` or
-  `use library.package.name` visibility, acyclic package-to-package imports,
-  and transitive package-source specialization provenance;
+  `use library.package.name` visibility, direct `package.constant` and
+  `library.package.constant` expressions, acyclic package-to-package imports,
+  and precise transitive package-source specialization provenance;
 - bounded VHDL context declarations/references with recursive reusable
   library/use visibility, cycle diagnostics, and transitive context-source
   cache provenance;

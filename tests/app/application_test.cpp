@@ -4808,6 +4808,8 @@ end architecture rtl;
       directory / "package_base_context.vhd";
   const auto package_context_source =
       directory / "package_context.vhd";
+  const auto unused_package_source =
+      directory / "unused_package.vhd";
   const auto package_constant_user_source =
       directory / "package_constant_user.vhd";
   const auto write_package_constants =
@@ -4848,12 +4850,23 @@ end context package_base_context;
                << "end context package_context;\n";
       };
   write_package_context("context revision 1");
+  const auto write_unused_package =
+      [&](const std::string_view revision) {
+        std::ofstream output(unused_package_source);
+        output << "-- " << revision << '\n'
+               << "package unused_constants is\n"
+               << "  constant unrelated : natural := 99;\n"
+               << "end package unused_constants;\n";
+      };
+  write_unused_package("unused revision 1");
   {
     std::ofstream output(package_constant_user_source);
     output << R"(
-context support.package_context;
 entity package_constant_user is
-  port (observed : out unsigned(width - 1 downto 0));
+  port (
+    observed : out unsigned(
+      support.constants.width - 1 downto 0)
+  );
 end entity package_constant_user;
 
 context support.package_context;
@@ -4886,6 +4899,7 @@ end architecture rtl;
       package_constant_source,
       package_base_context_source,
       package_context_source,
+      unused_package_source,
   };
   package_constant_config.source_sets.push_back(
       std::move(package_library_sources));
@@ -4942,6 +4956,12 @@ end architecture rtl;
                 dependencies.end(),
                 package_context_source.string())
             != dependencies.end());
+        assert(
+            std::find(
+                dependencies.begin(),
+                dependencies.end(),
+                unused_package_source.string())
+            == dependencies.end());
         auto key = project->specialization_cache_keys.front();
         auto simulation = capture_simulation(
             std::move(*project), engine);
@@ -4983,6 +5003,22 @@ end architecture rtl;
   assert(package_constant_warm.simulation.native_cache.hits == 1);
   assert(
       package_constant_warm.simulation.native_cache.misses == 0);
+#endif
+
+  write_unused_package("unused revision 2");
+  const auto package_unrelated_changed =
+      run_package_constants(
+          fsim::app::SimulationEngine::compiled);
+  assert(
+      package_unrelated_changed.specialization_key
+      == package_constant_cold.specialization_key);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      package_unrelated_changed.simulation.native_cache.hits
+      == 1);
+  assert(
+      package_unrelated_changed.simulation.native_cache.misses
+      == 0);
 #endif
 
   write_package_context("context revision 2");

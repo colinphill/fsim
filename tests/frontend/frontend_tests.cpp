@@ -1025,6 +1025,38 @@ end entity package_user;
               == "work.constants.all",
       "following unit retains package use visibility");
 
+  const auto selected_names = parse_text(
+      "selected_package_names.vhd",
+      R"(
+entity selected_package_names is
+  port (
+    observed : out unsigned(
+      work.constants.width - 1 downto 0)
+  );
+end entity selected_package_names;
+architecture rtl of selected_package_names is
+begin
+  observed <= constants.next_value;
+end architecture rtl;
+)",
+      Language::Vhdl2008);
+  require(
+      selected_names.ok()
+          && selected_names.design.units.size() == 2
+          && selected_names.design.units[0]
+                 .ports.front()
+                 .type.packed_range_expression
+          && selected_names.design.units[0]
+                 .ports.front()
+                 .type.packed_range_expression
+                 ->left.operands.front().text
+              == "work.constants.width"
+          && selected_names.design.units[1]
+                 .concurrent_statements.front()
+                 .value.text
+              == "constants.next_value",
+      "two- and three-part selected package names survive HIR parsing");
+
   const auto invalid = parse_text(
       "invalid_package_constants.vhd",
       R"(

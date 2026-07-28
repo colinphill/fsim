@@ -103,8 +103,9 @@ The following foundation is implemented:
   and loop-index dependencies folded before SimIR;
 - bounded VHDL constant-only project packages with explicit whole-package or
   selected-constant use visibility, acyclic package-to-package imports,
-  declaration-order folding, cycle diagnostics, and transitive source
-  provenance in specialization/native-cache keys;
+  direct package/library-qualified constant expressions, declaration-order
+  folding, cycle diagnostics, and precise transitive source provenance in
+  specialization/native-cache keys;
 - bounded reusable VHDL project contexts containing library/use/context items,
   with recursive expansion, cycle diagnostics, package visibility, and
   transitive context-source cache provenance;
@@ -232,7 +233,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 484 unique current production diagnostic codes.
+- a stable catalog covering 487 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -253,6 +254,7 @@ Current Linux validation:
 | Static/implicit generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for unguarded VHDL blocks, all three bounded implicit SV generate forms, direct explicit-generate contents, and named static SV blocks with exact conditional/static interpreter/JIT/VCD/cache behavior |
 | Generated constants/parameters | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for declaration-order, parent-scope, and loop-index folding, targeted evaluation/type failures, and exact interpreter/JIT/VCD/cache results |
 | VHDL package constants | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, `work` and cross-library selected/whole-package visibility, recursive declaration-order folding, interpreter/JIT/VCD equality, targeted import/evaluation/subtype/cycle diagnostics, and transitive package-only native-cache invalidation |
+| VHDL selected package constants | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for two-/three-part qualified constants in ranges and behavior, recursive folding, missing/malformed diagnostics, interpreter/JIT/VCD equality, and precise native-cache provenance |
 | VHDL reusable contexts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for bounded declarations, recursive cross-library context/package visibility, missing/malformed/cycle diagnostics, interpreter/JIT/VCD equality, and context-only native-cache invalidation |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |

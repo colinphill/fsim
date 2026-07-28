@@ -61,6 +61,14 @@ is diagnosed with its package chain. Package bodies, types/subprograms,
 standard-package loading, and general VHDL visibility remain future semantic
 layer work.
 
+Executable VHDL units and package declarations may also name a constant as
+`package.constant` in their own library or
+`library.package.constant` explicitly. Elaboration collects those qualified
+identifiers from types, declarations, generates, instances, and executable
+statements, specializes only the referenced packages, and injects folded
+qualified constants before ordinary substitution. Consequently, an unrelated
+package does not enter that unit's semantic source closure or native-cache key.
+
 The bounded VHDL context path represents a reusable context declaration as a
 library unit containing library clauses, use clauses, and references to other
 project contexts. A `context library.name;` item is expanded recursively before

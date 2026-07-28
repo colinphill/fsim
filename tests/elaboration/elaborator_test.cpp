@@ -679,6 +679,109 @@ end architecture rtl;
             .to_msb_string()
         == "0111");
 
+    const auto selected_package_user =
+        fsim::frontend::parse_text(
+            "selected_package_user.vhd",
+            R"(
+entity selected_package_user is
+  port (
+    observed : out unsigned(
+      work.constants.width - 1 downto 0)
+  );
+end entity selected_package_user;
+architecture rtl of selected_package_user is
+  signal local_value : unsigned(
+    constants.width - 1 downto 0);
+begin
+  local_value <= constants.next_value;
+  observed <= local_value + 1;
+end architecture rtl;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(selected_package_user.ok());
+    auto selected_package_design = package_design;
+    selected_package_design.units.insert(
+        selected_package_design.units.end(),
+        selected_package_user.design.units.begin(),
+        selected_package_user.design.units.end());
+    const auto selected_package_elaborated =
+        fsim::elaboration::elaborate(
+            selected_package_design,
+            "vhdl:work.selected_package_user(rtl)");
+    assert(selected_package_elaborated.ok());
+    const auto selected_package_observed =
+        selected_package_elaborated.design->find_signal(
+            "observed");
+    assert(selected_package_observed);
+    assert(
+        selected_package_elaborated.design->signals()
+            .at(*selected_package_observed).width
+        == 4);
+    const auto& selected_package_dependencies =
+        selected_package_elaborated.design
+            ->specializations()
+            .front()
+            .source_dependencies;
+    assert(std::find(
+               selected_package_dependencies.begin(),
+               selected_package_dependencies.end(),
+               "package_constants.vhd")
+           != selected_package_dependencies.end());
+    assert(std::find(
+               selected_package_dependencies.begin(),
+               selected_package_dependencies.end(),
+               "package_base_constants.vhd")
+           != selected_package_dependencies.end());
+    auto selected_package_interpreter =
+        selected_package_elaborated.design
+            ->create_interpreter();
+    assert(
+        selected_package_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        selected_package_interpreter
+            ->signal_value(*selected_package_observed)
+            .to_msb_string()
+        == "0111");
+
+    const auto invalid_selected_package_user =
+        fsim::frontend::parse_text(
+            "invalid_selected_package_user.vhd",
+            R"(
+entity invalid_selected_package_user is
+end entity invalid_selected_package_user;
+architecture rtl of invalid_selected_package_user is
+  signal first : std_logic;
+  signal second : std_logic;
+  signal third : std_logic;
+begin
+  first <= work.not_present.value;
+  second <= work.constants.not_present;
+  third <= too.many.selected.name;
+end architecture rtl;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_selected_package_user.ok());
+    auto invalid_selected_package_design = package_design;
+    invalid_selected_package_design.units.insert(
+        invalid_selected_package_design.units.end(),
+        invalid_selected_package_user.design.units.begin(),
+        invalid_selected_package_user.design.units.end());
+    const auto invalid_selected_package_result =
+        fsim::elaboration::elaborate(
+            invalid_selected_package_design,
+            "vhdl:work.invalid_selected_package_user(rtl)");
+    assert(!invalid_selected_package_result.ok());
+    assert(has_diagnostic(
+        invalid_selected_package_result,
+        "FSIM-ELAB-PKG-008"));
+    assert(has_diagnostic(
+        invalid_selected_package_result,
+        "FSIM-ELAB-PKG-009"));
+    assert(has_diagnostic(
+        invalid_selected_package_result,
+        "FSIM-ELAB-PKG-010"));
+
     const auto missing_package = fsim::frontend::parse_text(
         "missing_package.vhd",
         R"(
