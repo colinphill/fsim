@@ -83,7 +83,8 @@ The following foundation is implemented:
   ranges, entity/architecture interface merging, and canonical per-instance
   specialization values;
 - parameter/generic-driven VHDL and SystemVerilog conditional, iterative, and
-  selection instance-generate regions, including recursive nesting,
+  selection generate regions with executable local signals, assignments,
+  processes, and instances, including recursive nesting,
   loop-variable substitution, stable labeled/indexed/alternative hierarchy
   paths, and explicit mixed-language bindings through selected branches,
   realized iterations, and selected alternatives;
@@ -211,7 +212,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 450 unique current production diagnostic codes.
+- a stable catalog covering 451 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -228,6 +229,7 @@ Current Linux validation:
 | Conditional instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL and SV selection, stable generated mixed-binding paths, interpreter/JIT equivalence, and cold/warm native cache |
 | Iterative instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for VHDL ascending/descending ranges and canonical SV inline-`genvar` loops, nested expansion, mixed indexed bindings, interpreter/JIT equivalence, and cold/warm native cache |
 | Selection instance-generate | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for labeled VHDL/SV multi-choice/default alternatives, mixed selected paths, interpreter/JIT equivalence, and cold/warm native cache |
+| Executable generated bodies | GCC Debug and exact LLVM 22 frontend/elaboration/application tests pass for selected and per-iteration local signals, concurrent/process behavior, scoped debug/VCD names, interpreter/JIT equivalence, and specialization-level native cache |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -352,8 +354,9 @@ Remaining before the architecture gate passes:
   type/sizing rules; bounded scalar VHDL and integral SystemVerilog values
   already participate in per-specialization native-cache identity and cross
   explicit VHDL/SystemVerilog bindings. Conditional, bounded iterative, and
-  bounded selection instance-generate are implemented; broader SV loop syntax,
-  VHDL range choices, and general generate bodies remain.
+  bounded selection generate plus local signals, assignments, processes, and
+  instances are implemented; broader SV loop syntax, VHDL range choices, and
+  additional generated declarative/module items remain.
 
 ### 3. Near-full synthesizable frontend coverage — Pending
 
@@ -362,10 +365,10 @@ Early groundwork:
 - handwritten tokenization and recursive-descent/precedence parsing;
 - VHDL entity/architecture/port/signal/process nodes and represented
   library/use/context-reference clauses plus bounded generic specialization
-  and conditional/iterative/selection instance-generate;
+  and executable conditional/iterative/selection generate;
 - SV modules, common declarations, simple hierarchy, basic procedural and
   continuous statements, bounded integral parameter specialization,
-  conditional/canonical-genvar/selection instance-generate, and bounded
+  executable conditional/canonical-genvar/selection generate, and bounded
   `` `timescale`` handling;
 - domain, width, signedness, duplicate-declaration, driver, and binding checks;
   and

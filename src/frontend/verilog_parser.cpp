@@ -774,13 +774,11 @@ class VerilogParser final : private detail::ParserBase {
         "FSIM-SV-PARSE-060");
     parse_generate_branch(
         result.then_scope,
-        result.then_instances,
-        result.then_generates);
+        result.then_body);
     if (match_keyword("else")) {
       parse_generate_branch(
           result.else_scope,
-          result.else_instances,
-          result.else_generates);
+          result.else_body);
     }
     result.span = span_from(start, previous());
     return result;
@@ -831,8 +829,7 @@ class VerilogParser final : private detail::ParserBase {
         "FSIM-SV-PARSE-072");
     parse_generate_branch(
         result.then_scope,
-        result.then_instances,
-        result.then_generates);
+        result.then_body);
     const auto generate_name =
         current_generate_names_.find(result.variable);
     if (generate_name != current_generate_names_.end()
@@ -879,8 +876,7 @@ class VerilogParser final : private detail::ParserBase {
           "FSIM-SV-PARSE-075");
       parse_generate_branch(
           alternative.scope,
-          alternative.instances,
-          alternative.generate_regions);
+          alternative.body);
       alternative.span =
           span_from(alternative_start, previous());
       result.alternatives.push_back(std::move(alternative));
@@ -892,8 +888,7 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_generate_branch(
       std::string& scope,
-      std::vector<Instance>& instances,
-      std::vector<GenerateRegion>& nested) {
+      GenerateBody& body) {
     if (!match_keyword("begin")) {
       error(
           current(),
@@ -908,15 +903,30 @@ class VerilogParser final : private detail::ParserBase {
         "FSIM-SV-PARSE-062");
     const auto label = expect_identifier("generate block label");
     scope = label.text;
+    std::vector<std::string> local_names;
     while (!at_end() && !keyword("end")) {
-      if (match_keyword("if")) {
-        nested.push_back(
+      if (is_declaration_start()) {
+        parse_generate_declaration(body, local_names);
+      } else if (match_keyword("assign")) {
+        if (auto assignment =
+                parse_continuous_assignment(previous())) {
+          body.concurrent_statements.push_back(
+              std::move(*assignment));
+        }
+      } else if (
+          keyword("always") || keyword("always_ff")
+          || keyword("always_comb") || keyword("always_latch")) {
+        body.processes.push_back(parse_always());
+      } else if (keyword("initial")) {
+        body.processes.push_back(parse_initial());
+      } else if (match_keyword("if")) {
+        body.generate_regions.push_back(
             parse_conditional_generate(previous()));
       } else if (match_keyword("for")) {
-        nested.push_back(
+        body.generate_regions.push_back(
             parse_iterative_generate(previous()));
       } else if (match_keyword("case")) {
-        nested.push_back(
+        body.generate_regions.push_back(
             parse_selection_generate(previous()));
       } else if (
           at(TokenKind::Identifier)
@@ -924,15 +934,13 @@ class VerilogParser final : private detail::ParserBase {
                && at(TokenKind::LeftParen, 2))
               || (at(TokenKind::Hash, 1)
                   && at(TokenKind::LeftParen, 2)))) {
-        instances.push_back(parse_instance());
+        body.instances.push_back(parse_instance());
       } else {
         const auto unsupported = advance();
         error(
             unsupported,
             "FSIM-SV-UNSUPPORTED-021",
-            "generate branches currently admit only instances and "
-            "nested conditional, canonical genvar-for, or case "
-            "regions");
+            "unsupported item in generated module body");
         skip_to_semicolon();
       }
     }
@@ -947,6 +955,80 @@ class VerilogParser final : private detail::ParserBase {
             "generate end label does not match '" + scope + "'");
       }
     }
+    for (const auto& local_name : local_names) {
+      const auto found = current_generate_names_.find(local_name);
+      if (found != current_generate_names_.end()
+          && --found->second == 0) {
+        current_generate_names_.erase(found);
+      }
+    }
+  }
+
+  void parse_generate_declaration(
+      GenerateBody& body,
+      std::vector<std::string>& local_names) {
+    const auto start = current();
+    Type type = default_verilog_type();
+    if (is_direction_keyword()) {
+      error(
+          current(),
+          "FSIM-SV-UNSUPPORTED-022",
+          "port directions are not legal generated local "
+          "declarations");
+      (void)parse_direction();
+    }
+    parse_optional_net_type(type);
+    parse_optional_signedness(type);
+    parse_optional_range(type);
+    for (;;) {
+      const auto name = expect_identifier(
+          "generated local signal name");
+      if (at(TokenKind::LeftBracket)) {
+        const auto dimension = current();
+        error(
+            dimension,
+            "FSIM-SV-UNSUPPORTED-007",
+            "unpacked generated arrays are not implemented");
+        skip_balanced(
+            TokenKind::LeftBracket, TokenKind::RightBracket);
+      }
+      if (match(TokenKind::Assign)) {
+        (void)parse_expression();
+        error(
+            name,
+            "FSIM-SV-UNSUPPORTED-011",
+            "generated declaration initializers are not executable");
+      }
+      const auto duplicate = std::find_if(
+          body.signals.begin(),
+          body.signals.end(),
+          [&](const SignalDeclaration& signal) {
+            return signal.name == name.text;
+          });
+      if (duplicate != body.signals.end()) {
+        error(
+            name,
+            "FSIM-SV-SEM-006",
+            "duplicate generated signal declaration '"
+                + name.text + "'");
+      } else {
+        body.signals.push_back({
+            name.text,
+            type,
+            PortDirection::Unknown,
+            false,
+            span_from(start, previous())});
+        ++current_generate_names_[name.text];
+        local_names.push_back(name.text);
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after generated declaration",
+        "FSIM-SV-PARSE-008");
   }
 
   Type parse_parameter_type() {

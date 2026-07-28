@@ -43,7 +43,7 @@ The current tree contains:
   explicit cross-language bindings, whole-signal port aliasing, and boundary
   validation;
 - specialization-time VHDL and SystemVerilog conditional/iterative/selection
-  instance-generate expansion with labeled and indexed generated scopes
+  executable generate expansion with labeled and indexed generated scopes
   retained in mixed binding paths;
 - lowering of scalar and common packed operations into SimIR;
 - bounded source-level VHDL `wait for`/`wait on` and Verilog/SystemVerilog
@@ -144,6 +144,10 @@ constant into child construction actuals before specialization.
 VHDL `case generate` and SystemVerilog generate-case select constant-choice or
 default alternatives per specialization, retaining the alternative label in
 explicit mixed-language binding paths.
+Selected generated bodies can execute local packed signals, concurrent
+assignments, and processes. Their local names are scope-qualified for
+debug/VCD visibility, including independent `label[index]` objects for each
+realized loop iteration.
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In

@@ -2204,6 +2204,9 @@ module generated_loop #(parameter COUNT = 3) (
 );
   generate
     for (genvar i = 0; i < COUNT; i = i + 1) begin : lane
+      logic [3:0] generated_value;
+      assign generated_value = i;
+      initial generated_value = i + 1;
       leaf child(.value(value), .result(result));
     end
   endgenerate
@@ -2246,14 +2249,15 @@ endmodule
           && sv_generate.condition.kind
               == ExpressionKind::Identifier
           && sv_generate.condition.text == "ENABLED"
-          && sv_generate.then_instances.size() == 1
-          && sv_generate.then_instances.front().name == "active"
-          && sv_generate.else_instances.size() == 1
-          && sv_generate.else_instances.front().name == "inactive"
-          && sv_generate.then_generates.size() == 1
-          && sv_generate.then_generates.front().then_scope
+          && sv_generate.then_body.instances.size() == 1
+          && sv_generate.then_body.instances.front().name == "active"
+          && sv_generate.else_body.instances.size() == 1
+          && sv_generate.else_body.instances.front().name == "inactive"
+          && sv_generate.then_body.generate_regions.size() == 1
+          && sv_generate.then_body.generate_regions.front().then_scope
               == "nested_selected"
-          && sv_generate.then_generates.front().then_instances
+          && sv_generate.then_body.generate_regions.front()
+                 .then_body.instances
                  .front()
                  .name
               == "nested_active",
@@ -2275,7 +2279,12 @@ endmodule
           && sv_loop.condition.text == "<"
           && sv_loop.iteration.kind == ExpressionKind::Binary
           && sv_loop.iteration.text == "+"
-          && sv_loop.then_instances.front().name == "child"
+          && sv_loop.then_body.signals.size() == 1
+          && sv_loop.then_body.signals.front().name
+              == "generated_value"
+          && sv_loop.then_body.concurrent_statements.size() == 1
+          && sv_loop.then_body.processes.size() == 1
+          && sv_loop.then_body.instances.front().name == "child"
           && std::none_of(
               sv_loop_unit->signals.begin(),
               sv_loop_unit->signals.end(),
@@ -2342,6 +2351,13 @@ end entity;
 architecture rtl of generated_loop is
 begin
   lanes: for i in 2 downto 0 generate
+    signal generated_value : unsigned(3 downto 0);
+  begin
+    generated_value <= i;
+    worker: process(generated_value)
+    begin
+      result <= generated_value(0);
+    end process;
     child: entity work.leaf(rtl)
       port map (value => value, result => result);
   end generate lanes;
@@ -2386,12 +2402,13 @@ end architecture;
       vhdl_generate.then_scope == "selection"
           && vhdl_generate.else_scope == "selection"
           && vhdl_generate.condition.text == "enabled"
-          && vhdl_generate.then_instances.front().name == "active"
-          && vhdl_generate.else_instances.front().name == "inactive"
-          && vhdl_generate.then_generates.size() == 1
-          && vhdl_generate.then_generates.front().then_scope
+          && vhdl_generate.then_body.instances.front().name == "active"
+          && vhdl_generate.else_body.instances.front().name == "inactive"
+          && vhdl_generate.then_body.generate_regions.size() == 1
+          && vhdl_generate.then_body.generate_regions.front().then_scope
               == "nested"
-          && vhdl_generate.then_generates.front().then_instances
+          && vhdl_generate.then_body.generate_regions.front()
+                 .then_body.instances
                  .front()
                  .name
               == "nested_active",
@@ -2415,7 +2432,10 @@ end architecture;
           && vhdl_loop.variable == "i"
           && vhdl_loop.condition.text == ">="
           && vhdl_loop.iteration.text == "-"
-          && vhdl_loop.then_instances.front().name == "child",
+          && vhdl_loop.then_body.signals.size() == 1
+          && vhdl_loop.then_body.concurrent_statements.size() == 1
+          && vhdl_loop.then_body.processes.size() == 1
+          && vhdl_loop.then_body.instances.front().name == "child",
       "VHDL descending for-generate region");
   const auto vhdl_case_unit = std::find_if(
       vhdl.design.units.begin(),
@@ -2469,7 +2489,7 @@ architecture rtl of generated is
   signal q : std_logic;
 begin
   selection: if true generate
-    q <= '1';
+    report "unsupported";
   end generate selection;
 end architecture;
 )",
@@ -2505,6 +2525,29 @@ endmodule
                 return diagnostic.code == "FSIM-SV-PARSE-066";
               }),
       "non-inline-genvar loop generate is targeted");
+
+  const auto generated_port_direction = parse_text(
+      "generated_port_direction.sv",
+      R"(
+module invalid_generated_port;
+  generate
+    if (1) begin : selected
+      output logic invalid_port;
+    end
+  endgenerate
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !generated_port_direction.ok()
+          && std::any_of(
+              generated_port_direction.diagnostics.begin(),
+              generated_port_direction.diagnostics.end(),
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-UNSUPPORTED-022";
+              }),
+      "generated port direction is targeted");
 
   const auto invalid_vhdl_loop = parse_text(
       "invalid_loop_generate.vhd",

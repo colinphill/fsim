@@ -875,6 +875,56 @@ module generated_case_top #(
 endmodule
 )";
   }
+  const auto generated_behavior_sv_source =
+      directory / "generated_behavior.sv";
+  {
+    std::ofstream output(generated_behavior_sv_source);
+    output << R"(
+module generated_behavior_sv #(parameter ENABLED = 1) (
+  output logic [3:0] observed
+);
+  generate
+    if (ENABLED) begin : selected
+      logic [3:0] generated_value;
+      assign generated_value = 4'd5;
+      always_comb observed = generated_value + 1;
+    end else begin : fallback
+      assign observed = 4'd1;
+    end
+  endgenerate
+endmodule
+)";
+  }
+  const auto generated_behavior_vhdl_source =
+      directory / "generated_behavior.vhd";
+  {
+    std::ofstream output(generated_behavior_vhdl_source);
+    output << R"(
+entity generated_behavior_vhdl is
+  generic (
+    enabled : boolean := true
+  );
+  port (
+    observed : out unsigned(3 downto 0)
+  );
+end entity;
+
+architecture rtl of generated_behavior_vhdl is
+begin
+  chosen: if enabled generate
+    signal generated_value : unsigned(3 downto 0);
+  begin
+    generated_value <= 6;
+    worker: process(generated_value)
+    begin
+      observed <= generated_value + 1;
+    end process;
+  else generate
+    observed <= 1;
+  end generate chosen;
+end architecture;
+)";
+  }
   const auto systemc_source = directory / "model.cpp";
   {
     std::ofstream output(systemc_source);
@@ -5246,6 +5296,128 @@ end architecture rtl;
   assert(
       generated_case_warm.simulation.native_cache.misses == 0);
 #endif
+
+  const auto make_generated_behavior_config =
+      [&](const std::string_view name,
+          const std::string_view top,
+          const fsim::project::Language language,
+          const std::filesystem::path& behavior_source) {
+        auto behavior_config = config;
+        behavior_config.project.name = std::string{name};
+        behavior_config.project.top = std::string{top};
+        behavior_config.build.optimization =
+            fsim::project::Optimization::o2;
+        behavior_config.build.cache_path =
+            directory / (std::string{name} + "-cache");
+        behavior_config.source_sets.clear();
+        fsim::project::SourceSet behavior_sources;
+        behavior_sources.language = language;
+        behavior_sources.standard =
+            language == fsim::project::Language::vhdl
+            ? "2008"
+            : "2017";
+        behavior_sources.library = "work";
+        behavior_sources.compilation_unit = "file";
+        behavior_sources.files = {behavior_source};
+        behavior_config.source_sets.push_back(
+            std::move(behavior_sources));
+        return behavior_config;
+      };
+  auto generated_behavior_sv_config =
+      make_generated_behavior_config(
+          "generated-behavior-sv-test",
+          "sv:work.generated_behavior_sv",
+          fsim::project::Language::system_verilog,
+          generated_behavior_sv_source);
+  auto generated_behavior_vhdl_config =
+      make_generated_behavior_config(
+          "generated-behavior-vhdl-test",
+          "vhdl:work.generated_behavior_vhdl(rtl)",
+          fsim::project::Language::vhdl,
+          generated_behavior_vhdl_source);
+  const auto run_generated_behavior =
+      [&](const fsim::project::Config& behavior_config,
+          const fsim::app::SimulationEngine engine,
+          const std::string_view local_path) {
+        fsim::diagnostic::Engine run_diagnostics;
+        auto project = fsim::app::build_project(
+            behavior_config, run_diagnostics);
+        if (!project) {
+          fsim::diagnostic::print_text(
+              std::cerr, run_diagnostics);
+        }
+        assert(project);
+        assert(project->design.specializations().size() == 1);
+        assert(project->specialization_cache_keys.size() == 1);
+        assert(project->design.find_signal("observed"));
+        assert(project->design.find_signal(local_path));
+        ParameterRun result;
+        result.keys.emplace_back(
+            project->design.specializations().front().instance,
+            project->specialization_cache_keys.front());
+        result.simulation =
+            capture_simulation(std::move(*project), engine);
+        return result;
+      };
+  const auto verify_generated_behavior =
+      [&](const fsim::project::Config& behavior_config,
+          const std::string_view local_path,
+          const std::vector<std::string>& expected_values) {
+        const auto reference = run_generated_behavior(
+            behavior_config,
+            fsim::app::SimulationEngine::interpreter,
+            local_path);
+        const auto cold = run_generated_behavior(
+            behavior_config,
+            fsim::app::SimulationEngine::compiled,
+            local_path);
+        compare_captures(reference.simulation, cold.simulation);
+        assert(
+            cold.simulation.result.status
+            == fsim::runtime::RunStatus::completed);
+        assert(cold.simulation.result.time == 0);
+        assert(cold.simulation.final_values == expected_values);
+        assert(cold.simulation.process_count == 2);
+        const auto local_separator = local_path.find_last_of('.');
+        assert(local_separator != std::string_view::npos);
+        const auto local_scope =
+            local_path.substr(0, local_separator);
+        const auto local_name =
+            local_path.substr(local_separator + 1);
+        assert(
+            cold.simulation.normalized_vcd.find(
+                "$scope module " + std::string{local_scope}
+                + " $end")
+            != std::string::npos);
+        assert(
+            cold.simulation.normalized_vcd.find(
+                " " + std::string{local_name} + " $end")
+            != std::string::npos);
+#if defined(FSIM_HAS_LLVM)
+        assert(cold.simulation.compiled_processes == 2);
+        assert(cold.simulation.compiled_modules == 1);
+        assert(cold.simulation.native_cache.hits == 0);
+        assert(cold.simulation.native_cache.misses == 1);
+        assert(cold.simulation.native_cache.stores == 1);
+#endif
+        const auto warm = run_generated_behavior(
+            behavior_config,
+            fsim::app::SimulationEngine::compiled,
+            local_path);
+        assert(warm.keys == cold.keys);
+#if defined(FSIM_HAS_LLVM)
+        assert(warm.simulation.native_cache.hits == 1);
+        assert(warm.simulation.native_cache.misses == 0);
+#endif
+      };
+  verify_generated_behavior(
+      generated_behavior_sv_config,
+      "selected.generated_value",
+      {"0110", "0101"});
+  verify_generated_behavior(
+      generated_behavior_vhdl_config,
+      "chosen.generated_value",
+      {"0111", "0110"});
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit
   // must invalidate both the analysis object and the owning specialization,

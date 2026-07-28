@@ -797,7 +797,57 @@ void substitute_parameters(
     std::vector<frontend::GenerateRegion>& generates,
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,
-    const frontend::Language language) {
+    frontend::Language language,
+    std::vector<Diagnostic>& diagnostics);
+
+void substitute_parameters(
+    frontend::GenerateBody& body,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    std::vector<Diagnostic>& diagnostics) {
+    for (auto& signal : body.signals) {
+        substitute_parameters(
+            signal.type, environment, diagnostics, language);
+    }
+    substitute_parameters(
+        body.concurrent_statements,
+        environment,
+        domains,
+        diagnostics,
+        language);
+    for (auto& process : body.processes) {
+        for (auto& variable : process.variables) {
+            substitute_parameters(
+                variable,
+                environment,
+                domains,
+                diagnostics,
+                language);
+        }
+        substitute_parameters(
+            process.statements,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
+    substitute_parameters(
+        body.instances, environment, domains, language);
+    substitute_parameters(
+        body.generate_regions,
+        environment,
+        domains,
+        language,
+        diagnostics);
+}
+
+void substitute_parameters(
+    std::vector<frontend::GenerateRegion>& generates,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    std::vector<Diagnostic>& diagnostics) {
     for (auto& generate : generates) {
         substitute_parameters(
             generate.initial, environment, domains, language);
@@ -818,25 +868,17 @@ void substitute_parameters(
             body_domains,
             language);
         substitute_parameters(
-            generate.then_instances,
+            generate.then_body,
             body_environment,
             body_domains,
-            language);
+            language,
+            diagnostics);
         substitute_parameters(
-            generate.else_instances,
+            generate.else_body,
             body_environment,
             body_domains,
-            language);
-        substitute_parameters(
-            generate.then_generates,
-            body_environment,
-            body_domains,
-            language);
-        substitute_parameters(
-            generate.else_generates,
-            body_environment,
-            body_domains,
-            language);
+            language,
+            diagnostics);
         for (auto& alternative : generate.alternatives) {
             for (auto& choice : alternative.choices) {
                 substitute_parameters(
@@ -846,15 +888,11 @@ void substitute_parameters(
                     language);
             }
             substitute_parameters(
-                alternative.instances,
+                alternative.body,
                 body_environment,
                 body_domains,
-                language);
-            substitute_parameters(
-                alternative.generate_regions,
-                body_environment,
-                body_domains,
-                language);
+                language,
+                diagnostics);
         }
     }
 }
@@ -867,15 +905,152 @@ std::string generated_scope(
         : std::string{parent_scope} + "." + std::string{local_scope};
 }
 
-void append_generated_branch(
-    const std::vector<frontend::Instance>& selected_instances,
-    const std::vector<frontend::GenerateRegion>& selected_nested,
+using GeneratedNameEnvironment =
+    std::unordered_map<std::string, std::string>;
+
+void qualify_generated_expression(
+    Expression& expression,
+    const GeneratedNameEnvironment& names) {
+    if (expression.kind == ExpressionKind::Identifier) {
+        if (const auto found = names.find(expression.text);
+            found != names.end()) {
+            expression.text = found->second;
+        }
+    }
+    for (auto& operand : expression.operands) {
+        qualify_generated_expression(operand, names);
+    }
+}
+
+void qualify_generated_statements(
+    std::vector<Statement>& statements,
+    const GeneratedNameEnvironment& names);
+
+void qualify_generated_statement(
+    Statement& statement,
+    const GeneratedNameEnvironment& names) {
+    auto body_names = names;
+    for (auto& declaration : statement.declarations) {
+        if (declaration.initializer) {
+            qualify_generated_expression(
+                *declaration.initializer, body_names);
+        }
+        body_names.erase(declaration.name);
+    }
+    qualify_generated_expression(statement.target, body_names);
+    qualify_generated_expression(statement.value, body_names);
+    qualify_generated_expression(statement.condition, body_names);
+    for (auto& sensitivity : statement.sensitivities) {
+        if (const auto found = body_names.find(sensitivity.signal);
+            found != body_names.end()) {
+            sensitivity.signal = found->second;
+        }
+    }
+    for (auto& alternative : statement.case_alternatives) {
+        for (auto& choice : alternative.choices) {
+            qualify_generated_expression(choice, body_names);
+        }
+        qualify_generated_statements(
+            alternative.statements, body_names);
+    }
+    qualify_generated_statements(statement.statements, body_names);
+    qualify_generated_statements(
+        statement.else_statements, body_names);
+}
+
+void qualify_generated_statements(
+    std::vector<Statement>& statements,
+    const GeneratedNameEnvironment& names) {
+    for (auto& statement : statements) {
+        qualify_generated_statement(statement, names);
+    }
+}
+
+void qualify_generated_process(
+    frontend::Process& process,
+    const GeneratedNameEnvironment& names,
+    const std::string_view scope) {
+    process.name = process.name.empty()
+        ? std::string{scope}
+        : generated_scope(scope, process.name);
+    auto process_names = names;
+    for (auto& variable : process.variables) {
+        if (variable.initializer) {
+            qualify_generated_expression(
+                *variable.initializer, process_names);
+        }
+        process_names.erase(variable.name);
+    }
+    for (auto& sensitivity : process.sensitivities) {
+        if (const auto found = process_names.find(sensitivity.signal);
+            found != process_names.end()) {
+            sensitivity.signal = found->second;
+        }
+    }
+    qualify_generated_statements(process.statements, process_names);
+}
+
+void qualify_generated_instance(
+    frontend::Instance& instance,
+    const GeneratedNameEnvironment& names,
+    const std::string_view scope) {
+    instance.name = generated_scope(scope, instance.name);
+    for (auto& override : instance.parameter_overrides) {
+        qualify_generated_expression(override.value, names);
+    }
+    for (auto& connection : instance.connections) {
+        qualify_generated_expression(connection.value, names);
+    }
+}
+
+void expand_generate_regions(
+    const std::vector<frontend::GenerateRegion>& generates,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    frontend::Language language,
+    std::string_view parent_scope,
+    const GeneratedNameEnvironment& visible_names,
+    DesignUnit& unit,
+    std::vector<Diagnostic>& diagnostics);
+
+void append_generated_body(
+    frontend::GenerateBody body,
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,
     const frontend::Language language,
-    const std::string_view parent_scope,
-    std::vector<frontend::Instance>& instances,
-    std::vector<Diagnostic>& diagnostics);
+    const std::string_view scope,
+    const GeneratedNameEnvironment& visible_names,
+    DesignUnit& unit,
+    std::vector<Diagnostic>& diagnostics) {
+    auto body_names = visible_names;
+    for (auto& signal : body.signals) {
+        const auto local_name = signal.name;
+        signal.name = generated_scope(scope, local_name);
+        body_names[local_name] = signal.name;
+        unit.signals.push_back(std::move(signal));
+    }
+    for (auto& statement : body.concurrent_statements) {
+        qualify_generated_statement(statement, body_names);
+        unit.concurrent_statements.push_back(std::move(statement));
+    }
+    for (auto& process : body.processes) {
+        qualify_generated_process(process, body_names, scope);
+        unit.processes.push_back(std::move(process));
+    }
+    for (auto& instance : body.instances) {
+        qualify_generated_instance(instance, body_names, scope);
+        unit.instances.push_back(std::move(instance));
+    }
+    expand_generate_regions(
+        body.generate_regions,
+        environment,
+        domains,
+        language,
+        scope,
+        body_names,
+        unit,
+        diagnostics);
+}
 
 void expand_generate_regions(
     const std::vector<frontend::GenerateRegion>& generates,
@@ -883,7 +1058,8 @@ void expand_generate_regions(
     const ConstantDomainEnvironment& domains,
     const frontend::Language language,
     const std::string_view parent_scope,
-    std::vector<frontend::Instance>& instances,
+    const GeneratedNameEnvironment& visible_names,
+    DesignUnit& unit,
     std::vector<Diagnostic>& diagnostics) {
     for (const auto& generate : generates) {
         if (generate.kind == frontend::GenerateKind::Selection) {
@@ -962,15 +1138,15 @@ void expand_generate_regions(
                 selected = default_alternative;
             }
             if (selected != nullptr) {
-                append_generated_branch(
-                    selected->instances,
-                    selected->generate_regions,
+                append_generated_body(
+                    selected->body,
                     environment,
                     domains,
                     language,
                     generated_scope(
                         parent_scope, selected->scope),
-                    instances,
+                    visible_names,
+                    unit,
                     diagnostics);
             }
             continue;
@@ -1030,29 +1206,24 @@ void expand_generate_regions(
                         generate.span});
                     break;
                 }
-                auto body_instances = generate.then_instances;
-                auto body_nested = generate.then_generates;
+                auto body = generate.then_body;
                 substitute_parameters(
-                    body_instances,
+                    body,
                     iteration_environment,
                     iteration_domains,
-                    language);
-                substitute_parameters(
-                    body_nested,
-                    iteration_environment,
-                    iteration_domains,
-                    language);
+                    language,
+                    diagnostics);
                 const auto indexed_scope =
                     generate.then_scope + "["
                     + std::to_string(value) + "]";
-                append_generated_branch(
-                    body_instances,
-                    body_nested,
+                append_generated_body(
+                    std::move(body),
                     iteration_environment,
                     iteration_domains,
                     language,
                     generated_scope(parent_scope, indexed_scope),
-                    instances,
+                    visible_names,
+                    unit,
                     diagnostics);
                 error.clear();
                 const auto next = evaluate_constant_expression(
@@ -1090,53 +1261,24 @@ void expand_generate_regions(
             continue;
         }
         const bool selected_then = *condition != 0;
-        const auto& selected_instances =
+        const auto& selected_body =
             selected_then
-            ? generate.then_instances
-            : generate.else_instances;
-        const auto& selected_nested =
-            selected_then
-            ? generate.then_generates
-            : generate.else_generates;
+            ? generate.then_body
+            : generate.else_body;
         const auto& local_scope =
             selected_then
             ? generate.then_scope
             : generate.else_scope;
-        append_generated_branch(
-            selected_instances,
-            selected_nested,
+        append_generated_body(
+            selected_body,
             environment,
             domains,
             language,
             generated_scope(parent_scope, local_scope),
-            instances,
+            visible_names,
+            unit,
             diagnostics);
     }
-}
-
-void append_generated_branch(
-    const std::vector<frontend::Instance>& selected_instances,
-    const std::vector<frontend::GenerateRegion>& selected_nested,
-    const ConstantEnvironment& environment,
-    const ConstantDomainEnvironment& domains,
-    const frontend::Language language,
-    const std::string_view parent_scope,
-    std::vector<frontend::Instance>& instances,
-    std::vector<Diagnostic>& diagnostics) {
-    for (auto instance : selected_instances) {
-        instance.name = parent_scope.empty()
-            ? instance.name
-            : std::string{parent_scope} + "." + instance.name;
-        instances.push_back(std::move(instance));
-    }
-    expand_generate_regions(
-        selected_nested,
-        environment,
-        domains,
-        language,
-        parent_scope,
-        instances,
-        diagnostics);
 }
 
 struct SpecializedUnit {
@@ -1478,14 +1620,16 @@ SpecializedUnit specialize_unit(
         result.unit.generate_regions,
         result.environment,
         domains,
-        source.language);
+        source.language,
+        diagnostics);
     expand_generate_regions(
         result.unit.generate_regions,
         result.environment,
         domains,
         source.language,
         {},
-        result.unit.instances,
+        {},
+        result.unit,
         diagnostics);
     result.unit.generate_regions.clear();
     return result;

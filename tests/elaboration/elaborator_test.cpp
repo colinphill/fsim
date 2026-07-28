@@ -840,6 +840,31 @@ module generated_sv_case_default #(
     endcase
   endgenerate
 endmodule
+
+module generated_sv_behavior #(
+  parameter ENABLED = 1
+) (
+  output logic [3:0] observed
+);
+  generate
+    if (ENABLED) begin : selected
+      logic [3:0] generated_value;
+      assign generated_value = 4'd5;
+      always_comb observed = generated_value + 1;
+    end else begin : fallback
+      assign observed = 4'd1;
+    end
+  endgenerate
+endmodule
+
+module generated_sv_loop_behavior #(parameter COUNT = 3);
+  generate
+    for (genvar i = 0; i < COUNT; i = i + 1) begin : lane
+      logic [3:0] generated_value;
+      initial generated_value = i + 1;
+    end
+  endgenerate
+endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     auto generated_vhdl = fsim::frontend::parse_text(
@@ -951,6 +976,40 @@ begin
         )
         port map ();
   end generate selection;
+end architecture;
+
+entity generated_vhdl_behavior is
+  generic (
+    enabled : boolean := true
+  );
+  port (
+    observed : out unsigned(3 downto 0)
+  );
+end entity;
+architecture rtl of generated_vhdl_behavior is
+begin
+  chosen: if enabled generate
+    signal generated_value : unsigned(3 downto 0);
+  begin
+    generated_value <= 6;
+    worker: process(generated_value)
+    begin
+      observed <= generated_value + 1;
+    end process;
+  else generate
+    observed <= 1;
+  end generate chosen;
+end architecture;
+
+entity generated_vhdl_loop_behavior is
+end entity;
+architecture rtl of generated_vhdl_loop_behavior is
+begin
+  lanes: for i in 0 to 2 generate
+    signal generated_value : unsigned(3 downto 0);
+  begin
+    generated_value <= i + 4;
+  end generate lanes;
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -1271,6 +1330,119 @@ end architecture;
             ->signal_value(*generated_vhdl_case_q)
             .to_msb_string()
         == "0111");
+
+    const auto generated_sv_behavior =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_behavior");
+    assert(generated_sv_behavior.ok());
+    const auto generated_sv_observed =
+        generated_sv_behavior.design->find_signal("observed");
+    const auto generated_sv_local =
+        generated_sv_behavior.design->find_signal(
+            "selected.generated_value");
+    assert(generated_sv_observed && generated_sv_local);
+    assert(generated_sv_behavior.design->processes().size() == 2);
+    auto generated_sv_behavior_interpreter =
+        generated_sv_behavior.design->create_interpreter();
+    assert(
+        generated_sv_behavior_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_sv_behavior_interpreter
+            ->signal_value(*generated_sv_local)
+            .to_msb_string()
+        == "0101");
+    assert(
+        generated_sv_behavior_interpreter
+            ->signal_value(*generated_sv_observed)
+            .to_msb_string()
+        == "0110");
+
+    const auto generated_vhdl_behavior =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_behavior(rtl)");
+    assert(generated_vhdl_behavior.ok());
+    const auto generated_vhdl_observed =
+        generated_vhdl_behavior.design->find_signal("observed");
+    const auto generated_vhdl_local =
+        generated_vhdl_behavior.design->find_signal(
+            "chosen.generated_value");
+    assert(generated_vhdl_observed && generated_vhdl_local);
+    assert(generated_vhdl_behavior.design->processes().size() == 2);
+    auto generated_vhdl_behavior_interpreter =
+        generated_vhdl_behavior.design->create_interpreter();
+    assert(
+        generated_vhdl_behavior_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_vhdl_behavior_interpreter
+            ->signal_value(*generated_vhdl_local)
+            .to_msb_string()
+        == "0110");
+    assert(
+        generated_vhdl_behavior_interpreter
+            ->signal_value(*generated_vhdl_observed)
+            .to_msb_string()
+        == "0111");
+
+    const auto generated_sv_loop_behavior =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_loop_behavior");
+    assert(generated_sv_loop_behavior.ok());
+    assert(
+        generated_sv_loop_behavior.design->processes().size() == 3);
+    auto generated_sv_loop_behavior_interpreter =
+        generated_sv_loop_behavior.design->create_interpreter();
+    assert(
+        generated_sv_loop_behavior_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const std::array<std::string_view, 3>
+        generated_sv_loop_behavior_values{
+            "0001", "0010", "0011"};
+    for (std::size_t index = 0; index < 3; ++index) {
+      const auto signal =
+          generated_sv_loop_behavior.design->find_signal(
+              "lane[" + std::to_string(index)
+              + "].generated_value");
+      assert(signal);
+      assert(
+          generated_sv_loop_behavior_interpreter
+              ->signal_value(*signal)
+              .to_msb_string()
+          == generated_sv_loop_behavior_values[index]);
+    }
+
+    const auto generated_vhdl_loop_behavior =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_loop_behavior(rtl)");
+    assert(generated_vhdl_loop_behavior.ok());
+    assert(
+        generated_vhdl_loop_behavior.design->processes().size()
+        == 3);
+    auto generated_vhdl_loop_behavior_interpreter =
+        generated_vhdl_loop_behavior.design->create_interpreter();
+    assert(
+        generated_vhdl_loop_behavior_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const std::array<std::string_view, 3>
+        generated_vhdl_loop_behavior_values{
+            "0100", "0101", "0110"};
+    for (std::size_t index = 0; index < 3; ++index) {
+      const auto signal =
+          generated_vhdl_loop_behavior.design->find_signal(
+              "lanes[" + std::to_string(index)
+              + "].generated_value");
+      assert(signal);
+      assert(
+          generated_vhdl_loop_behavior_interpreter
+              ->signal_value(*signal)
+              .to_msb_string()
+          == generated_vhdl_loop_behavior_values[index]);
+    }
 
     auto unevaluable_generate_design = generated_design;
     const auto unevaluable_unit = std::find_if(

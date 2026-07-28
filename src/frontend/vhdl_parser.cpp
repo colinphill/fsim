@@ -490,7 +490,7 @@ class VhdlParser final : private detail::ParserBase {
 
     while (!at_end() && !keyword("begin", 0, true)) {
       if (match_keyword("signal", true)) {
-        parse_signal_declaration(unit);
+        parse_signal_declaration(unit.signals);
       } else {
         const auto declaration = advance();
         error(declaration, "FSIM-VHDL-UNSUPPORTED-004",
@@ -509,7 +509,8 @@ class VhdlParser final : private detail::ParserBase {
     return unit;
   }
 
-  void parse_signal_declaration(DesignUnit& unit) {
+  void parse_signal_declaration(
+      std::vector<SignalDeclaration>& signals) {
     const auto start = previous();
     std::vector<Token> names;
     names.push_back(expect_identifier("signal name"));
@@ -533,18 +534,18 @@ class VhdlParser final : private detail::ParserBase {
     for (const auto& name : names) {
       const auto canonical = vhdl_name(name.text);
       const auto duplicate = std::find_if(
-          unit.signals.begin(),
-          unit.signals.end(),
+          signals.begin(),
+          signals.end(),
           [&](const SignalDeclaration& signal) {
             return signal.name == canonical;
           });
-      if (duplicate != unit.signals.end()) {
+      if (duplicate != signals.end()) {
         error(
             name,
             "FSIM-VHDL-SEM-003",
             "duplicate signal declaration '" + canonical + "'");
       } else {
-        unit.signals.push_back(SignalDeclaration{
+        signals.push_back(SignalDeclaration{
             canonical,
             type,
             PortDirection::Unknown,
@@ -619,16 +620,14 @@ class VhdlParser final : private detail::ParserBase {
     result.else_scope = result.then_scope;
     result.condition = parse_expression();
     expect_keyword("generate", true, "FSIM-VHDL-PARSE-056");
+    parse_vhdl_generate_declarations(result.then_body);
     (void)match_keyword("begin", true);
-    parse_vhdl_generate_branch(
-        result.then_instances,
-        result.then_generates);
+    parse_vhdl_generate_branch(result.then_body);
     if (match_keyword("else", true)) {
       expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
+      parse_vhdl_generate_declarations(result.else_body);
       (void)match_keyword("begin", true);
-      parse_vhdl_generate_branch(
-          result.else_instances,
-          result.else_generates);
+      parse_vhdl_generate_branch(result.else_body);
     }
     expect_keyword("end", true, "FSIM-VHDL-PARSE-058");
     expect_keyword("generate", true, "FSIM-VHDL-PARSE-059");
@@ -695,10 +694,9 @@ class VhdlParser final : private detail::ParserBase {
                 {},
                 expression_span}},
         expression_span};
+    parse_vhdl_generate_declarations(result.then_body);
     (void)match_keyword("begin", true);
-    parse_vhdl_generate_branch(
-        result.then_instances,
-        result.then_generates);
+    parse_vhdl_generate_branch(result.then_body);
     expect_keyword("end", true, "FSIM-VHDL-PARSE-065");
     expect_keyword("generate", true, "FSIM-VHDL-PARSE-066");
     if (at(TokenKind::Identifier)) {
@@ -777,10 +775,10 @@ class VhdlParser final : private detail::ParserBase {
           TokenKind::Arrow,
           "'=>' after case-generate choices",
           "FSIM-VHDL-PARSE-073");
+      parse_vhdl_generate_declarations(alternative.body);
       (void)match_keyword("begin", true);
       parse_vhdl_generate_branch(
-          alternative.instances,
-          alternative.generate_regions,
+          alternative.body,
           true);
       alternative.span =
           span_from(alternative_start, previous());
@@ -806,9 +804,14 @@ class VhdlParser final : private detail::ParserBase {
     return result;
   }
 
+  void parse_vhdl_generate_declarations(GenerateBody& body) {
+    while (match_keyword("signal", true)) {
+      parse_signal_declaration(body.signals);
+    }
+  }
+
   void parse_vhdl_generate_branch(
-      std::vector<Instance>& instances,
-      std::vector<GenerateRegion>& nested,
+      GenerateBody& body,
       const bool stop_at_case_alternative = false) {
     while (!at_end() && !keyword("else", 0, true)
            && !keyword("end", 0, true)
@@ -816,44 +819,57 @@ class VhdlParser final : private detail::ParserBase {
                 && at(TokenKind::Identifier)
                 && at(TokenKind::Colon, 1)
                 && keyword("when", 2, true))) {
-      if (!(at(TokenKind::Identifier)
-            && at(TokenKind::Colon, 1))) {
-        const auto unsupported = advance();
-        error(
-            unsupported,
-            "FSIM-VHDL-UNSUPPORTED-020",
-            "generate branches currently admit only labeled instances "
-            "and nested if/for/case-generate regions");
-        skip_to_semicolon();
+      std::optional<Token> label;
+      if (at(TokenKind::Identifier)
+          && at(TokenKind::Colon, 1)) {
+        label = advance();
+        advance();
+      }
+      if (keyword("process", 0, true)) {
+        body.processes.push_back(parse_process(
+            label ? vhdl_name(label->text) : std::string{}));
         continue;
       }
-      const auto label = advance();
-      advance();
-      if (match_keyword("if", true)) {
-        nested.push_back(
+      if (label && match_keyword("if", true)) {
+        body.generate_regions.push_back(
             parse_vhdl_conditional_generate(
-                label, previous()));
-      } else if (match_keyword("for", true)) {
-        nested.push_back(
+                *label, previous()));
+        continue;
+      }
+      if (label && match_keyword("for", true)) {
+        body.generate_regions.push_back(
             parse_vhdl_iterative_generate(
-                label, previous()));
-      } else if (match_keyword("case", true)) {
-        nested.push_back(
+                *label, previous()));
+        continue;
+      }
+      if (label && match_keyword("case", true)) {
+        body.generate_regions.push_back(
             parse_vhdl_selection_generate(
-                label, previous()));
-      } else if (
+                *label, previous()));
+        continue;
+      }
+      if (label && (
           keyword("entity", 0, true)
           || (at(TokenKind::Identifier)
               && (keyword("port", 1, true)
-                  || keyword("generic", 1, true)))) {
-        instances.push_back(parse_vhdl_instance(label));
-      } else {
-        error(
-            current(),
-            "FSIM-VHDL-UNSUPPORTED-020",
-            "unsupported concurrent item in generate branch");
-        skip_to_semicolon();
+                  || keyword("generic", 1, true))))) {
+        body.instances.push_back(parse_vhdl_instance(*label));
+        continue;
       }
+      const auto before = position();
+      auto assignment = parse_assignment(true);
+      if (assignment) {
+        body.concurrent_statements.push_back(
+            std::move(*assignment));
+        continue;
+      }
+      rewind(before);
+      const auto unsupported = advance();
+      error(
+          unsupported,
+          "FSIM-VHDL-UNSUPPORTED-020",
+          "unsupported concurrent item in generate branch");
+      skip_to_semicolon();
     }
   }
 

@@ -174,7 +174,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |
-| `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded labeled-instance and nested if/for/case-generate subset. |
+| `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded local-signal, assignment, process, instance, and nested-generate subset. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -351,7 +351,8 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
 | `FSIM-SV-UNSUPPORTED-020` | error | A parameter data type is outside the supported integral subset. |
-| `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded conditional/canonical-genvar/case instance-generate subset. |
+| `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded local-signal, continuous assignment, process, instance, and nested-generate subset. |
+| `FSIM-SV-UNSUPPORTED-022` | error | A generated local declaration incorrectly uses a module-port direction. |
 
 ## Elaboration and SimIR lowering
 

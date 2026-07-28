@@ -269,18 +269,25 @@ enum class GenerateKind {
 
 struct GenerateRegion;
 
+struct GenerateBody {
+  std::vector<SignalDeclaration> signals;
+  std::vector<Statement> concurrent_statements;
+  std::vector<Process> processes;
+  std::vector<Instance> instances;
+  std::vector<GenerateRegion> generate_regions;
+};
+
 struct GenerateAlternative {
   std::string scope;
   std::vector<Expression> choices;
   bool is_default{};
-  std::vector<Instance> instances;
-  std::vector<GenerateRegion> generate_regions;
+  GenerateBody body;
   SourceSpan span;
 };
 
 /// Elaboration-time hierarchy region. Conditional regions use `condition`
 /// and both branches. Iterative regions use `variable`, `initial`,
-/// `condition`, and `iteration`, with their body in the `then_*` fields.
+/// `condition`, and `iteration`, with their body in `then_body`.
 /// Selection regions use `condition` as the selector plus `alternatives`.
 /// Regions recursively compose while the current executable subset admits
 /// module/entity instances as leaf items.
@@ -292,10 +299,8 @@ struct GenerateRegion {
   Expression initial;
   Expression condition;
   Expression iteration;
-  std::vector<Instance> then_instances;
-  std::vector<Instance> else_instances;
-  std::vector<GenerateRegion> then_generates;
-  std::vector<GenerateRegion> else_generates;
+  GenerateBody then_body;
+  GenerateBody else_body;
   std::vector<GenerateAlternative> alternatives;
   SourceSpan span;
 };
