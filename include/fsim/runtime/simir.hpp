@@ -363,6 +363,20 @@ struct Display {
   bool postponed{};
 };
 
+enum class OutputFormat : std::uint8_t {
+  binary,
+};
+
+/// Format one runtime value between literal prefix/suffix text.
+struct FormatDisplay {
+  RegisterId source{};
+  OutputFormat format{OutputFormat::binary};
+  std::string prefix;
+  std::string suffix;
+  bool newline{true};
+  bool postponed{};
+};
+
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
 struct Report {
   std::string message;
@@ -387,8 +401,8 @@ using Operation =
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
-                 Branch, DebugPoint, Assert, Display, Report, Pause, Stop,
-                 Halt>;
+                 Branch, DebugPoint, Assert, Display, FormatDisplay, Report,
+                 Pause, Stop, Halt>;
 
 struct Signal {
   std::string name;
@@ -580,6 +594,13 @@ public:
 
   virtual void display(std::string_view, bool) {}
   virtual void postpone_display(std::string_view, bool) {}
+  virtual void display_formatted(
+      std::string_view,
+      std::string_view,
+      OutputFormat,
+      const PackedLogic4&,
+      bool,
+      bool) {}
   virtual void report(
       std::string_view,
       AssertionSeverity,

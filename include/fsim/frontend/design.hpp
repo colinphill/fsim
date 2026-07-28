@@ -263,6 +263,10 @@ enum class AssertionSeverity {
   Failure,
 };
 
+enum class OutputFormat {
+  Binary,
+};
+
 enum class EdgeKind {
   Any,
   Positive,
@@ -320,6 +324,9 @@ struct Statement {
   std::string output_text;
   bool output_newline{true};
   bool output_postponed{};
+  std::optional<OutputFormat> output_format;
+  std::string output_prefix;
+  std::string output_suffix;
 
   // Block contents or the true branch/delayed statement.
   std::vector<Statement> statements;

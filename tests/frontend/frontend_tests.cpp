@@ -5494,23 +5494,51 @@ endmodule
           && statements[2].output_text.empty(),
       "literal and empty $display HIR");
 
-  const auto unsupported = parse_text(
+  const auto formatted = parse_text(
       "formatted_display.sv",
       R"(
 module formatted_display;
   logic q;
-  initial $display("%b", q);
+  initial begin
+    $display("q=%%:%b!", q);
+    $write("%b", q);
+  end
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      std::any_of(
-          unsupported.diagnostics.begin(),
-          unsupported.diagnostics.end(),
+      formatted.ok()
+          && formatted.design.units.front().processes.front()
+                 .statements.size() == 2
+          && formatted.design.units.front().processes.front()
+                 .statements[0].output_format
+              == OutputFormat::Binary
+          && formatted.design.units.front().processes.front()
+                 .statements[0].output_prefix == "q=%:"
+          && formatted.design.units.front().processes.front()
+                 .statements[0].output_suffix == "!"
+          && formatted.design.units.front().processes.front()
+                 .statements[0].value.text == "q"
+          && !formatted.design.units.front().processes.front()
+                  .statements[1].output_newline,
+      "single-value %b display/write HIR and %% decoding");
+
+  const auto unsupported = parse_text(
+      "unsupported_format.sv",
+      R"(
+module unsupported_format;
+  logic q;
+  initial $display("%h", q);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          unsupported.diagnostics,
           [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-SV-SEM-037";
+            return diagnostic.code == "FSIM-SV-SEM-042";
           }),
-      "formatted $display arguments need a targeted diagnostic");
+      "unsupported output conversions need a targeted diagnostic");
 
   const auto bad_escape = parse_text(
       "bad_escape.sv",
@@ -5575,23 +5603,23 @@ endmodule
           && write_statements[2].output_text.empty(),
       "literal and empty $write HIR");
 
-  const auto unsupported_write = parse_text(
-      "formatted_write.sv",
+  const auto multiple_write = parse_text(
+      "multiple_write.sv",
       R"(
 module formatted_write;
   logic q;
-  initial $write("%b", q);
+  initial $write("%b", q, q);
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
       std::any_of(
-          unsupported_write.diagnostics.begin(),
-          unsupported_write.diagnostics.end(),
+          multiple_write.diagnostics.begin(),
+          multiple_write.diagnostics.end(),
           [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-SV-SEM-038";
           }),
-      "formatted $write arguments need a targeted diagnostic");
+      "multiple $write arguments need a targeted diagnostic");
 
   const auto strobe = parse_text(
       "strobe.sv",

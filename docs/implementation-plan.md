@@ -819,9 +819,13 @@ The twentieth post-gate batch is in progress:
    lower to a distinct typed operation retaining source metadata, continue
    after synchronous interpreter/LLVM delivery, render through CLI/Tcl, and
    reach the native C assertion callback without terminating the session.
+2. Verilog-2005/SystemVerilog `$display` and `$write` now accept one `%b`
+   conversion with one packed runtime expression, preserve four-state width,
+   prefix/suffix text and `%%`, and execute through a typed interpreter/LLVM
+   formatting path.
 
 Focused frontend, elaboration, runtime, strict C ABI, LLVM, application, Tcl,
-native API, and diagnostic-catalog tests pass. This is feature 1 of 10, so the
+native API, and diagnostic-catalog tests pass. This is feature 2 of 10, so the
 interval full regression and remote push are not due yet.
 
 ## v1 release condition

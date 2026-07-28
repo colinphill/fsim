@@ -2927,6 +2927,7 @@ void test_simir_display_output() {
   Interpreter report_interpreter;
   Process report_process;
   report_process.name = "reports";
+  report_process.register_count = 1;
   report_process.operations = {
       Report{
           "warning",
@@ -2936,6 +2937,14 @@ void test_simir_display_output() {
           "error",
           AssertionSeverity::error,
           SourceLocation{"report.vhd", 10, 5}},
+      LoadConstant{0, PackedLogic4::from_msb_string("10xz")},
+      FormatDisplay{
+          0,
+          OutputFormat::binary,
+          "v=",
+          "!",
+          true,
+          false},
       Halt{},
   };
   const auto report_process_id =
@@ -2949,6 +2958,7 @@ void test_simir_display_output() {
     std::uint64_t delta{};
   };
   std::vector<ObservedReport> reports;
+  std::vector<std::string> formatted_output;
   report_interpreter.set_report_hook(
       [&reports](
           const ProcessId process_value,
@@ -2966,6 +2976,15 @@ void test_simir_display_output() {
                 time,
                 delta});
       });
+  report_interpreter.set_output_hook(
+      [&formatted_output](
+          const ProcessId,
+          const std::string_view text,
+          const bool,
+          const SimulationTick,
+          const std::uint64_t) {
+        formatted_output.emplace_back(text);
+      });
   report_interpreter.start();
   const auto report_result = report_interpreter.run();
   require(
@@ -2977,7 +2996,9 @@ void test_simir_display_output() {
           && reports[0].source.line == 9
           && reports[0].time == 0
           && reports[0].delta == 0
-          && reports[1].severity == AssertionSeverity::error,
+          && reports[1].severity == AssertionSeverity::error
+          && formatted_output
+              == std::vector<std::string>{"v=10xz!"},
       "nonfatal report hook severity, source, and ordering");
 }
 

@@ -26,6 +26,40 @@ struct VerilogTypeSpec {
   PortDirection direction{PortDirection::Unknown};
 };
 
+struct ParsedOutputFormat {
+  bool valid{true};
+  std::optional<OutputFormat> format;
+  std::string prefix;
+  std::string suffix;
+};
+
+[[nodiscard]] ParsedOutputFormat
+parse_output_format(const std::string_view text) {
+  ParsedOutputFormat result;
+  auto* literal = &result.prefix;
+  for (std::size_t index = 0; index < text.size(); ++index) {
+    if (text[index] != '%') {
+      literal->push_back(text[index]);
+      continue;
+    }
+    if (++index >= text.size()) {
+      result.valid = false;
+      return result;
+    }
+    if (text[index] == '%') {
+      literal->push_back('%');
+      continue;
+    }
+    if (text[index] != 'b' || result.format) {
+      result.valid = false;
+      return result;
+    }
+    result.format = OutputFormat::Binary;
+    literal = &result.suffix;
+  }
+  return result;
+}
+
 [[nodiscard]] std::optional<std::string>
 constant_output_number(const std::string_view spelling) {
   const auto quote = spelling.find('\'');
@@ -3802,8 +3836,58 @@ class VerilogParser final : private detail::ParserBase {
       if (match(TokenKind::LeftParen)) {
         if (!at(TokenKind::RightParen)) {
           if (at(TokenKind::StringLiteral)) {
-            statement.output_text =
-                decoded_string_literal_text(advance());
+            const auto format_token = advance();
+            const auto parsed_format = parse_output_format(
+                decoded_string_literal_text(format_token));
+            if (!parsed_format.valid) {
+              error(
+                  format_token,
+                  "FSIM-SV-SEM-042",
+                  "the current formatted-output slice supports one "
+                  "%b conversion and %%");
+            } else if (match(TokenKind::Comma)) {
+              if (postponed) {
+                error(
+                    previous(),
+                    semantic_code,
+                    monitor
+                        ? "value-sensitive $monitor is not implemented"
+                        : "formatted $strobe is not implemented");
+                statement.value = parse_expression();
+              } else if (!parsed_format.format) {
+                error(
+                    format_token,
+                    semantic_code,
+                    std::string{task_name}
+                        + " has a value argument but no conversion");
+                statement.value = parse_expression();
+              } else {
+                statement.output_format = parsed_format.format;
+                statement.output_prefix = parsed_format.prefix;
+                statement.output_suffix = parsed_format.suffix;
+                statement.value = parse_expression();
+              }
+              if (match(TokenKind::Comma)) {
+                error(
+                    previous(),
+                    semantic_code,
+                    std::string{task_name}
+                        + " supports exactly one formatted value");
+                while (!at_end() && !at(TokenKind::RightParen)
+                       && !at(TokenKind::Semicolon)) {
+                  advance();
+                }
+              }
+            } else if (parsed_format.format) {
+              error(
+                  format_token,
+                  semantic_code,
+                  std::string{task_name}
+                      + " format conversion requires one value "
+                        "argument");
+            } else {
+              statement.output_text = parsed_format.prefix;
+            }
           } else if (at(TokenKind::Number)) {
             const auto number = advance();
             const auto value =
@@ -3830,7 +3914,8 @@ class VerilogParser final : private detail::ParserBase {
               advance();
             }
           }
-          if (match(TokenKind::Comma)) {
+          if (!statement.output_format
+              && match(TokenKind::Comma)) {
             error(
                 previous(),
                 semantic_code,

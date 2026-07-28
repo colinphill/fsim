@@ -3045,11 +3045,40 @@ private:
             lower_event_trigger(statement);
             break;
         case StatementKind::Display:
-            process_.operations.emplace_back(
-                Display{
-                    statement.output_text,
-                    statement.output_newline,
-                    statement.output_postponed});
+            if (statement.output_format) {
+                const auto width =
+                    infer_width(statement.value)
+                        .value_or(std::size_t{32});
+                const auto source =
+                    lower_expression(statement.value, width);
+                if (!source) {
+                    report(
+                        "FSIM-ELAB-102",
+                        "formatted output value cannot be lowered",
+                        statement.span);
+                    break;
+                }
+                auto format = runtime::simir::OutputFormat::binary;
+                switch (*statement.output_format) {
+                case frontend::OutputFormat::Binary:
+                    format = runtime::simir::OutputFormat::binary;
+                    break;
+                }
+                process_.operations.emplace_back(
+                    FormatDisplay{
+                        *source,
+                        format,
+                        statement.output_prefix,
+                        statement.output_suffix,
+                        statement.output_newline,
+                        statement.output_postponed});
+            } else {
+                process_.operations.emplace_back(
+                    Display{
+                        statement.output_text,
+                        statement.output_newline,
+                        statement.output_postponed});
+            }
             break;
         case StatementKind::Report: {
             AssertionSeverity severity = AssertionSeverity::note;
@@ -6484,8 +6513,12 @@ private:
             case StatementKind::Continue:
             case StatementKind::Delay:
             case StatementKind::WaitOn:
-            case StatementKind::EventTrigger:
             case StatementKind::Display:
+                if (statement.output_format) {
+                    collect_identifiers(statement.value, output);
+                }
+                break;
+            case StatementKind::EventTrigger:
             case StatementKind::Report:
             case StatementKind::Pause:
             case StatementKind::Finish:

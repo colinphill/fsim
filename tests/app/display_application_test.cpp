@@ -157,7 +157,7 @@ void test_display(
   assert(reference.result.time == 2);
   assert(compiled.result.time == 2);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 9);
+  assert(reference.output.size() == 11);
   assert(reference.output[0].process == 0);
   assert(reference.output[0].text == "first\t");
   assert(!reference.output[0].newline);
@@ -174,23 +174,29 @@ void test_display(
   assert(reference.output[3].newline);
   assert(reference.output[3].time == 0);
   assert(reference.output[3].delta == 0);
-  assert(reference.output[4].text == "postponed");
+  assert(reference.output[4].text == "q=%:10xz!");
   assert(reference.output[4].newline);
   assert(reference.output[4].time == 0);
   assert(reference.output[4].delta == 0);
-  assert(reference.output[5].text == "monitored");
-  assert(reference.output[5].newline);
+  assert(reference.output[5].text == "[10xz]");
+  assert(!reference.output[5].newline);
   assert(reference.output[5].time == 0);
   assert(reference.output[5].delta == 0);
-  assert(reference.output[6].text == "second");
-  assert(!reference.output[6].newline);
-  assert(reference.output[6].time == 2);
-  assert(reference.output[7].text.empty());
-  assert(!reference.output[7].newline);
-  assert(reference.output[7].time == 2);
-  assert(reference.output[8].text.empty());
-  assert(reference.output[8].newline);
+  assert(reference.output[6].text == "postponed");
+  assert(reference.output[6].newline);
+  assert(reference.output[6].time == 0);
+  assert(reference.output[7].text == "monitored");
+  assert(reference.output[7].newline);
+  assert(reference.output[7].time == 0);
+  assert(reference.output[8].text == "second");
+  assert(!reference.output[8].newline);
   assert(reference.output[8].time == 2);
+  assert(reference.output[9].text.empty());
+  assert(!reference.output[9].newline);
+  assert(reference.output[9].time == 2);
+  assert(reference.output[10].text.empty());
+  assert(reference.output[10].newline);
+  assert(reference.output[10].time == 2);
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 1);
 }
@@ -270,11 +276,15 @@ int main() {
     std::ofstream output(source);
     output << R"(
 module display_test;
+  logic [3:0] q;
   initial begin
+    q = 4'b10xz;
     $write("first\t");
     $display("+line\nembedded \"quote\" \\ \101");
     $display(8'h2a);
     $display(8'shff);
+    $display("q=%%:%b!", q);
+    $write("[%b]", q);
     $strobe("postponed");
     $monitor("monitored");
     #2 $write("second");
@@ -339,7 +349,8 @@ end architecture;
     assert(
         output.str().find(
             "first\t+line\nembedded \"quote\" \\ A\n"
-            "42\n-1\npostponed\nmonitored\nsecond\n"
+            "42\n-1\nq=%:10xz!\n[10xz]postponed\n"
+            "monitored\nsecond\n"
             "simulation stopped at tick 2")
         != std::string::npos);
   }

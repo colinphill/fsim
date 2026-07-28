@@ -186,6 +186,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.write_output = write_output;
     runtime.schedule_output = schedule_output;
     runtime.write_report = write_report;
+    runtime.write_formatted = write_formatted;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -743,6 +744,49 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           report->message,
           report->severity,
           report->source);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_formatted(
+      void* context,
+      const std::uint32_t process,
+      const std::uint32_t instruction,
+      const std::uint32_t width,
+      const std::uint64_t aval,
+      const std::uint64_t bval) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (state.context == nullptr
+          || state.process == nullptr
+          || state.process->id != process
+          || instruction >= state.process->operations.size()
+          || width == 0
+          || width > 64) {
+        throw std::logic_error{
+            "invalid generated formatted-output callback"};
+      }
+      const auto* operation =
+          std::get_if<runtime::simir::FormatDisplay>(
+              &state.process->operations[instruction]);
+      if (operation == nullptr) {
+        throw std::logic_error{
+            "generated formatted-output callback references a "
+            "different operation"};
+      }
+      const auto value = PackedLogic4::from_aval_bval(
+          width, aval, bval);
+      state.context->display_formatted(
+          operation->prefix,
+          operation->suffix,
+          operation->format,
+          value,
+          operation->newline,
+          operation->postponed);
     } catch (...) {
       capture_failure(state);
     }

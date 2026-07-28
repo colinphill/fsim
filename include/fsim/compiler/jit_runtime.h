@@ -158,6 +158,19 @@ typedef struct fsim_jit_runtime_v1 {
       void* context,
       uint32_t process,
       uint32_t instruction);
+
+  /*
+   * Append-only runtime-value formatting callback. instruction identifies
+   * immutable FormatDisplay metadata; aval/bval use the common packed word
+   * representation.
+   */
+  void (*write_formatted)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t width,
+      uint64_t aval,
+      uint64_t bval);
 } fsim_jit_runtime_v1;
 
 /*

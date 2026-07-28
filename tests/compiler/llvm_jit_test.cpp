@@ -85,6 +85,8 @@ struct TestRuntime {
   std::vector<bool> output_newlines;
   std::vector<std::string> postponed_output;
   std::vector<std::uint32_t> report_instructions;
+  std::vector<std::uint32_t> formatted_instructions;
+  std::vector<EncodedSignal> formatted_values;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -282,6 +284,18 @@ extern "C" void write_report(
   runtime.report_instructions.push_back(instruction);
 }
 
+extern "C" void write_formatted(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t instruction,
+    const std::uint32_t,
+    const std::uint64_t aval,
+    const std::uint64_t bval) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.formatted_instructions.push_back(instruction);
+  runtime.formatted_values.push_back({aval, bval});
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -304,6 +318,7 @@ extern "C" void write_report(
       &write_output,
       &schedule_output,
       &write_report,
+      &write_formatted,
   };
 }
 
@@ -3637,6 +3652,7 @@ void test_display_at_level(
   Process process;
   process.id = 13;
   process.name = std::string{symbol};
+  process.register_count = 1;
   process.operations = {
       Display{"hello", true},
       Display{"tail", false},
@@ -3645,6 +3661,14 @@ void test_display_at_level(
           "warning",
           AssertionSeverity::warning,
           SourceLocation{"report.vhd", 7, 5}},
+      LoadConstant{0, PackedLogic4::from_msb_string("10xz")},
+      FormatDisplay{
+          0,
+          OutputFormat::binary,
+          "v=",
+          "!",
+          true,
+          false},
       Halt{},
   };
   const std::array<std::uint32_t, 0> no_signals{};
@@ -3668,6 +3692,10 @@ void test_display_at_level(
   assert(
       runtime.report_instructions
       == std::vector<std::uint32_t>({3}));
+  assert(
+      runtime.formatted_instructions
+      == std::vector<std::uint32_t>({5}));
+  assert(runtime.formatted_values.size() == 1);
 
   TestRuntime short_runtime;
   auto short_descriptor = abi(short_runtime);
@@ -3703,6 +3731,18 @@ void test_display_at_level(
             jit.lookup(symbol), short_report_descriptor);
       },
       "write_report");
+
+  TestRuntime short_formatted_runtime;
+  auto short_formatted_descriptor = abi(short_formatted_runtime);
+  short_formatted_descriptor.struct_size =
+      static_cast<std::uint32_t>(
+          offsetof(fsim_jit_runtime_v1, write_formatted));
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            jit.lookup(symbol), short_formatted_descriptor);
+      },
+      "write_formatted");
 }
 
 } // namespace

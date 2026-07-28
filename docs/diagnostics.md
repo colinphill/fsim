@@ -471,11 +471,12 @@ therefore excluded.
 | `FSIM-SV-SEM-034` | error | A procedural block closing label has no opening label or does not match it. |
 | `FSIM-SV-SEM-035` | error | A named event conflicts with another event, signal, or port declaration. |
 | `FSIM-SV-SEM-036` | error | A delayed named-event trigger uses immediate `->` rather than nonblocking `->>` syntax. |
-| `FSIM-SV-SEM-037` | error | A `$display` call uses a nonliteral or formatting argument outside the current bounded display slice. |
-| `FSIM-SV-SEM-038` | error | A `$write` call uses a nonliteral or formatting argument outside the current bounded output slice. |
+| `FSIM-SV-SEM-037` | error | A `$display` call uses a value/argument combination outside the current single-value formatting slice. |
+| `FSIM-SV-SEM-038` | error | A `$write` call uses a value/argument combination outside the current single-value formatting slice. |
 | `FSIM-SV-SEM-039` | error | A `$strobe` call uses a nonliteral or formatting argument outside the current bounded postponed-output slice. |
 | `FSIM-SV-SEM-040` | error | A Verilog/SystemVerilog output string uses an unsupported, incomplete, or out-of-byte-range escape. |
 | `FSIM-SV-SEM-041` | error | A `$monitor` call uses a value or formatting argument outside the literal-only initial-publication slice. |
+| `FSIM-SV-SEM-042` | error | An output format string uses an unsupported conversion, more than one conversion, or a malformed percent escape. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -582,6 +583,7 @@ therefore excluded.
 | `FSIM-ELAB-099` | error | A named-event trigger does not contain a simple event name. |
 | `FSIM-ELAB-100` | error | A named-event trigger references an unknown event. |
 | `FSIM-ELAB-101` | error | A named-event trigger targets an object not declared as an event. |
+| `FSIM-ELAB-102` | error | A formatted-output value expression could not be lowered into SimIR. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

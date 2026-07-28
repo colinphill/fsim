@@ -67,7 +67,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, schedule_output) == 128,
                "runtime postponed-output callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, write_report) == 136,
                "runtime report callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 144,
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_formatted) == 144,
+               "runtime formatted-output callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 152,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -94,6 +96,10 @@ typedef struct callback_state {
   uint32_t scheduled_output_count;
   uint32_t report_count;
   uint32_t report_instruction;
+  uint32_t formatted_count;
+  uint32_t formatted_width;
+  uint64_t formatted_aval;
+  uint64_t formatted_bval;
 } callback_state;
 
 static uint64_t read_signal(
@@ -244,6 +250,22 @@ static void write_report(
   state->report_instruction = instruction;
 }
 
+static void write_formatted(
+    void* context,
+    uint32_t process,
+    uint32_t instruction,
+    uint32_t width,
+    uint64_t aval,
+    uint64_t bval) {
+  callback_state* state = (callback_state*)context;
+  ++state->formatted_count;
+  state->output_process = process;
+  state->report_instruction = instruction;
+  state->formatted_width = width;
+  state->formatted_aval = aval;
+  state->formatted_bval = bval;
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -266,7 +288,8 @@ int main(void) {
       signal_active,
       write_output,
       schedule_output,
-      write_report};
+      write_report,
+      write_formatted};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -300,6 +323,13 @@ int main(void) {
       runtime.context, UINT32_C(12), "hello", UINT64_C(5), UINT32_C(1));
   runtime.write_report(
       runtime.context, UINT32_C(12), UINT32_C(19));
+  runtime.write_formatted(
+      runtime.context,
+      UINT32_C(12),
+      UINT32_C(20),
+      UINT32_C(8),
+      UINT64_C(0xa5),
+      UINT64_C(0x81));
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -340,7 +370,11 @@ int main(void) {
       state.output_count != UINT32_C(2) ||
       state.scheduled_output_count != UINT32_C(1) ||
       state.report_count != UINT32_C(1) ||
-      state.report_instruction != UINT32_C(19) ||
+      state.report_instruction != UINT32_C(20) ||
+      state.formatted_count != UINT32_C(1) ||
+      state.formatted_width != UINT32_C(8) ||
+      state.formatted_aval != UINT64_C(0xa5) ||
+      state.formatted_bval != UINT64_C(0x81) ||
       state.output_process != UINT32_C(12) ||
       state.output_newline != UINT32_C(1) ||
       state.output_size != UINT64_C(5)) {

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <limits>
 #include <set>
 #include <sstream>
@@ -27,6 +28,39 @@ template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
 };
 template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
+
+[[nodiscard]] std::string format_output_value(
+    const PackedLogic4& value,
+    const OutputFormat format) {
+  switch (format) {
+  case OutputFormat::binary: {
+    auto text = value.to_msb_string();
+    std::transform(
+        text.begin(),
+        text.end(),
+        text.begin(),
+        [](const unsigned char character) {
+          return static_cast<char>(std::tolower(character));
+        });
+    return text;
+  }
+  }
+  throw std::logic_error{"invalid formatted-output conversion"};
+}
+
+[[nodiscard]] std::string make_formatted_output(
+    const std::string_view prefix,
+    const std::string_view suffix,
+    const OutputFormat format,
+    const PackedLogic4& value) {
+  auto formatted = format_output_value(value, format);
+  std::string result;
+  result.reserve(prefix.size() + formatted.size() + suffix.size());
+  result.append(prefix);
+  result.append(formatted);
+  result.append(suffix);
+  return result;
+}
 
 [[nodiscard]] bool edge_matches(EdgeKind edge, Logic4 old_value,
                                 Logic4 new_value) noexcept {
@@ -1683,6 +1717,42 @@ struct Interpreter::Impl::ExecutionContext final
         });
   }
 
+  void display_formatted(
+      const std::string_view prefix,
+      const std::string_view suffix,
+      const OutputFormat format,
+      const PackedLogic4& value,
+      const bool newline,
+      const bool postponed) override {
+    auto text =
+        make_formatted_output(prefix, suffix, format, value);
+    if (postponed) {
+      owner.scheduler.schedule(
+          SchedulerPhase::postponed,
+          process,
+          [&owner = owner,
+           process = process,
+           text = std::move(text),
+           newline](Scheduler& scheduler) {
+            if (owner.output_hook) {
+              owner.output_hook(
+                  process,
+                  text,
+                  newline,
+                  scheduler.now(),
+                  scheduler.delta());
+            }
+          });
+    } else if (owner.output_hook) {
+      owner.output_hook(
+          process,
+          text,
+          newline,
+          owner.scheduler.now(),
+          owner.scheduler.delta());
+    }
+  }
+
   void report(
       const std::string_view message,
       const AssertionSeverity severity,
@@ -2406,6 +2476,39 @@ void Interpreter::Impl::execute(ProcessId id) {
                 output_hook(
                     process.program.id,
                     op.text,
+                    op.newline,
+                    scheduler.now(),
+                    scheduler.delta());
+              }
+              ++process.pc;
+            },
+            [&](const FormatDisplay& op) {
+              auto text = make_formatted_output(
+                  op.prefix,
+                  op.suffix,
+                  op.format,
+                  get_register(process, op.source));
+              if (op.postponed) {
+                scheduler.schedule(
+                    SchedulerPhase::postponed,
+                    process.program.id,
+                    [this,
+                     process_id = process.program.id,
+                     text = std::move(text),
+                     newline = op.newline](Scheduler& runtime) {
+                      if (output_hook) {
+                        output_hook(
+                            process_id,
+                            text,
+                            newline,
+                            runtime.now(),
+                            runtime.delta());
+                      }
+                    });
+              } else if (output_hook) {
+                output_hook(
+                    process.program.id,
+                    text,
                     op.newline,
                     scheduler.now(),
                     scheduler.delta());

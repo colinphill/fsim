@@ -338,8 +338,8 @@ metadata. Compiled O0/O2 code calls the same hook through an append-only
 plain-C runtime-table tail, so output ordering remains part of the common
 single-thread simulation semantics. `$strobe` publication is scheduled into
 the current timestamp's postponed phase through a second append-only callback.
-Formatting operands and value-sensitive `$monitor` behavior remain subsequent
-slices.
+Additional conversions/operands and value-sensitive `$monitor` behavior
+remain subsequent slices.
 Output-task literal spelling is decoded once in the frontend for newline, tab,
 quote, backslash, and one-byte octal escapes; SimIR and generated code retain
 the exact byte string, including embedded NUL bytes.
@@ -362,6 +362,13 @@ normalized to their width-truncated decimal value in typed HIR. Unknown-state,
 dynamic, and additional operands remain targeted. Based literals marked
 signed are interpreted as two's-complement at their declared width before
 decimal formatting.
+The first dynamic formatting slice lowers one `$display`/`$write` `%b`
+conversion to `FormatDisplay`, which retains a typed source register,
+prefix/suffix text, newline policy, and conversion kind. The interpreter
+formats the full packed value through the common four-state kernel. LLVM code
+passes its evaluated word plus immutable instruction identity through an
+append-only callback and therefore uses the same formatter and embedding
+output hook. `%%` is collapsed in the frontend.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment

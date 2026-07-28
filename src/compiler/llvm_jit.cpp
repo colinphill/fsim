@@ -57,6 +57,7 @@ using runtime::simir::DebugPoint;
 using runtime::simir::Display;
 using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
+using runtime::simir::FormatDisplay;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
 using runtime::simir::Insert;
@@ -97,7 +98,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v6";
+    "fsim-llvm-native-object-v7";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -124,7 +125,8 @@ static_assert(offsetof(fsim_jit_runtime_v1, signal_active) == 112);
 static_assert(offsetof(fsim_jit_runtime_v1, write_output) == 120);
 static_assert(offsetof(fsim_jit_runtime_v1, schedule_output) == 128);
 static_assert(offsetof(fsim_jit_runtime_v1, write_report) == 136);
-static_assert(sizeof(fsim_jit_runtime_v1) == 144);
+static_assert(offsetof(fsim_jit_runtime_v1, write_formatted) == 144);
+static_assert(sizeof(fsim_jit_runtime_v1) == 152);
 static_assert(sizeof(fsim_jit_frame_v1) == 64);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -359,6 +361,7 @@ struct ValidatedProcess {
   bool uses_output{};
   bool uses_postponed_output{};
   bool uses_report{};
+  bool uses_formatted_output{};
 };
 
 [[nodiscard]] ValidatedProcess
@@ -815,6 +818,10 @@ validate_process(const Process &process,
               } else {
                 result.uses_output = true;
               }
+            },
+            [&](const FormatDisplay& operation) {
+              record_use(operation.source, index);
+              result.uses_formatted_output = true;
             },
             [&](const Report&) {
               result.uses_report = true;
@@ -1508,6 +1515,23 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               builder.add("operation", "Display");
               builder.add("text", value.text);
               add_key_u64(builder, "newline", value.newline ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "postponed",
+                  value.postponed ? 1U : 0U);
+            },
+            [&](const FormatDisplay& value) {
+              builder.add("operation", "FormatDisplay");
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder,
+                  "format",
+                  static_cast<std::underlying_type_t<
+                      runtime::simir::OutputFormat>>(value.format));
+              builder.add("prefix", value.prefix);
+              builder.add("suffix", value.suffix);
+              add_key_u64(
+                  builder, "newline", value.newline ? 1U : 0U);
               add_key_u64(
                   builder,
                   "postponed",
@@ -2256,7 +2280,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       context,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -2390,6 +2414,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 19),
         "write_report");
   }
+  llvm::Value* formatted_output_callback = nullptr;
+  if (validated.uses_formatted_output) {
+    formatted_output_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 20),
+        "write_formatted");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -2429,6 +2461,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
           {pointer, i32, i32},
+          false);
+  auto* formatted_output_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, i64, i64},
           false);
 
   auto *register_aval = builder.CreateLoad(
@@ -3330,6 +3367,22 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   });
               branch_to_next();
             },
+            [&](const FormatDisplay& operation) {
+              const auto value =
+                  load_register(builder, registers, operation.source);
+              builder.CreateCall(
+                  formatted_output_type,
+                  formatted_output_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      llvm::ConstantInt::get(i32, instruction),
+                      llvm::ConstantInt::get(i32, value.width),
+                      value.aval,
+                      value.bval,
+                  });
+              branch_to_next();
+            },
             [&](const Report&) {
               builder.CreateCall(
                   report_type,
@@ -3474,6 +3527,7 @@ struct LlvmJit::Impl {
     bool uses_output{};
     bool uses_postponed_output{};
     bool uses_report{};
+    bool uses_formatted_output{};
   };
 
   struct NativeEntry {
@@ -3619,6 +3673,7 @@ void LlvmJit::add_process_module(
         validated.uses_output,
         validated.uses_postponed_output,
         validated.uses_report,
+        validated.uses_formatted_output,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -3931,13 +3986,24 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_report) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, write_formatted)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include write_report");
     }
     if (runtime.write_report == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires write_report for this process");
+    }
+  }
+  if (entry.info.uses_formatted_output) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include write_formatted");
+    }
+    if (runtime.write_formatted == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_formatted for this process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {

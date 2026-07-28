@@ -58,7 +58,14 @@ replacement, `$monitoron`, and `$monitoroff` remain deferred.
 A sole constant unsigned decimal, binary, octal, or hexadecimal output
 argument is width-truncated and emitted in default decimal form. A based
 literal marked signed is interpreted as two's-complement at its declared
-width. Unknown-state, dynamic, and additional operands remain deferred.
+width. Unknown-state literals, unformatted dynamic operands, and additional
+operands remain deferred.
+
+Dynamic output status update: `$display` and `$write` accept one `%b`
+conversion with one packed runtime expression, literal prefix/suffix text,
+and `%%`. Full declared width and `0`/`1`/`x`/`z` bits are preserved.
+Additional arguments, other conversions, format width/precision modifiers,
+and dynamic `$strobe`/`$monitor` remain targeted.
 
 Literal `$fatal` and immediate-assertion `$error` messages use the same
 Verilog/SystemVerilog escape decoding as output tasks, including byte-exact
