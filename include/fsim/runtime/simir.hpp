@@ -225,14 +225,22 @@ struct WaitOn {
 
   std::vector<SignalId> signals;
   std::vector<EdgeKind> edges;
+  // An optional timeout races the listed signal events. A condition-wait
+  // lowering uses timeout_result to distinguish timeout resumption from an
+  // event resumption. A rearmed wait preserves the absolute deadline
+  // established by the operation at timeout_origin instead of restarting the
+  // timeout after a false condition.
+  std::optional<SimulationTick> timeout;
+  std::optional<RegisterId> timeout_result;
+  std::optional<InstructionIndex> timeout_origin;
 };
 
 /// Suspend until this process's static sensitivity condition is met.
 struct WaitSensitivity {};
 
-/// Suspend permanently without completing the process. This models
-/// dependency-free false condition waits while preserving debugger-visible
-/// suspended state.
+/// Suspend permanently without completing the process. This models bare
+/// waits and dependency-free condition waits while preserving
+/// debugger-visible suspended state.
 struct WaitForever {};
 
 /// Suspend and resume in the active phase of the next delta cycle.
@@ -559,6 +567,12 @@ public:
   read_register(RegisterId, std::size_t) const {
     throw std::logic_error{
         "alternate process executor does not expose register values"};
+  }
+
+  virtual void write_register(
+      RegisterId, const PackedLogic4&) {
+    throw std::logic_error{
+        "alternate process executor does not expose writable registers"};
   }
 };
 

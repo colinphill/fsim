@@ -214,7 +214,6 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-013` | error | A subtype requires semantic type resolution not implemented in this slice. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | A non-generic integer-family object is parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
-| `FSIM-VHDL-UNSUPPORTED-016` | error | A wait form requires unsupported bare, `until`, or combined-clause semantics. |
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |

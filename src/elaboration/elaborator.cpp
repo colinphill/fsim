@@ -2777,69 +2777,15 @@ private:
             lower_statements(statement.statements);
             break;
         case StatementKind::WaitOn: {
-            std::vector<SignalId> signals;
-            std::vector<runtime::simir::EdgeKind> edges;
-            signals.reserve(statement.sensitivities.size());
-            edges.reserve(statement.sensitivities.size());
-            for (const auto& sensitivity : statement.sensitivities) {
-                if (sensitivity.signal == "*") {
-                    std::set<std::string> dependencies;
-                    collect_statement_identifiers(
-                        statement.statements, dependencies);
-                    for (const auto& dependency : dependencies) {
-                        if (locals_.contains(dependency)) {
-                            continue;
-                        }
-                        if (const auto found =
-                                signals_.find(dependency);
-                            found != signals_.end()) {
-                            signals.push_back(found->second);
-                            edges.push_back(
-                                runtime::simir::EdgeKind::any);
-                        }
-                    }
-                    if (dependencies.empty() || signals.empty()) {
-                        report(
-                            "FSIM-ELAB-062",
-                            "dynamic wildcard event control has no readable "
-                            "signal dependencies",
-                            sensitivity.span);
-                    }
-                    continue;
+            auto [signals, edges] =
+                resolve_wait_sensitivities(statement);
+            if (!signals.empty() || statement.delay) {
+                WaitOn wait{
+                    std::move(signals), std::move(edges)};
+                if (statement.delay) {
+                    wait.timeout = statement.delay->magnitude;
                 }
-                const auto found = signals_.find(sensitivity.signal);
-                if (found == signals_.end()) {
-                    report(
-                        "FSIM-ELAB-059",
-                        "unknown wait signal '" + sensitivity.signal + "'",
-                        sensitivity.span);
-                    continue;
-                }
-                if (sensitivity.edge != frontend::EdgeKind::Any
-                    && design_.signal_info_[found->second].width != 1) {
-                    report(
-                        "FSIM-ELAB-060",
-                        "dynamic edge-qualified wait signal '"
-                            + sensitivity.signal
-                            + "' must be scalar",
-                        sensitivity.span);
-                    continue;
-                }
-                signals.push_back(found->second);
-                auto edge = runtime::simir::EdgeKind::any;
-                if (sensitivity.edge
-                    == frontend::EdgeKind::Positive) {
-                    edge = runtime::simir::EdgeKind::posedge;
-                } else if (
-                    sensitivity.edge
-                    == frontend::EdgeKind::Negative) {
-                    edge = runtime::simir::EdgeKind::negedge;
-                }
-                edges.push_back(edge);
-            }
-            if (!signals.empty()) {
-                process_.operations.emplace_back(
-                    WaitOn{std::move(signals), std::move(edges)});
+                process_.operations.emplace_back(std::move(wait));
             }
             lower_statements(statement.statements);
             break;
@@ -2858,6 +2804,74 @@ private:
         }
     }
 
+    [[nodiscard]] std::pair<
+        std::vector<SignalId>,
+        std::vector<runtime::simir::EdgeKind>>
+    resolve_wait_sensitivities(
+        const Statement& statement) {
+        std::vector<SignalId> signals;
+        std::vector<runtime::simir::EdgeKind> edges;
+        signals.reserve(statement.sensitivities.size());
+        edges.reserve(statement.sensitivities.size());
+        for (const auto& sensitivity : statement.sensitivities) {
+            if (sensitivity.signal == "*") {
+                std::set<std::string> dependencies;
+                collect_statement_identifiers(
+                    statement.statements, dependencies);
+                for (const auto& dependency : dependencies) {
+                    if (locals_.contains(dependency)) {
+                        continue;
+                    }
+                    if (const auto found =
+                            signals_.find(dependency);
+                        found != signals_.end()) {
+                        signals.push_back(found->second);
+                        edges.push_back(
+                            runtime::simir::EdgeKind::any);
+                    }
+                }
+                if (dependencies.empty() || signals.empty()) {
+                    report(
+                        "FSIM-ELAB-062",
+                        "dynamic wildcard event control has no readable "
+                        "signal dependencies",
+                        sensitivity.span);
+                }
+                continue;
+            }
+            const auto found = signals_.find(sensitivity.signal);
+            if (found == signals_.end()) {
+                report(
+                    "FSIM-ELAB-059",
+                    "unknown wait signal '" + sensitivity.signal + "'",
+                    sensitivity.span);
+                continue;
+            }
+            if (sensitivity.edge != frontend::EdgeKind::Any
+                && design_.signal_info_[found->second].width != 1) {
+                report(
+                    "FSIM-ELAB-060",
+                    "dynamic edge-qualified wait signal '"
+                        + sensitivity.signal
+                        + "' must be scalar",
+                    sensitivity.span);
+                continue;
+            }
+            signals.push_back(found->second);
+            auto edge = runtime::simir::EdgeKind::any;
+            if (sensitivity.edge
+                == frontend::EdgeKind::Positive) {
+                edge = runtime::simir::EdgeKind::posedge;
+            } else if (
+                sensitivity.edge
+                == frontend::EdgeKind::Negative) {
+                edge = runtime::simir::EdgeKind::negedge;
+            }
+            edges.push_back(edge);
+        }
+        return {std::move(signals), std::move(edges)};
+    }
+
     void emit_debug_point(
         const DebugPointKind kind,
         const frontend::SourceSpan& span) {
@@ -2870,9 +2884,13 @@ private:
     }
 
     void lower_wait_until(const Statement& statement) {
-        const auto condition_start =
-            static_cast<InstructionIndex>(
-                process_.operations.size());
+        if (language_ != frontend::Language::Vhdl2008) {
+            lower_immediate_condition_wait(statement);
+            return;
+        }
+
+        const auto condition_operations_start =
+            process_.operations.size();
         const auto condition = lower_condition(
             statement.condition,
             "FSIM-ELAB-079",
@@ -2880,7 +2898,91 @@ private:
         if (!condition) {
             return;
         }
-        const auto branch_index =
+        std::vector<runtime::simir::Operation> condition_operations(
+            std::make_move_iterator(
+                process_.operations.begin()
+                + static_cast<std::ptrdiff_t>(
+                    condition_operations_start)),
+            std::make_move_iterator(
+                process_.operations.end()));
+        process_.operations.resize(condition_operations_start);
+
+        std::vector<SignalId> waited_signals;
+        std::vector<runtime::simir::EdgeKind> waited_edges;
+        if (!statement.sensitivities.empty()) {
+            auto resolved =
+                resolve_wait_sensitivities(statement);
+            waited_signals = std::move(resolved.first);
+            waited_edges = std::move(resolved.second);
+        } else {
+            std::set<std::string> dependencies;
+            collect_identifiers(
+                statement.condition, dependencies);
+            for (const auto& dependency : dependencies) {
+                if (locals_.contains(dependency)) {
+                    continue;
+                }
+                if (const auto found = signals_.find(dependency);
+                    found != signals_.end()) {
+                    waited_signals.push_back(found->second);
+                }
+            }
+            std::ranges::sort(waited_signals);
+            waited_signals.erase(
+                std::unique(
+                    waited_signals.begin(),
+                    waited_signals.end()),
+                waited_signals.end());
+        }
+
+        if (waited_signals.empty() && !statement.delay) {
+            process_.operations.emplace_back(WaitForever{});
+            lower_statements(statement.statements);
+            return;
+        }
+
+        std::optional<RegisterId> timed_out;
+        if (statement.delay) {
+            timed_out = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+        }
+
+        const auto initial_wait =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        WaitOn first_wait{
+            waited_signals, waited_edges};
+        if (statement.delay) {
+            first_wait.timeout =
+                statement.delay->magnitude;
+            first_wait.timeout_result = timed_out;
+        }
+        process_.operations.emplace_back(
+            std::move(first_wait));
+
+        std::optional<InstructionIndex> timeout_branch;
+        if (timed_out) {
+            timeout_branch =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            process_.operations.emplace_back(
+                Branch{
+                    *timed_out,
+                    0,
+                    0,
+                    UnknownBranchPolicy::error});
+        }
+
+        const auto condition_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        process_.operations.insert(
+            process_.operations.end(),
+            std::make_move_iterator(
+                condition_operations.begin()),
+            std::make_move_iterator(
+                condition_operations.end()));
+        const auto condition_branch =
             static_cast<InstructionIndex>(
                 process_.operations.size());
         const auto unknown_policy =
@@ -2889,6 +2991,64 @@ private:
                 : UnknownBranchPolicy::when_false;
         process_.operations.emplace_back(
             Branch{*condition, 0, 0, unknown_policy});
+
+        const auto rewait_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        WaitOn rewait{
+            std::move(waited_signals),
+            std::move(waited_edges)};
+        if (statement.delay) {
+            rewait.timeout =
+                statement.delay->magnitude;
+            rewait.timeout_result = timed_out;
+            rewait.timeout_origin = initial_wait;
+        }
+        process_.operations.emplace_back(std::move(rewait));
+        process_.operations.emplace_back(
+            Jump{
+                timeout_branch.value_or(
+                    condition_start)});
+
+        const auto satisfied_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        lower_statements(statement.statements);
+        process_.operations[condition_branch] = Branch{
+            *condition,
+            satisfied_start,
+            rewait_start,
+            unknown_policy};
+        if (timeout_branch) {
+            process_.operations[*timeout_branch] = Branch{
+                *timed_out,
+                satisfied_start,
+                condition_start,
+                UnknownBranchPolicy::error};
+        }
+    }
+
+    void lower_immediate_condition_wait(
+        const Statement& statement) {
+        const auto condition_start =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        const auto condition = lower_condition(
+            statement.condition,
+            "FSIM-ELAB-079",
+            "wait");
+        if (!condition) {
+            return;
+        }
+        const auto branch_index =
+            static_cast<InstructionIndex>(
+                process_.operations.size());
+        process_.operations.emplace_back(
+            Branch{
+                *condition,
+                0,
+                0,
+                UnknownBranchPolicy::when_false});
 
         const auto wait_start =
             static_cast<InstructionIndex>(
@@ -2929,7 +3089,7 @@ private:
             *condition,
             satisfied_start,
             wait_start,
-            unknown_policy};
+            UnknownBranchPolicy::when_false};
     }
 
     std::optional<RegisterId> lower_condition(

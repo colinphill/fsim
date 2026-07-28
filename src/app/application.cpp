@@ -230,10 +230,21 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
         }
         break;
       }
-      case compiler::JitResumeStatus::wait_on:
-        require_boundary<runtime::simir::WaitOn>(
-            result.instruction, "WaitOn");
+      case compiler::JitResumeStatus::wait_on: {
+        const auto* wait = std::get_if<
+            runtime::simir::WaitOn>(
+            &process_.operations[result.instruction]);
+        if (wait == nullptr) {
+          throw compiler::LlvmJitError(
+              "compiled process reported WaitOn at a non-wait instruction");
+        }
+        if (result.delay != wait->timeout.value_or(0)) {
+          throw compiler::LlvmJitError(
+              "compiled process returned a WaitOn timeout that disagrees "
+              "with SimIR");
+        }
         break;
+      }
       case compiler::JitResumeStatus::wait_sensitivity:
         require_boundary<runtime::simir::WaitSensitivity>(
             result.instruction, "WaitSensitivity");
@@ -271,6 +282,19 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
     return PackedLogic4::from_aval_bval(
         width, register_aval_[id], register_bval_[id]);
+  }
+
+  void write_register(
+      const runtime::simir::RegisterId id,
+      const PackedLogic4& value) override {
+    if (id >= register_aval_.size()
+        || value.width() == 0
+        || value.width() > 64) {
+      throw compiler::LlvmJitError{
+          "compiled process register write is out of range"};
+    }
+    register_aval_[id] = value.aval_words().front();
+    register_bval_[id] = value.bval_words().front();
   }
 
  private:

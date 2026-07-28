@@ -1343,6 +1343,96 @@ void test_simir_alternate_executor_dynamic_wait() {
   }
 }
 
+void test_simir_timed_dynamic_wait_rearm() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto trigger = interpreter.add_signal(
+      {"top.trigger", PackedLogic4::from_msb_string("0")});
+  const auto observed = interpreter.add_signal(
+      {"top.observed", PackedLogic4::from_msb_string("0")});
+
+  Process driver;
+  driver.id = 0;
+  driver.name = "timed_wait_driver";
+  driver.register_count = 1;
+  driver.operations = {
+      WaitFor{1},
+      LoadConstant{
+          0, PackedLogic4::from_msb_string("1")},
+      WriteBlocking{trigger, 0},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(driver));
+
+  WaitOn initial_wait{{trigger}};
+  initial_wait.timeout = 2;
+  initial_wait.timeout_result = 0;
+  WaitOn rearmed_wait{{trigger}};
+  rearmed_wait.timeout = 2;
+  rearmed_wait.timeout_result = 0;
+  rearmed_wait.timeout_origin = 0;
+  Process waiter;
+  waiter.id = 1;
+  waiter.name = "timed_wait_observer";
+  waiter.register_count = 2;
+  waiter.operations = {
+      std::move(initial_wait),
+      Branch{
+          0, 4, 2, UnknownBranchPolicy::error},
+      std::move(rearmed_wait),
+      Jump{1},
+      LoadConstant{
+          1, PackedLogic4::from_msb_string("1")},
+      WriteBlocking{observed, 1},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(waiter));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed
+          && result.time == 2,
+      "a false event wake must preserve the original WaitOn timeout");
+  require(
+      interpreter.signal_value(observed).to_msb_string() == "1",
+      "the WaitOn timeout result register must select timeout resumption");
+
+  Interpreter invalid_rearm;
+  const auto invalid_trigger = invalid_rearm.add_signal(
+      {"top.trigger", PackedLogic4::from_msb_string("0")});
+  WaitOn invalid_origin{{invalid_trigger}};
+  invalid_origin.timeout = 1;
+  invalid_origin.timeout_result = 0;
+  WaitOn invalid_continuation{{invalid_trigger}};
+  invalid_continuation.timeout = 2;
+  invalid_continuation.timeout_result = 0;
+  invalid_continuation.timeout_origin = 0;
+  Process invalid_process;
+  invalid_process.id = 0;
+  invalid_process.name = "invalid_timed_wait_rearm";
+  invalid_process.register_count = 1;
+  invalid_process.operations = {
+      std::move(invalid_origin),
+      std::move(invalid_continuation),
+      Halt{},
+  };
+  (void)invalid_rearm.add_process(
+      std::move(invalid_process));
+  try {
+    (void)invalid_rearm.run();
+    throw std::runtime_error{
+        "a mismatched WaitOn timeout rearm was accepted"};
+  } catch (const InterpreterError& error) {
+    require(
+        std::string_view{error.what()}.find(
+            "WaitOn timeout rearm does not match its origin")
+            != std::string_view::npos,
+        "mismatched WaitOn timeout rearm diagnostic");
+  }
+}
+
 void test_simir_alternate_executor_scheduled_word_writes() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -2421,6 +2511,7 @@ int main() {
     test_simir_design_stop_identity();
     test_simir_alternate_executor_context_and_boundaries();
     test_simir_alternate_executor_dynamic_wait();
+    test_simir_timed_dynamic_wait_rearm();
     test_simir_alternate_executor_scheduled_word_writes();
     test_simir_alternate_executor_zero_delay_and_frame();
     test_simir_alternate_executor_cpp_exception_containment();

@@ -627,6 +627,9 @@ architecture rtl of vhdl_conditional_statement_app is
   signal targeted_control_result : boolean;
   signal wait_gate : boolean;
   signal wait_observed : boolean;
+  signal wait_timed : boolean;
+  signal wait_constant_timeout : boolean;
+  signal wait_permanent : boolean;
 begin
   choose: process(trigger)
     variable assembled : std_logic_vector(3 downto 0) := "0000";
@@ -741,13 +744,20 @@ begin
   begin
     wait for 1 ns;
     wait_gate <= true;
+    wait for 2 ns;
+    wait_gate <= false;
     wait until false;
   end process;
   wait_observer: process
   begin
-    wait until wait_gate;
+    wait on wait_gate until false for 2 ns;
+    wait_timed <= true;
+    wait on wait_gate until not wait_gate for 2 ns;
     wait_observed <= true;
-    wait until false;
+    wait until true for 1 ns;
+    wait_constant_timeout <= true;
+    wait until true;
+    wait_permanent <= true;
   end process;
 end architecture;
 )";
@@ -4497,7 +4507,7 @@ end architecture rtl;
     assert(
         vhdl_conditional_statement_hybrid.result.status
         == fsim::runtime::RunStatus::completed);
-    assert(vhdl_conditional_statement_hybrid.result.time == 1);
+    assert(vhdl_conditional_statement_hybrid.result.time == 4);
     assert(vhdl_conditional_statement_hybrid.process_count == 3);
 #if defined(FSIM_HAS_LLVM)
     assert(
@@ -4511,7 +4521,7 @@ end architecture rtl;
         != std::vector<std::string>{
             "X", "1", "1", "1", "1", "01",
             "0011", "00", "1", "1", "1", "1", "1",
-            "1", "1", "1"}) {
+            "1", "0", "1", "1", "1", "0"}) {
       for (const auto& value :
            vhdl_conditional_statement_hybrid.final_values) {
         std::cerr << value << ' ';
@@ -4523,7 +4533,7 @@ end architecture rtl;
         == std::vector<std::string>{
             "X", "1", "1", "1", "1", "01",
             "0011", "00", "1", "1", "1", "1", "1",
-            "1", "1", "1"}));
+            "1", "0", "1", "1", "1", "0"}));
   }
 
   auto partial_group_config = config;

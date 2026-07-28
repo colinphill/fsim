@@ -168,9 +168,9 @@ The following foundation is implemented:
 - bounded VHDL/SystemVerilog process variables lowered to named persistent
   SimIR registers, interpreter/O0/O2 `CopyRegister`, and engine-neutral
   debugger `locals` reads;
-- source-level VHDL `wait for`/`wait on` and SystemVerilog
-  any-change/`posedge`/`negedge` procedural event controls lowered to
-  resumable `WaitFor`/`WaitOn`, with interpreter/O2 timing and filtered-wakeup
+- source-level VHDL bare, `on`, `until`, and `for` wait clauses plus
+  SystemVerilog any-change/`posedge`/`negedge` procedural event controls
+  lowered to resumable waits, with interpreter/O2 timing and filtered-wakeup
   differentials;
 - deterministic simple-expression dependency inference for `always @*` and
   time-zero `always_comb`/`always_latch`, plus dynamic `@*`, with a
@@ -221,10 +221,12 @@ The following foundation is implemented:
   static and runtime loop kinds;
 - unconditional VHDL sequential loops and SystemVerilog post-test `do-while`
   loops, with `continue` edges targeting the trailing condition;
-- dependency-driven VHDL `wait until` and Verilog/SystemVerilog condition
-  waits lowered to signal-change suspension and condition-recheck CFGs,
-  including attached Verilog statements and debugger-visible permanent waits
-  for dependency-free false conditions;
+- first-suspending VHDL `wait until` and immediate-test
+  Verilog/SystemVerilog condition waits lowered to signal-change suspension
+  and condition-recheck CFGs, including attached Verilog statements and
+  debugger-visible permanent waits;
+- combined VHDL event/condition/timeout waits with engine-neutral wake-reason
+  registers and absolute deadlines preserved across false event wakeups;
 - nested VHDL `if`/`elsif`/`else` with Boolean literals and typed Boolean
   operators, plus nested SystemVerilog `if`/`else` and immediate assertions
   using packed four-state truth conversion, with O0/O2 differential evidence;
@@ -278,7 +280,7 @@ The following foundation is implemented:
   port chains and standard typed signal-interface export chains;
 - explicit SystemC export hierarchy objects resolved into common DesignIR
   signal aliases; and
-- a stable catalog covering 591 unique current production diagnostic codes.
+- a stable catalog covering 590 unique current production diagnostic codes.
 
 Current Linux validation:
 
@@ -305,7 +307,7 @@ Current Linux validation:
 | SystemVerilog expression semantics | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for four-state logical/reduction/shift/arithmetic operations, complemented reductions/XNOR, and exact `===`/`!==` X/Z comparison |
 | VHDL packed shifts | GCC Debug and exact LLVM 22 frontend/elaboration/application tests plus focused ASan/UBSan pass for `sll`/`srl`/`sra`, including X-containing data and arithmetic left-element fill |
 | Sequential loop control | GCC Debug and exact LLVM 22 frontend/elaboration/compiler/application tests plus focused ASan/UBSan pass for nested SystemVerilog `break`/`continue` and VHDL `exit`/`next`, conditional and labeled VHDL forms, named outer-loop transfers across static/runtime loops, opening/end label validation, guaranteed first execution, trailing-condition continue targeting, interpreter/JIT O0/O2 equivalence, and defensive orphan-HIR rejection |
-| Conditional waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for VHDL `wait until` and Verilog/SystemVerilog `wait (expression)`, multi-signal dependency rechecks, SV unknown-as-false behavior, attached statements, debugger-visible permanent suspension, append-only status 9, process-group compilation, and interpreter/JIT O0/O2 equivalence |
+| Conditional and combined waits | GCC Debug and exact LLVM 22 frontend/elaboration/runtime/compiler/application tests plus focused ASan/UBSan pass for all bounded VHDL wait-clause combinations and Verilog/SystemVerilog `wait (expression)`, first-suspend versus immediate-test semantics, event/timeout races, absolute-deadline rearming, engine-owned wake-result registers, multi-signal dependency rechecks, debugger-visible permanent suspension, append-only status 9, cache identity, and interpreter/JIT O0/O2 equivalence |
 | Installed C API | Strict C11 compile/link/run passes; only versioned `fsim_*` symbols are exported |
 | Installed SystemC facade | Strict C++20 compile/run passes |
 | Mixed-language CLI example | Check/build/run pass; simulation stops at tick 6 and emits VCD |
@@ -519,8 +521,10 @@ Completed groundwork:
   statically unrolled and runtime loops;
 - VHDL labeled loops and targeted outer-loop `exit`/`next` control;
 - unconditional VHDL loops and post-test SystemVerilog `do-while` loops;
-- VHDL `wait until` and Verilog/SystemVerilog condition waits with
-  dependency-driven re-evaluation and non-polling constant-false suspension;
+- VHDL bare and combined `on`/`until`/`for` waits with first-suspend,
+  dependency-driven re-evaluation, event/timeout races, and non-polling
+  permanent suspension, plus immediate-test Verilog/SystemVerilog condition
+  waits;
 - bounded nested VHDL and SystemVerilog conditional statements, including
   language-specific Boolean/four-state condition rules;
 - deterministic project seed handling;

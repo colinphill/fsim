@@ -68,7 +68,8 @@ The current tree contains:
   explicit or implicit SystemVerilog generate forms with labeled and indexed
   generated scopes retained in mixed binding paths;
 - lowering of scalar and common packed operations into SimIR;
-- bounded source-level VHDL `wait for`/`wait on` and Verilog/SystemVerilog
+- bounded source-level VHDL bare, `on`, `until`, and `for` wait clauses,
+  including event-or-timeout combinations, plus Verilog/SystemVerilog
   integer-delay, any-change, `posedge`, and `negedge` procedural event
   controls;
 - deterministic simple-expression sensitivity inference for `always @*`,
@@ -122,9 +123,12 @@ The current tree contains:
   control transfers from runtime inner loops to static outer loops;
 - unconditional VHDL sequential loops and post-test SystemVerilog `do-while`
   loops, including correct trailing-condition targets for `continue`;
-- dependency-driven VHDL `wait until` and Verilog/SystemVerilog
-  `wait (expression)` suspension with condition re-evaluation, attached
-  procedural statements, and non-polling constant-false waits;
+- first-suspending VHDL `wait until` and immediate-test
+  Verilog/SystemVerilog `wait (expression)` suspension with condition
+  re-evaluation, attached procedural statements, and non-polling permanent
+  waits;
+- combined VHDL `wait on ... until ... for ...` event/timeout races with
+  absolute-deadline preservation across false condition wakeups;
 - a narrow LLVM ORC adapter for processes whose value-bearing operations are
   at most 64 bits, including explicit jumps/branches and caller-owned
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,

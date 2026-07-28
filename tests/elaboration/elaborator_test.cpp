@@ -4222,7 +4222,7 @@ end architecture;
               return std::holds_alternative<
                   fsim::runtime::simir::WaitOn>(operation);
             })
-        == 2);
+        == 3);
     auto vhdl_condition_wait_interpreter =
         elaborated_vhdl_condition_wait.design
             ->create_interpreter();
@@ -4261,6 +4261,142 @@ end architecture;
             ->signal_value(*vhdl_condition_observed)
             .to_msb_string()
         == "1");
+
+    const auto vhdl_combined_wait =
+        fsim::frontend::parse_text(
+            "combined_wait.vhd",
+            R"(
+entity combined_wait is end entity;
+architecture rtl of combined_wait is
+  signal trigger : boolean;
+  signal timed_result : boolean;
+  signal event_result : boolean;
+  signal constant_timeout_result : boolean;
+  signal permanent_result : boolean;
+begin
+  driver: process
+  begin
+    wait for 1 ns;
+    trigger <= true;
+    wait for 2 ns;
+    trigger <= false;
+    wait;
+  end process;
+  observer: process
+  begin
+    wait on trigger until false for 2 ns;
+    timed_result <= true;
+    wait on trigger until not trigger for 2 ns;
+    event_result <= true;
+    wait until true for 1 ns;
+    constant_timeout_result <= true;
+    wait until true;
+    permanent_result <= true;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_combined_wait.ok());
+    const auto elaborated_vhdl_combined_wait =
+        fsim::elaboration::elaborate(
+            vhdl_combined_wait.design,
+            "vhdl:work.combined_wait(rtl)");
+    if (!elaborated_vhdl_combined_wait.ok()) {
+        for (const auto& diagnostic :
+             elaborated_vhdl_combined_wait.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_vhdl_combined_wait.ok());
+    const auto& combined_wait_observer =
+        elaborated_vhdl_combined_wait.design
+            ->processes()
+            .back();
+    assert(std::ranges::any_of(
+        combined_wait_observer.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+            const auto* wait =
+                std::get_if<fsim::runtime::simir::WaitOn>(
+                    &operation);
+            return wait != nullptr
+                && wait->timeout
+                && wait->timeout_result
+                && wait->timeout_origin;
+        }));
+    assert(std::ranges::any_of(
+        combined_wait_observer.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+            return std::holds_alternative<
+                fsim::runtime::simir::WaitForever>(
+                    operation);
+        }));
+
+    auto combined_wait_interpreter =
+        elaborated_vhdl_combined_wait.design
+            ->create_interpreter();
+    const auto combined_timed =
+        elaborated_vhdl_combined_wait.design
+            ->find_signal("timed_result");
+    const auto combined_event =
+        elaborated_vhdl_combined_wait.design
+            ->find_signal("event_result");
+    const auto combined_constant_timeout =
+        elaborated_vhdl_combined_wait.design
+            ->find_signal("constant_timeout_result");
+    const auto combined_permanent =
+        elaborated_vhdl_combined_wait.design
+            ->find_signal("permanent_result");
+    assert(
+        combined_timed
+        && combined_event
+        && combined_constant_timeout
+        && combined_permanent);
+    const auto combined_before_timeout =
+        combined_wait_interpreter->run(1);
+    assert(
+        combined_before_timeout.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        combined_wait_interpreter
+            ->signal_value(*combined_timed)
+            .to_msb_string()
+        == "0");
+    const auto combined_after_timeout =
+        combined_wait_interpreter->run(2);
+    assert(
+        combined_after_timeout.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        combined_wait_interpreter
+            ->signal_value(*combined_timed)
+            .to_msb_string()
+        == "1");
+    const auto combined_after_event =
+        combined_wait_interpreter->run(3);
+    assert(
+        combined_after_event.status
+        == fsim::runtime::RunStatus::time_limit);
+    assert(
+        combined_wait_interpreter
+            ->signal_value(*combined_event)
+            .to_msb_string()
+        == "1");
+    const auto combined_after_constant_timeout =
+        combined_wait_interpreter->run(4);
+    assert(
+        combined_after_constant_timeout.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        combined_wait_interpreter
+            ->signal_value(*combined_constant_timeout)
+            .to_msb_string()
+        == "1");
+    assert(
+        combined_wait_interpreter
+            ->signal_value(*combined_permanent)
+            .to_msb_string()
+        == "0");
 
     const auto sv_condition_wait =
         fsim::frontend::parse_text(

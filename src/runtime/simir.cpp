@@ -630,6 +630,10 @@ struct Interpreter::Impl {
     bool waiting_on_static{};
     bool waiting_on_signal{};
     bool dynamic_wait_all{};
+    std::optional<InstructionIndex> wait_timeout_origin;
+    std::optional<SimulationTick> wait_timeout_deadline;
+    std::optional<RegisterId> wait_timeout_result;
+    std::uint64_t wait_timeout_generation{};
     bool halted{};
   };
 
@@ -724,6 +728,132 @@ struct Interpreter::Impl {
     process.dynamic_triggered.clear();
     process.waiting_on_signal = false;
     process.dynamic_wait_all = false;
+  }
+
+  void write_process_register(
+      ProcessState& process,
+      const RegisterId destination,
+      const PackedLogic4& value) {
+    if (process.executor) {
+      process.executor->write_register(
+          destination, value);
+      return;
+    }
+    get_register(process, destination) = value;
+  }
+
+  void clear_wait_timeout(ProcessState& process) {
+    if (!process.wait_timeout_origin) {
+      return;
+    }
+    if (process.wait_timeout_generation
+        == std::numeric_limits<std::uint64_t>::max()) {
+      fail(process, "wait timeout generation overflow");
+    }
+    ++process.wait_timeout_generation;
+    process.wait_timeout_origin.reset();
+    process.wait_timeout_deadline.reset();
+    process.wait_timeout_result.reset();
+  }
+
+  void set_wait_timeout_result(
+      ProcessState& process,
+      const bool timed_out) {
+    if (!process.wait_timeout_result) {
+      return;
+    }
+    write_process_register(
+        process,
+        *process.wait_timeout_result,
+        PackedLogic4::from_msb_string(
+            timed_out ? "1" : "0"));
+  }
+
+  void begin_wait_timeout(
+      ProcessState& process,
+      const InstructionIndex origin,
+      const SimulationTick delay,
+      const std::optional<RegisterId> result) {
+    clear_wait_timeout(process);
+    if (delay
+        > std::numeric_limits<SimulationTick>::max()
+            - scheduler.now()) {
+      process.pc = origin;
+      fail(process, "simulation time overflow in WaitOn timeout");
+    }
+    if (process.wait_timeout_generation
+        == std::numeric_limits<std::uint64_t>::max()) {
+      process.pc = origin;
+      fail(process, "wait timeout generation overflow");
+    }
+    const auto generation =
+        ++process.wait_timeout_generation;
+    const auto deadline = scheduler.now() + delay;
+    process.wait_timeout_origin = origin;
+    process.wait_timeout_deadline = deadline;
+    process.wait_timeout_result = result;
+    set_wait_timeout_result(process, false);
+
+    auto callback =
+        [this, id = process.program.id, origin, generation](
+            Scheduler&) {
+          auto& state = get_process(id);
+          if (state.wait_timeout_generation != generation
+              || state.wait_timeout_origin
+                  != std::optional{origin}) {
+            return;
+          }
+          set_wait_timeout_result(state, true);
+          state.wait_timeout_origin.reset();
+          state.wait_timeout_deadline.reset();
+          state.wait_timeout_result.reset();
+          queue_active_current(id);
+        };
+    if (delay == 0) {
+      scheduler.schedule(
+          SchedulerPhase::inactive,
+          process.program.id,
+          std::move(callback));
+    } else {
+      scheduler.schedule_at(
+          deadline,
+          SchedulerPhase::active,
+          process.program.id,
+          std::move(callback));
+    }
+  }
+
+  void rearm_wait_timeout(
+      ProcessState& process,
+      const InstructionIndex instruction,
+      const InstructionIndex origin,
+      const std::optional<RegisterId> result) {
+    if (process.wait_timeout_origin
+            != std::optional{origin}
+        || !process.wait_timeout_deadline) {
+      process.pc = instruction;
+      fail(
+          process,
+          "WaitOn timeout rearm has no matching active deadline");
+    }
+    if (process.wait_timeout_result != result) {
+      process.pc = instruction;
+      fail(
+          process,
+          "WaitOn timeout rearm result register mismatch");
+    }
+    if (*process.wait_timeout_deadline < scheduler.now()) {
+      process.pc = instruction;
+      fail(process, "WaitOn timeout deadline was missed");
+    }
+  }
+
+  void mark_dynamic_event_resume(
+      ProcessState& process) {
+    const auto timed_out =
+        process.wait_timeout_deadline
+        && *process.wait_timeout_deadline <= scheduler.now();
+    set_wait_timeout_result(process, timed_out);
   }
 
   [[nodiscard]] bool dynamic_wait_satisfied(
@@ -842,6 +972,7 @@ struct Interpreter::Impl {
       auto& process = get_process(sensitivity.process);
       if (dynamic_wait_satisfied(
               process, event, sensitivity.edge)) {
+        mark_dynamic_event_resume(process);
         queue_active_current(sensitivity.process);
       }
     }
@@ -1014,6 +1145,7 @@ struct Interpreter::Impl {
       auto& process = get_process(sensitivity.process);
       if (dynamic_wait_satisfied(
               process, signal_id, sensitivity.edge)) {
+        mark_dynamic_event_resume(process);
         queue_next_delta(sensitivity.process);
       }
     }
@@ -1347,6 +1479,7 @@ void Interpreter::Impl::handle_boundary(
   const auto& operation = process.program.operations[instruction];
   process.pc = next_instruction;
   if (const auto* point = std::get_if<DebugPoint>(&operation)) {
+    clear_wait_timeout(process);
     process.current_source = point->source;
     auto kind = ExecutionPointKind::statement;
     switch (point->kind) {
@@ -1371,6 +1504,7 @@ void Interpreter::Impl::handle_boundary(
     return;
   }
   if (const auto* wait = std::get_if<WaitFor>(&operation)) {
+    clear_wait_timeout(process);
     if (wait->delay == 0) {
       process.queued = true;
       scheduler.schedule(
@@ -1398,14 +1532,54 @@ void Interpreter::Impl::handle_boundary(
     return;
   }
   if (const auto* wait = std::get_if<WaitOn>(&operation)) {
-    if (wait->signals.empty()) {
+    if (wait->signals.empty() && !wait->timeout) {
       process.pc = instruction;
-      fail(process, "WaitOn requires at least one signal");
+      fail(
+          process,
+          "WaitOn requires at least one signal or a timeout");
     }
     if (!wait->edges.empty()
         && wait->edges.size() != wait->signals.size()) {
       process.pc = instruction;
       fail(process, "WaitOn edge count must match its signal count");
+    }
+    if (!wait->timeout
+        && (wait->timeout_result
+            || wait->timeout_origin)) {
+      process.pc = instruction;
+      fail(
+          process,
+          "WaitOn timeout metadata requires a timeout");
+    }
+    if (wait->timeout_origin
+        && !wait->timeout_result) {
+      process.pc = instruction;
+      fail(
+          process,
+          "WaitOn timeout rearm requires a result register");
+    }
+    if (wait->timeout_origin) {
+      if (*wait->timeout_origin >= instruction) {
+        process.pc = instruction;
+        fail(
+            process,
+            "WaitOn timeout origin must precede its rearm");
+      }
+      const auto* origin = std::get_if<WaitOn>(
+          &process.program.operations[*wait->timeout_origin]);
+      if (origin == nullptr
+          || !origin->timeout
+          || origin->timeout_origin
+          || origin->timeout != wait->timeout
+          || origin->timeout_result
+              != wait->timeout_result
+          || origin->signals != wait->signals
+          || origin->edges != wait->edges) {
+        process.pc = instruction;
+        fail(
+            process,
+            "WaitOn timeout rearm does not match its origin");
+      }
     }
     process.waiting_on_signal = true;
     process.dynamic_sensitivity.clear();
@@ -1452,12 +1626,30 @@ void Interpreter::Impl::handle_boundary(
       dynamic_fanout[sensitivity.signal].push_back(
           {process.program.id, sensitivity.edge});
     }
+    if (wait->timeout) {
+      if (wait->timeout_origin) {
+        rearm_wait_timeout(
+            process,
+            instruction,
+            *wait->timeout_origin,
+            wait->timeout_result);
+      } else {
+        begin_wait_timeout(
+            process,
+            instruction,
+            *wait->timeout,
+            wait->timeout_result);
+      }
+    } else {
+      clear_wait_timeout(process);
+    }
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
         process.current_source);
     return;
   }
   if (std::holds_alternative<WaitSensitivity>(operation)) {
+    clear_wait_timeout(process);
     if (process.program.static_sensitivity.empty()) {
       process.pc = instruction;
       fail(process, "WaitSensitivity requires a static sensitivity list");
@@ -1469,12 +1661,14 @@ void Interpreter::Impl::handle_boundary(
     return;
   }
   if (std::holds_alternative<WaitForever>(operation)) {
+    clear_wait_timeout(process);
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
         process.current_source);
     return;
   }
   if (std::holds_alternative<Yield>(operation)) {
+    clear_wait_timeout(process);
     queue_next_delta(process.program.id);
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
@@ -1482,6 +1676,7 @@ void Interpreter::Impl::handle_boundary(
     return;
   }
   if (std::holds_alternative<Stop>(operation)) {
+    clear_wait_timeout(process);
     process.halted = true;
     stopped_by_design = true;
     scheduler.request_stop();
@@ -1491,6 +1686,7 @@ void Interpreter::Impl::handle_boundary(
     return;
   }
   if (std::holds_alternative<Halt>(operation)) {
+    clear_wait_timeout(process);
     process.halted = true;
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
@@ -1522,6 +1718,7 @@ void Interpreter::Impl::handle_external_boundary(
         "instruction");
   }
   process.pc = next_instruction;
+  clear_wait_timeout(process);
 
   switch (suspension.kind) {
   case ExternalSuspendKind::simir_boundary:

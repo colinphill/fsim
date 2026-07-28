@@ -747,9 +747,11 @@ validate_process(const Process &process,
             },
             [&](const WaitFor &) {},
             [&](const WaitOn &operation) {
-              if (operation.signals.empty()) {
-                reject(process, index,
-                       "WaitOn requires at least one signal");
+              if (operation.signals.empty()
+                  && !operation.timeout) {
+                reject(
+                    process, index,
+                    "WaitOn requires at least one signal or a timeout");
               }
               if (!operation.edges.empty()
                   && operation.edges.size()
@@ -757,6 +759,53 @@ validate_process(const Process &process,
                 reject(
                     process, index,
                     "WaitOn edge count must match its signal count");
+              }
+              if (!operation.timeout
+                  && (operation.timeout_result
+                      || operation.timeout_origin)) {
+                reject(
+                    process,
+                    index,
+                    "WaitOn timeout metadata requires a timeout");
+              }
+              if (operation.timeout_origin
+                  && !operation.timeout_result) {
+                reject(
+                    process,
+                    index,
+                    "WaitOn timeout rearm requires a result register");
+              }
+              if (operation.timeout_result) {
+                record_definition(
+                    *operation.timeout_result, index);
+                constrain_width(
+                    *operation.timeout_result, 1U, index);
+              }
+              if (operation.timeout_origin) {
+                if (*operation.timeout_origin >= index) {
+                  reject(
+                      process,
+                      index,
+                      "WaitOn timeout origin must precede its rearm");
+                }
+                const auto* origin = std::get_if<WaitOn>(
+                    &process.operations[*operation.timeout_origin]);
+                if (origin == nullptr
+                    || !origin->timeout
+                    || origin->timeout_origin
+                    || origin->timeout
+                        != operation.timeout
+                    || origin->timeout_result
+                        != operation.timeout_result
+                    || origin->signals
+                        != operation.signals
+                    || origin->edges
+                        != operation.edges) {
+                  reject(
+                      process,
+                      index,
+                      "WaitOn timeout rearm does not match its origin");
+                }
               }
               for (std::size_t signal_index = 0;
                    signal_index < operation.signals.size();
@@ -1340,6 +1389,36 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                     builder, "wait-on-edge",
                     static_cast<std::underlying_type_t<EdgeKind>>(
                         edge));
+              }
+              add_key_u64(
+                  builder,
+                  "wait-on-has-timeout",
+                  value.timeout.has_value());
+              if (value.timeout) {
+                add_key_u64(
+                    builder,
+                    "wait-on-timeout",
+                    *value.timeout);
+              }
+              add_key_u64(
+                  builder,
+                  "wait-on-has-timeout-result",
+                  value.timeout_result.has_value());
+              if (value.timeout_result) {
+                add_key_u64(
+                    builder,
+                    "wait-on-timeout-result",
+                    *value.timeout_result);
+              }
+              add_key_u64(
+                  builder,
+                  "wait-on-has-timeout-origin",
+                  value.timeout_origin.has_value());
+              if (value.timeout_origin) {
+                add_key_u64(
+                    builder,
+                    "wait-on-timeout-origin",
+                    *value.timeout_origin);
               }
             },
             [&](const WaitSensitivity &) {
@@ -2639,9 +2718,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   operation.delay, FSIM_JIT_FRAME_STATE_READY,
                   next_instruction);
             },
-            [&](const WaitOn &) {
+            [&](const WaitOn &operation) {
               return_result(
-                  FSIM_JIT_RESUME_STATUS_WAIT_ON, instruction, 0,
+                  FSIM_JIT_RESUME_STATUS_WAIT_ON,
+                  instruction,
+                  operation.timeout.value_or(0),
                   FSIM_JIT_FRAME_STATE_READY, next_instruction);
             },
             [&](const WaitSensitivity &) {

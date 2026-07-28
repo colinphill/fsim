@@ -2173,6 +2173,11 @@ begin
     wait for 2 ns;
     wait on trigger;
     wait until trigger = '1';
+    wait;
+    wait on trigger until trigger = '0';
+    wait on trigger for 3 ns;
+    wait until trigger = '1' for 4 ns;
+    wait on trigger until trigger = '0' for 5 ns;
   end process;
 end architecture;
 )",
@@ -2181,7 +2186,7 @@ end architecture;
   const auto& vhdl_statements =
       vhdl.design.units.back().processes.front().statements;
   require(
-      vhdl_statements.size() == 3
+      vhdl_statements.size() == 8
           && vhdl_statements[0].kind == StatementKind::Delay
           && vhdl_statements[0].delay
           && vhdl_statements[0].delay->magnitude == 2
@@ -2194,7 +2199,32 @@ end architecture;
               == StatementKind::WaitUntil
           && vhdl_statements[2].condition.kind
               == ExpressionKind::Binary
-          && vhdl_statements[2].condition.text == "=",
+          && vhdl_statements[2].condition.text == "="
+          && vhdl_statements[3].kind
+              == StatementKind::WaitUntil
+          && vhdl_statements[3].condition.kind
+              == ExpressionKind::BooleanLiteral
+          && vhdl_statements[3].condition.text == "true"
+          && vhdl_statements[4].kind
+              == StatementKind::WaitUntil
+          && vhdl_statements[4].sensitivities.size() == 1
+          && vhdl_statements[4].sensitivities.front().signal
+              == "trigger"
+          && !vhdl_statements[4].delay
+          && vhdl_statements[5].kind
+              == StatementKind::WaitOn
+          && vhdl_statements[5].delay
+          && vhdl_statements[5].delay->magnitude == 3
+          && vhdl_statements[6].kind
+              == StatementKind::WaitUntil
+          && vhdl_statements[6].sensitivities.empty()
+          && vhdl_statements[6].delay
+          && vhdl_statements[6].delay->magnitude == 4
+          && vhdl_statements[7].kind
+              == StatementKind::WaitUntil
+          && vhdl_statements[7].sensitivities.size() == 1
+          && vhdl_statements[7].delay
+          && vhdl_statements[7].delay->magnitude == 5,
       "VHDL wait metadata");
 
   const auto system_verilog = parse_text(
@@ -3393,19 +3423,16 @@ end architecture;
 )",
       Language::Vhdl2008);
   require(
-      !vhdl.ok(),
-      "the unsupported bare wait should be the only VHDL diagnostic");
-  require(
-      vhdl.diagnostics.size() == 1
-          && vhdl.diagnostics.front().code
-              == "FSIM-VHDL-UNSUPPORTED-016",
-      "VHDL conditional parsing must recover through a trailing bare wait");
+      vhdl.ok(),
+      "VHDL conditional parsing must retain a trailing bare wait");
   const auto* architecture =
       vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(
       architecture != nullptr
           && architecture->processes.size() == 1
-          && architecture->processes.front().statements.size() == 2,
+          && architecture->processes.front().statements.size() == 3
+          && architecture->processes.front().statements.back().kind
+              == StatementKind::WaitUntil,
       "VHDL conditional process representation");
   const auto& outer =
       architecture->processes.front().statements.front();

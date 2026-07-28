@@ -1540,45 +1540,38 @@ class VhdlParser final : private detail::ParserBase {
     if (match_keyword("wait", true)) {
       const auto start = previous();
       Statement statement;
-      if (match_keyword("for", true)) {
-        statement.kind = StatementKind::Delay;
-        statement.delay = parse_vhdl_delay(previous());
-      } else if (match_keyword("on", true)) {
-        statement.kind = StatementKind::WaitOn;
+      bool has_sensitivity_clause = false;
+      bool has_condition_clause = false;
+      if (match_keyword("on", true)) {
+        has_sensitivity_clause = true;
         do {
           const auto signal = expect_identifier("wait sensitivity name");
           statement.sensitivities.push_back(Sensitivity{
               EdgeKind::Any, vhdl_name(signal.text), signal.span});
         } while (match(TokenKind::Comma));
-        if (keyword("until", 0, true) || keyword("for", 0, true)) {
-          error(
-              current(),
-              "FSIM-VHDL-UNSUPPORTED-016",
-              "combined wait on/until/for clauses are not implemented in "
-              "this frontend slice");
-          skip_to_semicolon();
-          return std::nullopt;
-        }
-      } else if (match_keyword("until", true)) {
-        statement.kind = StatementKind::WaitUntil;
+      }
+      if (match_keyword("until", true)) {
+        has_condition_clause = true;
         statement.condition = parse_expression();
-        if (keyword("for", 0, true)) {
-          error(
-              current(),
-              "FSIM-VHDL-UNSUPPORTED-016",
-              "combined wait until/for clauses are not implemented in "
-              "this frontend slice");
-          skip_to_semicolon();
-          return std::nullopt;
-        }
+      }
+      if (match_keyword("for", true)) {
+        statement.delay = parse_vhdl_delay(previous());
+      }
+      if (has_condition_clause) {
+        statement.kind = StatementKind::WaitUntil;
+      } else if (has_sensitivity_clause) {
+        statement.kind = StatementKind::WaitOn;
+      } else if (statement.delay) {
+        statement.kind = StatementKind::Delay;
       } else {
-        error(
-            current(),
-            "FSIM-VHDL-UNSUPPORTED-016",
-            "this frontend slice supports only 'wait for', 'wait on', and "
-            "'wait until'");
-        skip_to_semicolon();
-        return std::nullopt;
+        // The default sensitivity set is empty, so both a bare wait and
+        // `wait until true` suspend permanently.
+        statement.kind = StatementKind::WaitUntil;
+        statement.condition = Expression{
+            ExpressionKind::BooleanLiteral,
+            "true",
+            {},
+            start.span};
       }
       expect(
           TokenKind::Semicolon,

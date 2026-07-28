@@ -1132,6 +1132,38 @@ void test_signal_waits_at_level(
          JitResumeStatus::wait_sensitivity);
   assert(sensitivity_result.instruction == 0);
   assert(sensitivity_frame.program_counter == 1);
+
+  Process timed_wait;
+  timed_wait.id = 10;
+  timed_wait.name = "timed_wait";
+  timed_wait.register_count = 1;
+  WaitOn timed_boundary;
+  timed_boundary.timeout = 7;
+  timed_boundary.timeout_result = 0;
+  timed_wait.operations = {
+      std::move(timed_boundary),
+      Halt{},
+  };
+  const auto timed_symbol =
+      std::string{symbol_prefix} + "_timed_wait";
+  jit.add_process(timed_symbol, timed_wait, widths);
+  const auto timed_handle = jit.lookup(timed_symbol);
+  std::vector<std::uint64_t> timed_aval(1);
+  std::vector<std::uint64_t> timed_bval(1);
+  fsim_jit_frame_v1 timed_frame{};
+  jit.initialize_frame(
+      timed_handle, timed_frame, timed_aval, timed_bval);
+  auto timed_result = new_resume_result();
+  assert(
+      jit.resume(
+          timed_handle,
+          descriptor,
+          timed_frame,
+          timed_result)
+      == JitResumeStatus::wait_on);
+  assert(timed_result.instruction == 0);
+  assert(timed_result.delay == 7);
+  assert(timed_frame.program_counter == 1);
 }
 
 [[nodiscard]] Logic4 equality(const Logic4 lhs, const Logic4 rhs) {
@@ -2626,6 +2658,20 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     expect_cache_statistics(changed_metadata, 0, 1, 1);
   }
   assert(cached_object_paths(cache_directory).size() == 18);
+
+  // A WaitOn timeout changes generated boundary metadata and cache identity.
+  {
+    LlvmJit changed_timeout{options};
+    auto timed_wait =
+        make_cached_wait_process(false, {0, 1});
+    std::get<WaitOn>(timed_wait.operations.front()).timeout = 5;
+    changed_timeout.add_process(
+        wait_symbol, timed_wait, wait_widths);
+    materialize_cached_wait_process(
+        changed_timeout, wait_symbol);
+    expect_cache_statistics(changed_timeout, 0, 1, 1);
+  }
+  assert(cached_object_paths(cache_directory).size() == 19);
 }
 
 void test_optimization_cache_invalidation(
@@ -2692,6 +2738,50 @@ void test_rejections() {
   expect_fatal_error(
       [&] { jit.add_process("empty_wait_on", empty_wait_on, one_signal); },
       "WaitOn requires at least one signal");
+
+  Process timeout_metadata_without_timeout;
+  timeout_metadata_without_timeout.id = 0;
+  timeout_metadata_without_timeout.name =
+      "timeout_metadata_without_timeout";
+  timeout_metadata_without_timeout.register_count = 1;
+  WaitOn incomplete_timeout{{0}};
+  incomplete_timeout.timeout_result = 0;
+  timeout_metadata_without_timeout.operations = {
+      std::move(incomplete_timeout), Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "timeout_metadata_without_timeout",
+            timeout_metadata_without_timeout,
+            one_signal);
+      },
+      "WaitOn timeout metadata requires a timeout");
+
+  Process mismatched_timeout_rearm;
+  mismatched_timeout_rearm.id = 0;
+  mismatched_timeout_rearm.name =
+      "mismatched_timeout_rearm";
+  mismatched_timeout_rearm.register_count = 1;
+  WaitOn timeout_origin{{0}};
+  timeout_origin.timeout = 2;
+  timeout_origin.timeout_result = 0;
+  WaitOn timeout_rearm{{0}};
+  timeout_rearm.timeout = 3;
+  timeout_rearm.timeout_result = 0;
+  timeout_rearm.timeout_origin = 0;
+  mismatched_timeout_rearm.operations = {
+      std::move(timeout_origin),
+      std::move(timeout_rearm),
+      Halt{},
+  };
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "mismatched_timeout_rearm",
+            mismatched_timeout_rearm,
+            one_signal);
+      },
+      "WaitOn timeout rearm does not match its origin");
 
   Process mismatched_wait_edges;
   mismatched_wait_edges.id = 0;

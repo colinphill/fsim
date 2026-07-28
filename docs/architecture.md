@@ -291,19 +291,23 @@ SimIR processes are explicit state machines. The current operation set includes:
   arithmetic, shift, conditional-select, and comparison operations;
 - whole and normalized partial blocking writes, update-phase writes, and
   delayed writes;
-- timed, dynamic-signal, and static-sensitivity waits;
+- timed, dynamic-signal, static-sensitivity, and combined event-or-timeout
+  waits;
 - next-delta yields;
 - jumps and branches;
 - assertions; and
 - process halt and simulation stop.
 
-Bounded frontend lowering reaches these suspension operations from VHDL
-`wait for`/`wait on`, SystemVerilog integer `#` delay and
+Bounded frontend lowering reaches these suspension operations from VHDL bare,
+`on`, `until`, and `for` wait clauses, SystemVerilog integer `#` delay and
 any-change/`posedge`/`negedge` `@(signal-list)` statements, and static process
 sensitivities. Dynamic and static edge waits share the same four-state edge
-predicate. A VHDL process containing explicit waits jumps back to its
-post-initializer entry when its body completes, preserving implicit process
-repetition without reinitializing locals.
+predicate. VHDL condition waits suspend before their first condition test.
+Combined event/timeout waits retain one absolute deadline while false event
+wakeups rearm the sensitivity set; an internal scalar frame register records
+whether the eventual wake was the timeout. A VHDL process containing explicit
+waits jumps back to its post-initializer entry when its body completes,
+preserving implicit process repetition without reinitializing locals.
 
 For bounded `always @*`, `always_comb`, `always_latch`, and dynamic `@*`,
 elaboration walks executable statement expressions, excludes assignment
