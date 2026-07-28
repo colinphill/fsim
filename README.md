@@ -312,9 +312,13 @@ The first Tcl slice supports `fsim tcl` for a multiline interactive shell,
 `fsim tcl FILE [ARG ...]` for scripts with standard Tcl argument variables.
 It exposes `fsim::version`, project metadata, check/build, signal enumeration
 and reads, deposit/force/release, run, and status commands over the same native
-application model. Breakpoint, step, trace, and callback Tcl commands remain
-to be added. Interactive and batch Python support is planned later, after the
-Tcl and native control contracts stabilize.
+application model. The stateful `fsim::debug COMMAND ?ARG ...?` adapter also
+exposes scope/signal/local inspection, debugger mutation, relative and absolute
+runs, source/time/conditional-signal breakpoints, and
+statement/process/delta/time stepping through the same O0 debugger engine used
+by the CLI. Tcl stop, trace-selection, diagnostics, and callback commands
+remain to be added. Interactive and batch Python support is planned later,
+after the Tcl and native control contracts stabilize.
 
 ## Build and test
 

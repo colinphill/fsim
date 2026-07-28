@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -189,6 +190,12 @@ if {[fsim::read tb.q] ne "1"} {error "bad tick-1 value"}
 set final [fsim::run]
 if {[dict get $final time] != 2} {error "bad final time"}
 if {[dict get [fsim::status] state] ne "finished"} {error "not finished"}
+if {![catch {fsim::debug where} mode_error]} {
+  error "debug accepted a compiled-mode session"
+}
+if {[string first "different execution mode" $mode_error] < 0} {
+  error "bad execution-mode diagnostic: $mode_error"
+}
 puts "control-ok"
 )";
     std::istringstream input;
@@ -208,6 +215,115 @@ puts "control-ok"
         error);
     assert(result == 0);
     assert(output.str().find("control-ok") != std::string::npos);
+    assert(error.str().empty());
+  }
+  {
+    const std::string debug_script = R"FSIM_TCL(
+set where [fsim::debug where]
+if {![string match "time 0, delta 0, scope tb" $where]} {
+  error "bad initial location: $where"
+}
+if {[fsim::debug scope] ne "tb"} {error "bad current scope"}
+if {[fsim::debug scopes] ne "(no child scopes)"} {
+  error "bad child scopes"
+}
+set initial_signals [fsim::debug signals]
+if {![string match "*tb.q = *" $initial_signals]} {
+  error "missing debug signal: $initial_signals"
+}
+fsim::debug deposit tb.q 0
+if {[fsim::debug show tb.q] ne "tb.q = 0"} {
+  error "debug deposit failed"
+}
+fsim::debug force tb.q 1
+if {[fsim::debug show tb.q] ne "tb.q = 1 (forced)"} {
+  error "debug force failed"
+}
+fsim::debug release tb.q
+if {[fsim::debug show tb.q] ne "tb.q = 0"} {
+  error "debug release failed"
+}
+if {![string match "breakpoint 1 set at time 1*" \
+          [fsim::debug break time 1ns]]} {
+  error "time breakpoint failed"
+}
+if {![string match "breakpoint 2 set at *control.sv:4" \
+          [fsim::debug break source control.sv:4]]} {
+  error "source breakpoint failed"
+}
+if {[fsim::debug break signal tb.q == 1] ne \
+        "breakpoint 3 set on tb.q == 1"} {
+  error "signal breakpoint failed"
+}
+set breakpoints [fsim::debug breakpoints]
+foreach expected {"1: time 1 ticks" "2: source control.sv:4" \
+                  "3: signal tb.q == 1"} {
+  if {[string first $expected $breakpoints] < 0} {
+    error "missing breakpoint: $expected"
+  }
+}
+if {[fsim::debug delete 2] ne "deleted breakpoint 2"} {
+  error "breakpoint deletion failed"
+}
+if {[fsim::debug clear] ne "cleared all breakpoints"} {
+  error "breakpoint clear failed"
+}
+if {[fsim::debug breakpoints] ne "no breakpoints"} {
+  error "breakpoints were not cleared"
+}
+set relative [fsim::debug run 1ns]
+if {[string first "stopped at time 1" $relative] < 0} {
+  error "relative debug run failed: $relative"
+}
+set absolute [fsim::debug run-until 2ns]
+if {[string first "simulation finished at time 2" $absolute] < 0} {
+  error "absolute debug run failed: $absolute"
+}
+
+# Rebuilding deliberately starts a fresh debugger session for step coverage.
+fsim::build
+set statement [fsim::debug step statement]
+if {[string first "process tb." $statement] < 0} {
+  error "statement step failed: $statement"
+}
+set locals [fsim::debug locals]
+if {$locals ne "(no locals)"} {error "bad locals result: $locals"}
+set process [fsim::debug step process]
+if {[string first "stopped at time 0" $process] < 0} {
+  error "process step failed: $process"
+}
+set delta [fsim::debug step delta]
+if {[string first "stopped at time 0" $delta] < 0} {
+  error "delta step failed: $delta"
+}
+set time [fsim::debug step time]
+if {[string first "time 1" $time] < 0} {
+  error "time step failed: $time"
+}
+puts "debug-control-ok"
+)FSIM_TCL";
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {
+            "fsim",
+            "tcl",
+            "-p",
+            manifest.string(),
+            "-c",
+            debug_script,
+        },
+        input,
+        output,
+        error);
+    if (result != 0) {
+      throw std::runtime_error(
+          "Tcl debugger test failed:\n" + error.str()
+          + "\nTcl output:\n" + output.str());
+    }
+    assert(
+        output.str().find("debug-control-ok") != std::string::npos);
     assert(error.str().empty());
   }
 

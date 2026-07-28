@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -51,6 +52,10 @@ struct TclContext {
   std::ostream& error;
   std::optional<BuiltProject> built;
   std::unique_ptr<Simulation> simulation;
+  std::optional<SimulationEngine> simulation_engine;
+  std::unique_ptr<std::ostringstream> debug_output;
+  std::unique_ptr<std::ostringstream> debug_error;
+  std::unique_ptr<DebuggerControl> debugger;
   bool exit_requested{};
   int exit_code{};
 };
@@ -366,18 +371,30 @@ bool ensure_built(TclContext& context, Tcl_Interp* interpreter) {
 
 bool ensure_simulation(
     TclContext& context,
-    Tcl_Interp* interpreter) {
+    Tcl_Interp* interpreter,
+    const std::optional<SimulationEngine> requested_engine = std::nullopt) {
   if (context.simulation) {
+    if (requested_engine
+        && context.simulation_engine != requested_engine) {
+      (void)command_error(
+          interpreter,
+          "the simulation is already initialized in a different execution "
+          "mode; rebuild before entering Tcl debug control");
+      return false;
+    }
     return true;
   }
+  const auto engine =
+      requested_engine.value_or(SimulationEngine::compiled);
   if (!ensure_built(context, interpreter)) {
     return false;
   }
   context.simulation = std::make_unique<Simulation>(
       std::move(*context.built),
       context.config.run.max_deltas,
-      SimulationEngine::compiled);
+      engine);
   context.built.reset();
+  context.simulation_engine = engine;
   return true;
 }
 
@@ -474,7 +491,11 @@ int build_command(
     return command_diagnostic_error(
         context, interpreter, "fsim project build failed");
   }
+  context.debugger.reset();
+  context.debug_output.reset();
+  context.debug_error.reset();
   context.simulation.reset();
+  context.simulation_engine.reset();
   context.built = std::move(*built);
   Tcl_Obj* result = Tcl_NewDictObj();
   dict_put(
@@ -682,6 +703,54 @@ int run_command(
   return TCL_OK;
 }
 
+int debug_command(
+    TclContext& context,
+    Tcl_Interp* interpreter,
+    const int argument_count,
+    Tcl_Obj* const arguments[]) {
+  if (argument_count < 2) {
+    Tcl_WrongNumArgs(
+        interpreter, 1, arguments, "command ?argument ...?");
+    return TCL_ERROR;
+  }
+  if (!ensure_simulation(
+          context, interpreter, SimulationEngine::debug)) {
+    return TCL_ERROR;
+  }
+  if (!context.debugger) {
+    context.debug_output =
+        std::make_unique<std::ostringstream>();
+    context.debug_error =
+        std::make_unique<std::ostringstream>();
+    context.simulation->start();
+    context.debugger = std::make_unique<DebuggerControl>(
+        *context.simulation,
+        *context.debug_output,
+        *context.debug_error);
+  }
+
+  context.debug_output->str({});
+  context.debug_output->clear();
+  context.debug_error->str({});
+  context.debug_error->clear();
+  std::vector<std::string> command;
+  command.reserve(static_cast<std::size_t>(argument_count - 1));
+  for (int index = 1; index < argument_count; ++index) {
+    command.emplace_back(Tcl_GetString(arguments[index]));
+  }
+  context.debugger->execute(command);
+  const auto error = context.debug_error->str();
+  if (!error.empty()) {
+    return command_error(interpreter, error);
+  }
+  auto output = context.debug_output->str();
+  while (!output.empty()
+         && (output.back() == '\n' || output.back() == '\r')) {
+    output.pop_back();
+  }
+  return set_result(interpreter, output);
+}
+
 int fsim_command(
     void* client_data,
     Tcl_Interp* interpreter,
@@ -740,6 +809,10 @@ int fsim_command(
     }
     if (command == "::fsim::status" || command == "fsim::status") {
       return status_command(
+          context, interpreter, argument_count, arguments);
+    }
+    if (command == "::fsim::debug" || command == "fsim::debug") {
+      return debug_command(
           context, interpreter, argument_count, arguments);
     }
     return command_error(interpreter, "unknown fsim Tcl command");
@@ -1009,6 +1082,10 @@ int handle_tcl(
       error,
       std::nullopt,
       nullptr,
+      std::nullopt,
+      nullptr,
+      nullptr,
+      nullptr,
       false,
       0};
   if (Tcl_CreateNamespace(
@@ -1030,7 +1107,8 @@ int handle_tcl(
       "::fsim::force",
       "::fsim::release",
       "::fsim::run",
-      "::fsim::status"};
+      "::fsim::status",
+      "::fsim::debug"};
   bool commands_ok = true;
   for (const char* command : fsim_commands) {
     if (Tcl_CreateObjCommand(

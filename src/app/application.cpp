@@ -3334,6 +3334,35 @@ bool validate_declared_time_precisions(
 
 }  // namespace
 
+struct DebuggerControl::Impl {
+  Impl(
+      Simulation& simulation,
+      std::ostream& output,
+      std::ostream& error)
+      : session(simulation, output, error) {}
+
+  DebuggerSession session;
+};
+
+DebuggerControl::DebuggerControl(
+    Simulation& simulation,
+    std::ostream& output,
+    std::ostream& error)
+    : impl_(std::make_unique<Impl>(simulation, output, error)) {}
+
+DebuggerControl::~DebuggerControl() = default;
+DebuggerControl::DebuggerControl(DebuggerControl&&) noexcept = default;
+DebuggerControl& DebuggerControl::operator=(
+    DebuggerControl&&) noexcept = default;
+
+void DebuggerControl::execute(
+    const std::vector<std::string>& command) {
+  if (command.empty()) {
+    throw std::invalid_argument("debugger command cannot be empty");
+  }
+  impl_->session.execute(command);
+}
+
 std::optional<CheckedProject> check_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics) {

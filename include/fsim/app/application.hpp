@@ -173,6 +173,30 @@ class Simulation final {
   std::unique_ptr<Impl> impl_;
 };
 
+/// Stateful command adapter over the same debugger engine used by the CLI.
+///
+/// Embedders supply already-tokenized commands and own the streams for the
+/// adapter lifetime. This retains breakpoints, scope, and selected process
+/// state across calls without exposing debugger implementation layouts.
+class DebuggerControl final {
+ public:
+  DebuggerControl(
+      Simulation& simulation,
+      std::ostream& output,
+      std::ostream& error);
+  ~DebuggerControl();
+  DebuggerControl(DebuggerControl&&) noexcept;
+  DebuggerControl& operator=(DebuggerControl&&) noexcept;
+  DebuggerControl(const DebuggerControl&) = delete;
+  DebuggerControl& operator=(const DebuggerControl&) = delete;
+
+  void execute(const std::vector<std::string>& command);
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 /// Parse a canonical 2/4-state textual value of exactly width bits.
 [[nodiscard]] std::optional<runtime::PackedLogic4> parse_value(
     std::string_view text,

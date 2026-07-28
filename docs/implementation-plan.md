@@ -58,7 +58,9 @@ The following foundation is implemented:
 - C++20 project structure for Linux and Windows x86-64, with CMake 3.28
   presets, warning policy, Apache-2.0 licensing, and dependency-version policy;
 - embedded Tcl command/script/interactive execution with fsim-owned standard
-  streams and an installed-or-SHA-256-pinned-source CMake dependency path;
+  streams, an installed-or-SHA-256-pinned-source CMake dependency path, and a
+  stateful adapter over the common O0 debugger for hierarchy/value inspection,
+  mutation, run control, breakpoints, and all four stepping modes;
 - packed 2-, 4-, and 9-state value kernels;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
@@ -695,9 +697,10 @@ The next development iterations should occur in this order:
 6. **Complete visibility and automation:** finish source-level debugger
    behavior, trace selection, public API metadata, and normalized differential
    trace/control tests. The embedded interactive/batch Tcl shell is present;
-   its remaining commands cover project load/check/build, hierarchy/value access,
-   run/stop/step, breakpoints, force/deposit/release, trace selection,
-   diagnostics, callbacks, and deterministic batch exit status.
+   project/check/build, hierarchy/value access, debug run/step, breakpoints,
+   mutation, script arguments, and deterministic batch exit status use the
+   common application/debug engines. Remaining Tcl work is stop control, trace
+   selection, diagnostics, and callbacks.
 7. **Harden for release:** Windows LLVM gates, fuzzing, Unicode/path behavior,
    cache eviction/fingerprinting, benchmarks, and full feature-matrix closure.
 
@@ -712,23 +715,25 @@ by both engines.
 
 ## Current ten-feature regression batch
 
-The second post-gate batch is implementation- and regression-complete:
+The third post-gate batch is implementation-complete:
 
-1. installed-or-pinned-source Tcl dependency resolution;
-2. repeatable Tcl command batches;
-3. Tcl script files, arguments, and deterministic exit status;
-4. multiline interactive Tcl plus fsim-owned standard channels;
-5. Tcl project metadata;
-6. Tcl source checking;
-7. Tcl elaborated builds;
-8. Tcl signal enumeration and canonical reads;
-9. Tcl deposit/force/release semantics; and
-10. Tcl time-limited/completion runs and lifecycle status.
+1. a stateful Tcl adapter over the existing O0 command-line debugger;
+2. Tcl debugger scope and hierarchy navigation;
+3. Tcl debugger signal, packed-value, force-state, and local inspection;
+4. Tcl debugger deposit, force, and release;
+5. Tcl source, absolute-time, and conditional-signal breakpoints with
+   persistent list/delete/clear management;
+6. Tcl relative-time debug runs;
+7. Tcl absolute-time `run-until` control;
+8. Tcl statement stepping;
+9. Tcl process stepping; and
+10. Tcl delta and time stepping.
 
-Every item has focused application evidence. The pinned 8.6.18 fallback was
-also configured, downloaded with checksum verification, statically built,
-linked, and executed on Linux. The interval LLVM 22 Debug regression passed
-all 16 tests in 152.93 seconds. This checkpoint is ready to commit and push.
+Every item has focused application evidence, including deliberate rebuild of a
+live debugger session and reuse of the same application `Simulation` and
+`DebuggerSession` semantics as the CLI. The interval LLVM 22 Debug regression
+passed all 16 tests in 151.79 seconds. This checkpoint is ready to commit and
+push.
 
 ## v1 release condition
 
