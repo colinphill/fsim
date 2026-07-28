@@ -29,6 +29,7 @@ enum class DiagnosticFormat {
 
 struct Invocation {
   std::string program_name{"fsim"};
+  std::filesystem::path program_path{"fsim"};
   Command command{Command::check};
   std::filesystem::path manifest{"fsim.toml"};
   bool manifest_explicit{false};

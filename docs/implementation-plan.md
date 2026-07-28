@@ -58,8 +58,9 @@ The following foundation is implemented:
 - C++20 project structure for Linux and Windows x86-64, with CMake 3.28
   presets, warning policy, Apache-2.0 licensing, and dependency-version policy;
 - embedded Tcl command/script/interactive execution with fsim-owned standard
-  streams, an installed-or-SHA-256-pinned-source CMake dependency path, and a
-  stateful adapter over the common O0 debugger for hierarchy/value inspection,
+  streams, an installed-or-SHA-256-pinned-source CMake dependency path,
+  relocatable bundled standard-library discovery, and a stateful adapter over
+  the common O0 debugger for hierarchy/value inspection,
   mutation, run control, breakpoints, all four stepping modes, structured
   diagnostics, live VCD selection, and synchronous safe-point/value/lifecycle
   callbacks with callback-safe stop/resume;
@@ -741,7 +742,7 @@ Each iteration must add or update feature-matrix evidence and run through the
 interpreter/JIT differential harness once the affected operation is supported
 by both engines.
 
-## Current ten-feature regression batch
+## Most recent ten-feature regression batch
 
 The eighteenth post-gate batch is implementation-complete:
 
@@ -758,8 +759,24 @@ The eighteenth post-gate batch is implementation-complete:
     event/observer timestamps, deltas, values, and compiled-process counts.
 
 Focused frontend, elaboration, and named-event application tests pass. The
-interval LLVM 22 Debug regression passed all 20 tests in 141.16 seconds. This
-batch is ready to commit and push.
+interval LLVM 22 Debug regression passed all 20 tests in 141.16 seconds, and
+commit `3cfb932` is pushed. A subsequent forced no-system-Tcl probe downloaded,
+checksum-verified, built, and linked Tcl 8.6.18; relocation testing then found
+and drove the bundled standard-library packaging fix in the next batch.
+
+## Current ten-feature regression batch
+
+The nineteenth post-gate batch is in progress:
+
+1. CMake now falls back to a checksum-pinned native Tcl 8.6.18 static build
+   when development files are absent, installs its standard-library scripts
+   and license, locates the scripts relative to the actual fsim executable,
+   and supports `FSIM_TCL_LIBRARY` for custom package layouts.
+
+The forced no-system-Tcl dependency build and its isolated staged relocation
+probe pass; the ordinary installed-Tcl application regression also passes.
+This is feature 1 of 10, so the interval full regression and remote push are
+not due yet.
 
 ## v1 release condition
 

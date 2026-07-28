@@ -184,6 +184,7 @@ if(NOT FSIM_TCL_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
 endif()
 
 set(FSIM_WITH_TCL OFF)
+set(FSIM_WITH_BUNDLED_TCL OFF)
 if(NOT FSIM_TCL_MODE_NORMALIZED STREQUAL "OFF")
   find_package(TCL QUIET)
   if(TCL_FOUND)
@@ -202,6 +203,7 @@ if(NOT FSIM_TCL_MODE_NORMALIZED STREQUAL "OFF")
       "${FSIM_TCL_VERSION}"
     )
     fsim_add_fetched_tcl()
+    set(FSIM_WITH_BUNDLED_TCL ON)
   endif()
   set(FSIM_WITH_TCL ON)
 else()
@@ -422,6 +424,24 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   if(FSIM_WITH_TCL)
     target_link_libraries(fsim_application PRIVATE fsim_tcl_dependency)
     target_compile_definitions(fsim_application PUBLIC FSIM_HAS_TCL=1)
+    if(FSIM_WITH_BUNDLED_TCL)
+      file(
+        RELATIVE_PATH
+        FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR
+        "${CMAKE_INSTALL_FULL_BINDIR}"
+        "${CMAKE_INSTALL_FULL_DATADIR}/fsim/tcl${FSIM_TCL_LIBRARY_VERSION}"
+      )
+      file(
+        TO_CMAKE_PATH
+        "${FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR}"
+        FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR
+      )
+      target_compile_definitions(
+        fsim_application
+        PRIVATE
+          "FSIM_BUNDLED_TCL_LIBRARY_RELATIVE_PATH=\"${FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR}\""
+      )
+    endif()
   endif()
   target_link_libraries(fsim_api PUBLIC fsim_application)
 endif()
@@ -474,6 +494,18 @@ if(FSIM_COMMAND_TARGETS)
   install(
     TARGETS ${FSIM_COMMAND_TARGETS}
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  )
+endif()
+if(FSIM_WITH_BUNDLED_TCL)
+  install(
+    DIRECTORY "${FSIM_FETCHED_TCL_LIBRARY_DIR}/"
+    DESTINATION
+      "${CMAKE_INSTALL_DATADIR}/fsim/tcl${FSIM_TCL_LIBRARY_VERSION}"
+  )
+  install(
+    FILES "${FSIM_FETCHED_TCL_LICENSE_FILE}"
+    DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party"
+    RENAME "tcl-license.terms"
   )
 endif()
 install(

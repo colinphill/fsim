@@ -229,6 +229,23 @@ if(TARGET fsim_application)
       fsim.application.tcl
       PROPERTIES LABELS "fast;tcl"
     )
+    if(FSIM_WITH_BUNDLED_TCL)
+      add_test(
+        NAME fsim.tcl.fetched-relocation
+        COMMAND
+          "${CMAKE_COMMAND}"
+          "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+          "-DFSIM_TCL_LIBRARY_DIR=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
+          "-DFSIM_TCL_LIBRARY_VERSION=${FSIM_TCL_LIBRARY_VERSION}"
+          "-DFSIM_STAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/fetched-tcl-stage"
+          -P
+          "${PROJECT_SOURCE_DIR}/cmake/CheckFetchedTclRelocation.cmake"
+      )
+      set_tests_properties(
+        fsim.tcl.fetched-relocation
+        PROPERTIES LABELS "fast;tcl;cmake"
+      )
+    endif()
   endif()
 
   add_executable(fsim_api_tests api/api_test.cpp)

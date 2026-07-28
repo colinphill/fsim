@@ -7,6 +7,7 @@
 #include <array>
 #include <cerrno>
 #include <charconv>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <istream>
@@ -272,6 +273,49 @@ std::string path_utf8(const std::filesystem::path& path) {
       encoded.size()};
 #else
   return path.generic_string();
+#endif
+}
+
+void configure_tcl_library(Tcl_Interp* interpreter) {
+  if (const char* override_path = std::getenv("FSIM_TCL_LIBRARY");
+      override_path != nullptr && override_path[0] != '\0') {
+    (void)Tcl_SetVar(
+        interpreter,
+        "tcl_library",
+        override_path,
+        TCL_GLOBAL_ONLY);
+    return;
+  }
+
+#if defined(FSIM_BUNDLED_TCL_LIBRARY_RELATIVE_PATH)
+  const char* executable = Tcl_GetNameOfExecutable();
+  if (executable == nullptr || executable[0] == '\0') {
+    return;
+  }
+#if defined(_WIN32)
+  const std::u8string executable_utf8{
+      reinterpret_cast<const char8_t*>(executable)};
+  const std::filesystem::path executable_path{executable_utf8};
+#else
+  const std::filesystem::path executable_path{executable};
+#endif
+  const auto candidate =
+      (executable_path.parent_path()
+       / FSIM_BUNDLED_TCL_LIBRARY_RELATIVE_PATH)
+          .lexically_normal();
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(
+          candidate / "init.tcl", error)) {
+    return;
+  }
+  const auto encoded = path_utf8(candidate);
+  (void)Tcl_SetVar(
+      interpreter,
+      "tcl_library",
+      encoded.c_str(),
+      TCL_GLOBAL_ONLY);
+#else
+  (void)interpreter;
 #endif
 }
 
@@ -1620,13 +1664,15 @@ int handle_tcl(
       "-DFSIM_TCL_MODE=ON to discover or download Tcl");
   return kUnavailable;
 #else
-  Tcl_FindExecutable(invocation.program_name.c_str());
+  const auto executable = path_utf8(invocation.program_path);
+  Tcl_FindExecutable(executable.c_str());
   TclInterpreter interpreter{Tcl_CreateInterp()};
   if (!interpreter) {
     diagnostics.error(
         "FSIM-TCL-0002", "failed to create the Tcl interpreter");
     return kUnavailable;
   }
+  configure_tcl_library(interpreter.get());
   if (Tcl_Init(interpreter.get()) != TCL_OK) {
     diagnostics.error(
         "FSIM-TCL-0002",

@@ -797,7 +797,11 @@ diagnostic-query, and callback commands remain milestone-four work.
 CMake first discovers a Tcl development package. If none is present, the Tcl
 adapter downloads the pinned 8.6.18 source archive with SHA-256 verification,
 builds only the native static core, and installs its headers and script
-library into the build tree. `FSIM_TCL_MODE=OFF` is the explicit opt-out.
+library into the build tree. Installation copies the runtime script library to
+`share/fsim/tcl8.6`; the embedded interpreter locates it relative to the fsim
+executable so a staged installation remains relocatable. `FSIM_TCL_LIBRARY`
+overrides that location for custom package layouts. `FSIM_TCL_MODE=OFF` is the
+explicit opt-out.
 
 ## Platform boundary
 

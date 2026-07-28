@@ -308,8 +308,11 @@ intentionally diagnoses `SC_THREAD`/`SC_CTHREAD` as non-executable.
 
 CMake also prefers an installed Tcl development package and otherwise
 downloads the pinned Tcl 8.6.18 source archive, verifies its SHA-256 digest,
-and builds the static core with Tcl's native Linux or MSVC build. Set
-`FSIM_TCL_MODE=OFF` only when intentionally building without the Tcl command.
+builds the static core with Tcl's native Linux or MSVC build, and installs the
+Tcl standard-library scripts in a relocatable fsim data directory. Set
+`FSIM_TCL_LIBRARY` to an alternate standard-library directory when packaging
+with a custom layout. Set `FSIM_TCL_MODE=OFF` only when intentionally building
+without the Tcl command.
 
 The first Tcl slice supports `fsim tcl` for a multiline interactive shell,
 `fsim tcl -c SCRIPT` for repeatable batch commands, and

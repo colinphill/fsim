@@ -11,7 +11,17 @@ function(fsim_add_fetched_tcl)
     return()
   endif()
 
+  string(
+    REGEX MATCH
+    "^[0-9]+\\.[0-9]+"
+    tcl_library_version
+    "${FSIM_TCL_VERSION}"
+  )
   set(tcl_install "${CMAKE_BINARY_DIR}/_deps/fsim_tcl-install")
+  set(
+    tcl_source
+    "${CMAKE_BINARY_DIR}/fsim_tcl_external-prefix/src/fsim_tcl_external"
+  )
   file(MAKE_DIRECTORY "${tcl_install}/include" "${tcl_install}/lib")
 
   set(
@@ -27,6 +37,7 @@ function(fsim_add_fetched_tcl)
       URL "${tcl_url}"
       URL_HASH "SHA256=${FSIM_TCL_SOURCE_SHA256}"
       DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+      SOURCE_DIR "${tcl_source}"
       CONFIGURE_COMMAND ""
       BUILD_COMMAND
         "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc core
@@ -50,6 +61,7 @@ function(fsim_add_fetched_tcl)
       URL "${tcl_url}"
       URL_HASH "SHA256=${FSIM_TCL_SOURCE_SHA256}"
       DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+      SOURCE_DIR "${tcl_source}"
       CONFIGURE_COMMAND
         "<SOURCE_DIR>/unix/configure"
         "--prefix=<INSTALL_DIR>"
@@ -96,4 +108,23 @@ function(fsim_add_fetched_tcl)
         m
     )
   endif()
+
+  # Tcl_Init sources init.tcl and the rest of the standard library at runtime.
+  # Export its staged location so fsim can install those scripts beside a
+  # relocatable executable instead of retaining Tcl's build-tree prefix.
+  set(
+    FSIM_FETCHED_TCL_LIBRARY_DIR
+    "${tcl_install}/lib/tcl${tcl_library_version}"
+    PARENT_SCOPE
+  )
+  set(
+    FSIM_TCL_LIBRARY_VERSION
+    "${tcl_library_version}"
+    PARENT_SCOPE
+  )
+  set(
+    FSIM_FETCHED_TCL_LICENSE_FILE
+    "${tcl_source}/license.terms"
+    PARENT_SCOPE
+  )
 endfunction()

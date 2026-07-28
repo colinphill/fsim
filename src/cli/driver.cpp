@@ -423,6 +423,7 @@ std::optional<Invocation> parse_arguments(
   }
 
   Invocation invocation;
+  invocation.program_path = argv[0];
   invocation.program_name = basename(argv[0]);
   bool command_selected = false;
   const auto executable = lowercase(invocation.program_name);
