@@ -47,6 +47,11 @@ interfaces or test scaffolding exist.
 - Tcl is the first scripted automation surface. Interactive and batch Tcl
   commands must wrap the same project, session, debugger, and callback model
   as the CLI and native C API; they do not own a separate simulation kernel.
+- The bundled Tcl dependency tracks the latest stable Tcl release available
+  when its reproducible source pin is reviewed. The next dependency update
+  will move the fallback from legacy Tcl 8.6.18 to Tcl 9.0.4, the latest
+  stable release as of 2026-07-28; implementation must recheck the upstream
+  stable release before changing the pin.
 - Python automation follows later, after the Tcl command model and opaque
   native session/object ABI are stable. It must reuse those semantics rather
   than introduce a second control path.
@@ -414,6 +419,12 @@ Completed:
 
 Remaining before completion:
 
+- migrate the Tcl embedding and fetched-dependency adapter to the reviewed
+  latest stable release (currently Tcl 9.0.4), including `Tcl_Size`-correct
+  C API usage, version-derived Linux/MSVC library paths, a checksum-pinned
+  source archive, bundled standard-library relocation, and Linux/Windows
+  interactive/batch regression evidence; an installed legacy Tcl 8.6 package
+  must not silently prevent the selected Tcl 9 fallback from being used;
 - exercise LLVM 22.1.8 in Windows CI;
 - consume the planned support dependencies where their corresponding features
   are implemented, instead of only pinning version policy;
@@ -853,6 +864,28 @@ commit `65ce752`; the gate-record commit is pushed with the batch.
 Development is paused at the completed batch boundary before the twenty-first
 post-gate batch begins, as requested by the user.
 
+### Planned Tcl dependency update — Not started
+
+The first action after development resumes is a dependency migration, not a
+Tcl command-surface redesign:
+
+1. Recheck the official Tcl stable-download channel and select its latest
+   stable release; the recorded baseline on 2026-07-28 is Tcl 9.0.4.
+2. Replace the 8.6.18 version and SHA-256 source pin and derive native library
+   and standard-library paths from the selected Tcl major/minor version rather
+   than hardcoding `tcl86tsx.lib` and `libtcl8.6.a`.
+3. Audit the embedding boundary for Tcl 9 API changes, especially
+   `Tcl_Size`, channel callbacks, object/string lengths, and Windows builds;
+   do not use narrowing compatibility casts to preserve the old signatures.
+4. Require CMake discovery to verify a compatible selected Tcl 9 development
+   package. If Tcl is absent or only legacy Tcl 8.6 is detected, download and
+   build the checksum-pinned selected stable release.
+5. Re-run the forced-fetch, staged-relocation, interactive, batch, callback,
+   debugger, and failure-exit tests on Linux and Windows before treating the
+   migration as complete.
+
+No implementation work for this migration has started.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
@@ -867,6 +900,9 @@ fsim v1 may be declared only when:
 - interactive and batch Tcl behavior passes on Windows and Linux, including
   script arguments, diagnostics, stop/resume, callbacks, and nonzero batch
   exit status after a command failure;
+- the bundled Tcl pin is the latest stable release reviewed for the release
+  candidate, its Tcl 9 embedding is free of legacy-size narrowing, and an
+  installed Tcl 8.6 cannot silently select the legacy runtime;
 - recursive VHDL/SystemVerilog/SystemC hierarchy passes elaboration and runtime
   matrices in every parent-to-child language direction, including mixed
   hierarchy rooted at SystemC;
