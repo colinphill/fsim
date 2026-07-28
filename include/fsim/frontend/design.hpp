@@ -266,6 +266,7 @@ enum class AssertionSeverity {
 enum class OutputFormat {
   Binary,
   Hexadecimal,
+  Octal,
   Decimal,
 };
 

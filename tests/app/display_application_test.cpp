@@ -157,7 +157,7 @@ void test_display(
   assert(reference.result.time == 2);
   assert(compiled.result.time == 2);
   assert(reference.output == compiled.output);
-  assert(reference.output.size() == 15);
+  assert(reference.output.size() == 16);
   assert(reference.output[0].process == 0);
   assert(reference.output[0].text == "first\t");
   assert(!reference.output[0].newline);
@@ -185,30 +185,33 @@ void test_display(
   assert(reference.output[6].text == "h=x");
   assert(reference.output[6].newline);
   assert(reference.output[6].time == 0);
-  assert(reference.output[7].text == "d=165");
+  assert(reference.output[7].text == "o=245");
   assert(reference.output[7].newline);
   assert(reference.output[7].time == 0);
-  assert(reference.output[8].text == "s=-1");
+  assert(reference.output[8].text == "d=165");
   assert(reference.output[8].newline);
   assert(reference.output[8].time == 0);
-  assert(reference.output[9].text == "u=x");
+  assert(reference.output[9].text == "s=-1");
   assert(reference.output[9].newline);
   assert(reference.output[9].time == 0);
-  assert(reference.output[10].text == "post=10xz");
+  assert(reference.output[10].text == "u=x");
   assert(reference.output[10].newline);
   assert(reference.output[10].time == 0);
-  assert(reference.output[11].text == "monitored");
+  assert(reference.output[11].text == "post=10xz");
   assert(reference.output[11].newline);
   assert(reference.output[11].time == 0);
-  assert(reference.output[12].text == "second");
-  assert(!reference.output[12].newline);
-  assert(reference.output[12].time == 2);
-  assert(reference.output[13].text.empty());
+  assert(reference.output[12].text == "monitored");
+  assert(reference.output[12].newline);
+  assert(reference.output[12].time == 0);
+  assert(reference.output[13].text == "second");
   assert(!reference.output[13].newline);
   assert(reference.output[13].time == 2);
   assert(reference.output[14].text.empty());
-  assert(reference.output[14].newline);
+  assert(!reference.output[14].newline);
   assert(reference.output[14].time == 2);
+  assert(reference.output[15].text.empty());
+  assert(reference.output[15].newline);
+  assert(reference.output[15].time == 2);
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 1);
 }
@@ -302,6 +305,7 @@ module display_test;
     $display("q=%%:%b!", q);
     $write("[%b]", q);
     $display("h=%h", q);
+    $display("o=%o", n);
     $display("d=%d", n);
     $display("s=%d", s);
     $display("u=%d", q);
@@ -370,7 +374,7 @@ end architecture;
     assert(
         output.str().find(
             "first\t+line\nembedded \"quote\" \\ A\n"
-            "42\n-1\nq=%:10xz!\n[10xz]h=x\n"
+            "42\n-1\nq=%:10xz!\n[10xz]h=x\no=245\n"
             "d=165\ns=-1\nu=x\npost=10xz\n"
             "monitored\nsecond\n"
             "simulation stopped at tick 2")

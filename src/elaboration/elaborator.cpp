@@ -3067,6 +3067,9 @@ private:
                     format =
                         runtime::simir::OutputFormat::hexadecimal;
                     break;
+                case frontend::OutputFormat::Octal:
+                    format = runtime::simir::OutputFormat::octal;
+                    break;
                 case frontend::OutputFormat::Decimal:
                     format = runtime::simir::OutputFormat::decimal;
                     break;

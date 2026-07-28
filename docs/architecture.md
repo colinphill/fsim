@@ -362,8 +362,8 @@ normalized to their width-truncated decimal value in typed HIR. Unknown-state,
 dynamic, and additional operands remain targeted. Based literals marked
 signed are interpreted as two's-complement at their declared width before
 decimal formatting.
-The dynamic formatting spine lowers one `$display`/`$write` `%b`, `%h`, or
-`%d`
+The dynamic formatting spine lowers one `$display`/`$write` `%b`, `%h`, `%o`,
+or `%d`
 conversion to `FormatDisplay`, which retains a typed source register,
 prefix/suffix text, newline policy, and conversion kind. The interpreter
 formats the full packed value through the common four-state kernel. LLVM code
@@ -372,6 +372,7 @@ append-only callback and therefore uses the same formatter and embedding
 output hook. `%%` is collapsed in the frontend.
 Hex formatting retains `ceil(width/4)` digits. Uniform X/Z nibbles remain
 `x`/`z`; a nibble mixing known and unknown states conservatively renders `x`.
+Octal applies the same policy to `ceil(width/3)` three-bit groups.
 Decimal formatting uses an arbitrary-width binary-to-decimal kernel, derives
 two's-complement interpretation from the typed expression, and renders any
 four-state unknown value as `x`.

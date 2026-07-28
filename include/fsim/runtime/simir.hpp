@@ -366,6 +366,7 @@ struct Display {
 enum class OutputFormat : std::uint8_t {
   binary,
   hexadecimal,
+  octal,
   decimal,
 };
 
