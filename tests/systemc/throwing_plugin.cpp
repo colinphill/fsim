@@ -11,6 +11,10 @@ void* create_module(void*, const char*, fsim_sc_handle_v1) {
 
 void destroy_module(void*, void*) {}
 
+[[noreturn]] void fail_initialization() {
+    throw std::runtime_error{"intentional plug-in failure"};
+}
+
 } // namespace
 
 extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
@@ -25,5 +29,5 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
             != FSIM_SC_OK) {
         return FSIM_SC_RUNTIME_ERROR;
     }
-    throw std::runtime_error{"intentional plug-in failure"};
+    fail_initialization();
 }

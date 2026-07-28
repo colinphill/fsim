@@ -382,6 +382,11 @@ if(FSIM_WITH_LLVM)
   target_link_libraries(fsim_llvm PUBLIC fsim_runtime PRIVATE fsim_object_cache)
   target_include_directories(fsim_llvm SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
   target_compile_definitions(fsim_llvm PUBLIC FSIM_HAS_LLVM=1)
+  if(MSVC)
+    # LLVM's DenseMap templates trigger C4702 in MSVC after instantiation,
+    # even when their headers are marked external.
+    target_compile_options(fsim_llvm PRIVATE /wd4702)
+  endif()
 
   # Prefer a distribution's monolithic imported target. Static LLVM builds
   # expose components instead; map only the narrow ORC adapter's requirements.

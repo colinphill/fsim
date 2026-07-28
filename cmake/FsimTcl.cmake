@@ -31,7 +31,17 @@ function(fsim_add_fetched_tcl)
 
   if(WIN32)
     find_program(FSIM_NMAKE_EXECUTABLE NAMES nmake REQUIRED)
-    set(tcl_library "${tcl_install}/lib/tcl86tsx.lib")
+    if(
+      CMAKE_MSVC_RUNTIME_LIBRARY
+      AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL"
+    )
+      set(tcl_options "OPTS=static,nomsvcrt")
+      set(tcl_library "${tcl_install}/lib/tcl86ts.lib")
+    else()
+      set(tcl_options "OPTS=static,msvcrt")
+      set(tcl_library "${tcl_install}/lib/tcl86tsx.lib")
+    endif()
+    set(tcl_optimization "OPTIMIZATIONS=/O2 /GS /GL-")
     ExternalProject_Add(
       fsim_tcl_external
       URL "${tcl_url}"
@@ -41,11 +51,13 @@ function(fsim_add_fetched_tcl)
       CONFIGURE_COMMAND ""
       BUILD_COMMAND
         "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc core shell dlls
-        "OPTS=static,msvcrt" "INSTALLDIR=<INSTALL_DIR>"
+        "${tcl_options}" "${tcl_optimization}"
+        "INSTALLDIR=<INSTALL_DIR>"
       INSTALL_COMMAND
         "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc
         install-binaries install-libraries
-        "OPTS=static,msvcrt" "INSTALLDIR=<INSTALL_DIR>"
+        "${tcl_options}" "${tcl_optimization}"
+        "INSTALLDIR=<INSTALL_DIR>"
       SOURCE_SUBDIR win
       BINARY_DIR "${tcl_source}/win"
       INSTALL_DIR "${tcl_install}"

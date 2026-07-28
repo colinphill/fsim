@@ -39,6 +39,7 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-msvc",
       "cacheVariables": {
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
         "FSIM_BUILD_TESTS": "ON",
         "FSIM_LLVM_MODE": "ON"
       }
@@ -102,6 +103,7 @@
       "binaryDir": "${sourceDir}/build/ci-windows",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
         "FSIM_BUILD_TESTS": "ON",
         "FSIM_LLVM_MODE": "OFF",
         "FSIM_WARNINGS_AS_ERRORS": "ON"

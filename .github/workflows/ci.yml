@@ -264,7 +264,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} `
             "-DCMAKE_C_COMPILER=$cCompiler" `
             "-DCMAKE_CXX_COMPILER=$cxxCompiler" `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
             -DFSIM_BUILD_TESTS=ON `
             -DFSIM_LLVM_MODE=ON `
             -DFSIM_WARNINGS_AS_ERRORS=ON `
