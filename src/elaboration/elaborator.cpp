@@ -99,8 +99,7 @@ std::optional<std::int64_t> constant_index(
         return -*value;
     }
     if (expression.kind == ExpressionKind::Binary
-        || (expression.kind == ExpressionKind::Call
-            && expression.text == "?:")) {
+        || expression.kind == ExpressionKind::Call) {
         std::string error;
         return evaluate_constant_expression(
             expression, {}, error);
@@ -490,6 +489,34 @@ std::optional<std::int64_t> evaluate_constant_expression(
             "unsupported unary constant operator '"
             + expression.text + "'";
         return std::nullopt;
+    }
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "$clog2") {
+        if (expression.operands.size() != 1) {
+            error = "$clog2 requires exactly one argument";
+            return std::nullopt;
+        }
+        const auto operand = evaluate_constant_expression(
+            expression.operands.front(), environment, error);
+        if (!operand) {
+            return std::nullopt;
+        }
+        if (*operand < 0) {
+            error =
+                "$clog2 requires a nonnegative integral argument in "
+                "the current executable slice";
+            return std::nullopt;
+        }
+        auto magnitude = static_cast<std::uint64_t>(*operand);
+        std::int64_t result = 0;
+        if (magnitude > 1) {
+            --magnitude;
+            while (magnitude != 0) {
+                ++result;
+                magnitude >>= 1U;
+            }
+        }
+        return result;
     }
     if (expression.kind == ExpressionKind::Call
         && expression.text == "?:"

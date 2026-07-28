@@ -213,7 +213,8 @@ endmodule
 module parameterized #(
   parameter int WIDTH = 8,
   parameter int INCREMENT = 1,
-  localparam int LAST = WIDTH - 1
+  localparam int LAST = WIDTH - 1,
+  localparam int CLOG_WIDTH = $clog2(WIDTH)
 ) (
   input logic clk,
   output logic [WIDTH - 1:0] q
@@ -260,13 +261,15 @@ endmodule
         == std::vector<std::pair<std::string, std::string>>{
             {"WIDTH", "4"},
             {"INCREMENT", "2"},
-            {"LAST", "3"}}));
+            {"LAST", "3"},
+            {"CLOG_WIDTH", "2"}}));
     assert((
         parameter_specializations[2].parameter_values
         == std::vector<std::pair<std::string, std::string>>{
             {"WIDTH", "8"},
             {"INCREMENT", "3"},
-            {"LAST", "7"}}));
+            {"LAST", "7"},
+            {"CLOG_WIDTH", "3"}}));
     const auto parameter_clock =
         parameterized_elaborated.design->find_signal("clk");
     const auto parameter_q4 =
@@ -322,13 +325,73 @@ endmodule
         parameter_interpreter->signal_value(*parameter_q8).to_msb_string()
         == "00000011");
 
+    const auto clog2_values = fsim::frontend::parse_text(
+        "clog2-values.sv",
+        R"(
+module clog2_value #(
+  parameter int VALUE = 0,
+  localparam int RESULT = $clog2(VALUE)
+) ();
+endmodule
+
+module clog2_values_top;
+  clog2_value #(.VALUE(0)) zero();
+  clog2_value #(.VALUE(1)) one();
+  clog2_value #(.VALUE(2)) two();
+  clog2_value #(.VALUE(3)) three();
+  clog2_value #(.VALUE(4)) four();
+  clog2_value #(.VALUE(5)) five();
+  clog2_value #(.VALUE(9)) nine();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(clog2_values.ok());
+    const auto elaborated_clog2_values =
+        fsim::elaboration::elaborate(
+            clog2_values.design,
+            "sv:work.clog2_values_top");
+    assert(elaborated_clog2_values.ok());
+    const std::array<
+        std::tuple<
+            std::string_view,
+            std::string_view,
+            std::string_view>,
+        7>
+        expected_clog2_values{{
+            {"clog2_values_top.zero", "0", "0"},
+            {"clog2_values_top.one", "1", "0"},
+            {"clog2_values_top.two", "2", "1"},
+            {"clog2_values_top.three", "3", "2"},
+            {"clog2_values_top.four", "4", "2"},
+            {"clog2_values_top.five", "5", "3"},
+            {"clog2_values_top.nine", "9", "4"},
+        }};
+    for (const auto& [instance, input, expected] :
+         expected_clog2_values) {
+      const auto specialization = std::ranges::find_if(
+          elaborated_clog2_values.design->specializations(),
+          [&](const auto& candidate) {
+            return candidate.instance == instance;
+          });
+      assert(
+          specialization
+          != elaborated_clog2_values.design->specializations().end());
+      assert((
+          specialization->parameter_values
+          == std::vector<std::pair<std::string, std::string>>{
+              {"VALUE", std::string{input}},
+              {"RESULT", std::string{expected}}}));
+    }
+
     const auto invalid_parameters = fsim::frontend::parse_text(
         "invalid-parameter-elaboration.sv",
         R"(
 module invalid_parameter_target #(
   parameter int WIDTH = 4,
   localparam int LOCAL_WIDTH = WIDTH,
-  parameter int BROKEN = 1 / 0
+  parameter int BROKEN = 1 / 0,
+  parameter int BROKEN_CLOG = $clog2(-1),
+  parameter int BROKEN_CLOG_ARITY = $clog2()
 ) ();
 endmodule
 module invalid_parameter_top;
@@ -347,6 +410,20 @@ endmodule
         rejected_parameters, "FSIM-ELAB-PARAM-001"));
     assert(has_diagnostic(
         rejected_parameters, "FSIM-ELAB-PARAM-005"));
+    assert(std::ranges::any_of(
+        rejected_parameters.diagnostics,
+        [](const auto& diagnostic) {
+          return diagnostic.message.find(
+                     "$clog2 requires a nonnegative")
+                     != std::string::npos;
+        }));
+    assert(std::ranges::any_of(
+        rejected_parameters.diagnostics,
+        [](const auto& diagnostic) {
+          return diagnostic.message.find(
+                     "$clog2 requires exactly one argument")
+                     != std::string::npos;
+        }));
 
     const auto systemverilog_base_package =
         fsim::frontend::parse_text(

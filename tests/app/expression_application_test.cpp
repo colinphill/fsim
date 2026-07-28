@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -26,6 +27,7 @@ struct TemporaryDirectory {
 struct Capture {
   fsim::runtime::RunResult result;
   std::vector<std::string> values;
+  fsim::app::NativeCacheStatistics native_cache;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
 };
@@ -57,6 +59,7 @@ template <std::size_t SignalCount>
   Capture capture;
   capture.compiled_processes = simulation.compiled_process_count();
   capture.compiled_modules = simulation.compiled_module_count();
+  capture.native_cache = simulation.native_cache_statistics();
   capture.result = simulation.run();
   capture.values.reserve(signals.size());
   for (const auto signal : signals) {
@@ -64,6 +67,106 @@ template <std::size_t SignalCount>
         simulation.read_signal(signal).to_msb_string());
   }
   return capture;
+}
+
+void test_systemverilog_clog2(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "systemverilog-clog2-expression-test";
+  config.project.top = "sv:work.clog2_application";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path =
+      directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "clog2-cache-o0"
+             : "clog2-cache-o2");
+  config.run.max_deltas = 1000;
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::system_verilog;
+  sources.standard = "2017";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  auto reference_project =
+      fsim::app::build_project(config, diagnostics);
+  auto compiled_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project) {
+    print_diagnostics(diagnostics);
+  }
+  assert(reference_project);
+  assert(compiled_project);
+  assert(reference_project->design.specializations().size() == 3);
+  assert(reference_project->specialization_cache_keys.size() == 3);
+
+  std::optional<std::size_t> narrow_specialization;
+  std::optional<std::size_t> wide_specialization;
+  for (std::size_t index = 0;
+       index < reference_project->design.specializations().size();
+       ++index) {
+    const auto& specialization =
+        reference_project->design.specializations()[index];
+    if (specialization.instance == "clog2_application.narrow") {
+      narrow_specialization = index;
+      assert((
+          specialization.parameter_values
+          == std::vector<std::pair<std::string, std::string>>{
+              {"DEPTH", "9"}, {"WIDTH", "4"}}));
+    } else if (
+        specialization.instance == "clog2_application.wide") {
+      wide_specialization = index;
+      assert((
+          specialization.parameter_values
+          == std::vector<std::pair<std::string, std::string>>{
+              {"DEPTH", "17"}, {"WIDTH", "5"}}));
+    }
+  }
+  assert(narrow_specialization && wide_specialization);
+  assert(
+      reference_project->specialization_cache_keys
+          .at(*narrow_specialization)
+      != reference_project->specialization_cache_keys
+             .at(*wide_specialization));
+
+  const std::array<std::string, 2> signal_paths{
+      "clog2_application.narrow_result",
+      "clog2_application.wide_result"};
+  const auto reference = run(
+      std::move(*reference_project),
+      fsim::app::SimulationEngine::interpreter,
+      signal_paths);
+  const auto compiled = run(
+      std::move(*compiled_project),
+      fsim::app::SimulationEngine::compiled,
+      signal_paths);
+
+  assert(reference.result.status == fsim::runtime::RunStatus::completed);
+  assert(reference.result.status == compiled.result.status);
+  assert(reference.result.time == compiled.result.time);
+  assert(reference.result.delta == compiled.result.delta);
+  assert(reference.values == compiled.values);
+  assert((
+      compiled.values
+      == std::vector<std::string>{"0100", "00101"}));
+  assert(reference.compiled_processes == 0);
+  assert(reference.compiled_modules == 0);
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes == 2);
+  assert(compiled.compiled_modules == 2);
+  assert(compiled.native_cache.hits == 0);
+  assert(compiled.native_cache.misses == 2);
+  assert(compiled.native_cache.stores == 2);
+#else
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
+#endif
 }
 
 void test_vhdl_shift_rotate(
@@ -284,6 +387,27 @@ begin
 end architecture;
 )";
   }
+  const auto clog2_source = directory.path / "clog2.sv";
+  {
+    std::ofstream output(clog2_source);
+    output << R"(
+module clog2_child #(
+  parameter int DEPTH = 1,
+  localparam int WIDTH = $clog2(DEPTH)
+) (
+  output logic [WIDTH-1:0] result
+);
+  assign result = WIDTH;
+endmodule
+
+module clog2_application;
+  logic [3:0] narrow_result;
+  logic [4:0] wide_result;
+  clog2_child #(.DEPTH(9)) narrow(.result(narrow_result));
+  clog2_child #(.DEPTH(17)) wide(.result(wide_result));
+endmodule
+)";
+  }
 
   test_wildcard_equality(
       directory.path, source, fsim::project::Optimization::o0);
@@ -296,5 +420,13 @@ end architecture;
   test_vhdl_shift_rotate(
       directory.path,
       vhdl_source,
+      fsim::project::Optimization::o2);
+  test_systemverilog_clog2(
+      directory.path,
+      clog2_source,
+      fsim::project::Optimization::o0);
+  test_systemverilog_clog2(
+      directory.path,
+      clog2_source,
       fsim::project::Optimization::o2);
 }

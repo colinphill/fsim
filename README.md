@@ -47,6 +47,9 @@ The current tree contains:
   direct
   `package::constant`/`package::type` references; recursive dependency
   diagnostics; and precise specialization provenance;
+- bounded SystemVerilog `$clog2` folding for nonnegative integral constant
+  arguments in parameter/localparam defaults and specialized packed ranges,
+  with zero and exact/non-power-of-two edge behavior;
 - Verilog/SystemVerilog preprocessing with quoted/angle includes, manifest/CLI
   macros, object/function expansion with default arguments, multiline
   replacements, token concatenation/stringification, conditional compilation,

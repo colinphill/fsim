@@ -1636,6 +1636,7 @@ module parameterized #(
   output logic [WIDTH - 1:0] result
 );
   localparam int DOUBLE_WIDTH = WIDTH * 2;
+  localparam int CLOG_WIDTH = $clog2(WIDTH);
   assign result = data;
 endmodule
 
@@ -1659,7 +1660,7 @@ endmodule
   const auto* parameterized =
       result.design.find(UnitKind::VerilogModule, "parameterized");
   require(
-      parameterized != nullptr && parameterized->parameters.size() == 4,
+      parameterized != nullptr && parameterized->parameters.size() == 5,
       "parameter and localparam declarations are retained in source order");
   require(
       parameterized->parameters[0].name == "WIDTH"
@@ -1671,7 +1672,16 @@ endmodule
           && parameterized->parameters[2].name == "LAST"
           && parameterized->parameters[2].local
           && parameterized->parameters[3].name == "DOUBLE_WIDTH"
-          && parameterized->parameters[3].local,
+          && parameterized->parameters[3].local
+          && parameterized->parameters[4].name == "CLOG_WIDTH"
+          && parameterized->parameters[4].local
+          && parameterized->parameters[4].default_value.kind
+              == ExpressionKind::Call
+          && parameterized->parameters[4].default_value.text
+              == "$clog2"
+          && parameterized->parameters[4]
+                 .default_value.operands.size()
+              == 1,
       "typed parameter metadata");
   require(
       parameterized->ports.size() == 2
