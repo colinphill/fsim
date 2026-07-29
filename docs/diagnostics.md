@@ -203,8 +203,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-129` | error | Expected `;` after a VHDL record element declaration. |
 | `FSIM-VHDL-PARSE-130` | error | A bounded VHDL record declaration has no supported elements. |
 | `FSIM-VHDL-PARSE-131` | error | A VHDL record declaration has a malformed `end record` clause. |
-| `FSIM-VHDL-PARSE-132` | error | A bounded record-aggregate choice is not an element name or `others`. |
-| `FSIM-VHDL-PARSE-133` | error | A record aggregate association has no value or a trailing comma has no following association. |
+| `FSIM-VHDL-PARSE-132` | error | An aggregate choice is not a record element, `others`, or a supported locally static integer expression or range. |
+| `FSIM-VHDL-PARSE-133` | error | An aggregate association has no value or a trailing comma has no following association. |
 | `FSIM-VHDL-PARSE-134` | error | A VHDL subtype declaration is missing `is`. |
 | `FSIM-VHDL-PARSE-135` | error | A VHDL subtype declaration is missing its terminating semicolon. |
 | `FSIM-VHDL-PARSE-136` | error | A VHDL enumeration literal is neither an identifier nor a character literal. |
@@ -220,6 +220,9 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-146` | error | A VHDL array index definition is missing its closing parenthesis. |
 | `FSIM-VHDL-PARSE-147` | error | A VHDL array declaration is missing `of` before its element subtype. |
 | `FSIM-VHDL-PARSE-148` | error | A VHDL array type declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-149` | error | A VHDL aggregate range choice is missing its right bound. |
+| `FSIM-VHDL-PARSE-150` | error | A VHDL aggregate choice list has no choice after `|`. |
+| `FSIM-VHDL-PARSE-151` | error | A VHDL aggregate range or choice list is not followed by `=>`. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -255,9 +258,10 @@ therefore excluded.
 | `FSIM-VHDL-SEM-035` | error | A VHDL record declares the same case-insensitive element name more than once. |
 | `FSIM-VHDL-SEM-036` | error | A VHDL design unit declares the same bounded type name more than once. |
 | `FSIM-VHDL-SEM-037` | error | A VHDL record's optional end name does not match its declaration name. |
-| `FSIM-VHDL-SEM-038` | error | A positional record-aggregate association follows a named association. |
-| `FSIM-VHDL-SEM-039` | error | A record aggregate contains multiple `others` associations or does not place `others` last. |
+| `FSIM-VHDL-SEM-038` | error | A positional aggregate association follows a named association. |
+| `FSIM-VHDL-SEM-039` | error | An aggregate contains multiple `others` associations or does not place `others` last. |
 | `FSIM-VHDL-SEM-040` | error | A VHDL enumeration declares the same identifier or character literal more than once. |
+| `FSIM-VHDL-SEM-041` | error | `others` is combined with another choice in one VHDL aggregate association. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -697,13 +701,14 @@ therefore excluded.
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |
 | `FSIM-ELAB-VHTYPE-004` | error | A selected VHDL package type name is malformed or does not exist. |
-| `FSIM-ELAB-VHAGG-001` | error | A VHDL record aggregate appears without a contextual bounded record target type. |
+| `FSIM-ELAB-VHAGG-001` | error | A VHDL aggregate appears without a supported contextual record or array target type. |
 | `FSIM-ELAB-VHAGG-002` | error | A contextual record layout or aggregate-association HIR payload is internally inconsistent. |
 | `FSIM-ELAB-VHAGG-003` | error | A named aggregate association does not name an element of the contextual record type. |
 | `FSIM-ELAB-VHAGG-004` | error | A record aggregate assigns an element more than once, has too many positional associations, or repeats `others`. |
 | `FSIM-ELAB-VHAGG-005` | error | A record aggregate omits an element without supplying `others`. |
 | `FSIM-ELAB-VHAGG-006` | error | A record aggregate element value does not have the element's exact packed width. |
 | `FSIM-ELAB-VHAGG-007` | error | A record aggregate would implicitly lose four- or nine-state information in a two-state element. |
+| `FSIM-ELAB-VHAGG-008` | error | A record aggregate uses a discrete, range, or choice-list association that is only meaningful for an array. |
 | `FSIM-ELAB-VHSUBTYPE-001` | error | A scalar `range` constraint is applied to a resolved noninteger base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-002` | error | A derived integer subtype constraint lies outside its resolved base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-003` | error | A packed index constraint is applied to a scalar, record, or otherwise nonarray base subtype. |
@@ -715,6 +720,13 @@ therefore excluded.
 | `FSIM-ELAB-VHARRAY-005` | error | A VHDL array object uses an unconstrained or otherwise nonconcrete array subtype. |
 | `FSIM-ELAB-VHARRAY-006` | error | Assignment or comparison mixes values from different nominal VHDL array types. |
 | `FSIM-ELAB-VHARRAY-007` | error | An operator other than equality or inequality is applied to a VHDL array value in the current bounded semantic path. |
+| `FSIM-ELAB-VHARRAYAGG-002` | error | Contextual VHDL array layout or aggregate-choice HIR metadata is inconsistent with the aggregate value. |
+| `FSIM-ELAB-VHARRAYAGG-003` | error | A VHDL array aggregate choice is nonstatic or outside the contextual index range. |
+| `FSIM-ELAB-VHARRAYAGG-004` | error | A VHDL array aggregate covers an index more than once, has too many positional values, or repeats `others`. |
+| `FSIM-ELAB-VHARRAYAGG-005` | error | A VHDL array aggregate leaves a contextual index uncovered without supplying `others`. |
+| `FSIM-ELAB-VHARRAYAGG-006` | error | A VHDL array aggregate element value is not scalar width. |
+| `FSIM-ELAB-VHARRAYAGG-007` | error | A VHDL array aggregate would implicitly lose four- or nine-state information in a two-state element. |
+| `FSIM-ELAB-VHARRAYAGG-008` | error | A VHDL array aggregate combines `others` with another choice in the same association. |
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |

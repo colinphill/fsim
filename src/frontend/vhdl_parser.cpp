@@ -3074,7 +3074,10 @@ class VhdlParser final : private detail::ParserBase {
       const auto open = previous();
       auto first = parse_expression();
       if (!at(TokenKind::Arrow)
-          && !at(TokenKind::Comma)) {
+          && !at(TokenKind::Comma)
+          && !at(TokenKind::Pipe)
+          && !keyword("to", 0, true)
+          && !keyword("downto", 0, true)) {
         expect(TokenKind::RightParen, "')' after expression",
                "FSIM-VHDL-PARSE-034");
         first.span = span_from(open, previous());
@@ -3087,27 +3090,107 @@ class VhdlParser final : private detail::ParserBase {
       bool saw_others = false;
       const auto append_association =
           [&](Expression head) {
+            const auto choice_with_optional_range =
+                [&]() {
+                  const auto left_span = head.span;
+                  if (!match_keyword("to", true)
+                      && !match_keyword("downto", true)) {
+                    return head;
+                  }
+                  const auto direction = previous();
+                  Expression right;
+                  if (at(TokenKind::Arrow)
+                      || at(TokenKind::Pipe)
+                      || at(TokenKind::Comma)
+                      || at(TokenKind::RightParen)
+                      || at_end()) {
+                    error(
+                        current(),
+                        "FSIM-VHDL-PARSE-149",
+                        "expected a right bound in aggregate range "
+                        "choice");
+                    right = Expression{
+                        ExpressionKind::Invalid,
+                        {},
+                        {},
+                        current().span};
+                  } else {
+                    right = parse_expression();
+                  }
+                  return Expression{
+                      ExpressionKind::Binary,
+                      detail::ascii_lower(direction.text),
+                      {std::move(head), std::move(right)},
+                      cover(
+                          left_span,
+                          previous().span)};
+                };
+            std::vector<Expression> choices;
+            choices.push_back(choice_with_optional_range());
+            while (match(TokenKind::Pipe)) {
+              if (at(TokenKind::Arrow)
+                  || at(TokenKind::Comma)
+                  || at(TokenKind::RightParen)
+                  || at_end()) {
+                error(
+                    current(),
+                    "FSIM-VHDL-PARSE-150",
+                    "expected an aggregate choice after '|'");
+                break;
+              }
+              head = parse_expression();
+              choices.push_back(choice_with_optional_range());
+            }
             if (match(TokenKind::Arrow)) {
               named_association = true;
-              std::string choice;
-              if (head.kind == ExpressionKind::Identifier) {
-                choice = vhdl_name(head.text);
-              } else {
-                error(
-                    previous(),
-                    "FSIM-VHDL-PARSE-132",
-                    "a bounded record aggregate choice must be an "
-                    "element name or others");
+              std::size_t others_count = 0;
+              for (auto& choice_expression : choices) {
+                if (choice_expression.kind
+                        == ExpressionKind::BooleanLiteral
+                    || choice_expression.kind
+                        == ExpressionKind::LogicLiteral
+                    || choice_expression.kind
+                        == ExpressionKind::StringLiteral
+                    || choice_expression.kind
+                        == ExpressionKind::Aggregate) {
+                  error(
+                      previous(),
+                      "FSIM-VHDL-PARSE-132",
+                      "an aggregate choice must be a record element, "
+                      "others, or a locally static integer expression or "
+                      "range");
+                }
+                if (choice_expression.kind
+                        == ExpressionKind::Identifier) {
+                  choice_expression.text =
+                      vhdl_name(choice_expression.text);
+                  if (choice_expression.text == "others") {
+                    ++others_count;
+                  }
+                }
               }
-              if (choice == "others") {
+              if (others_count != 0) {
+                if (choices.size() != 1) {
+                  error(
+                      previous(),
+                      "FSIM-VHDL-SEM-041",
+                      "others must be the only choice in its aggregate "
+                      "association");
+                }
                 if (saw_others) {
                   error(
                       previous(),
                       "FSIM-VHDL-SEM-039",
-                      "a record aggregate has more than one others "
+                      "an aggregate has more than one others "
                       "association");
                 }
                 saw_others = true;
+              }
+              std::string choice = "@array";
+              if (choices.size() == 1
+                  && choices.front().kind
+                      == ExpressionKind::Identifier) {
+                choice = choices.front().text;
               }
               Expression value;
               if (at(TokenKind::Comma)
@@ -3116,7 +3199,7 @@ class VhdlParser final : private detail::ParserBase {
                 error(
                     current(),
                     "FSIM-VHDL-PARSE-133",
-                    "expected a value after record aggregate =>");
+                    "expected a value after aggregate =>");
                 value = Expression{
                     ExpressionKind::Invalid,
                     {},
@@ -3127,19 +3210,34 @@ class VhdlParser final : private detail::ParserBase {
               }
               aggregate.aggregate_choices.push_back(
                   std::move(choice));
+              aggregate.aggregate_choice_expressions.push_back(
+                  std::move(choices));
               aggregate.operands.push_back(
                   std::move(value));
               return;
+            }
+            if (choices.size() != 1
+                || (choices.front().kind
+                        == ExpressionKind::Binary
+                    && (choices.front().text == "to"
+                        || choices.front().text == "downto"))) {
+              error(
+                  current(),
+                  "FSIM-VHDL-PARSE-151",
+                  "an aggregate choice list or range must be followed "
+                  "by =>");
             }
             if (named_association) {
               error(
                   current(),
                   "FSIM-VHDL-SEM-038",
-                  "a positional record aggregate association cannot "
+                  "a positional aggregate association cannot "
                   "follow a named association");
             }
             aggregate.aggregate_choices.emplace_back();
-            aggregate.operands.push_back(std::move(head));
+            aggregate.aggregate_choice_expressions.emplace_back();
+            aggregate.operands.push_back(
+                std::move(choices.front()));
           };
       append_association(std::move(first));
       while (match(TokenKind::Comma)) {
@@ -3147,13 +3245,13 @@ class VhdlParser final : private detail::ParserBase {
           error(
               previous(),
               "FSIM-VHDL-SEM-039",
-              "the others record aggregate association must be last");
+              "the others aggregate association must be last");
         }
         if (at(TokenKind::RightParen) || at_end()) {
           error(
               current(),
               "FSIM-VHDL-PARSE-133",
-              "expected a record aggregate association after ','");
+              "expected an aggregate association after ','");
           break;
         }
         append_association(parse_expression());

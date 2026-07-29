@@ -31,9 +31,11 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 8> values;
+  std::array<std::string, 11> values;
   std::string top_local;
+  std::string top_aggregate;
   std::string child_local;
+  std::string generic_aggregate;
   std::string debugger_output;
   std::string vcd;
   std::vector<std::string> specialization_keys;
@@ -101,6 +103,12 @@ Capture run_once(
   std::optional<std::pair<
       fsim::runtime::simir::ProcessId,
       std::size_t>> child_local;
+  std::optional<std::pair<
+      fsim::runtime::simir::ProcessId,
+      std::size_t>> top_aggregate;
+  std::optional<std::pair<
+      fsim::runtime::simir::ProcessId,
+      std::size_t>> generic_aggregate;
   for (const auto& process : project->design.processes()) {
     for (std::size_t index = 0;
          index < process.debug_locals.size();
@@ -112,16 +120,30 @@ Capture run_once(
             && local.value_kind
                 == fsim::runtime::simir::ValueKind::logic9);
         top_local = std::pair{process.id, index};
+      } else if (local.name == "top_aggregate") {
+        assert(
+            local.width == 8
+            && local.value_kind
+                == fsim::runtime::simir::ValueKind::logic9);
+        top_aggregate = std::pair{process.id, index};
       } else if (local.name == "child_local") {
         assert(
             local.width == 8
             && local.value_kind
                 == fsim::runtime::simir::ValueKind::logic9);
         child_local = std::pair{process.id, index};
+      } else if (local.name == "generic_aggregate") {
+        assert(
+            local.width == 8
+            && local.value_kind
+                == fsim::runtime::simir::ValueKind::logic9);
+        generic_aggregate = std::pair{process.id, index};
       }
     }
   }
-  assert(top_local && child_local);
+  assert(
+      top_local && top_aggregate
+      && child_local && generic_aggregate);
 
   Capture capture;
   capture.specialization_keys =
@@ -134,7 +156,7 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 8> paths{
+  constexpr std::array<std::string_view, 11> paths{
       "array_top.source",
       "array_top.result",
       "array_top.conditional_result",
@@ -142,11 +164,14 @@ Capture run_once(
       "array_top.indexed_result",
       "array_top.equal_result",
       "array_top.ascending_result",
-      "array_top.boolean_result"};
-  constexpr std::array<std::size_t, 8> widths{
-      8, 8, 8, 4, 1, 1, 8, 4};
-  std::array<fsim::runtime::simir::SignalId, 8> signals{};
-  std::array<fsim::runtime::VcdSignal, 8> traces{};
+      "array_top.boolean_result",
+      "array_top.aggregate_positional",
+      "array_top.aggregate_named",
+      "array_top.aggregate_equal"};
+  constexpr std::array<std::size_t, 11> widths{
+      8, 8, 8, 4, 1, 1, 8, 4, 8, 8, 1};
+  std::array<fsim::runtime::simir::SignalId, 11> signals{};
+  std::array<fsim::runtime::VcdSignal, 11> traces{};
   std::ostringstream vcd_output;
   fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 64};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -184,8 +209,14 @@ Capture run_once(
   }
   capture.top_local = simulation.read_process_local(
       top_local->first, top_local->second).to_msb_string();
+  capture.top_aggregate = simulation.read_process_local(
+      top_aggregate->first,
+      top_aggregate->second).to_msb_string();
   capture.child_local = simulation.read_process_local(
       child_local->first, child_local->second).to_msb_string();
+  capture.generic_aggregate = simulation.read_process_local(
+      generic_aggregate->first,
+      generic_aggregate->second).to_msb_string();
   {
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
@@ -193,6 +224,7 @@ Capture run_once(
         simulation, debugger_output, debugger_error};
     debugger.execute({"show", "source"});
     debugger.execute({"show", "result"});
+    debugger.execute({"show", "aggregate_named"});
     debugger.execute({"show", "slice_result"});
     assert(debugger_error.str().empty());
     capture.debugger_output = debugger_output.str();
@@ -208,17 +240,22 @@ void verify_capture(const Capture& capture) {
       == fsim::runtime::RunStatus::completed);
   assert((
       capture.values
-      == std::array<std::string, 8>{
+      == std::array<std::string, 11>{
           "01LH10Z-",
           "11LH10Z-",
-          "11LH10Z-",
+          "1111Z0ZH",
           "10Z-",
           "1",
           "0",
+          "1111Z0Z0",
+          "1010",
           "01LH10Z-",
-          "0000"}));
+          "1111Z0ZH",
+          "1"}));
   assert(capture.top_local == "00LH10Z-");
+  assert(capture.top_aggregate == "1111Z0ZH");
   assert(capture.child_local == "11LH10Z-");
+  assert(capture.generic_aggregate == "10000000");
   assert(
       capture.debugger_output.find(
           "source = 01LH10Z-")
@@ -226,6 +263,10 @@ void verify_capture(const Capture& capture) {
   assert(
       capture.debugger_output.find(
           "result = 11LH10Z-")
+      != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "aggregate_named = 1111Z0ZH")
       != std::string::npos);
   assert(
       capture.debugger_output.find(
@@ -257,6 +298,7 @@ int main() {
         output << "-- " << revision << R"(
 package Array_Types is
   constant Byte_Width : positive := 8;
+  constant First_Index : natural := 0;
   type Logic_Array_T is array (natural range <>) of std_logic;
   subtype Byte_T is Logic_Array_T(Byte_Width - 1 downto 0);
   subtype Nibble_T is Logic_Array_T(3 downto 0);
@@ -285,6 +327,9 @@ architecture rtl of Array_Child is
 begin
   transform : process(Source)
     variable Child_Local : Byte_T;
+    variable Generic_Aggregate :
+      Logic_Array_T(Width - 1 downto 0) :=
+        (Width - 1 => '1', others => '0');
   begin
     Child_Local := Source;
     Child_Local(7) := '1';
@@ -312,12 +357,22 @@ architecture rtl of Array_Top is
   signal Equal_Result : boolean;
   signal Ascending_Result : Ascending_Byte_T;
   signal Boolean_Result : Boolean_Nibble_T;
+  signal Aggregate_Positional : Byte_T;
+  signal Aggregate_Named : Byte_T;
+  signal Aggregate_Equal : boolean;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
+    variable Top_Aggregate : Byte_T :=
+      (7 downto 4 => '1', 3 | 1 => 'Z',
+       First_Index => 'H', others => '0');
   begin
     Source <= Top_Local;
+    Aggregate_Named <= Top_Aggregate;
     Top_Local(6) := '0';
+    Top_Aggregate :=
+      (Byte_Width - 1 downto 4 => '1',
+       3 | 1 => 'Z', First_Index => 'H', others => '0');
     wait;
   end process;
 
@@ -328,11 +383,23 @@ begin
       Result => Result
     );
 
-  Conditional_Result <= Source when false else Result;
+  Conditional_Result <=
+    (others => '0') when false else
+    (7 downto 4 => '1', 3 | 1 => 'Z',
+     work.array_types.first_index => 'H', others => '0');
   Slice_Result <= Result(3 downto 0);
   Indexed_Result <= Result(7);
   Equal_Result <= Result = Source;
-  Ascending_Result <= Source;
+  Ascending_Result <=
+    (0 to 3 => '1', 4 | 6 => 'Z', others => '0');
+  Boolean_Result <=
+    (0 | 2 => true, others => false);
+  Aggregate_Positional <=
+    ('0', '1', 'L', 'H', '1', '0', 'Z', '-');
+  Aggregate_Equal <=
+    Aggregate_Named =
+      (7 downto 4 => '1', 3 | 1 => 'Z',
+       First_Index => 'H', others => '0');
 end architecture;
 )";
     assert(output.good());
@@ -367,12 +434,20 @@ end architecture;
     assert(reference.result.delta == cold.result.delta);
     assert(reference.values == cold.values);
     assert(reference.top_local == cold.top_local);
+    assert(reference.top_aggregate == cold.top_aggregate);
     assert(reference.child_local == cold.child_local);
+    assert(
+        reference.generic_aggregate
+        == cold.generic_aggregate);
     assert(reference.debugger_output == cold.debugger_output);
     assert(reference.vcd == cold.vcd);
     assert(cold.values == warm.values);
     assert(cold.top_local == warm.top_local);
+    assert(cold.top_aggregate == warm.top_aggregate);
     assert(cold.child_local == warm.child_local);
+    assert(
+        cold.generic_aggregate
+        == warm.generic_aggregate);
     assert(cold.debugger_output == warm.debugger_output);
     assert(cold.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)

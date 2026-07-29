@@ -1225,6 +1225,19 @@ bool fold_vhdl_enumeration_attributes(
     const ConstantEnvironment& environment,
     std::string& error,
     bool& range_error) {
+    for (auto& association :
+         expression.aggregate_choice_expressions) {
+        for (auto& choice : association) {
+            if (!fold_vhdl_enumeration_attributes(
+                    choice,
+                    unit,
+                    environment,
+                    error,
+                    range_error)) {
+                return false;
+            }
+        }
+    }
     for (auto& operand : expression.operands) {
         if (!fold_vhdl_enumeration_attributes(
                 operand,
@@ -1301,6 +1314,13 @@ void substitute_parameters(
                     domain->second.nominal_type;
             }
             return;
+        }
+    }
+    for (auto& association :
+         expression.aggregate_choice_expressions) {
+        for (auto& choice : association) {
+            substitute_parameters(
+                choice, environment, domains, language);
         }
     }
     for (auto& operand : expression.operands) {
@@ -2009,6 +2029,13 @@ void collect_qualified_identifiers(
         identifiers.try_emplace(
             expression.text, expression.span);
     }
+    for (const auto& association :
+         expression.aggregate_choice_expressions) {
+        for (const auto& choice : association) {
+            collect_qualified_identifiers(
+                choice, identifiers);
+        }
+    }
     for (const auto& operand : expression.operands) {
         collect_qualified_identifiers(operand, identifiers);
     }
@@ -2336,6 +2363,12 @@ void qualify_generated_expression(
         if (const auto found = names.find(expression.text);
             found != names.end()) {
             expression.text = found->second;
+        }
+    }
+    for (auto& association :
+         expression.aggregate_choice_expressions) {
+        for (auto& choice : association) {
+            qualify_generated_expression(choice, names);
         }
     }
     for (auto& operand : expression.operands) {
@@ -6611,6 +6644,287 @@ private:
             adjusted, type);
     }
 
+    std::optional<RegisterId> lower_vhdl_array_aggregate(
+        const Expression& expression,
+        const std::size_t expected_width,
+        const frontend::Type& expected_type) {
+        const auto aggregate_width = expected_type.width();
+        if (!expected_type.vhdl_array
+            || !expected_type.packed_range
+            || !aggregate_width
+            || *aggregate_width != expected_width
+            || expected_width == 0
+            || expected_width - 1
+                > std::numeric_limits<std::uint32_t>::max()
+            || expression.aggregate_choices.size()
+                != expression.operands.size()
+            || expression.aggregate_choice_expressions.size()
+                != expression.operands.size()) {
+            report(
+                "FSIM-ELAB-VHARRAYAGG-002",
+                "VHDL array aggregate association metadata or contextual "
+                "layout is inconsistent",
+                expression.span);
+            return std::nullopt;
+        }
+
+        frontend::Type element_type;
+        element_type.spelling =
+            expected_type.vhdl_array->element_spelling;
+        element_type.domain =
+            expected_type.vhdl_array->element_domain;
+        const auto destination = allocate_register(
+            expected_width, expected_type.domain);
+        process_.operations.emplace_back(LoadConstant{
+            destination,
+            default_packed_value(
+                expected_type, expected_width)});
+        std::vector<bool> assigned(expected_width, false);
+        std::optional<std::size_t> others_index;
+        std::size_t positional_index = 0;
+        bool valid = true;
+
+        const auto source_index =
+            [&](const std::size_t offset) {
+              const auto distance =
+                  static_cast<std::int64_t>(offset);
+              return expected_type.packed_range->descending
+                  ? expected_type.packed_range->right + distance
+                  : expected_type.packed_range->right - distance;
+            };
+        const auto insert_offset =
+            [&](const std::size_t offset,
+                const Expression& value,
+                const frontend::SourceSpan& span) {
+              if (offset >= assigned.size()) {
+                  report(
+                      "FSIM-ELAB-VHARRAYAGG-004",
+                      "VHDL array aggregate has too many positional "
+                      "associations",
+                      span);
+                  valid = false;
+                  return;
+              }
+              if (assigned[offset]) {
+                  report(
+                      "FSIM-ELAB-VHARRAYAGG-004",
+                      "VHDL array aggregate index "
+                          + std::to_string(source_index(offset))
+                          + " is assigned more than once",
+                      span);
+                  valid = false;
+                  return;
+              }
+              const auto lowered =
+                  lower_expression(value, 1, &element_type);
+              if (!lowered) {
+                  valid = false;
+                  return;
+              }
+              if (register_width(*lowered) != 1) {
+                  report(
+                      "FSIM-ELAB-VHARRAYAGG-006",
+                      "VHDL array aggregate element expects one scalar "
+                      "value but its association has "
+                          + std::to_string(register_width(*lowered))
+                          + " bits",
+                      span);
+                  valid = false;
+                  return;
+              }
+              if (is_two_state_domain(element_type.domain)
+                  && !is_two_state_domain(
+                      register_domain(*lowered))) {
+                  report(
+                      "FSIM-ELAB-VHARRAYAGG-007",
+                      "two-state VHDL array aggregate element requires an "
+                      "explicit conversion from a four- or nine-state "
+                      "value",
+                      span);
+                  valid = false;
+                  return;
+              }
+              process_.operations.emplace_back(Insert{
+                  destination,
+                  destination,
+                  *lowered,
+                  static_cast<std::uint32_t>(offset)});
+              assigned[offset] = true;
+            };
+        const auto insert_index =
+            [&](const std::int64_t index,
+                const Expression& value,
+                const frontend::SourceSpan& span) {
+              const auto range = *expected_type.packed_range;
+              const auto lower =
+                  std::min(range.left, range.right);
+              const auto upper =
+                  std::max(range.left, range.right);
+              if (index < lower || index > upper) {
+                  report(
+                      "FSIM-ELAB-VHARRAYAGG-003",
+                      "VHDL array aggregate index "
+                          + std::to_string(index)
+                          + " is outside the contextual range "
+                          + std::to_string(range.left)
+                          + (range.descending
+                                 ? " downto "
+                                 : " to ")
+                          + std::to_string(range.right),
+                      span);
+                  valid = false;
+                  return;
+              }
+              const auto offset =
+                  index_distance(index, range.right);
+              if (offset
+                  > std::numeric_limits<std::size_t>::max()) {
+                  report(
+                      "FSIM-ELAB-VHARRAYAGG-002",
+                      "VHDL array aggregate index offset is not "
+                      "representable by the packed runtime",
+                      span);
+                  valid = false;
+                  return;
+              }
+              insert_offset(
+                  static_cast<std::size_t>(offset),
+                  value,
+                  span);
+            };
+
+        for (std::size_t association = 0;
+             association < expression.operands.size();
+             ++association) {
+            const auto& choices =
+                expression.aggregate_choice_expressions[
+                    association];
+            const auto& value =
+                expression.operands[association];
+            if (choices.empty()) {
+                if (positional_index >= expected_width) {
+                    insert_offset(
+                        expected_width, value, value.span);
+                } else {
+                    insert_offset(
+                        expected_width - 1
+                            - positional_index,
+                        value,
+                        value.span);
+                }
+                ++positional_index;
+                continue;
+            }
+            for (const auto& choice : choices) {
+                if (choice.kind == ExpressionKind::Identifier
+                    && choice.text == "others") {
+                    if (choices.size() != 1) {
+                        report(
+                            "FSIM-ELAB-VHARRAYAGG-008",
+                            "others must be the only choice in a VHDL "
+                            "array aggregate association",
+                            choice.span);
+                        valid = false;
+                    }
+                    if (others_index) {
+                        report(
+                            "FSIM-ELAB-VHARRAYAGG-004",
+                            "VHDL array aggregate has more than one "
+                            "others association",
+                            choice.span);
+                        valid = false;
+                    } else {
+                        others_index = association;
+                    }
+                    continue;
+                }
+                if (choice.kind == ExpressionKind::Binary
+                    && (choice.text == "to"
+                        || choice.text == "downto")) {
+                    if (choice.operands.size() != 2) {
+                        report(
+                            "FSIM-ELAB-VHARRAYAGG-002",
+                            "VHDL array aggregate range choice metadata "
+                            "is inconsistent",
+                            choice.span);
+                        valid = false;
+                        continue;
+                    }
+                    const auto left =
+                        constant_index(choice.operands[0]);
+                    const auto right =
+                        constant_index(choice.operands[1]);
+                    if (!left || !right) {
+                        report(
+                            "FSIM-ELAB-VHARRAYAGG-003",
+                            "VHDL array aggregate range choices require "
+                            "locally static integer bounds",
+                            choice.span);
+                        valid = false;
+                        continue;
+                    }
+                    const bool descending =
+                        choice.text == "downto";
+                    const bool null =
+                        descending ? *left < *right
+                                   : *left > *right;
+                    if (null) {
+                        continue;
+                    }
+                    auto index = *left;
+                    while (true) {
+                        insert_index(index, value, choice.span);
+                        if (index == *right) {
+                            break;
+                        }
+                        index += descending ? -1 : 1;
+                    }
+                    continue;
+                }
+                const auto index = constant_index(choice);
+                if (!index) {
+                    report(
+                        "FSIM-ELAB-VHARRAYAGG-003",
+                        "VHDL array aggregate choices require locally "
+                        "static integer indices",
+                        choice.span);
+                    valid = false;
+                    continue;
+                }
+                insert_index(*index, value, choice.span);
+            }
+        }
+
+        if (others_index) {
+            for (std::size_t offset = 0;
+                 offset < assigned.size();
+                 ++offset) {
+                if (!assigned[offset]) {
+                    insert_offset(
+                        offset,
+                        expression.operands[*others_index],
+                        expression.operands[*others_index].span);
+                }
+            }
+        }
+        for (std::size_t offset = 0;
+             offset < assigned.size();
+             ++offset) {
+            if (assigned[offset]) {
+                continue;
+            }
+            report(
+                "FSIM-ELAB-VHARRAYAGG-005",
+                "VHDL array aggregate is missing index "
+                    + std::to_string(source_index(offset)),
+                expression.span);
+            valid = false;
+        }
+        return valid
+            ? std::optional<RegisterId>{destination}
+            : std::nullopt;
+    }
+
     std::optional<RegisterId> lower_expression(
         const Expression& expression,
         const std::size_t expected_width,
@@ -6813,6 +7127,12 @@ private:
             }
         }
         if (expression.kind == ExpressionKind::Aggregate) {
+            if (language_ == frontend::Language::Vhdl2008
+                && expected_type != nullptr
+                && expected_type->vhdl_array) {
+                return lower_vhdl_array_aggregate(
+                    expression, expected_width, *expected_type);
+            }
             if (language_ != frontend::Language::Vhdl2008
                 || expected_type == nullptr
                 || expected_type->packed_members.empty()) {
@@ -6830,6 +7150,8 @@ private:
                 || *aggregate_width
                     > std::numeric_limits<std::size_t>::max()
                 || expression.aggregate_choices.size()
+                    != expression.operands.size()
+                || expression.aggregate_choice_expressions.size()
                     != expression.operands.size()) {
                 report(
                     "FSIM-ELAB-VHAGG-002",
@@ -6933,7 +7255,17 @@ private:
                  ++index) {
                 const auto& choice =
                     expression.aggregate_choices[index];
+                const auto& choice_expressions =
+                    expression.aggregate_choice_expressions[index];
                 if (choice.empty()) {
+                    if (!choice_expressions.empty()) {
+                        report(
+                            "FSIM-ELAB-VHAGG-002",
+                            "positional record aggregate association has "
+                            "unexpected choice metadata",
+                            expression.operands[index].span);
+                        valid = false;
+                    }
                     insert_member(
                         positional_index++,
                         expression.operands[index],
@@ -6941,6 +7273,18 @@ private:
                     continue;
                 }
                 if (choice == "others") {
+                    if (choice_expressions.size() != 1
+                        || choice_expressions.front().kind
+                            != ExpressionKind::Identifier
+                        || choice_expressions.front().text
+                            != "others") {
+                        report(
+                            "FSIM-ELAB-VHAGG-002",
+                            "record aggregate others association has "
+                            "inconsistent choice metadata",
+                            expression.operands[index].span);
+                        valid = false;
+                    }
                     if (others_index) {
                         report(
                             "FSIM-ELAB-VHAGG-004",
@@ -6951,6 +7295,18 @@ private:
                     } else {
                         others_index = index;
                     }
+                    continue;
+                }
+                if (choice_expressions.size() != 1
+                    || choice_expressions.front().kind
+                        != ExpressionKind::Identifier
+                    || choice_expressions.front().text != choice) {
+                    report(
+                        "FSIM-ELAB-VHAGG-008",
+                        "record aggregates do not accept discrete, range, "
+                        "or choice-list associations",
+                        expression.operands[index].span);
+                    valid = false;
                     continue;
                 }
                 const auto member = std::find_if(

@@ -2079,6 +2079,68 @@ debugger, VCD, and cache evidence, fetched Boost.Context 1.91.0 and Tcl 9.0.4,
 SystemC, the strict native ABI, and every preceding feature batch. No CI state
 was inspected for this local gate.
 
+### Forty-fifth feature batch — contextual VHDL array aggregates
+
+The planned ten implementation features are:
+
+1. Extend expression HIR so every VHDL aggregate association retains its
+   ordered choice expressions and source spans independently from its value,
+   while preserving existing record-element metadata.
+2. Parse positional, discrete-index, locally static `to`/`downto` range,
+   `|` choice-list, and final `others` associations in nested aggregate
+   expressions without guessing the contextual array or record type.
+3. Preserve identifiers inside aggregate choices through qualified package
+   discovery, generate-scope qualification, package/generic substitution,
+   and specialization.
+4. Contextually type aggregates from a concrete nominal one-dimensional
+   scalar-element array target and lower every element using the declared
+   Boolean, bit, std_logic, or std_ulogic domain.
+5. Map positional and named choices by declared ordinal for both ascending
+   and descending constraints, including nonzero and negative index bounds.
+6. Diagnose a missing contextual array type, malformed choice metadata,
+   nonstatic or out-of-range choices, duplicate coverage, missing elements,
+   illegal record-style choice lists, width mismatches, and implicit lossy
+   four-state-to-two-state element conversion with stable codes.
+7. Execute array aggregates in signal and local initializers, whole signal
+   and variable assignments, conditional alternatives, and nominal equality
+   expressions through the common SimIR path.
+8. Fold package constants and prior generics used as choices per hierarchy
+   specialization, retain same-language nominal port behavior, and propagate
+   transitive package dependencies into native-cache identity.
+9. Require interpreter and LLVM O0/O2 equivalence for aggregate results,
+   persistent debug locals, debugger rendering, normalized VCD, cold/warm
+   object reuse, and package-edit invalidation.
+10. Add focused positive, negative, frontend, elaboration, and application
+    evidence; update the VHDL feature matrix and support documentation; then
+    run, record, and push the full local regression gate.
+
+All ten implementation features are complete. Expression HIR now retains an
+ordered AST for every aggregate choice alongside the association value and
+the existing record-element marker. The parser accepts positional,
+discrete-index, ascending/descending range, `|` choice-list, and final
+`others` associations, preserves source spans, recovers with targeted
+diagnostics, and leaves record-versus-array interpretation to contextual
+semantic analysis.
+
+Qualified-name discovery, generate qualification, enumeration folding, and
+package/generic substitution traverse choice expressions. Elaboration
+constructs concrete scalar-element arrays by declared ordinal for ascending,
+descending, negative, and nonzero index ranges; folds visible and selected
+package constants plus prior generics; enforces scalar width and state-domain
+safety; and diagnoses inconsistent metadata, nonstatic or out-of-range
+choices, duplicate coverage, missing indices, illegal record choice lists,
+and unsupported aggregate contexts.
+
+The application differential covers positional and named aggregate
+initializers, local and signal assignments, range and choice-list
+associations, conditional alternatives, nominal equality, Boolean and
+nine-state elements, ascending and descending mapping, selected package
+constants, hierarchy generics, persistent debug locals, debugger display,
+normalized VCD, interpreter/LLVM O0/O2 equivalence, cold/warm native reuse,
+and package-edit invalidation. Focused frontend and elaboration evidence
+covers every new parser and semantic diagnostic, including deliberately
+malformed HIR robustness cases.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

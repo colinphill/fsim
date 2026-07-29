@@ -10934,6 +10934,7 @@ package Scalar_Types is
 end package;
 
 package Array_Types is
+  constant Low_Index : integer := 0;
   type Flags_T is array (natural range <>) of boolean;
   subtype Quartet_T is Flags_T(0 to 3);
   type Logic_Bus_T is array (7 downto 0)
@@ -10953,10 +10954,20 @@ end entity;
 use work.array_types.all;
 architecture rtl of Array_Dut is
   signal Local_Bits : Bits_T(-1 to 2);
+  signal Aggregate_Positional : Quartet_T;
+  signal Aggregate_Named : Quartet_T;
+  signal Aggregate_Equal : boolean;
 begin
   Result <= Source;
-  Logic_Bus <= "10100101";
-  Local_Bits <= "1100";
+  Logic_Bus <=
+    (7 downto 4 => '1', 3 | 1 => 'Z', others => '0');
+  Local_Bits <= (-1 | 1 => '1', others => '0');
+  Aggregate_Positional <= (true, false, true, false);
+  Aggregate_Named <=
+    (Low_Index | 2 => true, 1 | 3 => false);
+  Aggregate_Equal <=
+    Aggregate_Named =
+      (0 to 0 => true, 2 => true, others => false);
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -10978,9 +10989,18 @@ end architecture;
         array_design.design->find_signal("logic_bus");
     const auto array_local_signal =
         array_design.design->find_signal("local_bits");
+    const auto array_positional_signal =
+        array_design.design->find_signal(
+            "aggregate_positional");
+    const auto array_named_signal =
+        array_design.design->find_signal("aggregate_named");
+    const auto array_equal_signal =
+        array_design.design->find_signal("aggregate_equal");
     assert(
         array_source_signal && array_result_signal
-        && array_logic_signal && array_local_signal);
+        && array_logic_signal && array_local_signal
+        && array_positional_signal && array_named_signal
+        && array_equal_signal);
     const auto& array_source_info =
         array_design.design->signals().at(*array_source_signal);
     const auto& array_result_info =
@@ -11032,11 +11052,24 @@ end architecture;
     assert(
         array_interpreter->signal_value(*array_logic_signal)
             .to_msb_string()
-            == "10100101");
+            == "1111Z0Z0");
     assert(
         array_interpreter->signal_value(*array_local_signal)
             .to_msb_string()
-            == "1100");
+            == "1010");
+    assert(
+        array_interpreter
+            ->signal_value(*array_positional_signal)
+            .to_msb_string()
+            == "1010");
+    assert(
+        array_interpreter->signal_value(*array_named_signal)
+            .to_msb_string()
+            == "1010");
+    assert(
+        array_interpreter->signal_value(*array_equal_signal)
+            .to_msb_string()
+            == "1");
 
     const auto invalid_array_source =
         fsim::frontend::parse_text(
@@ -11064,16 +11097,41 @@ use work.invalid_array_types.all;
 architecture rtl of Invalid_Arrays is
   subtype Bad_Reconstraint_T is Fixed_T(1 downto 0);
   type Nested_T is array (0 to 1) of A_T;
+  type Record_T is record
+    X : bit;
+    Y : bit;
+  end record;
   signal Null_Array : A_T(3 to 0);
   signal Negative_Natural : A_T(-1 to 2);
   signal Unconstrained : A_T;
   signal A : A_T(0 to 3);
   signal B : B_T(0 to 3);
   signal Equal : boolean;
+  signal Dynamic_Index : integer;
+  signal Logic_Value : std_logic;
+  signal Missing_Aggregate : A_T(0 to 3);
+  signal Duplicate_Aggregate : A_T(0 to 3);
+  signal Outside_Aggregate : A_T(0 to 3);
+  signal Nonstatic_Aggregate : A_T(0 to 3);
+  signal Lossy_Aggregate : A_T(0 to 3);
+  signal Wide_Element_Aggregate : A_T(0 to 3);
+  signal Scalar_Target : bit;
+  signal Record_Target : Record_T;
 begin
   B <= A;
   Equal <= A = B;
   Equal <= A < A;
+  Missing_Aggregate <= (0 => '1', 1 => '0');
+  Duplicate_Aggregate <= (0 | 0 => '1', others => '0');
+  Outside_Aggregate <= (4 => '1', others => '0');
+  Nonstatic_Aggregate <=
+    (Dynamic_Index => '1', others => '0');
+  Lossy_Aggregate <=
+    (0 => Logic_Value, others => '0');
+  Wide_Element_Aggregate <=
+    (0 => "10", others => '0');
+  Scalar_Target <= (0 => '0');
+  Record_Target <= (X | Y => '0');
   Child : entity work.Invalid_Array_Child(rtl)
     port map (Value => B);
 end architecture;
@@ -11109,6 +11167,87 @@ end architecture;
     assert(
         has_diagnostic(
             invalid_array_design, "FSIM-ELAB-BIND-056"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHARRAYAGG-003"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHARRAYAGG-004"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHARRAYAGG-005"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHARRAYAGG-006"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHARRAYAGG-007"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHAGG-001"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHAGG-008"));
+
+    auto malformed_array_aggregate =
+        fsim::frontend::parse_text(
+            "malformed_array_aggregate_metadata.vhd",
+            R"(
+entity Malformed_Array_Aggregate is
+end entity;
+architecture rtl of Malformed_Array_Aggregate is
+  type Bits_T is array (0 to 3) of bit;
+  signal Value : Bits_T;
+begin
+  Value <= (others => '0');
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(malformed_array_aggregate.ok());
+    auto combined_others_aggregate =
+        malformed_array_aggregate;
+    auto& malformed_array_expression =
+        malformed_array_aggregate.design.units.back()
+            .concurrent_statements.front().value;
+    malformed_array_expression
+        .aggregate_choice_expressions.pop_back();
+    const auto malformed_array_design =
+        fsim::elaboration::elaborate(
+            malformed_array_aggregate.design,
+            "vhdl:work.malformed_array_aggregate(rtl)");
+    assert(
+        !malformed_array_design.ok()
+        && has_diagnostic(
+            malformed_array_design,
+            "FSIM-ELAB-VHARRAYAGG-002"));
+    auto& combined_others_expression =
+        combined_others_aggregate.design.units.back()
+            .concurrent_statements.front().value;
+    const auto combined_choice_span =
+        combined_others_expression.span;
+    combined_others_expression
+        .aggregate_choice_expressions.front().push_back(
+            fsim::frontend::Expression{
+                fsim::frontend::ExpressionKind::IntegerLiteral,
+                "0",
+                {},
+                combined_choice_span});
+    const auto combined_others_design =
+        fsim::elaboration::elaborate(
+            combined_others_aggregate.design,
+            "vhdl:work.malformed_array_aggregate(rtl)");
+    assert(
+        !combined_others_design.ok()
+        && has_diagnostic(
+            combined_others_design,
+            "FSIM-ELAB-VHARRAYAGG-008"));
 
     const auto foreign_array_parent =
         fsim::frontend::parse_text(

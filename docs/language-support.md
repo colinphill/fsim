@@ -24,6 +24,17 @@ silently discarded.
 | Preprocessing/directives | Quoted and angle includes, manifest/CLI definitions, object/function macros with default arguments, multiline replacement, argument substitution, token concatenation/stringification, `__FILE__`/`__LINE__`, `undef`, nested conditional compilation, logical `` `line`` source remapping, legal `` `timescale``, `` `default_nettype``, reset/cell/keyword-version/unconnected-drive state, and ordered `file`/`source-set`/`combined` policies | Included units and macro-selected executable source enter the normal frontend; active `` `line`` mappings reach parser diagnostics, macro ancestry, DesignIR/SimIR debug points, report callbacks, and LLVM objects while physical ownership remains in analysis/native cache provenance; mappings reset for includes and compilation-unit roots; source-set/combined roots otherwise share macro, conditional, and parser directive state while retaining library ownership; scalar implicit nets and default port net types honor `` `default_nettype``; cell metadata and omitted-input pulls reach DesignIR/runtime; time directives and declarations scale exact delays and contribute to `auto` resolution; ordered snapshots participate in cache identity | Standardized pragma behavior, multi-driver wired-net resolution, and complete trireg charge semantics remain incomplete; unsupported directives receive targeted errors |
 | SystemC | C++ compatibility header, versioned plug-in entry point, typed factories, and peer mixed-language hierarchy | Common signals/ports/exports/events/channels, native and foreign children, lifecycle callbacks, `SC_METHOD`, and Boost.Context-backed `SC_THREAD`/`SC_CTHREAD` timed/event/static waits execute on the deterministic common kernel | Arbitrary custom-interface metadata, dynamic processes, thread reset/kill, TLM/AMS/CCI, and Accellera ABI compatibility remain unsupported |
 
+VHDL array-aggregate status update: constrained one-dimensional
+scalar-element user arrays now accept contextually typed positional,
+locally-static discrete/range/choice-list, and final `others` associations in
+initializers, whole assignments, conditional alternatives, and equality
+expressions. Choices follow the declared ascending or descending ordinal
+range and may fold visible package constants or prior generics. The compact
+table's older blanket references to unsupported “array aggregates” and
+“choice-list aggregates” are therefore superseded for this bounded form;
+nested, multidimensional, qualified, composite-element, and dynamically
+chosen aggregates remain unsupported.
+
 SystemVerilog time status update: compilation-unit and leading module-local
 `timeunit`/`timeprecision` declarations, including the combined
 `timeunit value / value` form, now override inherited `` `timescale`` context.

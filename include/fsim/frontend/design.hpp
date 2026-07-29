@@ -73,9 +73,14 @@ struct Expression {
   std::vector<Expression> operands;
   SourceSpan span;
   // VHDL aggregate choices parallel operands. Empty denotes a positional
-  // association; otherwise the canonical element name or `others` is
-  // retained. Non-aggregate expressions leave this vector empty.
+  // association; otherwise the canonical record element name, `others`, or
+  // the internal `@array` marker is retained. Each corresponding entry in
+  // aggregate_choice_expressions retains the parsed discrete/range choices;
+  // record aggregates normally have one identifier choice, positional
+  // associations have none, and non-aggregate expressions leave both vectors
+  // empty.
   std::vector<std::string> aggregate_choices{};
+  std::vector<std::vector<Expression>> aggregate_choice_expressions{};
   // Set only on elaboration-internal folded VHDL enumeration constants so
   // contextual nominal typing survives substitution into comparisons and
   // conditional expressions.
@@ -87,11 +92,15 @@ struct Expression {
              std::vector<Expression> expression_operands,
              SourceSpan expression_span,
              std::vector<std::string> expression_aggregate_choices = {},
+             std::vector<std::vector<Expression>>
+                 expression_aggregate_choice_expressions = {},
              std::string expression_nominal_type = {})
       : kind(expression_kind), text(std::move(expression_text)),
         operands(std::move(expression_operands)),
         span(std::move(expression_span)),
         aggregate_choices(std::move(expression_aggregate_choices)),
+        aggregate_choice_expressions(
+            std::move(expression_aggregate_choice_expressions)),
         nominal_type(std::move(expression_nominal_type)) {}
 
   [[nodiscard]] bool valid() const noexcept {

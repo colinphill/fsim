@@ -1728,7 +1728,19 @@ end entity;
 use work.array_types.all;
 architecture rtl of Array_Endpoint is
   signal Local : Local_Byte_T;
+  signal Aggregate_Result : Logic_Bus_T;
 begin
+  aggregate_forms : process
+    variable Positional : Quartet_T :=
+      (true, false, true, false);
+    variable Named : Quartet_T :=
+      (0 | 2 => true, 1 | 3 => false);
+  begin
+    Named := (0 to 1 => true, others => false);
+    Aggregate_Result <=
+      (7 downto 4 => '1', 3 | 1 => 'Z', others => '0');
+    wait;
+  end process;
 end architecture;
 )",
       Language::Vhdl2008);
@@ -1803,6 +1815,63 @@ end architecture;
           && entity->type_aliases[1].type.named_type
               == "local_bits_t",
       "entity-local array declarations and constrained subtypes are retained");
+  const auto& architecture = parsed.design.units.back();
+  require(
+      architecture.processes.size() == 1
+          && architecture.processes[0].variables.size() == 2,
+      "array aggregate initializers remain attached to process variables");
+  const auto& positional =
+      *architecture.processes[0].variables[0].initializer;
+  const auto& named =
+      *architecture.processes[0].variables[1].initializer;
+  require(
+      positional.kind == ExpressionKind::Aggregate
+          && positional.operands.size() == 4
+          && positional.aggregate_choice_expressions.size() == 4
+          && std::ranges::all_of(
+              positional.aggregate_choice_expressions,
+              [](const auto& choices) {
+                return choices.empty();
+              }),
+      "positional array aggregate associations have no choice expressions");
+  require(
+      named.kind == ExpressionKind::Aggregate
+          && named.operands.size() == 2
+          && named.aggregate_choices
+              == std::vector<std::string>({"@array", "@array"})
+          && named.aggregate_choice_expressions.size() == 2
+          && named.aggregate_choice_expressions[0].size() == 2
+          && named.aggregate_choice_expressions[1].size() == 2
+          && named.aggregate_choice_expressions[0][0].kind
+              == ExpressionKind::IntegerLiteral
+          && named.aggregate_choice_expressions[0][0]
+                 .span.source_name
+              == "array_types.vhd",
+      "discrete array choice lists retain ordered expression HIR");
+  const auto& aggregate_statements =
+      architecture.processes[0].statements;
+  require(
+      aggregate_statements.size() == 3
+          && aggregate_statements[0].value.kind
+              == ExpressionKind::Aggregate
+          && aggregate_statements[0]
+                 .value.aggregate_choice_expressions[0][0].kind
+              == ExpressionKind::Binary
+          && aggregate_statements[0]
+                 .value.aggregate_choice_expressions[0][0].text
+              == "to"
+          && aggregate_statements[0]
+                 .value.aggregate_choice_expressions[0][0]
+                 .span.source_name
+              == "array_types.vhd"
+          && aggregate_statements[0].value.aggregate_choices[1]
+              == "others"
+          && aggregate_statements[1].value.kind
+              == ExpressionKind::Aggregate
+          && aggregate_statements[1]
+                 .value.aggregate_choice_expressions[0][0].text
+              == "downto",
+      "range and others array aggregate choices retain direction and order");
 
   const auto rejected = parse_text(
       "invalid_array_types.vhd",
@@ -1825,6 +1894,37 @@ end package;
               >= 3,
       "multidimensional, composite-element, and invalid-index arrays are "
       "targeted rather than silently accepted");
+
+  const auto invalid_aggregates = parse_text(
+      "invalid_array_aggregates.vhd",
+      R"(
+entity Invalid_Array_Aggregates is
+end entity;
+architecture rtl of Invalid_Array_Aggregates is
+  type Bits_T is array (0 to 3) of bit;
+  signal Result : Bits_T;
+begin
+  Result <= (0 to => '0', others => '1');
+  Result <= (0 | => '0', others => '1');
+  Result <= (others | 1 => '0');
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_aggregate_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            invalid_aggregates.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !invalid_aggregates.ok()
+          && has_aggregate_code("FSIM-VHDL-PARSE-149")
+          && has_aggregate_code("FSIM-VHDL-PARSE-150")
+          && has_aggregate_code("FSIM-VHDL-SEM-041"),
+      "malformed array ranges, choice lists, and others associations have "
+      "stable parser diagnostics");
 }
 
 void test_vhdl_enumeration_declarations() {
