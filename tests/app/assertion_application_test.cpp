@@ -44,8 +44,6 @@ struct Capture {
   fsim::runtime::simir::AssertionSeverity failure_severity{};
   bool failure_was_reported{};
   std::size_t compiled_processes{};
-
-  friend bool operator==(const Capture&, const Capture&) = default;
 };
 
 int run_cli(

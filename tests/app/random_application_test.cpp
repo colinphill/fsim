@@ -31,8 +31,6 @@ struct Capture {
   std::array<fsim::runtime::Logic4Word, 9> values{};
   std::vector<std::string> output;
   std::size_t compiled_processes{};
-
-  friend bool operator==(const Capture&, const Capture&) = default;
 };
 
 int run_cli(

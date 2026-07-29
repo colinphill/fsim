@@ -3100,6 +3100,20 @@ end entity;
           }),
       "malformed context clause needs a targeted diagnostic");
 
+  const auto adjacent_identifiers = parse_text(
+      "adjacent_context_identifiers.vhd",
+      "library e is; entity recovered is end entity;",
+      Language::Vhdl2008);
+  require(
+      !adjacent_identifiers.ok()
+          && std::any_of(
+              adjacent_identifiers.diagnostics.begin(),
+              adjacent_identifiers.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-PARSE-044";
+              }),
+      "adjacent context identifiers must be consumed and diagnosed");
+
   const auto invalid_declaration = parse_text(
       "invalid_context_declaration.vhd",
       R"(

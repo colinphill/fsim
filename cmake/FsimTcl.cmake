@@ -34,7 +34,7 @@ function(fsim_add_fetched_tcl)
       CMAKE_MSVC_RUNTIME_LIBRARY
       AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL"
     )
-      set(tcl_options "OPTS=static,nomsvcrt")
+      fsim_tcl_windows_build_options(OFF tcl_options)
       fsim_tcl_static_library_name(
         "${FSIM_TCL_VERSION}"
         WINDOWS
@@ -42,7 +42,7 @@ function(fsim_add_fetched_tcl)
         tcl_library_name
       )
     else()
-      set(tcl_options "OPTS=static,msvcrt")
+      fsim_tcl_windows_build_options(ON tcl_options)
       fsim_tcl_static_library_name(
         "${FSIM_TCL_VERSION}"
         WINDOWS

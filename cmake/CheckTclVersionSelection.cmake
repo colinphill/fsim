@@ -90,3 +90,24 @@ if(NOT windows_static_crt_library STREQUAL "tcl90sx.lib")
     "unexpected static-CRT Tcl library: ${windows_static_crt_library}"
   )
 endif()
+
+fsim_tcl_windows_build_options(ON windows_dll_crt_options)
+fsim_tcl_windows_build_options(OFF windows_static_crt_options)
+if(
+  NOT windows_dll_crt_options
+  STREQUAL "OPTS=static,noembed,msvcrt"
+)
+  message(
+    FATAL_ERROR
+    "unexpected dynamic-CRT Tcl options: ${windows_dll_crt_options}"
+  )
+endif()
+if(
+  NOT windows_static_crt_options
+  STREQUAL "OPTS=static,noembed,nomsvcrt"
+)
+  message(
+    FATAL_ERROR
+    "unexpected static-CRT Tcl options: ${windows_static_crt_options}"
+  )
+endif()

@@ -186,10 +186,11 @@ class VhdlParser final : private detail::ParserBase {
         continue;
       }
       if (at(TokenKind::Identifier)) {
+        const auto identifier = advance();
         if (!selected_name.empty() && selected_name.back() != '.') {
           malformed = true;
         } else {
-          selected_name += vhdl_name(advance().text);
+          selected_name += vhdl_name(identifier.text);
         }
         continue;
       }

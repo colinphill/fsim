@@ -75,3 +75,19 @@ function(
   endif()
   set(${output_variable} "${name}" PARENT_SCOPE)
 endfunction()
+
+function(
+  fsim_tcl_windows_build_options
+  msvc_runtime_is_dll
+  output_variable
+)
+  # Tcl's Windows static build normally embeds its standard-library scripts
+  # into tclsh and then omits them from install-libraries. fsim links Tcl into
+  # a different executable, so retain the scripts as relocatable files.
+  if(msvc_runtime_is_dll)
+    set(options "OPTS=static,noembed,msvcrt")
+  else()
+    set(options "OPTS=static,noembed,nomsvcrt")
+  endif()
+  set(${output_variable} "${options}" PARENT_SCOPE)
+endfunction()
