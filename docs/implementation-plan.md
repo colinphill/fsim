@@ -2114,13 +2114,13 @@ The planned ten implementation features are:
     evidence; update the VHDL feature matrix and support documentation; then
     run, record, and push the full local regression gate.
 
-All ten implementation features are complete. Expression HIR now retains an
-ordered AST for every aggregate choice alongside the association value and
-the existing record-element marker. The parser accepts positional,
-discrete-index, ascending/descending range, `|` choice-list, and final
-`others` associations, preserves source spans, recovers with targeted
-diagnostics, and leaves record-versus-array interpretation to contextual
-semantic analysis.
+All ten implementation features are complete in feature commit `9c9a932`.
+Expression HIR now retains an ordered AST for every aggregate choice alongside
+the association value and the existing record-element marker. The parser
+accepts positional, discrete-index, ascending/descending range, `|`
+choice-list, and final `others` associations, preserves source spans, recovers
+with targeted diagnostics, and leaves record-versus-array interpretation to
+contextual semantic analysis.
 
 Qualified-name discovery, generate qualification, enumeration folding, and
 package/generic substitution traverse choice expressions. Elaboration
@@ -2140,6 +2140,14 @@ normalized VCD, interpreter/LLVM O0/O2 equivalence, cold/warm native reuse,
 and package-edit invalidation. Focused frontend and elaboration evidence
 covers every new parser and semantic diagnostic, including deliberately
 malformed HIR robustness cases.
+
+The feature state recorded in commit `9c9a932` passed the exact LLVM 22.1.8
+warnings-as-errors Release regression: all 41 tests completed successfully in
+51.58 seconds on 2026-07-29. The gate includes the new aggregate parser,
+choice-preservation, specialization, legality, ordinal-mapping,
+interpreter/LLVM O0/O2, debugger, VCD, and cache evidence, fetched
+Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the strict native ABI, and every
+preceding feature batch. No CI state was inspected for this local gate.
 
 ## v1 release condition
 
