@@ -2266,6 +2266,20 @@ nonzero ranges; exact Logic9 states; all six dynamic write forms; VHDL and
 SystemVerilog source lowering; debugger/VCD visibility; cold/warm cache reuse;
 and interpreter/compiled runtime-failure equivalence.
 
+The feature implementation is recorded in commit `f052569`; the exact
+Release build additionally exposed a GCC `-O3 -Wmaybe-uninitialized` false
+positive around a default-constructed optional selected offset. Portability
+commit `3bdf73b` replaces that representation with an explicitly initialized
+offset and validity flag, retaining the same selection semantics.
+
+The resulting state passed the exact LLVM 22.1.8 warnings-as-errors Release
+regression: all 41 tests completed successfully in 51.72 seconds on
+2026-07-29. The gate includes dynamic-index SimIR validation and serialization,
+interpreter and LLVM O0/O2 Logic4/Logic9 execution, VHDL/SystemVerilog source
+lowering, debugger/VCD/cache behavior, runtime failure equivalence, fetched
+Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the strict native ABI, and every
+preceding feature batch. No CI state was inspected for this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
