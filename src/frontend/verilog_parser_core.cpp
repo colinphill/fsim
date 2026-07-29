@@ -821,6 +821,22 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
     } else if (match_keyword("typedef")) {
       module_has_non_time_item_ = true;
       parse_typedef(unit, previous());
+    } else if (match_keyword("function")) {
+      module_has_non_time_item_ = true;
+      auto function = parse_function(previous());
+      const bool duplicate = std::ranges::any_of(
+          unit.functions,
+          [&](const FunctionDeclaration& existing) {
+            return existing.name == function.name;
+          });
+      if (duplicate) {
+        error(
+            start,
+            "FSIM-SV-SEM-066",
+            "duplicate module function '" + function.name + "'");
+      } else {
+        unit.functions.push_back(std::move(function));
+      }
     } else if (match_keyword("genvar")) {
       module_has_non_time_item_ = true;
       parse_genvar_declaration(unit);

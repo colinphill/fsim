@@ -39,6 +39,7 @@ int main() {
     test_simir_alternate_executor_context_and_boundaries();
     test_simir_alternate_executor_dynamic_wait();
     test_simir_timed_dynamic_wait_rearm();
+    test_simir_nested_calls();
     test_simir_alternate_executor_scheduled_word_writes();
     test_simir_alternate_executor_zero_delay_and_frame();
     test_simir_alternate_executor_cpp_exception_containment();

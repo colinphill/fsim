@@ -12,6 +12,7 @@ int main() {
   test_generate_elaboration();
   test_mixed_language_and_systemc();
   test_process_and_wait_lowering();
+  test_systemverilog_function_lowering();
   test_case_and_expression_lowering();
   test_numeric_and_system_function_lowering();
   test_selection_and_assignment_lowering();

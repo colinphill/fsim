@@ -507,6 +507,34 @@ struct Jump {
   InstructionIndex target{};
 };
 
+/// Persistent hidden-register storage used by resumable SimIR subroutines.
+///
+/// The stack pointer and each entry are 32-bit, two-state registers. The
+/// lowering which owns the process must initialize all of them before the
+/// first call. Keeping this state in ordinary process registers gives the
+/// interpreter and generated code the same suspension-safe representation.
+struct CallStack {
+  RegisterId pointer{};
+  RegisterId entries{};
+  std::uint32_t capacity{};
+};
+
+/// Enter a non-suspending or resumable SimIR subroutine.
+///
+/// return_target is pushed before control transfers to target. A frontend is
+/// responsible for rejecting recursive source-language call graphs when its
+/// language does not support recursion.
+struct Call {
+  InstructionIndex target{};
+  InstructionIndex return_target{};
+  CallStack stack;
+};
+
+/// Return to the most recently pushed Call return_target.
+struct Return {
+  CallStack stack;
+};
+
 enum class UnknownBranchPolicy : std::uint8_t {
   error,
   when_false,
@@ -682,7 +710,7 @@ using Operation =
                  WriteProjectedDynamicSlice,
                  WriteProjectedWaveformDynamicSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
-                 Branch, DebugPoint, Assert, Display, FormatDisplay,
+                 Call, Return, Branch, DebugPoint, Assert, Display, FormatDisplay,
                  TimeDisplay, MonitorInstall, MonitorControl, RandomValue,
                  Report, Pause, Stop, Halt>;
 

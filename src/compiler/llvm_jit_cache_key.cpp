@@ -20,6 +20,7 @@ using runtime::simir::Assert;
 using runtime::simir::Binary;
 using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
+using runtime::simir::Call;
 using runtime::simir::Concatenate;
 using runtime::simir::ConditionalSelect;
 using runtime::simir::CountOnes;
@@ -58,6 +59,7 @@ using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
 using runtime::simir::RandomValue;
 using runtime::simir::Report;
+using runtime::simir::Return;
 using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
 using runtime::simir::SignalActive;
@@ -799,6 +801,27 @@ void add_dynamic_index_key(
             [&](const Jump &value) {
               builder.add("operation", "Jump");
               add_key_u64(builder, "target", value.target);
+            },
+            [&](const Call& value) {
+              builder.add("operation", "Call");
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(
+                  builder, "return-target", value.return_target);
+              add_key_u64(
+                  builder, "stack-pointer", value.stack.pointer);
+              add_key_u64(
+                  builder, "stack-entries", value.stack.entries);
+              add_key_u64(
+                  builder, "stack-capacity", value.stack.capacity);
+            },
+            [&](const Return& value) {
+              builder.add("operation", "Return");
+              add_key_u64(
+                  builder, "stack-pointer", value.stack.pointer);
+              add_key_u64(
+                  builder, "stack-entries", value.stack.entries);
+              add_key_u64(
+                  builder, "stack-capacity", value.stack.capacity);
             },
             [&](const Branch &value) {
               builder.add("operation", "Branch");

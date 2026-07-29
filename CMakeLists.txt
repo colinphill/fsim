@@ -297,6 +297,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_declarations.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
@@ -337,6 +338,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_constants.cpp
       src/elaboration/elaboration_specialization.cpp
       src/elaboration/elaboration_sv_constants.cpp
+      src/elaboration/elaboration_sv_functions.cpp
       src/elaboration/elaboration_sv_generate.cpp
       src/elaboration/elaboration_sv_strings.cpp
       src/elaboration/elaboration_sv_type_parameters.cpp
@@ -351,6 +353,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_expression_binary.cpp
       src/elaboration/lowerer_expression_system.cpp
       src/elaboration/lowerer_expression_unary.cpp
+      src/elaboration/lowerer_functions.cpp
       src/elaboration/lowerer_process.cpp
       src/elaboration/lowerer_types.cpp
   )
@@ -489,6 +492,7 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit_cache_key.cpp
       src/compiler/llvm_jit_lowering.cpp
       src/compiler/llvm_jit_module.cpp
+      src/compiler/llvm_jit_operations_control.cpp
       src/compiler/llvm_jit_operations_logic.cpp
       src/compiler/llvm_jit_operations_output.cpp
       src/compiler/llvm_jit_operations_signal.cpp

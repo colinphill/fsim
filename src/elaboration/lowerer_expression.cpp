@@ -546,6 +546,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (expression.kind == ExpressionKind::Call) {
             emit_debug_point(
                 DebugPointKind::call, expression.span);
+            auto function = lower_user_function_expression(
+                expression, expected_width, expected_type);
+            if (function.handled) {
+                return function;
+            }
         }
         if (expression.kind == ExpressionKind::Index
             && expression.operands.size() == 2) {

@@ -119,6 +119,64 @@ void test_rejections() {
   const std::array<std::uint32_t, 1> one_signal{1};
   const std::array<std::uint32_t, 0> no_signals{};
 
+  Process empty_call_stack;
+  empty_call_stack.name = "empty_call_stack";
+  empty_call_stack.register_count = 2;
+  empty_call_stack.operations = {
+      Call{1, 1, CallStack{0, 1, 0}},
+      Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "empty_call_stack", empty_call_stack, no_signals);
+      },
+      "call-stack capacity must be greater than zero");
+
+  Process oversized_call_stack;
+  oversized_call_stack.name = "oversized_call_stack";
+  oversized_call_stack.register_count = 2;
+  oversized_call_stack.operations = {
+      Return{CallStack{0, 1, 2}},
+      Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "oversized_call_stack",
+            oversized_call_stack,
+            no_signals);
+      },
+      "call-stack register range is outside register_count");
+
+  Process invalid_call_target;
+  invalid_call_target.name = "invalid_call_target";
+  invalid_call_target.register_count = 2;
+  invalid_call_target.operations = {
+      Call{99, 1, CallStack{0, 1, 1}},
+      Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_call_target",
+            invalid_call_target,
+            no_signals);
+      },
+      "call target is outside the operation stream");
+
+  Process invalid_return_target;
+  invalid_return_target.name = "invalid_return_target";
+  invalid_return_target.register_count = 2;
+  invalid_return_target.operations = {
+      Call{1, 99, CallStack{0, 1, 1}},
+      Halt{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_return_target",
+            invalid_return_target,
+            no_signals);
+      },
+      "call return target is outside the operation stream");
+
   Process inverted_integer_check;
   inverted_integer_check.name = "inverted_integer_check";
   inverted_integer_check.register_count = 1;
@@ -693,4 +751,3 @@ void test_rejections() {
 }
 
 } // namespace fsim::tests::compiler
-

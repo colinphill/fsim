@@ -259,6 +259,18 @@ using namespace elaboration_detail;
                 || expression.text == "$urandom_range")) {
             return std::size_t{32};
         }
+        if (expression.kind == ExpressionKind::Call) {
+            if (const auto* function =
+                    visible_function(expression.text)) {
+                const auto width = function->return_type.width();
+                if (width
+                    && *width
+                        <= std::numeric_limits<std::size_t>::max()) {
+                    return static_cast<std::size_t>(*width);
+                }
+                return std::nullopt;
+            }
+        }
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
                 local != locals_.end()) {
@@ -410,6 +422,10 @@ using namespace elaboration_detail;
             }
             return is_signed_expression(expression.operands[0]);
         case ExpressionKind::Call:
+            if (const auto* function =
+                    visible_function(expression.text)) {
+                return function->return_type.is_signed;
+            }
             if (language_ != frontend::Language::Vhdl2008
                 && expression.text == "$random") {
                 return true;
@@ -598,6 +614,11 @@ using namespace elaboration_detail;
                 && is_integer_expression(expression.operands[0])
                 && is_integer_expression(expression.operands[1]);
         case ExpressionKind::Call:
+            if (const auto* function =
+                    visible_function(expression.text)) {
+                return function->return_type.domain
+                    == frontend::ValueDomain::Integer;
+            }
             if (expression.text == "?:"
                 && expression.operands.size() == 3) {
                 return is_integer_expression(expression.operands[1])
@@ -685,6 +706,9 @@ using namespace elaboration_detail;
             case StatementKind::Assert:
             case StatementKind::WaitUntil:
                 collect_identifiers(statement.condition, output);
+                break;
+            case StatementKind::Return:
+                collect_identifiers(statement.value, output);
                 break;
             case StatementKind::Case:
                 collect_identifiers(statement.condition, output);

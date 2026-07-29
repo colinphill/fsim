@@ -473,6 +473,7 @@ enum class StatementKind {
   Loop,
   Break,
   Continue,
+  Return,
   Assert,
   Delay,
   WaitOn,
@@ -652,6 +653,28 @@ struct Process {
   SourceSpan span;
 };
 
+struct FunctionArgument {
+  std::string name;
+  Type type;
+  PortDirection direction{PortDirection::Input};
+  SourceSpan span;
+};
+
+/// Typed source-level HDL function.
+///
+/// v1 functions are automatic, integral, and time-free. Frontends retain the
+/// declaration separately from processes so elaboration can use the same body
+/// for constant evaluation and executable SimIR subroutines.
+struct FunctionDeclaration {
+  std::string name;
+  Type return_type;
+  std::vector<FunctionArgument> arguments;
+  std::vector<VariableDeclaration> variables;
+  std::vector<Statement> statements;
+  bool automatic{};
+  SourceSpan span;
+};
+
 enum class GenerateKind {
   StaticBlock,
   Conditional,
@@ -754,6 +777,7 @@ struct DesignUnit {
   std::vector<ParameterDeclaration> parameters;
   std::vector<SignalDeclaration> ports;
   std::vector<SignalDeclaration> signals;
+  std::vector<FunctionDeclaration> functions;
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;
   std::vector<Instance> instances;

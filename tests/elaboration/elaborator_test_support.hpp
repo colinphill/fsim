@@ -99,6 +99,7 @@ void test_systemverilog_type_parameters();
 void test_generate_elaboration();
 void test_mixed_language_and_systemc();
 void test_process_and_wait_lowering();
+void test_systemverilog_function_lowering();
 void test_case_and_expression_lowering();
 void test_numeric_and_system_function_lowering();
 void test_selection_and_assignment_lowering();

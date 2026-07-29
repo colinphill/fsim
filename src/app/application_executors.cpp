@@ -168,6 +168,30 @@ LlvmProcessExecutor::LlvmProcessExecutor(
                 process_.id,
                 error.instruction(),
                 "dynamic packed index is outside the declared range");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              call_stack_unknown:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "call-stack pointer or return target is unknown");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              call_stack_overflow:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "call-stack capacity is exhausted");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              call_stack_underflow:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "call-stack underflow");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              call_stack_target:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "call-stack return target is invalid");
         }
         throw;
       } catch (...) {

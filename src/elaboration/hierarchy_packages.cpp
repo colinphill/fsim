@@ -1004,6 +1004,8 @@ HierarchyBuilder::HierarchyBuilder(
         std::vector<const DesignUnit*>& import_stack,
         NamedTypeEnvironment& type_environment) {
         std::vector<frontend::ParameterDeclaration> imports;
+        std::vector<frontend::FunctionDeclaration>
+            function_imports;
         std::unordered_map<std::string, std::string> owners;
         for (const auto& import_item :
              unit.systemverilog_imports) {
@@ -1131,6 +1133,34 @@ HierarchyBuilder::HierarchyBuilder(
                         import_item.span);
                 }
             }
+            for (const auto& function :
+                 specialized_package->unit.functions) {
+                if (!wildcard
+                    && function.name != import_item.name) {
+                    continue;
+                }
+                found_selected = true;
+                const auto [owner, inserted] =
+                    owners.emplace(
+                        function.name, package->name);
+                if (!inserted
+                    && owner->second != package->name) {
+                    report(
+                        "FSIM-ELAB-SVFUNC-007",
+                        "SystemVerilog function '"
+                            + function.name
+                            + "' is imported from multiple packages",
+                        import_item.span);
+                    continue;
+                }
+                if (std::ranges::none_of(
+                        function_imports,
+                        [&](const auto& existing) {
+                            return existing.name == function.name;
+                        })) {
+                    function_imports.push_back(function);
+                }
+            }
             if (!found_selected) {
                 report(
                     "FSIM-ELAB-SVPKG-002",
@@ -1148,6 +1178,11 @@ HierarchyBuilder::HierarchyBuilder(
             std::make_move_iterator(unit.parameters.begin()),
             std::make_move_iterator(unit.parameters.end()));
         unit.parameters = std::move(imports);
+        function_imports.insert(
+            function_imports.end(),
+            std::make_move_iterator(unit.functions.begin()),
+            std::make_move_iterator(unit.functions.end()));
+        unit.functions = std::move(function_imports);
     }
 
 
@@ -1167,6 +1202,8 @@ HierarchyBuilder::HierarchyBuilder(
         }
         std::sort(ordered.begin(), ordered.end());
         std::vector<frontend::ParameterDeclaration> imports;
+        std::vector<frontend::FunctionDeclaration>
+            function_imports;
         for (const auto& identifier : ordered) {
             const auto& reference_span =
                 identifiers.at(identifier);
@@ -1216,9 +1253,17 @@ HierarchyBuilder::HierarchyBuilder(
                 [&](const auto& candidate) {
                     return candidate.name == constant_name;
                 });
+            const auto function = std::find_if(
+                specialized_package->unit.functions.begin(),
+                specialized_package->unit.functions.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == constant_name;
+                });
             if (declaration == package->parameters.end()
                 && alias
-                    == specialized_package->unit.type_aliases.end()) {
+                    == specialized_package->unit.type_aliases.end()
+                && function
+                    == specialized_package->unit.functions.end()) {
                 report(
                     "FSIM-ELAB-SVPKG-002",
                     "SystemVerilog package '"
@@ -1235,6 +1280,15 @@ HierarchyBuilder::HierarchyBuilder(
                     NamedTypeBinding{
                         alias->type,
                         package->name});
+                append_package_dependencies(
+                    unit, *package, *specialized_package);
+                continue;
+            }
+            if (function
+                != specialized_package->unit.functions.end()) {
+                auto imported = *function;
+                imported.name = identifier;
+                function_imports.push_back(std::move(imported));
                 append_package_dependencies(
                     unit, *package, *specialized_package);
                 continue;
@@ -1297,6 +1351,11 @@ HierarchyBuilder::HierarchyBuilder(
             std::make_move_iterator(unit.parameters.begin()),
             std::make_move_iterator(unit.parameters.end()));
         unit.parameters = std::move(imports);
+        function_imports.insert(
+            function_imports.end(),
+            std::make_move_iterator(unit.functions.begin()),
+            std::make_move_iterator(unit.functions.end()));
+        unit.functions = std::move(function_imports);
     }
 
 } // namespace fsim::elaboration

@@ -1424,6 +1424,111 @@ void test_simir_alternate_executor_cpp_exception_containment() {
       "executor exception must leave the scheduler and signal state valid");
 }
 
+void test_simir_nested_calls() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto output = interpreter.add_signal(
+      {"top.call_result", PackedLogic4::from_aval_bval(8, 0, 0)});
+  const CallStack stack{0, 1, 2};
+
+  Process process;
+  process.id = 0;
+  process.name = "nested_calls";
+  process.register_count = 6;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{1, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{2, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{3, PackedLogic4::from_aval_bval(8, 10, 0)},
+      LoadConstant{4, PackedLogic4::from_aval_bval(8, 0, 0)},
+      Call{9, 6, stack},
+      WriteBlocking{output, 4},
+      Halt{},
+      Halt{},
+      DebugPoint{
+          DebugPointKind::call,
+          SourceLocation{"nested_calls.simir", 1, 1}},
+      LoadConstant{5, PackedLogic4::from_aval_bval(8, 0, 0)},
+      Call{15, 12, stack},
+      CopyRegister{4, 5},
+      Return{stack},
+      Halt{},
+      LoadConstant{5, PackedLogic4::from_aval_bval(8, 42, 0)},
+      Return{stack},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "nested SimIR calls must complete");
+  require(
+      interpreter.signal_value(output).to_msb_string() == "00101010",
+      "nested SimIR calls must return through the persistent call stack");
+
+  const auto word =
+      [](const std::uint64_t aval, const std::uint64_t bval = 0) {
+        return PackedLogic4::from_aval_bval(
+            32, aval, bval);
+      };
+  const auto expect_call_failure =
+      [&](std::vector<Operation> operations,
+          const std::string_view expected) {
+        Interpreter failing;
+        Process invalid;
+        invalid.id = 0;
+        invalid.name = "invalid_call_stack";
+        invalid.register_count = 2;
+        invalid.operations = std::move(operations);
+        (void)failing.add_process(std::move(invalid));
+        try {
+          (void)failing.run();
+          throw std::runtime_error(
+              "invalid SimIR call stack was accepted");
+        } catch (const InterpreterError& error) {
+          require(
+              std::string_view{error.what()}.find(expected)
+                  != std::string_view::npos,
+              "SimIR call-stack diagnostic");
+        }
+      };
+  const CallStack one_entry_stack{0, 1, 1};
+  expect_call_failure(
+      {
+          LoadConstant{0, word(0, 1)},
+          LoadConstant{1, word(0)},
+          Return{one_entry_stack},
+          Halt{},
+      },
+      "call-stack pointer is unknown");
+  expect_call_failure(
+      {
+          LoadConstant{0, word(1)},
+          LoadConstant{1, word(0)},
+          Call{3, 3, one_entry_stack},
+          Halt{},
+      },
+      "call-stack capacity is exhausted");
+  expect_call_failure(
+      {
+          LoadConstant{0, word(0)},
+          LoadConstant{1, word(0)},
+          Return{one_entry_stack},
+          Halt{},
+      },
+      "call-stack underflow");
+  expect_call_failure(
+      {
+          LoadConstant{0, word(1)},
+          LoadConstant{1, word(99)},
+          Return{one_entry_stack},
+          Halt{},
+      },
+      "call-stack return target is invalid");
+}
+
 void test_simir_alternate_executor_validation() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1492,4 +1597,3 @@ void test_simir_alternate_executor_validation() {
 }
 
 } // namespace fsim::tests::runtime
-

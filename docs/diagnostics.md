@@ -380,6 +380,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-038` | error | Expected `;` after a module instance. |
 | `FSIM-SV-PARSE-137` | error | Expected `(` after `assert`. |
 | `FSIM-SV-PARSE-138` | error | Expected `)` after an assertion condition. |
+| `FSIM-SV-PARSE-139` | error | Expected `;` after a SystemVerilog function return statement. |
+| `FSIM-SV-PARSE-140` | error | Expected `)` after a bounded SystemVerilog function argument list. |
+| `FSIM-SV-PARSE-141` | error | Expected `;` after a bounded SystemVerilog function header. |
+| `FSIM-SV-PARSE-142` | error | Expected `endfunction` after a bounded SystemVerilog function body. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -545,6 +549,17 @@ therefore excluded.
 | `FSIM-SV-SEM-053` | error | A Verilog/SystemVerilog delay list supplies more transition values than the containing assignment or gate form permits. |
 | `FSIM-SV-SEM-054` | error | A procedural assignment contains more than one delay or event control. |
 | `FSIM-SV-SEM-055` | error | A SystemVerilog type parameter and typedef declare the same type-namespace name in one bounded scope. |
+| `FSIM-SV-SEM-056` | error | A SystemVerilog return statement appears outside a function. |
+| `FSIM-SV-SEM-057` | error | A non-void SystemVerilog function return statement omits its value. |
+| `FSIM-SV-SEM-058` | error | A bounded function repeats an argument name or conflicts with its result name. |
+| `FSIM-SV-SEM-059` | error | A function closing name does not match its declaration name. |
+| `FSIM-SV-SEM-060` | error | A bounded function repeats or conflicts with a local declaration. |
+| `FSIM-SV-SEM-061` | error | A bounded function assigns an object outside its local activation frame. |
+| `FSIM-SV-SEM-062` | error | A bounded function assigns one of its input arguments. |
+| `FSIM-SV-SEM-063` | error | A bounded function assignment is nonblocking or contains a procedural timing/event control. |
+| `FSIM-SV-SEM-064` | error | A bounded function contains a timing control, event statement, or task statement. |
+| `FSIM-SV-SEM-065` | error | A bounded function has no function-name assignment or value-return statement. |
+| `FSIM-SV-SEM-066` | error | A module or package declares the same bounded function name more than once. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -573,6 +588,10 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
 | `FSIM-SV-UNSUPPORTED-031` | error | A procedural `for` loop does not declare an inline `int` or `integer` index. |
 | `FSIM-SV-UNSUPPORTED-032` | error | A nonblocking assignment uses a repeated event control, which is not executable yet. |
+| `FSIM-SV-UNSUPPORTED-033` | error | A bounded function is static or omits the explicit `automatic` lifetime required by the current activation-frame implementation. |
+| `FSIM-SV-UNSUPPORTED-034` | error | A bounded function return or argument type is not integral. |
+| `FSIM-SV-UNSUPPORTED-035` | error | A bounded function formal uses `ref`, `output`, or `inout` instead of `input`. |
+| `FSIM-SV-UNSUPPORTED-036` | error | A bounded function uses an unpacked/default argument or a classic body argument declaration. |
 
 ## Elaboration and SimIR lowering
 
@@ -699,6 +718,13 @@ therefore excluded.
 | `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
 | `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
+| `FSIM-ELAB-SVFUNC-001` | error | The visible bounded function set exceeds the representable SimIR call-stack capacity. |
+| `FSIM-ELAB-SVFUNC-002` | error | More than one bounded function has the same visible name. |
+| `FSIM-ELAB-SVFUNC-003` | error | A bounded function call has the wrong number of arguments. |
+| `FSIM-ELAB-SVFUNC-004` | error | A bounded function return or formal type does not specialize to an executable width from 1 through 64 bits. |
+| `FSIM-ELAB-SVFUNC-005` | error | A return statement is outside an executable function or lacks a value during lowering. |
+| `FSIM-ELAB-SVFUNC-006` | error | Bounded runtime functions contain a direct or indirect recursive call cycle. |
+| `FSIM-ELAB-SVFUNC-007` | error | The same bare function name is directly visible from multiple imported SystemVerilog packages. |
 | `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the design unit where it is used. |
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |

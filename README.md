@@ -74,6 +74,11 @@ The current tree contains:
   direct
   `package::constant`/`package::type` references; recursive dependency
   diagnostics; and precise specialization provenance;
+- bounded SystemVerilog module/package functions with explicit `automatic`
+  lifetime, 1–64-bit integral value arguments/locals/results, parameter-sized
+  types, function-name or explicit-return results, constant evaluation,
+  package visibility, nested nonrecursive calls, debugger safe points, and
+  interpreter/LLVM O0/O2 plus native-cache equivalence;
 - bounded Verilog-2005/SystemVerilog `$clog2` folding for nonnegative integral
   constant arguments in parameter/localparam defaults and specialized packed
   ranges, with zero and exact/non-power-of-two edge behavior;

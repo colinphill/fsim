@@ -149,6 +149,22 @@ through the common update phase and `->> #delay` publishes at a future
 timestamp; event arguments and general event expressions remain deferred. This update
 supersedes the older broad “named events” limitation in the compact table.
 
+SystemVerilog function status update: module and package functions with an
+explicit `automatic` lifetime, 1–64-bit integral return/formal/local types,
+ANSI value-input arguments, or a classic no-argument header now execute.
+Function-name assignment and explicit value `return` are supported together
+with nonsuspending blocks, blocking local assignments, conditionals, exact
+case, canonical bounded loops, break/continue, expressions, package imports,
+and directly selected package calls. Eligible functions also fold in
+parameters/localparams, packed ranges, and generate conditions. Runtime calls
+use checked persistent SimIR call/return state and produce identical
+interpreter/LLVM O0/O2 safe points and values. Static or implicit lifetimes,
+classic body argument declarations, output/inout/ref/default/unpacked
+arguments, widths above 64 bits, recursion, timing/event/task statements,
+runtime strings, DPI, generated functions, and all tasks remain deferred.
+This update supersedes the compact table's broader “subprograms,”
+“tasks/functions,” and “runtime calls beyond system functions” limitations.
+
 Display-task status update: Verilog-2005/SystemVerilog literal
 `$display("text")`, `$display()`, and `$display` execute synchronously and
 append a newline through the CLI or Tcl-owned output stream; literal/empty

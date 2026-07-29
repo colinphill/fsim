@@ -246,7 +246,8 @@ void substitute_parameters(
 void collect_qualified_identifiers(
     const Expression& expression,
     QualifiedIdentifierMap& identifiers) {
-    if (expression.kind == ExpressionKind::Identifier
+    if ((expression.kind == ExpressionKind::Identifier
+         || expression.kind == ExpressionKind::Call)
         && (expression.text.find('.') != std::string::npos
             || expression.text.find("::")
                 != std::string::npos)) {
@@ -457,6 +458,24 @@ QualifiedIdentifierMap qualified_identifiers(
     }
     for (const auto& signal : unit.signals) {
         collect_qualified_identifiers(signal.type, result);
+    }
+    for (const auto& function : unit.functions) {
+        collect_qualified_identifiers(
+            function.return_type, result);
+        for (const auto& argument : function.arguments) {
+            collect_qualified_identifiers(
+                argument.type, result);
+        }
+        for (const auto& variable : function.variables) {
+            collect_qualified_identifiers(
+                variable.type, result);
+            if (variable.initializer) {
+                collect_qualified_identifiers(
+                    *variable.initializer, result);
+            }
+        }
+        collect_qualified_identifiers(
+            function.statements, result);
     }
     collect_qualified_identifiers(
         unit.concurrent_statements, result);

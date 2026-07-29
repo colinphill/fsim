@@ -537,6 +537,36 @@ make_branch_process(const UnknownBranchPolicy unknown_policy) {
   return process;
 }
 
+[[nodiscard]] Process make_nested_call_process() {
+  const CallStack stack{0, 1, 2};
+  Process process;
+  process.id = 0;
+  process.name = "nested_calls";
+  process.register_count = 6;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{1, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{2, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{3, PackedLogic4::from_aval_bval(8, 10, 0)},
+      LoadConstant{4, PackedLogic4::from_aval_bval(8, 0, 0)},
+      Call{9, 6, stack},
+      WriteBlocking{0, 4},
+      Halt{},
+      Halt{},
+      DebugPoint{
+          DebugPointKind::call,
+          SourceLocation{"nested_calls.simir", 1, 1}},
+      LoadConstant{5, PackedLogic4::from_aval_bval(8, 0, 0)},
+      Call{15, 12, stack},
+      CopyRegister{4, 5},
+      Return{stack},
+      Halt{},
+      LoadConstant{5, PackedLogic4::from_aval_bval(8, 42, 0)},
+      Return{stack},
+  };
+  return process;
+}
+
 [[nodiscard]] EncodedSignal
 run_interpreter_branch(const UnknownBranchPolicy unknown_policy,
                        const Logic4 condition) {
@@ -646,6 +676,138 @@ void test_control_flow_at_level(const JitOptimizationLevel optimization,
         1, JitGeneratedRuntimeErrorReason::unknown_branch_condition,
         "instruction 1: branch condition is unknown or high impedance");
   }
+
+  LlvmJit call_jit{LlvmJitOptions{optimization, {}}};
+  const auto call_symbol =
+      std::string{symbol_prefix} + "_nested_calls";
+  call_jit.add_process(
+      call_symbol, make_nested_call_process(),
+      std::array<std::uint32_t, 1>{8});
+  const auto call_handle = call_jit.lookup(call_symbol);
+  TestRuntime call_runtime;
+  auto call_descriptor = abi(call_runtime);
+  const auto call_layout = call_jit.frame_layout(call_handle);
+  std::vector<std::uint64_t> call_aval(
+      call_layout.register_count);
+  std::vector<std::uint64_t> call_bval(
+      call_layout.register_count);
+  std::vector<std::uint8_t> call_initialized(
+      call_layout.register_count);
+  fsim_jit_frame_v1 call_frame{};
+  call_jit.initialize_frame(
+      call_handle,
+      call_frame,
+      call_aval,
+      call_bval,
+      call_initialized);
+  auto call_result = new_resume_result();
+  auto call_status = call_jit.resume(
+      call_handle,
+      call_descriptor,
+      call_frame,
+      call_result);
+  if (call_status == JitResumeStatus::debug_point) {
+    assert(call_result.instruction == 9);
+    call_status = call_jit.resume(
+        call_handle,
+        call_descriptor,
+        call_frame,
+        call_result);
+  }
+  assert(call_status == JitResumeStatus::completed);
+  assert((
+      call_runtime.signals[0]
+      == EncodedSignal{UINT64_C(42), UINT64_C(0)}));
+
+  const auto verify_call_error =
+      [&](const std::string_view suffix,
+          Process process,
+          const std::uint32_t instruction,
+          const JitGeneratedRuntimeErrorReason reason,
+          const std::string_view message) {
+        const auto symbol =
+            std::string{symbol_prefix} + "_" + std::string{suffix};
+        call_jit.add_process(
+            symbol,
+            process,
+            std::array<std::uint32_t, 0>{});
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        expect_generated_runtime_error(
+            [&] {
+              (void)call_jit.execute(
+                  call_jit.lookup(symbol), descriptor);
+            },
+            instruction,
+            reason,
+            message);
+      };
+  const CallStack one_entry_stack{0, 1, 1};
+  const auto word =
+      [](const std::uint64_t aval, const std::uint64_t bval = 0) {
+        return PackedLogic4::from_aval_bval(
+            32, aval, bval);
+      };
+
+  Process unknown_stack;
+  unknown_stack.name = "unknown_call_stack";
+  unknown_stack.register_count = 2;
+  unknown_stack.operations = {
+      LoadConstant{0, word(0, 1)},
+      LoadConstant{1, word(0)},
+      Return{one_entry_stack},
+      Halt{}};
+  verify_call_error(
+      "unknown_call_stack",
+      std::move(unknown_stack),
+      2,
+      JitGeneratedRuntimeErrorReason::call_stack_unknown,
+      "instruction 2: call-stack state contains an unknown");
+
+  Process overflowing_stack;
+  overflowing_stack.name = "overflowing_call_stack";
+  overflowing_stack.register_count = 2;
+  overflowing_stack.operations = {
+      LoadConstant{0, word(1)},
+      LoadConstant{1, word(0)},
+      Call{3, 3, one_entry_stack},
+      Halt{}};
+  verify_call_error(
+      "overflowing_call_stack",
+      std::move(overflowing_stack),
+      2,
+      JitGeneratedRuntimeErrorReason::call_stack_overflow,
+      "instruction 2: call-stack capacity is exhausted");
+
+  Process underflowing_stack;
+  underflowing_stack.name = "underflowing_call_stack";
+  underflowing_stack.register_count = 2;
+  underflowing_stack.operations = {
+      LoadConstant{0, word(0)},
+      LoadConstant{1, word(0)},
+      Return{one_entry_stack},
+      Halt{}};
+  verify_call_error(
+      "underflowing_call_stack",
+      std::move(underflowing_stack),
+      2,
+      JitGeneratedRuntimeErrorReason::call_stack_underflow,
+      "instruction 2: call-stack underflow");
+
+  Process invalid_return_stack;
+  invalid_return_stack.name = "invalid_return_call_stack";
+  invalid_return_stack.register_count = 2;
+  invalid_return_stack.operations = {
+      LoadConstant{0, word(1)},
+      LoadConstant{1, word(99)},
+      Return{one_entry_stack},
+      Halt{}};
+  verify_call_error(
+      "invalid_return_call_stack",
+      std::move(invalid_return_stack),
+      2,
+      JitGeneratedRuntimeErrorReason::call_stack_target,
+      "instruction 2: call-stack return target is invalid");
 }
 
 void test_checked_integer_at_level(

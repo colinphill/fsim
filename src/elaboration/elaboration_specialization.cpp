@@ -257,10 +257,11 @@ SpecializedUnit specialize_unit(
                     continue;
                 }
                 const auto value =
-                    evaluate_systemverilog_constant_expression(
+                    evaluate_systemverilog_constant_function_expression(
                         actual_expression,
                         {},
                         parent_environment,
+                        source.functions,
                         error);
                 if (!value) {
                     diagnostics.push_back({
@@ -454,10 +455,11 @@ SpecializedUnit specialize_unit(
                     systemverilog_string_environment,
                     result.environment);
                 systemverilog_value =
-                    evaluate_systemverilog_constant_expression(
+                    evaluate_systemverilog_constant_function_expression(
                         default_expression,
                         systemverilog_environment,
                         result.environment,
+                        source.functions,
                         error);
                 if (!systemverilog_value) {
                     diagnostics.push_back({
@@ -697,6 +699,11 @@ SpecializedUnit specialize_unit(
     if (is_verilog) {
         substitute_systemverilog_parameters(
             result.unit, systemverilog_environment);
+        fold_systemverilog_constant_functions(
+            result.unit,
+            systemverilog_environment,
+            result.environment,
+            diagnostics);
         substitute_systemverilog_strings(
             result.unit,
             systemverilog_string_environment,
@@ -833,6 +840,36 @@ SpecializedUnit specialize_unit(
     for (auto& signal : result.unit.signals) {
         substitute_parameters(
             signal.type,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+    }
+    for (auto& function : result.unit.functions) {
+        substitute_parameters(
+            function.return_type,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+        for (auto& argument : function.arguments) {
+            substitute_parameters(
+                argument.type,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        for (auto& variable : function.variables) {
+            substitute_parameters(
+                variable,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        substitute_parameters(
+            function.statements,
             result.environment,
             domains,
             diagnostics,

@@ -1148,6 +1148,23 @@ void substitute_sv_variable(
 
 void substitute_sv_statements(
     std::vector<Statement>& statements,
+    const SystemVerilogConstantEnvironment& environment);
+
+void substitute_sv_function(
+    frontend::FunctionDeclaration& function,
+    const SystemVerilogConstantEnvironment& environment) {
+    substitute_sv_type(function.return_type, environment);
+    for (auto& argument : function.arguments) {
+        substitute_sv_type(argument.type, environment);
+    }
+    for (auto& variable : function.variables) {
+        substitute_sv_variable(variable, environment);
+    }
+    substitute_sv_statements(function.statements, environment);
+}
+
+void substitute_sv_statements(
+    std::vector<Statement>& statements,
     const SystemVerilogConstantEnvironment& environment) {
     for (auto& statement : statements) {
         substitute_systemverilog_parameters(
@@ -1311,6 +1328,9 @@ void substitute_systemverilog_parameters(
     }
     for (auto& signal : unit.signals) {
         substitute_sv_type(signal.type, environment);
+    }
+    for (auto& function : unit.functions) {
+        substitute_sv_function(function, environment);
     }
     substitute_sv_statements(
         unit.concurrent_statements, environment);

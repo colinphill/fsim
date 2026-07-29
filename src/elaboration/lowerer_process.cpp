@@ -12,11 +12,13 @@ Lowerer::Lowerer(
             std::string, const frontend::Type*>& visible_types,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_type_marks,
+        const std::vector<frontend::FunctionDeclaration>& functions,
         std::vector<Diagnostic>& diagnostics)
         : design_(design),
           signals_(signals),
           visible_types_(visible_types),
           visible_type_marks_(visible_type_marks),
+          functions_(functions),
           diagnostics_(diagnostics) {}
 
 
@@ -50,6 +52,7 @@ Lowerer::Lowerer(
         if (process_.final) {
             process_.initialize = false;
         }
+        initialize_function_support();
         initialize_variables(source.variables);
         bool wildcard_sensitivity = false;
         for (const auto& sensitivity : source.sensitivities) {
@@ -152,6 +155,7 @@ Lowerer::Lowerer(
             process_.operations.emplace_back(WaitSensitivity{});
             process_.operations.emplace_back(Jump{resume_entry});
         }
+        lower_pending_functions();
         process_.register_count = next_register_;
         process_.register_value_kinds.reserve(register_domains_.size());
         for (const auto domain : register_domains_) {
@@ -201,6 +205,7 @@ Lowerer::Lowerer(
             + (statement.label.empty()
                    ? "concurrent_" + std::to_string(order)
                    : statement.label);
+        initialize_function_support();
         emit_debug_point(DebugPointKind::process_entry, statement.span);
 
         std::set<std::string> dependencies;
@@ -218,6 +223,7 @@ Lowerer::Lowerer(
         } else {
             process_.operations.emplace_back(Halt{});
         }
+        lower_pending_functions();
         process_.register_count = next_register_;
         process_.register_value_kinds.reserve(register_domains_.size());
         for (const auto domain : register_domains_) {
@@ -840,6 +846,9 @@ Lowerer::Lowerer(
             break;
         case StatementKind::Continue:
             lower_loop_control(statement, false);
+            break;
+        case StatementKind::Return:
+            lower_function_return(statement);
             break;
         case StatementKind::Assert:
             lower_assert(statement);

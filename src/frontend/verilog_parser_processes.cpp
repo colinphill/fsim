@@ -648,6 +648,32 @@ std::optional<Statement> VerilogParser::parse_statement() {
     statement.span = span_from(start, previous());
     return statement;
   }
+  if (language_ == Language::SystemVerilog2017
+      && match_keyword("return")) {
+    const auto start = previous();
+    Statement statement;
+    statement.kind = StatementKind::Return;
+    if (!in_function_) {
+      error(
+          start,
+          "FSIM-SV-SEM-056",
+          "a return statement must be nested in a function");
+    }
+    if (!at(TokenKind::Semicolon)) {
+      statement.value = parse_expression();
+    } else {
+      error(
+          start,
+          "FSIM-SV-SEM-057",
+          "a non-void function return requires a value");
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after return statement",
+        "FSIM-SV-PARSE-139");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
   if (match_keyword("wait")) {
     const auto start = previous();
     Statement statement;

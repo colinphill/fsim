@@ -750,6 +750,7 @@ using namespace elaboration_detail;
             local,
             visible_types,
             visible_type_marks,
+            unit.functions,
             diagnostics_};
         for (std::size_t index = 0;
              index < unit.concurrent_statements.size(); ++index) {

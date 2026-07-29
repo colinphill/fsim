@@ -510,6 +510,12 @@ class VerilogParser final : private detail::ParserBase {
 
   DesignUnit parse_package(const Token& start);
 
+  FunctionDeclaration parse_function(const Token& start);
+
+  void validate_function_body(
+      const FunctionDeclaration& function,
+      const Token& start);
+
   void parse_genvar_declaration(DesignUnit& unit);
 
   void parse_generate_region(
@@ -694,6 +700,9 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> body_port_declarations_;
   std::unordered_set<std::string> port_type_refinements_;
   std::unordered_set<std::string> current_procedural_names_;
+  std::unordered_set<std::string> current_function_arguments_;
+  std::string current_function_name_;
+  bool in_function_{};
   std::unordered_map<std::string, std::size_t>
       current_generate_names_;
   std::unordered_map<std::string, std::size_t>

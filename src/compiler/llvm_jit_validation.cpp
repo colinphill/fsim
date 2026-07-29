@@ -20,6 +20,8 @@ using runtime::simir::Assert;
 using runtime::simir::Binary;
 using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
+using runtime::simir::Call;
+using runtime::simir::CallStack;
 using runtime::simir::Concatenate;
 using runtime::simir::ConditionalSelect;
 using runtime::simir::CountOnes;
@@ -58,6 +60,7 @@ using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
 using runtime::simir::RandomValue;
 using runtime::simir::Report;
+using runtime::simir::Return;
 using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
 using runtime::simir::SignalActive;
@@ -143,6 +146,14 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
            "value";
   case JitGeneratedRuntimeErrorReason::dynamic_index_range:
     return "dynamic packed index is outside the declared range";
+  case JitGeneratedRuntimeErrorReason::call_stack_unknown:
+    return "call-stack state contains an unknown or high-impedance value";
+  case JitGeneratedRuntimeErrorReason::call_stack_overflow:
+    return "call-stack capacity is exhausted";
+  case JitGeneratedRuntimeErrorReason::call_stack_underflow:
+    return "call-stack underflow";
+  case JitGeneratedRuntimeErrorReason::call_stack_target:
+    return "call-stack return target is invalid";
   }
   return "unknown generated runtime error";
 }
@@ -168,6 +179,10 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept {
   case JitGeneratedRuntimeErrorReason::integer_subtype_range:
   case JitGeneratedRuntimeErrorReason::dynamic_index_unknown:
   case JitGeneratedRuntimeErrorReason::dynamic_index_range:
+  case JitGeneratedRuntimeErrorReason::call_stack_unknown:
+  case JitGeneratedRuntimeErrorReason::call_stack_overflow:
+  case JitGeneratedRuntimeErrorReason::call_stack_underflow:
+  case JitGeneratedRuntimeErrorReason::call_stack_target:
     return reason;
   }
   return std::nullopt;
@@ -414,6 +429,30 @@ validate_process(const Process &process,
              std::string{kind} + " target is outside the operation stream");
     }
   };
+
+  const auto validate_call_stack =
+      [&](const CallStack& stack, const std::size_t instruction) {
+        if (stack.capacity == 0) {
+          reject(process, instruction,
+                 "call-stack capacity must be greater than zero");
+        }
+        const auto end =
+            static_cast<std::uint64_t>(stack.entries)
+            + stack.capacity;
+        if (end > process.register_count) {
+          reject(process, instruction,
+                 "call-stack register range is outside register_count");
+        }
+        record_use(stack.pointer, instruction);
+        constrain_width(stack.pointer, 32U, instruction);
+        for (std::uint32_t offset = 0;
+             offset < stack.capacity; ++offset) {
+          const auto entry =
+              static_cast<RegisterId>(stack.entries + offset);
+          record_use(entry, instruction);
+          constrain_width(entry, 32U, instruction);
+        }
+      };
 
   const auto first_wait_sensitivity = std::find_if(
       process.operations.begin(), process.operations.end(),
@@ -832,6 +871,15 @@ validate_process(const Process &process,
             },
             [&](const Jump &operation) {
               validate_target(operation.target, index, "jump");
+            },
+            [&](const Call& operation) {
+              validate_target(operation.target, index, "call");
+              validate_target(
+                  operation.return_target, index, "call return");
+              validate_call_stack(operation.stack, index);
+            },
+            [&](const Return& operation) {
+              validate_call_stack(operation.stack, index);
             },
             [&](const Branch &operation) {
               record_use(operation.condition, index);
@@ -1446,11 +1494,17 @@ validate_process(const Process &process,
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     const auto &operation = process.operations[index];
     if (std::holds_alternative<Halt>(operation) ||
-        std::holds_alternative<Stop>(operation)) {
+        std::holds_alternative<Stop>(operation) ||
+        std::holds_alternative<Return>(operation)) {
       continue;
     }
     if (const auto *jump = std::get_if<Jump>(&operation)) {
       successors[index].push_back(jump->target);
+    } else if (const auto* call = std::get_if<Call>(&operation)) {
+      successors[index].push_back(call->target);
+      if (call->return_target != call->target) {
+        successors[index].push_back(call->return_target);
+      }
     } else if (const auto *branch = std::get_if<Branch>(&operation)) {
       successors[index].push_back(branch->when_true);
       if (branch->when_false != branch->when_true) {

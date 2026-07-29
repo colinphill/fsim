@@ -144,6 +144,38 @@ struct ValueOperationLowerer {
   void lower(const runtime::simir::ConditionalSelect& operation);
 };
 
+struct ControlFlowOperationLowerer {
+  llvm::IRBuilder<>& builder;
+  std::vector<RegisterSlot>& registers;
+  llvm::LLVMContext& context;
+  llvm::Type* i8;
+  llvm::Type* i32;
+  llvm::Type* i64;
+  llvm::Value* register_aval;
+  llvm::Value* register_bval;
+  llvm::Value* register_initialized;
+  const std::vector<llvm::BasicBlock*>& instruction_blocks;
+  llvm::BasicBlock* invalid_pc;
+  llvm::Function* function;
+  runtime::simir::InstructionIndex instruction;
+  std::size_t index;
+  std::function<void(
+      llvm::Value*,
+      JitGeneratedRuntimeErrorReason,
+      std::string_view)> runtime_error_if;
+  std::function<void(
+      std::uint32_t,
+      std::uint32_t,
+      std::uint64_t,
+      std::uint32_t,
+      std::uint32_t)> return_result;
+
+  void lower(const runtime::simir::Jump& operation);
+  void lower(const runtime::simir::Call& operation);
+  void lower(const runtime::simir::Return& operation);
+  void lower(const runtime::simir::Branch& operation);
+};
+
 struct SignalOperationLowerer {
   llvm::IRBuilder<>& builder;
   std::vector<RegisterSlot>& registers;

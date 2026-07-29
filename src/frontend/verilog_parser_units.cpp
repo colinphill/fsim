@@ -68,6 +68,21 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
           unit.systemverilog_imports;
     } else if (match_keyword("typedef")) {
       parse_typedef(unit, previous());
+    } else if (match_keyword("function")) {
+      auto function = parse_function(previous());
+      const bool duplicate = std::ranges::any_of(
+          unit.functions,
+          [&](const FunctionDeclaration& existing) {
+            return existing.name == function.name;
+          });
+      if (duplicate) {
+        error(
+            start,
+            "FSIM-SV-SEM-066",
+            "duplicate package function '" + function.name + "'");
+      } else {
+        unit.functions.push_back(std::move(function));
+      }
     } else {
       const auto unsupported = advance();
       error(

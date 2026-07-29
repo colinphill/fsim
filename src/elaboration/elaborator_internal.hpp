@@ -117,6 +117,20 @@ evaluate_systemverilog_constant_expression(
     std::string& error);
 
 std::optional<SystemVerilogConstantValue>
+evaluate_systemverilog_constant_function_expression(
+    const Expression& expression,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& fallback_environment,
+    const std::vector<frontend::FunctionDeclaration>& functions,
+    std::string& error);
+
+void fold_systemverilog_constant_functions(
+    DesignUnit& unit,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& fallback_environment,
+    std::vector<Diagnostic>& diagnostics);
+
+std::optional<SystemVerilogConstantValue>
 convert_systemverilog_parameter_value(
     const SystemVerilogConstantValue& value,
     const frontend::Type& type,
@@ -666,6 +680,7 @@ public:
             std::string, const frontend::Type*>& visible_types,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_type_marks,
+        const std::vector<frontend::FunctionDeclaration>& functions,
         std::vector<Diagnostic>& diagnostics);
 
     Process lower_process(
@@ -864,6 +879,10 @@ private:
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
+    ExpressionAttempt lower_user_function_expression(
+        const Expression& expression,
+        std::size_t expected_width,
+        const frontend::Type* expected_type);
     ExpressionAttempt lower_binary_expression(
         const Expression& expression,
         std::size_t expected_width,
@@ -885,6 +904,19 @@ private:
 
     [[nodiscard]] bool is_integer_expression(
         const Expression& expression) const;
+
+    [[nodiscard]] const frontend::FunctionDeclaration*
+    visible_function(std::string_view name) const;
+
+    void initialize_function_support();
+
+    void lower_pending_functions();
+
+    void lower_function_body(std::size_t function_index);
+
+    void lower_function_return(const Statement& statement);
+
+    void diagnose_function_cycles();
 
     void collect_identifiers(
         const Expression& expression,
@@ -916,6 +948,7 @@ private:
         std::string, const frontend::Type*>& visible_types_;
     const std::unordered_map<
         std::string, const frontend::Type*>& visible_type_marks_;
+    const std::vector<frontend::FunctionDeclaration>& functions_;
     std::vector<Diagnostic>& diagnostics_;
     Process process_;
     RegisterId next_register_{};
@@ -945,6 +978,26 @@ private:
         std::string label;
     };
     std::vector<LoopControlContext> loop_controls_;
+    struct FunctionFrame {
+        const frontend::FunctionDeclaration* source{};
+        RegisterId result{};
+        std::vector<RegisterId> arguments;
+        std::optional<InstructionIndex> target;
+        std::vector<InstructionIndex> call_sites;
+        bool allocated{};
+        bool queued{};
+        bool lowered{};
+    };
+    std::vector<FunctionFrame> function_frames_;
+    std::unordered_map<std::string, std::size_t>
+        function_indices_;
+    std::deque<std::size_t> pending_functions_;
+    std::vector<std::unordered_set<std::size_t>>
+        function_dependencies_;
+    std::optional<std::size_t> active_function_;
+    std::vector<InstructionIndex> function_return_jumps_;
+    CallStack function_call_stack_;
+    bool function_support_initialized_{};
     frontend::Language language_{frontend::Language::Vhdl2008};
     std::string hierarchy_;
 };

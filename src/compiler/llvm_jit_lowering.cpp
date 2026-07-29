@@ -32,6 +32,7 @@ using runtime::simir::Assert;
 using runtime::simir::Binary;
 using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
+using runtime::simir::Call;
 using runtime::simir::Concatenate;
 using runtime::simir::ConditionalSelect;
 using runtime::simir::CountOnes;
@@ -70,6 +71,7 @@ using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
 using runtime::simir::RandomValue;
 using runtime::simir::Report;
+using runtime::simir::Return;
 using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
 using runtime::simir::SignalActive;
@@ -1043,6 +1045,23 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         report_callback,
         branch_to_next,
         return_result};
+    ControlFlowOperationLowerer control_lowerer{
+        builder,
+        registers,
+        context,
+        i8,
+        i32,
+        i64,
+        register_aval,
+        register_bval,
+        register_initialized,
+        instruction_blocks,
+        invalid_pc,
+        function,
+        instruction,
+        index,
+        runtime_error_if,
+        return_result};
     std::visit(
         Overloaded{
             [&](const LoadConstant& operation) {
@@ -1909,46 +1928,16 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               output_lowerer.lower(operation);
             },
             [&](const Jump &operation) {
-              builder.CreateBr(instruction_blocks[operation.target]);
+              control_lowerer.lower(operation);
+            },
+            [&](const Call& operation) {
+              control_lowerer.lower(operation);
+            },
+            [&](const Return& operation) {
+              control_lowerer.lower(operation);
             },
             [&](const Branch &operation) {
-              const auto condition =
-                  load_register(builder, registers, operation.condition);
-              auto *known = builder.CreateICmpEQ(
-                  condition.bval, constant_i64(context, 0));
-              auto *one = builder.CreateICmpEQ(
-                  condition.aval, constant_i64(context, 1));
-              if (operation.unknown_policy ==
-                  UnknownBranchPolicy::when_false) {
-                builder.CreateCondBr(
-                    builder.CreateAnd(known, one),
-                    instruction_blocks[operation.when_true],
-                    instruction_blocks[operation.when_false]);
-                return;
-              }
-
-              auto *known_block = llvm::BasicBlock::Create(
-                  context, "branch.known." + std::to_string(index), function);
-              auto *unknown_block = llvm::BasicBlock::Create(
-                  context, "branch.unknown." + std::to_string(index),
-                  function);
-              builder.CreateCondBr(known, known_block, unknown_block);
-
-              builder.SetInsertPoint(known_block);
-              builder.CreateCondBr(
-                  one, instruction_blocks[operation.when_true],
-                  instruction_blocks[operation.when_false]);
-
-              builder.SetInsertPoint(unknown_block);
-              constexpr auto reason =
-                  JitGeneratedRuntimeErrorReason::
-                      unknown_branch_condition;
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR,
-                  instruction,
-                  static_cast<std::uint64_t>(reason),
-                  FSIM_JIT_FRAME_STATE_RUNTIME_ERROR,
-                  static_cast<std::uint32_t>(reason));
+              control_lowerer.lower(operation);
             },
             [&](const WaitFor &operation) {
               output_lowerer.lower(operation);

@@ -120,6 +120,10 @@ enum class JitGeneratedRuntimeErrorReason : std::uint8_t {
   integer_subtype_range,
   dynamic_index_unknown,
   dynamic_index_range,
+  call_stack_unknown,
+  call_stack_overflow,
+  call_stack_underflow,
+  call_stack_target,
 };
 
 /// A failure deliberately reported by generated SimIR code.

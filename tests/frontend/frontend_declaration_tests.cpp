@@ -826,6 +826,102 @@ package incomplete_struct;
       "unterminated packed structs have a targeted closing-brace diagnostic");
 }
 
+void test_systemverilog_function_declarations() {
+  const auto parsed = parse_text(
+      "functions.sv",
+      R"(
+package math_pkg;
+  function automatic logic [7:0] increment(
+      input logic [7:0] value);
+    return value + 1;
+  endfunction : increment
+endpackage
+
+module function_user(input logic select, output logic [7:0] result);
+  function automatic logic [7:0] choose(
+      input logic condition,
+      input logic [7:0] when_true,
+      when_false);
+    logic [7:0] temporary;
+    if (condition)
+      temporary = when_true;
+    else
+      temporary = when_false;
+    choose = temporary;
+  endfunction
+
+  initial result = choose(select, 8'h2a, 8'h11);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "automatic SystemVerilog functions must parse");
+  require(
+      parsed.design.units.size() == 2,
+      "package and module function design units");
+  const auto& package_function =
+      parsed.design.units.front().functions.front();
+  require(
+      package_function.name == "increment"
+          && package_function.automatic
+          && package_function.arguments.size() == 1
+          && package_function.statements.size() == 1
+          && package_function.statements.front().kind
+              == StatementKind::Return,
+      "package function HIR");
+  const auto& module_function =
+      parsed.design.units.back().functions.front();
+  require(
+      module_function.name == "choose"
+          && module_function.arguments.size() == 3
+          && module_function.variables.size() == 1
+          && module_function.statements.size() == 2
+          && module_function.statements.back().kind
+              == StatementKind::Assignment,
+      "module function arguments, locals, and body HIR");
+
+  const auto classic = parse_text(
+      "classic_function.v",
+      R"(
+module classic_function;
+  function automatic [7:0] answer;
+    answer = 8'h2a;
+  endfunction
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      classic.ok()
+          && classic.design.units.front().functions.size() == 1
+          && classic.design.units.front().functions.front()
+                 .arguments.empty(),
+      "classic no-argument Verilog function");
+
+  const auto invalid = parse_text(
+      "invalid_functions.sv",
+      R"(
+module invalid_functions;
+  function static logic bad(output logic argument);
+    #1 bad = argument;
+  endfunction
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid.ok(), "invalid function forms must be rejected");
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      has_code("FSIM-SV-UNSUPPORTED-033")
+          && has_code("FSIM-SV-UNSUPPORTED-035")
+          && has_code("FSIM-SV-SEM-064"),
+      "function lifetime, direction, and timing diagnostics");
+}
+
 void test_immediate_assertions() {
   const auto vhdl = parse_text(
       "assertions.vhd",

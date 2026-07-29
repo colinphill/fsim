@@ -78,6 +78,7 @@ add_executable(
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_process_test.cpp
+  elaboration/elaborator_function_test.cpp
   elaboration/elaborator_expression_test.cpp
   elaboration/elaborator_numeric_test.cpp
   elaboration/elaborator_selection_test.cpp
@@ -325,6 +326,25 @@ set_tests_properties(
   set_tests_properties(
     fsim.application.call_safe_points
     PROPERTIES LABELS "fast;call-safe-points"
+  )
+
+  add_executable(
+    fsim_sv_function_application_tests
+    app/sv_function_application_test.cpp
+  )
+  fsim_configure_test(fsim_sv_function_application_tests)
+  target_link_libraries(
+    fsim_sv_function_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_functions
+    COMMAND fsim_sv_function_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_functions
+    PROPERTIES
+      LABELS "fast;functions;systemverilog;cache"
   )
 
   add_executable(

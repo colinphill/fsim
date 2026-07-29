@@ -43,6 +43,7 @@ void test_systemverilog_procedural_assignment_controls();
 void test_systemverilog_compiler_directives();
 void test_systemverilog_parameters();
 void test_systemverilog_packages();
+void test_systemverilog_function_declarations();
 void test_immediate_assertions();
 void test_vhdl_literal_report();
 void test_process_variable_declarations();
@@ -67,4 +68,3 @@ void test_verilog_literal_display();
 void test_systemverilog_random_functions();
 
 } // namespace fsim::tests::frontend
-

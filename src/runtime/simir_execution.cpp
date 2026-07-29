@@ -1384,6 +1384,58 @@ void Interpreter::Impl::execute(ProcessId id) {
               }
               process.pc = op.target;
             },
+            [&](const Call& op) {
+              const auto pointer =
+                  get_register(process, op.stack.pointer).low_word();
+              if (pointer.bval != 0) {
+                fail(process, "call-stack pointer is unknown");
+              }
+              if (pointer.aval >= op.stack.capacity) {
+                fail(process, "call-stack capacity is exhausted");
+              }
+              if (op.target >= process.program.operations.size()
+                  || op.return_target
+                      >= process.program.operations.size()) {
+                fail(process, "call target is outside the operation stream");
+              }
+              get_register(
+                  process,
+                  static_cast<RegisterId>(
+                      op.stack.entries + pointer.aval)) =
+                  PackedLogic4::from_aval_bval(
+                      32, op.return_target, 0);
+              get_register(process, op.stack.pointer) =
+                  PackedLogic4::from_aval_bval(
+                      32, pointer.aval + 1U, 0);
+              process.pc = op.target;
+            },
+            [&](const Return& op) {
+              const auto pointer =
+                  get_register(process, op.stack.pointer).low_word();
+              if (pointer.bval != 0) {
+                fail(process, "call-stack pointer is unknown");
+              }
+              if (pointer.aval == 0
+                  || pointer.aval > op.stack.capacity) {
+                fail(process, "call-stack underflow");
+              }
+              const auto next_pointer = pointer.aval - 1U;
+              const auto target =
+                  get_register(
+                      process,
+                      static_cast<RegisterId>(
+                          op.stack.entries + next_pointer)).low_word();
+              if (target.bval != 0
+                  || target.aval
+                      >= process.program.operations.size()) {
+                fail(process, "call-stack return target is invalid");
+              }
+              get_register(process, op.stack.pointer) =
+                  PackedLogic4::from_aval_bval(
+                      32, next_pointer, 0);
+              process.pc =
+                  static_cast<InstructionIndex>(target.aval);
+            },
             [&](const Branch &op) {
               const auto &condition = get_register(process, op.condition);
               if (condition.width() != 1) {
