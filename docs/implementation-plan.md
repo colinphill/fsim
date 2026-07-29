@@ -2288,6 +2288,13 @@ remain near or below 1,600 lines so ordinary feature growth does not
 immediately consume the hard limit. Generated, fetched, build-tree, and
 third-party sources are outside this policy.
 
+Splitting implementation text into included fragments does not satisfy this
+program. Private implementation headers may contain declarations, state
+layouts, and genuinely unavoidable templates only. Ordinary executable
+functions and method bodies must move into independently compiled,
+responsibility-oriented translation units so the refactor reduces both file
+size and per-unit compilation scope.
+
 The initial inventory found fourteen oversized files containing approximately
 87,000 lines. The refactor is behavior-preserving: public C++, C, SystemC
 plug-in, and JIT callback ABIs remain stable; LLVM types remain private to the
@@ -2361,6 +2368,29 @@ LLVM 22.1.8 warnings-as-errors Release build passed all 42 tests in 95.85
 seconds on 2026-07-29, including the complete application integration,
 interpreter/JIT, SystemC, mixed-language, Tcl, C API, debugger, cache, and VCD
 coverage. No CI state was inspected.
+
+Checkpoint 3 applies the stricter translation-unit rule to SimIR, the SystemC
+runtime/compiler bridge, and the native C API. SimIR is now compiled as
+format/output, logic/vector, arithmetic/integer, interpreter state, scheduling,
+operation execution, public interpreter, and public value/error units. SystemC
+hierarchy registration callbacks are separate from lifecycle and registry
+methods; plug-in compilation is separated into planning/facade, source and
+cache support, dependency discovery, and platform process execution. Native C
+entry points are separate from session, hierarchy-object, callback, and
+runtime-failure services.
+
+The four new private headers contain declarations and state layouts only; they
+contain no ordinary function or method bodies. The largest new implementation
+unit is 1,615 lines. SimIR, SystemC hierarchy, and the plug-in compiler have
+been removed from the temporary allowlist, which now contains five remaining
+files, and the permanent budget gate checks 155 authored sources.
+
+Focused runtime, LLVM differential, SystemC plug-in/compiler/cache, C/C++ API,
+and line-budget tests pass. The exact LLVM 22.1.8 warnings-as-errors Release
+build passed all 42 tests in 95.03 seconds on 2026-07-29, including complete
+application integration, mixed-language execution, interpreter/JIT
+equivalence, Tcl, debugger, VCD, cache, and strict ABI coverage. No CI state
+was inspected.
 
 ## v1 release condition
 

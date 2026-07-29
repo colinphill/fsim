@@ -11,9 +11,6 @@ set(
   "src/app/application.cpp"
   "src/compiler/llvm_jit.cpp"
   "src/elaboration/elaborator.cpp"
-  "src/runtime/simir.cpp"
-  "src/systemc/hierarchy.cpp"
-  "src/systemc/plugin_compiler.cpp"
   "tests/app/application_test.cpp"
 )
 

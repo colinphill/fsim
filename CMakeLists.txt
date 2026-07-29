@@ -316,6 +316,13 @@ add_library(
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
     src/runtime/simir.cpp
+    src/runtime/simir_arithmetic.cpp
+    src/runtime/simir_execution.cpp
+    src/runtime/simir_format.cpp
+    src/runtime/simir_interpreter.cpp
+    src/runtime/simir_logic.cpp
+    src/runtime/simir_scheduling.cpp
+    src/runtime/simir_state.cpp
     src/runtime/vcd_writer.cpp
 )
 add_library(fsim::runtime ALIAS fsim_runtime)
@@ -359,7 +366,11 @@ add_library(
   fsim_systemc
   STATIC
     src/systemc/hierarchy.cpp
+    src/systemc/hierarchy_callbacks.cpp
     src/systemc/plugin_compiler.cpp
+    src/systemc/plugin_compiler_common.cpp
+    src/systemc/plugin_compiler_dependencies.cpp
+    src/systemc/plugin_compiler_process.cpp
     src/systemc/plugin_loader.cpp
 )
 add_library(fsim::systemc ALIAS fsim_systemc)
@@ -386,7 +397,7 @@ if(FSIM_WITH_SYSTEMC_FIBERS)
   )
 endif()
 
-add_library(fsim_api SHARED src/api/api.cpp)
+add_library(fsim_api SHARED src/api/api.cpp src/api/api_session.cpp)
 add_library(fsim::api ALIAS fsim_api)
 fsim_configure_library(fsim_api)
 target_link_libraries(fsim_api PUBLIC fsim_project fsim_diagnostic)
