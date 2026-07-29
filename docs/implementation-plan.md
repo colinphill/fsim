@@ -2333,6 +2333,14 @@ will be decomposed with the application implementation checkpoint so that the
 fixture becomes a proper reusable test component rather than duplicated
 source-writing code. The five focused checkpoint tests pass.
 
+The checkpoint implementation is recorded in commit `fc48bbc`. Its exact
+LLVM 22.1.8 warnings-as-errors Release build passed all 42 tests in 51.23
+seconds on 2026-07-29. The added test is the permanent source-line-budget gate;
+the prior 41 functional tests remain green. The regression includes the split
+frontend, elaboration, LLVM, and runtime translation units, fetched
+Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, mixed-language execution, cache,
+debugger, VCD, and strict native ABI coverage. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
