@@ -1357,10 +1357,21 @@ The planned ten implementation features are:
     interpreter/LLVM O0/O2/VCD/cold-warm-cache evidence before the full local
     regression and push gate.
 
-All ten implementation features are complete. Focused strict-build runtime,
-elaboration, mixed VHDL/SV interpreter/LLVM O0/O2/VCD/cold-warm-cache, and
-native C API tests pass. The full local regression and push gate remain
-pending.
+All ten implementation features are complete in feature commit `c2920d0`.
+Focused strict-build runtime, elaboration, mixed VHDL/SV
+interpreter/LLVM-O0/LLVM-O2/VCD/cold-warm-cache, unique diagnostic-catalog,
+and native C API tests pass. Process-owned slots now cover whole and slice
+blocking/update/future/inertial/projected paths without extending the generated
+runtime ABI. The native C hierarchy exposes resolved-signal metadata and
+pre-resolution driver values; force continues to mask effective values while
+driver slots advance underneath it.
+
+After feature commit `c2920d0`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 32 tests in 71.87 seconds on 2026-07-28. The
+gate includes fetched Boost.Context 1.91.0, fetched Tcl 9.0.4 and relocation,
+SystemC plug-in/fiber coverage, LLVM/C ABI tests, interpreter/LLVM
+differentials, VCD, cache, debugger-facing application tests, and the new
+mixed-resolution target. No CI state was inspected for this local gate.
 
 ## v1 release condition
 
