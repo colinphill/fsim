@@ -54,6 +54,21 @@ add_test(NAME fsim.jit-runtime-c COMMAND fsim_jit_runtime_c_tests)
 add_executable(fsim_elaboration_tests elaboration/elaborator_test.cpp)
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
+if(
+  WIN32
+  AND (
+    MSVC
+    OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+  )
+)
+  # This accumulated feature-matrix test intentionally retains hundreds of
+  # independent fixtures in one translation unit. Unoptimized MSVC-compatible
+  # builds otherwise exhaust Windows' 1 MiB default stack on entry.
+  target_link_options(
+    fsim_elaboration_tests
+    PRIVATE "$<$<CONFIG:Debug>:/STACK:8388608>"
+  )
+endif()
 add_test(NAME fsim.elaboration COMMAND fsim_elaboration_tests)
 
 add_executable(fsim_systemc_header_tests systemc/systemc_header_test.cpp)
