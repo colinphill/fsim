@@ -333,6 +333,25 @@ SpecializedUnit specialize_unit(
                 }
             }
         }
+        const bool enum_literal_parameter =
+            is_verilog
+            && std::ranges::any_of(
+                source.type_aliases,
+                [&](const auto& alias) {
+                  return std::ranges::any_of(
+                      alias.enum_literals,
+                      [&](const auto& literal) {
+                        return literal.name == parameter.name
+                            && literal.span.source_name
+                                == parameter.span.source_name
+                            && literal.span.begin.offset
+                                == parameter.span.begin.offset;
+                      });
+                });
+        if (is_verilog && !enum_literal_parameter) {
+            *value = normalize_systemverilog_parameter_value(
+                *value, parameter_type);
+        }
         if (is_vhdl) {
             const auto spelling = parameter_type.spelling;
             const bool enumeration =

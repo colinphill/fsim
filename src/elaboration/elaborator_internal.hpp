@@ -125,6 +125,10 @@ struct ConstantTypeInfo {
 using ConstantDomainEnvironment =
     std::unordered_map<std::string, ConstantTypeInfo>;
 
+std::int64_t normalize_systemverilog_parameter_value(
+    std::int64_t value,
+    const frontend::Type& type) noexcept;
+
 std::optional<std::int64_t> constant_literal_integer(
     const Expression& expression,
     std::string& error);

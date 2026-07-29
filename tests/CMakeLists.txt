@@ -214,6 +214,26 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_sv_parameter_sizing_application_tests
+    app/sv_parameter_sizing_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_sv_parameter_sizing_application_tests
+  )
+  target_link_libraries(
+    fsim_sv_parameter_sizing_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_parameter_sizing
+    COMMAND fsim_sv_parameter_sizing_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_parameter_sizing
+    PROPERTIES LABELS "fast;parameters;systemverilog"
+  )
+
+  add_executable(
     fsim_scoped_local_application_tests
     app/scoped_local_application_test.cpp
   )

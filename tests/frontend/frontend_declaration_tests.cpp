@@ -285,6 +285,81 @@ endmodule
           && !top->instances[1].parameter_overrides[0].name,
       "named and positional parameter overrides are represented");
 
+  const auto sized = parse_text(
+      "sized-parameters.sv",
+      R"(
+module sized_parameters #(
+  parameter byte SIGNED_BYTE = 8'hff,
+  parameter byte unsigned UNSIGNED_BYTE = 8'hff,
+  parameter shortint SHORT_VALUE = 16'h8000,
+  parameter longint LONG_VALUE = 1,
+  parameter longint unsigned UNSIGNED_LONG_VALUE = 1,
+  parameter time TIME_VALUE = 2,
+  parameter logic signed [7:0] SIGNED_VECTOR = 8'h80,
+  parameter int unsigned UNSIGNED_INT = 3
+) ();
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(sized.ok(), "SystemVerilog integral parameter types must parse");
+  const auto* sized_unit =
+      sized.design.find(UnitKind::VerilogModule, "sized_parameters");
+  require(
+      sized_unit != nullptr && sized_unit->parameters.size() == 8,
+      "integral parameter declarations retain source order");
+  require(
+      sized_unit->parameters[0].type.spelling == "byte"
+          && sized_unit->parameters[0].type.domain
+              == ValueDomain::Bit2
+          && sized_unit->parameters[0].type.is_signed
+          && sized_unit->parameters[0].type.width() == 8
+          && sized_unit->parameters[1].type.spelling == "byte"
+          && !sized_unit->parameters[1].type.is_signed
+          && sized_unit->parameters[2].type.spelling == "shortint"
+          && sized_unit->parameters[2].type.width() == 16
+          && sized_unit->parameters[3].type.spelling == "longint"
+          && sized_unit->parameters[3].type.width() == 64
+          && sized_unit->parameters[3].type.is_signed
+          && sized_unit->parameters[4].type.spelling == "longint"
+          && !sized_unit->parameters[4].type.is_signed
+          && sized_unit->parameters[4].type.width() == 64
+          && sized_unit->parameters[5].type.spelling == "time"
+          && sized_unit->parameters[5].type.domain
+              == ValueDomain::Logic4
+          && !sized_unit->parameters[5].type.is_signed
+          && sized_unit->parameters[5].type.width() == 64
+          && sized_unit->parameters[6].type.is_signed
+          && sized_unit->parameters[6].type.width() == 8
+          && !sized_unit->parameters[7].type.is_signed
+          && sized_unit->parameters[7].type.width() == 32,
+      "integral parameter widths, domains, and signedness are typed");
+
+  const auto unsupported_parameter_types = parse_text(
+      "unsupported-parameter-types.sv",
+      R"(
+module unsupported_parameter_types #(
+  parameter type ELEMENT = logic,
+  parameter string LABEL = "fsim"
+) ();
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !unsupported_parameter_types.ok()
+          && std::ranges::any_of(
+              unsupported_parameter_types.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-UNSUPPORTED-019";
+              })
+          && std::ranges::any_of(
+              unsupported_parameter_types.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-UNSUPPORTED-020";
+              }),
+      "type and string parameters receive targeted diagnostics");
+
   const auto verilog = parse_text(
       "clog2.v",
       R"(

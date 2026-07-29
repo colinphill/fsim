@@ -34,6 +34,26 @@ ConstantTypeInfo::ConstantTypeInfo(
         : runtime::simir::ValueKind::logic4;
 }
 
+std::int64_t normalize_systemverilog_parameter_value(
+    const std::int64_t value,
+    const frontend::Type& type) noexcept {
+    if (type.spelling == "implicit" && type.named_type.empty()) {
+        return value;
+    }
+    const auto width = type.width();
+    if (!width || *width == 0 || *width >= 64) {
+        return value;
+    }
+    const auto mask =
+        (std::uint64_t{1} << *width) - std::uint64_t{1};
+    auto bits = static_cast<std::uint64_t>(value) & mask;
+    if (type.is_signed
+        && (bits & (std::uint64_t{1} << (*width - 1U))) != 0) {
+        bits |= ~mask;
+    }
+    return static_cast<std::int64_t>(bits);
+}
+
 
 
 std::string simple_top_name(std::string_view top) {

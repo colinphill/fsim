@@ -238,6 +238,94 @@ endmodule
         parameter_interpreter->signal_value(*parameter_q8).to_msb_string()
         == "00000011");
 
+    const auto sized_parameters = fsim::frontend::parse_text(
+        "sized-parameters.sv",
+        R"(
+module sized_parameter_target #(
+  parameter byte SIGNED_BYTE = 8'hff,
+  parameter byte unsigned UNSIGNED_BYTE = -1,
+  parameter shortint SHORT_VALUE = 16'h8000,
+  parameter logic signed [7:0] SIGNED_VECTOR = 8'h80,
+  parameter logic [7:0] UNSIGNED_VECTOR = -1,
+  parameter int unsigned UNSIGNED_INT = -1,
+  parameter int WIDTH = 8,
+  parameter logic signed [WIDTH-1:0] DEPENDENT = 8'h80,
+  localparam byte NEXT_BYTE = SIGNED_BYTE + 1,
+  localparam logic [WIDTH-1:0] DEPENDENT_NEXT = DEPENDENT + 1
+) ();
+endmodule
+
+module sized_parameter_top;
+  sized_parameter_target defaults();
+  sized_parameter_target #(
+    .SIGNED_BYTE(8'h80),
+    .UNSIGNED_BYTE(-2),
+    .SHORT_VALUE(16'hffff),
+    .SIGNED_VECTOR(8'hff),
+    .UNSIGNED_VECTOR(-2),
+    .UNSIGNED_INT(-2),
+    .WIDTH(4),
+    .DEPENDENT(8'h0f)
+  ) overrides();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(sized_parameters.ok());
+    const auto sized_elaborated = fsim::elaboration::elaborate(
+        sized_parameters.design, "sv:work.sized_parameter_top");
+    if (!sized_elaborated.ok()) {
+        for (const auto& diagnostic : sized_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(sized_elaborated.ok());
+    assert(sized_elaborated.design->specializations().size() == 3);
+    const auto find_sized_specialization =
+        [&](const std::string_view instance) {
+          return std::ranges::find_if(
+              sized_elaborated.design->specializations(),
+              [&](const auto& candidate) {
+                return candidate.instance == instance;
+              });
+        };
+    const auto sized_defaults =
+        find_sized_specialization("sized_parameter_top.defaults");
+    const auto sized_overrides =
+        find_sized_specialization("sized_parameter_top.overrides");
+    assert(
+        sized_defaults
+        != sized_elaborated.design->specializations().end());
+    assert(
+        sized_overrides
+        != sized_elaborated.design->specializations().end());
+    assert((
+        sized_defaults->parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"SIGNED_BYTE", "-1"},
+            {"UNSIGNED_BYTE", "255"},
+            {"SHORT_VALUE", "-32768"},
+            {"SIGNED_VECTOR", "-128"},
+            {"UNSIGNED_VECTOR", "255"},
+            {"UNSIGNED_INT", "4294967295"},
+            {"WIDTH", "8"},
+            {"DEPENDENT", "-128"},
+            {"NEXT_BYTE", "0"},
+            {"DEPENDENT_NEXT", "129"}}));
+    assert((
+        sized_overrides->parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"SIGNED_BYTE", "-128"},
+            {"UNSIGNED_BYTE", "254"},
+            {"SHORT_VALUE", "-1"},
+            {"SIGNED_VECTOR", "-1"},
+            {"UNSIGNED_VECTOR", "254"},
+            {"UNSIGNED_INT", "4294967294"},
+            {"WIDTH", "4"},
+            {"DEPENDENT", "-1"},
+            {"NEXT_BYTE", "-127"},
+            {"DEPENDENT_NEXT", "0"}}));
+
     const auto clog2_values = fsim::frontend::parse_text(
         "clog2-values.sv",
         R"(

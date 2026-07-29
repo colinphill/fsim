@@ -734,17 +734,33 @@ Type VerilogParser::parse_parameter_type() {
         "parameter");
     return type;
   }
-  if (keyword("string") || keyword("byte")
-      || keyword("shortint") || keyword("longint")) {
+  if (keyword("string")) {
     const auto unsupported = advance();
     error(
         unsupported,
         "FSIM-SV-UNSUPPORTED-020",
-        "this parameter data type is parsed but integral constant "
-        "specialization currently supports int/integer/bit/logic/reg");
+        "string parameters are not implemented; use an integral value "
+        "parameter");
     return type;
   }
-  if (keyword("integer") || keyword("int")) {
+  if (keyword("byte") || keyword("shortint")
+      || keyword("longint") || keyword("time")) {
+    const auto token = advance();
+    type.spelling = token.text;
+    type.domain =
+        token.text == "time"
+            ? ValueDomain::Logic4
+            : ValueDomain::Bit2;
+    type.is_signed = token.text != "time";
+    const auto width =
+        token.text == "byte"
+            ? std::int64_t{8}
+        : token.text == "shortint"
+            ? std::int64_t{16}
+            : std::int64_t{64};
+    type.packed_range = PackedRange{
+        width - 1, 0, true};
+  } else if (keyword("integer") || keyword("int")) {
     const auto token = advance();
     type.spelling = token.text;
     type.domain = ValueDomain::Integer;
@@ -768,7 +784,12 @@ Type VerilogParser::parse_parameter_type() {
     return parse_named_type();
   }
   parse_optional_signedness(type);
-  parse_optional_range(type);
+  if (type.spelling == "implicit"
+      || type.spelling == "logic"
+      || type.spelling == "reg"
+      || type.spelling == "bit") {
+    parse_optional_range(type);
+  }
   return type;
 }
 

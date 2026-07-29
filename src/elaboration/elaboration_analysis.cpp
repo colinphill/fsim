@@ -630,6 +630,10 @@ void evaluate_generated_constants(
                 constant.span});
             value = 0;
         }
+        if (language != frontend::Language::Vhdl2008) {
+            *value = normalize_systemverilog_parameter_value(
+                *value, constant.type);
+        }
         const bool exceeds_word =
             constant.type.packed_range
             && constant.type.packed_range->width() > 64;
