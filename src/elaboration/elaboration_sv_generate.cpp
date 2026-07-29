@@ -72,6 +72,7 @@ void set_integer_expression(
 void prepare_regions(
     std::vector<frontend::GenerateRegion>& regions,
     const SystemVerilogConstantEnvironment& environment,
+    const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics);
@@ -79,10 +80,13 @@ void prepare_regions(
 void prepare_body(
     frontend::GenerateBody& body,
     const SystemVerilogConstantEnvironment& inherited_environment,
+    const SystemVerilogStringEnvironment&
+        inherited_string_environment,
     const ConstantEnvironment& inherited_integer_environment,
     const ConstantDomainEnvironment& inherited_domains,
     std::vector<Diagnostic>& diagnostics) {
     auto environment = inherited_environment;
+    auto string_environment = inherited_string_environment;
     auto integer_environment = inherited_integer_environment;
     auto domains = inherited_domains;
     for (auto& constant : body.constants) {
@@ -94,6 +98,29 @@ void prepare_body(
             frontend::Language::SystemVerilog2017);
         substitute_systemverilog_parameters(
             constant.default_value, environment);
+        substitute_systemverilog_strings(
+            constant.default_value,
+            string_environment,
+            integer_environment);
+        if (constant.type.spelling == "string") {
+            std::string error;
+            const auto value =
+                evaluate_systemverilog_string_expression(
+                    constant.default_value,
+                    string_environment,
+                    integer_environment,
+                    error);
+            if (!value) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-011",
+                    "cannot evaluate generated string parameter '"
+                        + constant.name + "': " + error,
+                    constant.span});
+            } else {
+                string_environment[constant.name] = *value;
+            }
+            continue;
+        }
         const auto evaluated = evaluate(
             constant.default_value,
             environment,
@@ -123,11 +150,17 @@ void prepare_body(
         domains[constant.name] = ConstantTypeInfo{
             constant.type.domain, false, {}};
     }
+    substitute_systemverilog_strings(
+        body,
+        string_environment,
+        integer_environment,
+        diagnostics);
     substitute_systemverilog_parameters(body, environment);
     body.constants.clear();
     prepare_regions(
         body.generate_regions,
         environment,
+        string_environment,
         integer_environment,
         domains,
         diagnostics);
@@ -136,9 +169,114 @@ void prepare_body(
 void prepare_selection(
     frontend::GenerateRegion& region,
     const SystemVerilogConstantEnvironment& environment,
+    const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics) {
+    std::string string_error;
+    if (const auto string_selector =
+            evaluate_systemverilog_string_expression(
+                region.condition,
+                string_environment,
+                integer_environment,
+                string_error)) {
+        const frontend::GenerateAlternative* selected = nullptr;
+        const frontend::GenerateAlternative*
+            default_alternative = nullptr;
+        std::unordered_set<std::string> prior_choices;
+        bool invalid = false;
+        for (auto& alternative : region.alternatives) {
+            if (alternative.is_default) {
+                if (default_alternative != nullptr) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-010",
+                        "string selection generate has more than one "
+                        "default alternative",
+                        alternative.span});
+                    invalid = true;
+                } else {
+                    default_alternative = &alternative;
+                }
+                continue;
+            }
+            bool matches = false;
+            for (auto& choice : alternative.choices) {
+                if (choice.right) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-009",
+                        "string selection generate supports exact "
+                        "choices only",
+                        choice.span});
+                    invalid = true;
+                    continue;
+                }
+                std::string error;
+                const auto value =
+                    evaluate_systemverilog_string_expression(
+                        choice.left,
+                        string_environment,
+                        integer_environment,
+                        error);
+                if (!value) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-009",
+                        "cannot evaluate string selection-generate "
+                        "choice: " + error,
+                        choice.span});
+                    invalid = true;
+                    continue;
+                }
+                if (!prior_choices.insert(value->bytes).second) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-010",
+                        "string selection generate has duplicate "
+                        "constant choices",
+                        choice.span});
+                    invalid = true;
+                }
+                matches =
+                    matches
+                    || value->bytes == string_selector->bytes;
+            }
+            if (matches) {
+                if (selected != nullptr) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-010",
+                        "string selection generate has overlapping "
+                        "matching alternatives",
+                        alternative.span});
+                    invalid = true;
+                } else {
+                    selected = &alternative;
+                }
+            }
+        }
+        if (invalid) {
+            return;
+        }
+        if (selected == nullptr) {
+            selected = default_alternative;
+        }
+        frontend::GenerateBody selected_body;
+        std::string selected_scope;
+        if (selected != nullptr) {
+            selected_body = selected->body;
+            selected_scope = selected->scope;
+        }
+        prepare_body(
+            selected_body,
+            environment,
+            string_environment,
+            integer_environment,
+            domains,
+            diagnostics);
+        region.kind = frontend::GenerateKind::StaticBlock;
+        region.then_scope = std::move(selected_scope);
+        region.then_body = std::move(selected_body);
+        region.else_body = {};
+        region.alternatives.clear();
+        return;
+    }
     const auto selector = evaluate(
         region.condition,
         environment,
@@ -206,6 +344,7 @@ void prepare_selection(
             prepare_body(
                 alternative.body,
                 environment,
+                string_environment,
                 integer_environment,
                 domains,
                 diagnostics);
@@ -296,6 +435,7 @@ void prepare_selection(
     prepare_body(
         selected_body,
         environment,
+        string_environment,
         integer_environment,
         domains,
         diagnostics);
@@ -309,10 +449,23 @@ void prepare_selection(
 void prepare_regions(
     std::vector<frontend::GenerateRegion>& regions,
     const SystemVerilogConstantEnvironment& environment,
+    const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics) {
     for (auto& region : regions) {
+        substitute_systemverilog_strings(
+            region.initial,
+            string_environment,
+            integer_environment);
+        substitute_systemverilog_strings(
+            region.condition,
+            string_environment,
+            integer_environment);
+        substitute_systemverilog_strings(
+            region.iteration,
+            string_environment,
+            integer_environment);
         substitute_systemverilog_parameters(
             region.initial, environment);
         substitute_systemverilog_parameters(
@@ -323,6 +476,7 @@ void prepare_regions(
             prepare_selection(
                 region,
                 environment,
+                string_environment,
                 integer_environment,
                 domains,
                 diagnostics);
@@ -353,16 +507,23 @@ void prepare_regions(
             prepare_body(
                 region.then_body,
                 environment,
+                string_environment,
                 integer_environment,
                 domains,
                 diagnostics);
             prepare_body(
                 region.else_body,
                 environment,
+                string_environment,
                 integer_environment,
                 domains,
                 diagnostics);
         } else {
+            substitute_systemverilog_strings(
+                region.then_body,
+                string_environment,
+                integer_environment,
+                diagnostics);
             substitute_systemverilog_parameters(
                 region.then_body, environment);
         }
@@ -374,12 +535,14 @@ void prepare_regions(
 void prepare_systemverilog_generate_regions(
     std::vector<frontend::GenerateRegion>& regions,
     const SystemVerilogConstantEnvironment& environment,
+    const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics) {
     prepare_regions(
         regions,
         environment,
+        string_environment,
         integer_environment,
         domains,
         diagnostics);

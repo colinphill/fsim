@@ -728,12 +728,10 @@ Type VerilogParser::parse_parameter_type() {
       std::nullopt,
       true};
   if (keyword("string")) {
-    const auto unsupported = advance();
-    error(
-        unsupported,
-        "FSIM-SV-UNSUPPORTED-020",
-        "string parameters are not implemented; use an integral value "
-        "parameter");
+    (void)advance();
+    type.spelling = "string";
+    type.domain = ValueDomain::Unknown;
+    type.is_signed = false;
     return type;
   }
   if (keyword("byte") || keyword("shortint")

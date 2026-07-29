@@ -94,6 +94,7 @@ public:
 
 void test_specialization_and_packages();
 void test_systemverilog_typed_constants();
+void test_systemverilog_string_constants();
 void test_systemverilog_type_parameters();
 void test_generate_elaboration();
 void test_mixed_language_and_systemc();

@@ -72,6 +72,43 @@ struct SystemVerilogConstantValue {
 using SystemVerilogConstantEnvironment =
     std::unordered_map<std::string, SystemVerilogConstantValue>;
 
+struct SystemVerilogStringValue {
+    std::string bytes;
+    frontend::SourceSpan source;
+
+    [[nodiscard]] std::string display() const;
+    [[nodiscard]] std::string canonical() const;
+    [[nodiscard]] Expression expression(
+        const frontend::SourceSpan& use_span) const;
+};
+
+using SystemVerilogStringEnvironment =
+    std::unordered_map<std::string, SystemVerilogStringValue>;
+
+std::optional<SystemVerilogStringValue>
+evaluate_systemverilog_string_expression(
+    const Expression& expression,
+    const SystemVerilogStringEnvironment& environment,
+    const ConstantEnvironment& integer_environment,
+    std::string& error);
+
+void substitute_systemverilog_strings(
+    Expression& expression,
+    const SystemVerilogStringEnvironment& environment,
+    const ConstantEnvironment& integer_environment);
+
+void substitute_systemverilog_strings(
+    DesignUnit& unit,
+    const SystemVerilogStringEnvironment& environment,
+    const ConstantEnvironment& integer_environment,
+    std::vector<Diagnostic>& diagnostics);
+
+void substitute_systemverilog_strings(
+    frontend::GenerateBody& body,
+    const SystemVerilogStringEnvironment& environment,
+    const ConstantEnvironment& integer_environment,
+    std::vector<Diagnostic>& diagnostics);
+
 std::optional<SystemVerilogConstantValue>
 evaluate_systemverilog_constant_expression(
     const Expression& expression,
@@ -182,6 +219,7 @@ using ConstantDomainEnvironment =
 void prepare_systemverilog_generate_regions(
     std::vector<frontend::GenerateRegion>& regions,
     const SystemVerilogConstantEnvironment& environment,
+    const SystemVerilogStringEnvironment& string_environment,
     const ConstantEnvironment& integer_environment,
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics);
@@ -490,6 +528,7 @@ void expand_generate_regions(
 struct SpecializedUnit {
     DesignUnit unit;
     ConstantEnvironment environment;
+    SystemVerilogStringEnvironment string_environment;
     std::vector<std::pair<std::string, std::string>> values;
     std::vector<std::pair<std::string, std::string>> identity_values;
 };

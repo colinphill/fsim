@@ -85,6 +85,10 @@ struct Expression {
   // contextual nominal typing survives substitution into comparisons and
   // conditional expressions.
   std::string nominal_type;
+  // Verilog/SystemVerilog source string literals are decoded once by the
+  // parser. The original token spelling remains in text for diagnostics and
+  // cache/source provenance.
+  std::optional<std::string> decoded_string;
 
   Expression() = default;
 
@@ -94,14 +98,17 @@ struct Expression {
              std::vector<std::string> expression_aggregate_choices = {},
              std::vector<std::vector<Expression>>
                  expression_aggregate_choice_expressions = {},
-             std::string expression_nominal_type = {})
+             std::string expression_nominal_type = {},
+             std::optional<std::string> expression_decoded_string =
+                 std::nullopt)
       : kind(expression_kind), text(std::move(expression_text)),
         operands(std::move(expression_operands)),
         span(std::move(expression_span)),
         aggregate_choices(std::move(expression_aggregate_choices)),
         aggregate_choice_expressions(
             std::move(expression_aggregate_choice_expressions)),
-        nominal_type(std::move(expression_nominal_type)) {}
+        nominal_type(std::move(expression_nominal_type)),
+        decoded_string(std::move(expression_decoded_string)) {}
 
   [[nodiscard]] bool valid() const noexcept {
     return kind != ExpressionKind::Invalid;

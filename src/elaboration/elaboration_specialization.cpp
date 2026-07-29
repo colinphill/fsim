@@ -132,6 +132,8 @@ SpecializedUnit specialize_unit(
         overridable.size());
     std::vector<std::optional<SystemVerilogConstantValue>>
         systemverilog_actuals(overridable.size());
+    std::vector<std::optional<SystemVerilogStringValue>>
+        systemverilog_string_actuals(overridable.size());
     std::size_t next_positional = 0;
     bool saw_named = false;
     bool saw_positional = false;
@@ -200,6 +202,60 @@ SpecializedUnit specialize_unit(
             bool range_error = false;
             auto actual_expression = override.value;
             if (is_verilog) {
+                if (overridable[*actual_index]->type.spelling
+                    == "string") {
+                    if (association_language
+                        != frontend::Language::
+                            SystemVerilog2017) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-SVSTRING-004",
+                            "string parameter actuals require a "
+                            "same-language SystemVerilog association",
+                            override.span});
+                        continue;
+                    }
+                    const auto value =
+                        evaluate_systemverilog_string_expression(
+                            actual_expression,
+                            {},
+                            parent_environment,
+                            error);
+                    if (!value) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-SVSTRING-002",
+                            "cannot evaluate string parameter actual: "
+                                + error,
+                            override.span});
+                    } else if (
+                        systemverilog_string_actuals[
+                            *actual_index]) {
+                        diagnostics.push_back({
+                            code(
+                                SpecializationDiagnostic::
+                                    duplicate_actual),
+                            "duplicate " + std::string{object_kind}
+                                + " actual for '"
+                                + overridable[*actual_index]->name + "'",
+                            override.span});
+                    } else {
+                        systemverilog_string_actuals[
+                            *actual_index] = *value;
+                    }
+                    continue;
+                }
+                std::string string_error;
+                if (evaluate_systemverilog_string_expression(
+                        actual_expression,
+                        {},
+                        parent_environment,
+                        string_error)) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-SVSTRING-002",
+                        "an integral parameter cannot receive a string "
+                        "actual",
+                        override.span});
+                    continue;
+                }
                 const auto value =
                     evaluate_systemverilog_constant_expression(
                         actual_expression,
@@ -287,6 +343,8 @@ SpecializedUnit specialize_unit(
     std::size_t overridable_index = 0;
     ConstantDomainEnvironment domains;
     SystemVerilogConstantEnvironment systemverilog_environment;
+    SystemVerilogStringEnvironment
+        systemverilog_string_environment;
     for (std::size_t parameter_index = 0;
          parameter_index < source.parameters.size();
          ++parameter_index) {
@@ -304,14 +362,76 @@ SpecializedUnit specialize_unit(
             specialized_parameter.type;
         std::optional<SystemVerilogConstantValue>
             systemverilog_value;
+        std::optional<SystemVerilogStringValue>
+            systemverilog_string_value;
         std::optional<std::int64_t> value;
         if (!parameter.local) {
             if (is_verilog) {
-                systemverilog_value =
-                    systemverilog_actuals.at(overridable_index++);
+                if (parameter_type.spelling == "string") {
+                    systemverilog_string_value =
+                        systemverilog_string_actuals.at(
+                            overridable_index++);
+                } else {
+                    systemverilog_value =
+                        systemverilog_actuals.at(
+                            overridable_index++);
+                }
             } else {
                 value = actuals.at(overridable_index++);
             }
+        }
+        if (is_verilog
+            && parameter_type.spelling == "string") {
+            if (!systemverilog_string_value) {
+                if (parameter.default_value.kind
+                    == ExpressionKind::Invalid) {
+                    diagnostics.push_back({
+                        code(
+                            SpecializationDiagnostic::
+                                invalid_actual),
+                        std::string{object_kind} + " '"
+                            + parameter.name
+                            + "' requires an actual because it has no "
+                              "default",
+                        parameter.span});
+                    systemverilog_string_value =
+                        SystemVerilogStringValue{{}, parameter.span};
+                } else {
+                    std::string error;
+                    auto default_expression =
+                        parameter.default_value;
+                    substitute_systemverilog_strings(
+                        default_expression,
+                        systemverilog_string_environment,
+                        result.environment);
+                    systemverilog_string_value =
+                        evaluate_systemverilog_string_expression(
+                            default_expression,
+                            systemverilog_string_environment,
+                            result.environment,
+                            error);
+                    if (!systemverilog_string_value) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-SVSTRING-001",
+                            "cannot evaluate default for "
+                                + std::string{object_kind} + " '"
+                                + parameter.name + "': " + error,
+                            parameter.span});
+                        systemverilog_string_value =
+                            SystemVerilogStringValue{
+                                {}, parameter.span};
+                    }
+                }
+            }
+            systemverilog_string_environment[parameter.name] =
+                *systemverilog_string_value;
+            result.values.emplace_back(
+                parameter.name,
+                systemverilog_string_value->display());
+            result.identity_values.emplace_back(
+                parameter.name,
+                systemverilog_string_value->canonical());
+            continue;
         }
         if (is_verilog && !systemverilog_value) {
             if (parameter.default_value.kind
@@ -327,9 +447,15 @@ SpecializedUnit specialize_unit(
                         0, 0, 0, 32, true, true, parameter.span};
             } else {
                 std::string error;
+                auto default_expression =
+                    parameter.default_value;
+                substitute_systemverilog_strings(
+                    default_expression,
+                    systemverilog_string_environment,
+                    result.environment);
                 systemverilog_value =
                     evaluate_systemverilog_constant_expression(
-                        parameter.default_value,
+                        default_expression,
                         systemverilog_environment,
                         result.environment,
                         error);
@@ -571,12 +697,20 @@ SpecializedUnit specialize_unit(
     if (is_verilog) {
         substitute_systemverilog_parameters(
             result.unit, systemverilog_environment);
+        substitute_systemverilog_strings(
+            result.unit,
+            systemverilog_string_environment,
+            result.environment,
+            diagnostics);
         prepare_systemverilog_generate_regions(
             result.unit.generate_regions,
             systemverilog_environment,
+            systemverilog_string_environment,
             result.environment,
             domains,
             diagnostics);
+        result.string_environment =
+            std::move(systemverilog_string_environment);
     }
     for (auto& parameter : result.unit.parameters) {
         substitute_parameters(

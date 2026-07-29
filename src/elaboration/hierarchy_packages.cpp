@@ -1033,13 +1033,6 @@ HierarchyBuilder::HierarchyBuilder(
                     continue;
                 }
                 found_selected = true;
-                const auto value =
-                    specialized_package->environment.find(
-                        declaration.name);
-                if (value
-                    == specialized_package->environment.end()) {
-                    continue;
-                }
                 const auto specialized_declaration =
                     std::find_if(
                         specialized_package->unit.parameters.begin(),
@@ -1057,6 +1050,33 @@ HierarchyBuilder::HierarchyBuilder(
                             == specialized_package->unit.parameters.end()
                         ? declaration.type
                         : specialized_declaration->type;
+                frontend::Expression imported_value;
+                if (imported_type.spelling == "string") {
+                    const auto value =
+                        specialized_package->string_environment.find(
+                            declaration.name);
+                    if (value
+                        == specialized_package
+                               ->string_environment.end()) {
+                        continue;
+                    }
+                    imported_value =
+                        value->second.expression(declaration.span);
+                } else {
+                    const auto value =
+                        specialized_package->environment.find(
+                            declaration.name);
+                    if (value
+                        == specialized_package->environment.end()) {
+                        continue;
+                    }
+                    imported_value = constant_expression(
+                        value->second,
+                        declaration.span,
+                        imported_type.domain,
+                        frontend::Language::
+                            SystemVerilog2017);
+                }
                 const auto [owner, inserted] =
                     owners.emplace(
                         declaration.name, package->name);
@@ -1083,12 +1103,7 @@ HierarchyBuilder::HierarchyBuilder(
                 imports.push_back({
                     declaration.name,
                     imported_type,
-                    constant_expression(
-                        value->second,
-                        declaration.span,
-                        imported_type.domain,
-                        frontend::Language::
-                            SystemVerilog2017),
+                    std::move(imported_value),
                     true,
                     declaration.span});
             }
@@ -1224,13 +1239,6 @@ HierarchyBuilder::HierarchyBuilder(
                     unit, *package, *specialized_package);
                 continue;
             }
-            const auto value =
-                specialized_package->environment.find(
-                    constant_name);
-            if (value
-                == specialized_package->environment.end()) {
-                continue;
-            }
             const auto specialized_declaration =
                 std::find_if(
                     specialized_package->unit.parameters.begin(),
@@ -1248,15 +1256,37 @@ HierarchyBuilder::HierarchyBuilder(
                         == specialized_package->unit.parameters.end()
                     ? declaration->type
                     : specialized_declaration->type;
-            imports.push_back({
-                identifier,
-                imported_type,
-                constant_expression(
+            frontend::Expression imported_value;
+            if (imported_type.spelling == "string") {
+                const auto value =
+                    specialized_package->string_environment.find(
+                        constant_name);
+                if (value
+                    == specialized_package
+                           ->string_environment.end()) {
+                    continue;
+                }
+                imported_value =
+                    value->second.expression(declaration->span);
+            } else {
+                const auto value =
+                    specialized_package->environment.find(
+                        constant_name);
+                if (value
+                    == specialized_package->environment.end()) {
+                    continue;
+                }
+                imported_value = constant_expression(
                     value->second,
                     declaration->span,
                     imported_type.domain,
                     frontend::Language::
-                        SystemVerilog2017),
+                        SystemVerilog2017);
+            }
+            imports.push_back({
+                identifier,
+                imported_type,
+                std::move(imported_value),
                 true,
                 declaration->span});
             append_package_dependencies(

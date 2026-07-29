@@ -402,24 +402,56 @@ endmodule
               == "byte_t",
       "unambiguous and identifier type actuals retain tentative HIR");
 
-  const auto unsupported_string_parameter = parse_text(
-      "unsupported-string-parameter.sv",
+  const auto string_parameters = parse_text(
+      "string-parameters.sv",
       R"(
-module unsupported_string_parameter #(
-  parameter string LABEL = "fsim"
+package string_pkg;
+  localparam string PACKAGE_LABEL = "package";
+endpackage
+module string_parameters #(
+  parameter string LABEL = "fsim\n"
+) ();
+  localparam string DECORATED = {LABEL, "!"};
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      string_parameters.ok(),
+      "string parameters and localparams must parse");
+  const auto* string_unit =
+      string_parameters.design.find(
+          UnitKind::VerilogModule, "string_parameters");
+  require(
+      string_unit != nullptr
+          && string_unit->parameters.size() == 2
+          && string_unit->parameters[0].type.spelling == "string"
+          && string_unit->parameters[0].default_value.kind
+              == ExpressionKind::StringLiteral
+          && string_unit->parameters[0].default_value.decoded_string
+              == std::optional<std::string>{"fsim\n"}
+          && string_unit->parameters[1].local
+          && string_unit->parameters[1].type.spelling == "string"
+          && string_unit->parameters[1].default_value.kind
+              == ExpressionKind::Concatenation,
+      "string HIR retains type, locality, expression, and decoded bytes");
+
+  const auto invalid_string_escape = parse_text(
+      "invalid-string-escape.sv",
+      R"(
+module invalid_string_escape #(
+  parameter string LABEL = "bad\q"
 ) ();
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      !unsupported_string_parameter.ok()
+      !invalid_string_escape.ok()
           && std::ranges::any_of(
-              unsupported_string_parameter.diagnostics,
+              invalid_string_escape.diagnostics,
               [](const auto& diagnostic) {
-                return diagnostic.code
-                    == "FSIM-SV-UNSUPPORTED-020";
+                return diagnostic.code == "FSIM-SV-SEM-040";
               }),
-      "string value parameters retain a targeted diagnostic");
+      "invalid string parameter escapes retain the shared diagnostic");
 
   const auto type_namespace_conflict = parse_text(
       "type-parameter-conflict.sv",

@@ -7,6 +7,7 @@ int main() {
   using namespace fsim::tests::elaboration;
   test_specialization_and_packages();
   test_systemverilog_typed_constants();
+  test_systemverilog_string_constants();
   test_systemverilog_type_parameters();
   test_generate_elaboration();
   test_mixed_language_and_systemc();

@@ -291,8 +291,11 @@ Expression VerilogParser::parse_primary() {
   }
   if (at(TokenKind::StringLiteral)) {
     const auto token = advance();
-    return Expression{ExpressionKind::StringLiteral, token.text, {},
-                      token.span};
+    auto expression = Expression{
+        ExpressionKind::StringLiteral, token.text, {}, token.span};
+    expression.decoded_string =
+        decoded_string_literal_text(token);
+    return expression;
   }
   if (at(TokenKind::Identifier)) {
     const auto name = advance();

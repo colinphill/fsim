@@ -450,7 +450,6 @@ therefore excluded.
 | `FSIM-SV-PARSE-111` | error | Expected `final` at the start of a SystemVerilog final procedure. |
 | `FSIM-SV-PARSE-112` | error | Expected `)` after a Verilog/SystemVerilog `$stop` argument. |
 | `FSIM-SV-PARSE-113` | error | Expected `;` after a Verilog/SystemVerilog `$stop` task. |
-| `FSIM-SV-PARSE-114` | error | Expected a literal message after a SystemVerilog `$fatal` finish argument. |
 | `FSIM-SV-PARSE-115` | error | Expected `)` after SystemVerilog `$fatal` arguments. |
 | `FSIM-SV-PARSE-116` | error | Expected `;` after a SystemVerilog `$fatal` task. |
 | `FSIM-SV-PARSE-117` | error | Expected `;` after a named-event declaration. |
@@ -746,6 +745,10 @@ therefore excluded.
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |
+| `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
+| `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
+| `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |
+| `FSIM-ELAB-SVSTRING-004` | error | A SystemVerilog string parameter was associated across a mixed-language boundary instead of through a same-language wrapper. |
 | `FSIM-ELAB-SVTYPEPARAM-001` | error | A required SystemVerilog type parameter or local type parameter has no data-type actual/default. |
 | `FSIM-ELAB-SVTYPEPARAM-002` | error | A SystemVerilog value parameter received a data-type actual. |
 | `FSIM-ELAB-SVTYPEPARAM-003` | error | A SystemVerilog type-parameter actual/default is invisible or outside the bounded packed integral subset. |

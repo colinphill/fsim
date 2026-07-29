@@ -504,15 +504,15 @@ void VerilogParser::parse_fatal_arguments(Statement& statement) {
           decoded_string_literal_text(advance());
     } else {
       // Accept and ignore the standard numeric finish control while
-      // retaining one bounded literal display message.
+      // retaining one bounded constant-string display message.
       (void)parse_expression();
       if (match(TokenKind::Comma)) {
-        const auto message = expect(
-            TokenKind::StringLiteral,
-            "literal message after the $fatal finish argument",
-            "FSIM-SV-PARSE-114");
-        statement.output_text =
-            decoded_string_literal_text(message);
+        if (at(TokenKind::StringLiteral)) {
+          statement.output_text =
+              decoded_string_literal_text(advance());
+        } else {
+          statement.value = parse_expression();
+        }
       }
     }
   }
@@ -534,13 +534,7 @@ void VerilogParser::parse_nonfatal_report_arguments(
       statement.output_text =
           decoded_string_literal_text(advance());
     } else {
-      error(
-          current(),
-          "FSIM-SV-SEM-043",
-          task.text
-              + " currently accepts only an optional literal "
-                "message");
-      (void)parse_expression();
+      statement.value = parse_expression();
     }
     while (match(TokenKind::Comma)) {
       error(
