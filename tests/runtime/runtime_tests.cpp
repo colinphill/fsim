@@ -1731,6 +1731,183 @@ void test_simir_insert_and_partial_writes() {
       "wide partial update uses the arbitrary-width kernel");
 }
 
+void test_simir_dynamic_packed_indices() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto integer = [](const std::int32_t value) {
+    return PackedLogic4::from_aval_bval(
+        32, static_cast<std::uint32_t>(value), 0);
+  };
+
+  Interpreter interpreter;
+  const auto descending = interpreter.add_signal(
+      {"top.dynamic.descending", PackedLogic4(1, Logic4::zero)});
+  const auto ascending = interpreter.add_signal(
+      {"top.dynamic.ascending",
+       PackedLogic4::from_logic9_msb_string("X"),
+       ResolutionKind::none,
+       ValueKind::logic9});
+  const auto inserted = interpreter.add_signal(
+      {"top.dynamic.inserted",
+       PackedLogic4::from_logic9_msb_string("00000000"),
+       ResolutionKind::none,
+       ValueKind::logic9});
+  const auto blocking = interpreter.add_signal(
+      {"top.dynamic.blocking", PackedLogic4(8, Logic4::zero)});
+  const auto updated = interpreter.add_signal(
+      {"top.dynamic.updated", PackedLogic4(8, Logic4::zero)});
+  const auto delayed = interpreter.add_signal(
+      {"top.dynamic.delayed", PackedLogic4(8, Logic4::zero)});
+  const auto inertial = interpreter.add_signal(
+      {"top.dynamic.inertial", PackedLogic4(8, Logic4::zero)});
+  const auto projected = interpreter.add_signal(
+      {"top.dynamic.projected",
+       PackedLogic4::from_logic9_msb_string("00000000"),
+       ResolutionKind::none,
+       ValueKind::logic9});
+  const auto waveform = interpreter.add_signal(
+      {"top.dynamic.waveform",
+       PackedLogic4::from_logic9_msb_string("00000000"),
+       ResolutionKind::none,
+       ValueKind::logic9});
+
+  Process process;
+  process.id = 0;
+  process.name = "dynamic_packed_indices";
+  process.register_count = 15;
+  process.register_value_kinds.assign(
+      process.register_count, ValueKind::logic4);
+  process.register_value_kinds[0] = ValueKind::logic9;
+  process.register_value_kinds[4] = ValueKind::logic9;
+  process.register_value_kinds[5] = ValueKind::logic9;
+  process.register_value_kinds[13] = ValueKind::logic9;
+  process.register_value_kinds[14] = ValueKind::logic9;
+  process.operations = {
+      LoadConstant{
+          0,
+          PackedLogic4::from_logic9_msb_string("UX01ZWLH")},
+      LoadConstant{1, integer(5)},
+      DynamicExtract{2, 0, DynamicIndex{1, 7, 0, 0}},
+      WriteBlocking{descending, 2},
+      LoadConstant{3, integer(3)},
+      DynamicExtract{4, 0, DynamicIndex{3, 3, 10, 0}},
+      WriteBlocking{ascending, 4},
+      LoadConstant{
+          5, PackedLogic4::from_logic9_msb_string("H")},
+      DynamicInsert{0, 0, 5, DynamicIndex{3, -2, 5, 0}},
+      WriteBlocking{inserted, 0},
+      LoadConstant{6, PackedLogic4::from_msb_string("1")},
+      LoadConstant{7, integer(6)},
+      WriteBlockingDynamicSlice{
+          blocking, 6, DynamicIndex{7, 7, 0, 0}},
+      LoadConstant{8, integer(5)},
+      WriteUpdateDynamicSlice{
+          updated, 6, DynamicIndex{8, 7, 0, 0}},
+      LoadConstant{9, integer(4)},
+      WriteAfterDynamicSlice{
+          delayed, 6, DynamicIndex{9, 7, 0, 0}, 3},
+      LoadConstant{10, integer(3)},
+      WriteInertialDynamicSlice{
+          inertial,
+          6,
+          DynamicIndex{10, 7, 0, 0},
+          TransitionDelays{2, 2, 2}},
+      LoadConstant{11, integer(2)},
+      WriteProjectedDynamicSlice{
+          projected,
+          5,
+          DynamicIndex{11, 7, 0, 0},
+          1,
+          0,
+          ProjectedDelayMode::transport},
+      LoadConstant{12, integer(1)},
+      LoadConstant{
+          13, PackedLogic4::from_logic9_msb_string("L")},
+      LoadConstant{
+          14, PackedLogic4::from_logic9_msb_string("H")},
+      WriteProjectedWaveformDynamicSlice{
+          waveform,
+          {
+              ProjectedWaveformElement{13, 1},
+              ProjectedWaveformElement{14, 4},
+          },
+          DynamicIndex{12, 7, 0, 0},
+          0,
+          ProjectedDelayMode::transport},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 4,
+      "dynamic packed-index process completes after timed writes");
+  require(
+      interpreter.signal_value(descending).to_msb_string() == "0",
+      "dynamic extraction follows a descending source range");
+  require(
+      interpreter.signal_value(ascending).to_msb_string() == "U",
+      "dynamic extraction follows an ascending source range");
+  require(
+      interpreter.signal_value(inserted).to_msb_string()
+          == "UX01ZHLH",
+      "dynamic Logic9 insertion changes only the normalized element");
+  require(
+      interpreter.signal_value(blocking).to_msb_string()
+              == "01000000"
+          && interpreter.signal_value(updated).to_msb_string()
+              == "00100000"
+          && interpreter.signal_value(delayed).to_msb_string()
+              == "00010000"
+          && interpreter.signal_value(inertial).to_msb_string()
+              == "00001000",
+      "dynamic immediate, update, delayed, and inertial writes use "
+      "captured offsets");
+  require(
+      interpreter.signal_value(projected).to_msb_string()
+              == "00000H00",
+      "dynamic projected Logic9 write preserves the exact element state");
+  require(
+      interpreter.signal_value(waveform).to_msb_string()
+              == "000000H0",
+      "dynamic projected Logic9 waveform preserves exact element states");
+
+  const auto expect_failure =
+      [&](PackedLogic4 index,
+          const std::string_view expected_message) {
+        Interpreter failing;
+        Process candidate;
+        candidate.name = "dynamic_index_failure";
+        candidate.register_count = 3;
+        candidate.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("1010")},
+            LoadConstant{1, std::move(index)},
+            DynamicExtract{
+                2, 0, DynamicIndex{1, 3, 0, 0}},
+            Halt{}};
+        (void)failing.add_process(std::move(candidate));
+        try {
+          (void)failing.run();
+          throw std::runtime_error(
+              "dynamic packed-index failure was not reported");
+        } catch (const InterpreterError& error) {
+          require(
+              std::string_view{error.what()}.find(expected_message)
+                  != std::string_view::npos,
+              "dynamic packed-index failure message");
+        }
+      };
+  expect_failure(
+      integer(4), "dynamic packed index is outside the declared range");
+  auto unknown = integer(0);
+  unknown.set(0, Logic4::x);
+  expect_failure(
+      std::move(unknown),
+      "dynamic packed index contains an unknown or high-impedance value");
+}
+
 void test_simir_force_release() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -4495,6 +4672,7 @@ int main() {
     test_checked_vhdl_integer_operations();
     test_simir_wide_extract_and_concatenate();
     test_simir_insert_and_partial_writes();
+    test_simir_dynamic_packed_indices();
     test_simir_force_release();
     test_simir_design_stop_identity();
     test_simir_pause_resume_lifecycle();

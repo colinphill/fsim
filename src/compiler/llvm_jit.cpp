@@ -56,6 +56,9 @@ using runtime::simir::CountBits;
 using runtime::simir::CopyRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::Display;
+using runtime::simir::DynamicExtract;
+using runtime::simir::DynamicIndex;
+using runtime::simir::DynamicInsert;
 using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
 using runtime::simir::FormatDisplay;
@@ -100,16 +103,22 @@ using runtime::simir::WaitOn;
 using runtime::simir::WaitSensitivity;
 using runtime::simir::WaitForever;
 using runtime::simir::WriteAfter;
+using runtime::simir::WriteAfterDynamicSlice;
 using runtime::simir::WriteAfterSlice;
 using runtime::simir::WriteBlocking;
+using runtime::simir::WriteBlockingDynamicSlice;
 using runtime::simir::WriteBlockingSlice;
 using runtime::simir::WriteInertial;
+using runtime::simir::WriteInertialDynamicSlice;
 using runtime::simir::WriteInertialSlice;
 using runtime::simir::WriteProjected;
+using runtime::simir::WriteProjectedDynamicSlice;
 using runtime::simir::WriteProjectedWaveform;
+using runtime::simir::WriteProjectedWaveformDynamicSlice;
 using runtime::simir::WriteProjectedSlice;
 using runtime::simir::WriteProjectedWaveformSlice;
 using runtime::simir::WriteUpdate;
+using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
 
@@ -135,7 +144,7 @@ using NativeProcess = fsim_jit_process_v1;
 }
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v19";
+    "fsim-llvm-native-object-v20";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -395,6 +404,11 @@ template <typename T>
     return "VHDL integer exponent must be nonnegative";
   case JitGeneratedRuntimeErrorReason::integer_subtype_range:
     return "VHDL integer subtype range check failed";
+  case JitGeneratedRuntimeErrorReason::dynamic_index_unknown:
+    return "dynamic packed index contains an unknown or high-impedance "
+           "value";
+  case JitGeneratedRuntimeErrorReason::dynamic_index_range:
+    return "dynamic packed index is outside the declared range";
   }
   return "unknown generated runtime error";
 }
@@ -418,6 +432,8 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept {
   case JitGeneratedRuntimeErrorReason::integer_division_by_zero:
   case JitGeneratedRuntimeErrorReason::integer_negative_exponent:
   case JitGeneratedRuntimeErrorReason::integer_subtype_range:
+  case JitGeneratedRuntimeErrorReason::dynamic_index_unknown:
+  case JitGeneratedRuntimeErrorReason::dynamic_index_range:
     return reason;
   }
   return std::nullopt;
@@ -634,6 +650,57 @@ validate_process(const Process &process,
     defined[id] = true;
   };
 
+  const auto dynamic_range_width =
+      [&](const DynamicIndex& selection,
+          const std::size_t instruction) -> std::uint64_t {
+        if (selection.left
+                < std::numeric_limits<std::int32_t>::min()
+            || selection.left
+                > std::numeric_limits<std::int32_t>::max()
+            || selection.right
+                < std::numeric_limits<std::int32_t>::min()
+            || selection.right
+                > std::numeric_limits<std::int32_t>::max()) {
+          reject(
+              process,
+              instruction,
+              "dynamic index bounds must fit signed 32-bit integers");
+        }
+        const auto left =
+            static_cast<std::int64_t>(selection.left);
+        const auto right =
+            static_cast<std::int64_t>(selection.right);
+        return static_cast<std::uint64_t>(
+                   left >= right ? left - right : right - left)
+            + 1U;
+      };
+
+  const auto validate_dynamic_bounds =
+      [&](const DynamicIndex& selection,
+          const std::uint64_t target_width,
+          const std::size_t instruction) {
+        const auto range_width =
+            dynamic_range_width(selection, instruction);
+        if (selection.base_offset > target_width
+            || range_width
+                > target_width - selection.base_offset) {
+          reject(
+              process,
+              instruction,
+              "dynamic index range is outside its packed target");
+        }
+      };
+
+  const auto validate_dynamic_selection =
+      [&](const DynamicIndex& selection,
+          const std::uint64_t target_width,
+          const std::size_t instruction) {
+        record_use(selection.index, instruction);
+        constrain_width(selection.index, 32U, instruction);
+        validate_dynamic_bounds(
+            selection, target_width, instruction);
+      };
+
   const auto validate_target = [&](const InstructionIndex target,
                                    const std::size_t instruction,
                                    const std::string_view kind) {
@@ -824,10 +891,33 @@ validate_process(const Process &process,
               constrain_width(
                   operation.destination, operation.width, index);
             },
+            [&](const DynamicExtract& operation) {
+              (void)dynamic_range_width(
+                  operation.selection, index);
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              record_use(operation.selection.index, index);
+              constrain_width(operation.destination, 1U, index);
+              constrain_width(
+                  operation.selection.index, 32U, index);
+            },
             [&](const Insert& operation) {
               record_definition(operation.destination, index);
               record_use(operation.target, index);
               record_use(operation.source, index);
+              unify_registers(
+                  operation.destination, operation.target, index);
+            },
+            [&](const DynamicInsert& operation) {
+              (void)dynamic_range_width(
+                  operation.selection, index);
+              record_definition(operation.destination, index);
+              record_use(operation.target, index);
+              record_use(operation.source, index);
+              record_use(operation.selection.index, index);
+              constrain_width(operation.source, 1U, index);
+              constrain_width(
+                  operation.selection.index, 32U, index);
               unify_registers(
                   operation.destination, operation.target, index);
             },
@@ -1281,6 +1371,139 @@ validate_process(const Process &process,
               }
               result.uses_write_projected_waveform_slice = true;
             },
+            [&](const WriteBlockingDynamicSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              record_use(operation.source, index);
+              constrain_width(operation.source, 1U, index);
+              validate_dynamic_selection(
+                  operation.selection, target_width, index);
+              result.uses_write_blocking_slice = true;
+            },
+            [&](const WriteUpdateDynamicSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              record_use(operation.source, index);
+              constrain_width(operation.source, 1U, index);
+              validate_dynamic_selection(
+                  operation.selection, target_width, index);
+              result.uses_write_update_slice = true;
+            },
+            [&](const WriteAfterDynamicSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              record_use(operation.source, index);
+              constrain_width(operation.source, 1U, index);
+              validate_dynamic_selection(
+                  operation.selection, target_width, index);
+              result.uses_write_after_slice = true;
+            },
+            [&](const WriteInertialDynamicSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              record_use(operation.source, index);
+              constrain_width(operation.source, 1U, index);
+              validate_dynamic_selection(
+                  operation.selection, target_width, index);
+              result.uses_write_inertial_slice = true;
+            },
+            [&](const WriteProjectedDynamicSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              record_use(operation.source, index);
+              constrain_width(operation.source, 1U, index);
+              validate_dynamic_selection(
+                  operation.selection, target_width, index);
+              switch (operation.mode) {
+              case runtime::simir::ProjectedDelayMode::transport:
+                if (operation.rejection != 0) {
+                  reject(
+                      process,
+                      index,
+                      "transport projected dynamic slice has a rejection "
+                      "limit");
+                }
+                break;
+              case runtime::simir::ProjectedDelayMode::inertial:
+                if (operation.rejection > operation.delay) {
+                  reject(
+                      process,
+                      index,
+                      "projected dynamic-slice rejection exceeds its "
+                      "delay");
+                }
+                break;
+              default:
+                reject(
+                    process,
+                    index,
+                    "projected dynamic slice has an invalid delay mode");
+              }
+              result.uses_write_projected_slice = true;
+            },
+            [&](const WriteProjectedWaveformDynamicSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              validate_dynamic_selection(
+                  operation.selection, target_width, index);
+              if (operation.elements.size() < 2) {
+                reject(
+                    process,
+                    index,
+                    "projected dynamic-slice waveform requires at least "
+                    "two elements");
+              }
+              if (operation.elements.size()
+                  > std::numeric_limits<std::uint32_t>::max()) {
+                reject(
+                    process,
+                    index,
+                    "projected dynamic-slice waveform has too many "
+                    "elements for the runtime ABI");
+              }
+              std::optional<runtime::SimulationTick> previous_delay;
+              for (const auto& element : operation.elements) {
+                record_use(element.source, index);
+                constrain_width(element.source, 1U, index);
+                if (previous_delay
+                    && element.delay <= *previous_delay) {
+                  reject(
+                      process,
+                      index,
+                      "projected dynamic-slice waveform delays must be "
+                      "strictly ascending");
+                }
+                previous_delay = element.delay;
+              }
+              switch (operation.mode) {
+              case runtime::simir::ProjectedDelayMode::transport:
+                if (operation.rejection != 0) {
+                  reject(
+                      process,
+                      index,
+                      "transport projected dynamic-slice waveform has a "
+                      "rejection limit");
+                }
+                break;
+              case runtime::simir::ProjectedDelayMode::inertial:
+                if (operation.rejection
+                    > operation.elements.front().delay) {
+                  reject(
+                      process,
+                      index,
+                      "projected dynamic-slice waveform rejection exceeds "
+                      "its first delay");
+                }
+                break;
+              default:
+                reject(
+                    process,
+                    index,
+                    "projected dynamic-slice waveform has an invalid delay "
+                    "mode");
+              }
+              result.uses_write_projected_waveform_slice = true;
+            },
             [&](const WaitFor &) {},
             [&](const WaitOn &operation) {
               if (operation.signals.empty()
@@ -1415,6 +1638,14 @@ validate_process(const Process &process,
             "Extract range is outside its source register");
       }
     }
+    if (const auto* extract =
+            std::get_if<DynamicExtract>(
+                &process.operations[index])) {
+      validate_dynamic_bounds(
+          extract->selection,
+          result.register_widths[extract->source],
+          index);
+    }
     if (const auto* insert =
             std::get_if<Insert>(&process.operations[index])) {
       const auto target_width =
@@ -1428,6 +1659,14 @@ validate_process(const Process &process,
             process, index,
             "Insert range is outside its target register");
       }
+    }
+    if (const auto* insert =
+            std::get_if<DynamicInsert>(
+                &process.operations[index])) {
+      validate_dynamic_bounds(
+          insert->selection,
+          result.register_widths[insert->target],
+          index);
     }
     if (const auto* concatenate =
             std::get_if<Concatenate>(&process.operations[index])) {
@@ -1691,6 +1930,22 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
   builder.add_bytes(label, encoded);
 }
 
+void add_dynamic_index_key(
+    CacheKeyBuilder& builder,
+    const DynamicIndex& selection) {
+  add_key_u64(builder, "index", selection.index);
+  add_key_u64(
+      builder,
+      "index-left",
+      static_cast<std::uint64_t>(selection.left));
+  add_key_u64(
+      builder,
+      "index-right",
+      static_cast<std::uint64_t>(selection.right));
+  add_key_u64(
+      builder, "index-base-offset", selection.base_offset);
+}
+
 [[nodiscard]] std::string make_native_object_cache_key(
     const std::string_view symbol, const Process &process,
     const std::span<const std::uint32_t> signal_widths,
@@ -1890,12 +2145,25 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "offset", value.offset);
               add_key_u64(builder, "width", value.width);
             },
+            [&](const DynamicExtract& value) {
+              builder.add("operation", "DynamicExtract");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_index_key(builder, value.selection);
+            },
             [&](const Insert& value) {
               builder.add("operation", "Insert");
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "target", value.target);
               add_key_u64(builder, "source", value.source);
               add_key_u64(builder, "offset", value.offset);
+            },
+            [&](const DynamicInsert& value) {
+              builder.add("operation", "DynamicInsert");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_index_key(builder, value.selection);
             },
             [&](const Concatenate& value) {
               builder.add("operation", "Concatenate");
@@ -2075,6 +2343,82 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(
                   builder, "signal-width", signal_widths[value.signal]);
               add_key_u64(builder, "offset", value.offset);
+              add_key_u64(
+                  builder, "element-count", value.elements.size());
+              for (const auto& element : value.elements) {
+                add_key_u64(builder, "source", element.source);
+                add_key_u64(builder, "delay", element.delay);
+              }
+              add_key_u64(builder, "rejection", value.rejection);
+              add_key_u64(
+                  builder,
+                  "mode",
+                  static_cast<std::uint8_t>(value.mode));
+            },
+            [&](const WriteBlockingDynamicSlice& value) {
+              builder.add(
+                  "operation", "WriteBlockingDynamicSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_index_key(builder, value.selection);
+            },
+            [&](const WriteUpdateDynamicSlice& value) {
+              builder.add(
+                  "operation", "WriteUpdateDynamicSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_index_key(builder, value.selection);
+            },
+            [&](const WriteAfterDynamicSlice& value) {
+              builder.add(
+                  "operation", "WriteAfterDynamicSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_index_key(builder, value.selection);
+              add_key_u64(builder, "delay", value.delay);
+            },
+            [&](const WriteInertialDynamicSlice& value) {
+              builder.add(
+                  "operation", "WriteInertialDynamicSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_index_key(builder, value.selection);
+              add_key_u64(builder, "rise-delay", value.delays.rise);
+              add_key_u64(builder, "fall-delay", value.delays.fall);
+              add_key_u64(
+                  builder, "turnoff-delay", value.delays.turnoff);
+            },
+            [&](const WriteProjectedDynamicSlice& value) {
+              builder.add(
+                  "operation", "WriteProjectedDynamicSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_index_key(builder, value.selection);
+              add_key_u64(builder, "delay", value.delay);
+              add_key_u64(builder, "rejection", value.rejection);
+              add_key_u64(
+                  builder,
+                  "mode",
+                  static_cast<std::uint8_t>(value.mode));
+            },
+            [&](const WriteProjectedWaveformDynamicSlice& value) {
+              builder.add(
+                  "operation",
+                  "WriteProjectedWaveformDynamicSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_dynamic_index_key(builder, value.selection);
               add_key_u64(
                   builder, "element-count", value.elements.size());
               for (const auto& element : value.elements) {
@@ -3807,6 +4151,238 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               static_cast<std::uint32_t>(reason));
           builder.SetInsertPoint(continue_block);
         };
+    const auto dynamic_offset =
+        [&](const DynamicIndex& selection) -> llvm::Value* {
+          const auto selected = coerce_value_kind(
+              builder,
+              load_register(
+                  builder, registers, selection.index),
+              ValueKind::logic4);
+          runtime_error_if(
+              builder.CreateICmpNE(
+                  builder.CreateAnd(
+                      selected.bval,
+                      constant_i64(
+                          context,
+                          std::numeric_limits<std::uint32_t>::max())),
+                  constant_i64(context, 0)),
+              JitGeneratedRuntimeErrorReason::dynamic_index_unknown,
+              "dynamic.index.unknown");
+          auto* signed_index = builder.CreateSExt(
+              builder.CreateTrunc(selected.aval, i32), i64);
+          auto* left = llvm::ConstantInt::getSigned(
+              i64, selection.left);
+          auto* right = llvm::ConstantInt::getSigned(
+              i64, selection.right);
+          auto* lower =
+              selection.left <= selection.right ? left : right;
+          auto* upper =
+              selection.left <= selection.right ? right : left;
+          runtime_error_if(
+              builder.CreateOr(
+                  builder.CreateICmpSLT(signed_index, lower),
+                  builder.CreateICmpSGT(signed_index, upper)),
+              JitGeneratedRuntimeErrorReason::dynamic_index_range,
+              "dynamic.index.range");
+          auto* distance = builder.CreateSelect(
+              builder.CreateICmpSGE(signed_index, right),
+              builder.CreateSub(signed_index, right),
+              builder.CreateSub(right, signed_index));
+          return builder.CreateAdd(
+              distance,
+              constant_i64(context, selection.base_offset),
+              "dynamic.index.offset");
+        };
+    const auto dynamic_offset_i32 =
+        [&](const DynamicIndex& selection) {
+          return builder.CreateTrunc(
+              dynamic_offset(selection), i32);
+        };
+    const auto emit_dynamic_slice =
+        [&](const std::uint32_t signal,
+            const RegisterId source_register,
+            llvm::Value* offset,
+            llvm::Value* logic4_callback,
+            llvm::Value* logic9_callback) {
+          const auto signal_kind =
+              signal_value_kinds.empty()
+                  ? ValueKind::logic4
+                  : signal_value_kinds[signal];
+          const auto source = coerce_value_kind(
+              builder,
+              load_register(
+                  builder, registers, source_register),
+              signal_kind);
+          if (signal_kind == ValueKind::logic9) {
+            store_logic9_word(logic9_word_slot, source);
+            builder.CreateCall(
+                write_slice_logic9_type,
+                logic9_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(i32, signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, source.width),
+                    logic9_word_slot});
+          } else {
+            builder.CreateCall(
+                write_slice_type,
+                logic4_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(i32, signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, source.width),
+                    source.aval,
+                    source.bval});
+          }
+          branch_to_next();
+        };
+    const auto emit_dynamic_after_slice =
+        [&](const WriteAfterDynamicSlice& operation,
+            llvm::Value* offset) {
+          const auto signal_kind =
+              signal_value_kinds.empty()
+                  ? ValueKind::logic4
+                  : signal_value_kinds[operation.signal];
+          const auto source = coerce_value_kind(
+              builder,
+              load_register(
+                  builder, registers, operation.source),
+              signal_kind);
+          if (signal_kind == ValueKind::logic9) {
+            store_logic9_word(logic9_word_slot, source);
+            builder.CreateCall(
+                write_after_slice_logic9_type,
+                write_after_slice_logic9_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, source.width),
+                    logic9_word_slot,
+                    constant_i64(context, operation.delay)});
+          } else {
+            builder.CreateCall(
+                write_after_slice_type,
+                write_after_slice_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, source.width),
+                    source.aval,
+                    source.bval,
+                    constant_i64(context, operation.delay)});
+          }
+          branch_to_next();
+        };
+    const auto emit_dynamic_inertial_slice =
+        [&](const WriteInertialDynamicSlice& operation,
+            llvm::Value* offset) {
+          const auto signal_kind =
+              signal_value_kinds.empty()
+                  ? ValueKind::logic4
+                  : signal_value_kinds[operation.signal];
+          const auto source = coerce_value_kind(
+              builder,
+              load_register(
+                  builder, registers, operation.source),
+              signal_kind);
+          if (signal_kind == ValueKind::logic9) {
+            store_logic9_word(logic9_word_slot, source);
+            builder.CreateCall(
+                write_inertial_slice_logic9_type,
+                write_inertial_slice_logic9_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, source.width),
+                    logic9_word_slot,
+                    constant_i64(
+                        context, operation.delays.rise),
+                    constant_i64(
+                        context, operation.delays.fall),
+                    constant_i64(
+                        context, operation.delays.turnoff)});
+          } else {
+            builder.CreateCall(
+                write_inertial_slice_type,
+                write_inertial_slice_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, source.width),
+                    source.aval,
+                    source.bval,
+                    constant_i64(
+                        context, operation.delays.rise),
+                    constant_i64(
+                        context, operation.delays.fall),
+                    constant_i64(
+                        context, operation.delays.turnoff)});
+          }
+          branch_to_next();
+        };
+    const auto emit_dynamic_projected_slice =
+        [&](const WriteProjectedDynamicSlice& operation,
+            llvm::Value* offset) {
+          const auto signal_kind =
+              signal_value_kinds.empty()
+                  ? ValueKind::logic4
+                  : signal_value_kinds[operation.signal];
+          const auto source = coerce_value_kind(
+              builder,
+              load_register(
+                  builder, registers, operation.source),
+              signal_kind);
+          if (signal_kind == ValueKind::logic9) {
+            store_logic9_word(logic9_word_slot, source);
+            builder.CreateCall(
+                write_projected_slice_logic9_type,
+                write_projected_slice_logic9_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, source.width),
+                    logic9_word_slot,
+                    constant_i64(context, operation.delay),
+                    constant_i64(
+                        context, operation.rejection),
+                    llvm::ConstantInt::get(
+                        i32,
+                        static_cast<std::uint32_t>(
+                            operation.mode))});
+          } else {
+            builder.CreateCall(
+                write_projected_slice_type,
+                write_projected_slice_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, source.width),
+                    source.aval,
+                    source.bval,
+                    constant_i64(context, operation.delay),
+                    constant_i64(
+                        context, operation.rejection),
+                    llvm::ConstantInt::get(
+                        i32,
+                        static_cast<std::uint32_t>(
+                            operation.mode))});
+          }
+          branch_to_next();
+        };
     std::visit(
         Overloaded{
             [&](const LoadConstant &operation) {
@@ -4780,6 +5356,33 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       source.kind});
               branch_to_next();
             },
+            [&](const DynamicExtract& operation) {
+              const auto source = load_register(
+                  builder, registers, operation.source);
+              auto* shift = dynamic_offset(operation.selection);
+              store_register(
+                  builder,
+                  registers,
+                  operation.destination,
+                  EncodedValue{
+                      builder.CreateAnd(
+                          builder.CreateLShr(source.aval, shift),
+                          constant_i64(context, 1)),
+                      builder.CreateAnd(
+                          builder.CreateLShr(source.bval, shift),
+                          constant_i64(context, 1)),
+                      1,
+                      builder.CreateAnd(
+                          builder.CreateLShr(
+                              source.logic9_plane2, shift),
+                          constant_i64(context, 1)),
+                      builder.CreateAnd(
+                          builder.CreateLShr(
+                              source.logic9_plane3, shift),
+                          constant_i64(context, 1)),
+                      source.kind});
+              branch_to_next();
+            },
             [&](const Insert& operation) {
               const auto destination_kind =
                   registers[operation.destination].kind;
@@ -4838,6 +5441,55 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       target.width,
                       plane2,
                       plane3,
+                      destination_kind});
+              branch_to_next();
+            },
+            [&](const DynamicInsert& operation) {
+              const auto destination_kind =
+                  registers[operation.destination].kind;
+              const auto target = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.target),
+                  destination_kind);
+              const auto source = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.source),
+                  destination_kind);
+              auto* shift = dynamic_offset(operation.selection);
+              auto* shifted_mask = builder.CreateShl(
+                  constant_i64(context, 1), shift);
+              auto* keep_mask = builder.CreateAnd(
+                  builder.CreateNot(shifted_mask),
+                  constant_i64(
+                      context, width_mask(target.width)));
+              const auto insert_plane =
+                  [&](llvm::Value* target_plane,
+                      llvm::Value* source_plane) {
+                    return builder.CreateOr(
+                        builder.CreateAnd(
+                            target_plane, keep_mask),
+                        builder.CreateShl(
+                            builder.CreateAnd(
+                                source_plane,
+                                constant_i64(context, 1)),
+                            shift));
+                  };
+              store_register(
+                  builder,
+                  registers,
+                  operation.destination,
+                  EncodedValue{
+                      insert_plane(target.aval, source.aval),
+                      insert_plane(target.bval, source.bval),
+                      target.width,
+                      insert_plane(
+                          target.logic9_plane2,
+                          source.logic9_plane2),
+                      insert_plane(
+                          target.logic9_plane3,
+                          source.logic9_plane3),
                       destination_kind});
               branch_to_next();
             },
@@ -5769,6 +6421,176 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                           static_cast<std::uint32_t>(
                               operation.elements.size())),
                       constant_i64(context, operation.rejection),
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.mode))});
+              branch_to_next();
+            },
+            [&](const WriteBlockingDynamicSlice& operation) {
+              emit_dynamic_slice(
+                  operation.signal,
+                  operation.source,
+                  dynamic_offset_i32(operation.selection),
+                  write_blocking_slice_callback,
+                  write_blocking_slice_logic9_callback);
+            },
+            [&](const WriteUpdateDynamicSlice& operation) {
+              emit_dynamic_slice(
+                  operation.signal,
+                  operation.source,
+                  dynamic_offset_i32(operation.selection),
+                  write_update_slice_callback,
+                  write_update_slice_logic9_callback);
+            },
+            [&](const WriteAfterDynamicSlice& operation) {
+              emit_dynamic_after_slice(
+                  operation,
+                  dynamic_offset_i32(operation.selection));
+            },
+            [&](const WriteInertialDynamicSlice& operation) {
+              emit_dynamic_inertial_slice(
+                  operation,
+                  dynamic_offset_i32(operation.selection));
+            },
+            [&](const WriteProjectedDynamicSlice& operation) {
+              emit_dynamic_projected_slice(
+                  operation,
+                  dynamic_offset_i32(operation.selection));
+            },
+            [&](const WriteProjectedWaveformDynamicSlice& operation) {
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              auto* offset =
+                  dynamic_offset_i32(operation.selection);
+              if (signal_kind == ValueKind::logic9) {
+                auto* array_type = llvm::ArrayType::get(
+                    logic9_projected_element_type,
+                    operation.elements.size());
+                auto* storage = builder.CreateAlloca(
+                    array_type,
+                    nullptr,
+                    "projected.logic9.dynamic.slice.waveform");
+                for (std::size_t element_index = 0;
+                     element_index < operation.elements.size();
+                     ++element_index) {
+                  const auto& element =
+                      operation.elements[element_index];
+                  auto source = coerce_value_kind(
+                      builder,
+                      load_register(
+                          builder,
+                          registers,
+                          element.source),
+                      ValueKind::logic9);
+                  auto* slot = builder.CreateInBoundsGEP(
+                      array_type,
+                      storage,
+                      {
+                          llvm::ConstantInt::get(i32, 0),
+                          llvm::ConstantInt::get(
+                              i32,
+                              static_cast<std::uint32_t>(
+                                  element_index))});
+                  store_logic9_word(
+                      builder.CreateStructGEP(
+                          logic9_projected_element_type,
+                          slot,
+                          0),
+                      source);
+                  builder.CreateStore(
+                      constant_i64(context, element.delay),
+                      builder.CreateStructGEP(
+                          logic9_projected_element_type,
+                          slot,
+                          1));
+                }
+                const auto first = load_register(
+                    builder,
+                    registers,
+                    operation.elements.front().source);
+                builder.CreateCall(
+                    write_projected_waveform_slice_logic9_type,
+                    write_projected_waveform_slice_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        offset,
+                        llvm::ConstantInt::get(
+                            i32, first.width),
+                        storage,
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                operation.elements.size())),
+                        constant_i64(
+                            context, operation.rejection),
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                operation.mode))});
+                branch_to_next();
+                return;
+              }
+              auto* array_type = llvm::ArrayType::get(
+                  projected_element_type,
+                  operation.elements.size());
+              auto* storage = builder.CreateAlloca(
+                  array_type,
+                  nullptr,
+                  "projected.dynamic.slice.waveform");
+              for (std::size_t element_index = 0;
+                   element_index < operation.elements.size();
+                   ++element_index) {
+                const auto& element =
+                    operation.elements[element_index];
+                const auto source = load_register(
+                    builder, registers, element.source);
+                auto* slot = builder.CreateInBoundsGEP(
+                    array_type,
+                    storage,
+                    {
+                        llvm::ConstantInt::get(i32, 0),
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                element_index))});
+                builder.CreateStore(
+                    source.aval,
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 0));
+                builder.CreateStore(
+                    source.bval,
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 1));
+                builder.CreateStore(
+                    constant_i64(context, element.delay),
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 2));
+              }
+              const auto first = load_register(
+                  builder,
+                  registers,
+                  operation.elements.front().source);
+              builder.CreateCall(
+                  write_projected_waveform_slice_type,
+                  write_projected_waveform_slice_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(
+                          i32, operation.signal),
+                      offset,
+                      llvm::ConstantInt::get(i32, first.width),
+                      storage,
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.elements.size())),
+                      constant_i64(
+                          context, operation.rejection),
                       llvm::ConstantInt::get(
                           i32,
                           static_cast<std::uint32_t>(

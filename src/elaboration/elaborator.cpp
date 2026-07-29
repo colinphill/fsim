@@ -5291,6 +5291,62 @@ private:
         std::size_t width{};
     };
 
+    std::optional<DynamicIndex>
+    lower_dynamic_index(
+        const Expression& source,
+        const Expression& index,
+        const std::size_t source_width,
+        const std::uint32_t base_offset,
+        const frontend::SourceSpan& span) {
+        const auto range =
+            expression_range(source, source_width);
+        if (!range
+            || range->left
+                < std::numeric_limits<std::int32_t>::min()
+            || range->left
+                > std::numeric_limits<std::int32_t>::max()
+            || range->right
+                < std::numeric_limits<std::int32_t>::min()
+            || range->right
+                > std::numeric_limits<std::int32_t>::max()
+            || range->width()
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::uint32_t>::max()
+                    - base_offset)
+                    + 1U) {
+            report(
+                "FSIM-ELAB-DYNINDEX-001",
+                "dynamic packed selection requires a concrete "
+                "one-dimensional range representable by signed 32-bit "
+                "indices and normalized offsets",
+                span);
+            return std::nullopt;
+        }
+        if (language_ == frontend::Language::Vhdl2008
+            && !is_integer_expression(index)) {
+            report(
+                "FSIM-ELAB-DYNINDEX-002",
+                "a dynamic VHDL array index requires an integer-family "
+                "expression",
+                index.span);
+            return std::nullopt;
+        }
+        const auto lowered = lower_expression(index, 32);
+        if (!lowered || register_width(*lowered) != 32) {
+            report(
+                "FSIM-ELAB-DYNINDEX-002",
+                "a dynamic packed index must lower to the signed 32-bit "
+                "runtime representation",
+                index.span);
+            return std::nullopt;
+        }
+        return DynamicIndex{
+            *lowered,
+            range->left,
+            range->right,
+            base_offset};
+    }
+
     std::optional<ConstantSliceSelection>
     constant_slice_selection(
         const Expression& expression,
@@ -5384,6 +5440,7 @@ private:
         std::optional<std::uint32_t> selected_offset;
         std::optional<std::size_t> selected_width;
         std::optional<frontend::ValueDomain> selected_domain;
+        std::optional<DynamicIndex> dynamic_selection;
         if (statement.target.kind == ExpressionKind::Index
             && statement.target.operands.size() == 2) {
             base = &statement.target.operands[0];
@@ -5453,26 +5510,38 @@ private:
             const auto index =
                 static_integer_value(
                     statement.target.operands[1]);
-            const auto offset =
-                index
-                    ? select_offset(
-                          *base, *index, selection_source_width)
-                    : std::nullopt;
             const auto base_offset =
                 static_cast<std::uint64_t>(
                     selected_offset.value_or(0));
-            if (!index || !offset
-                || base_offset + *offset
-                    > std::numeric_limits<std::uint32_t>::max()) {
-                report(
-                    "FSIM-ELAB-068",
-                    "an assignment bit-select requires a constant index "
-                    "inside the target's declared packed range",
+            if (index) {
+                const auto offset = select_offset(
+                    *base, *index, selection_source_width);
+                if (!offset
+                    || base_offset + *offset
+                        > std::numeric_limits<
+                            std::uint32_t>::max()) {
+                    report(
+                        "FSIM-ELAB-068",
+                        "an assignment bit-select requires an index "
+                        "inside the target's declared packed range",
+                        statement.target.span);
+                    return;
+                }
+                selected_offset =
+                    static_cast<std::uint32_t>(
+                        base_offset + *offset);
+            } else {
+                dynamic_selection = lower_dynamic_index(
+                    *base,
+                    statement.target.operands[1],
+                    selection_source_width,
+                    selected_offset.value_or(0),
                     statement.target.span);
-                return;
+                if (!dynamic_selection) {
+                    return;
+                }
+                selected_offset.reset();
             }
-            selected_offset =
-                static_cast<std::uint32_t>(base_offset + *offset);
             selected_width = 1;
         } else if (statement.target.kind == ExpressionKind::Slice) {
             const auto selection =
@@ -5503,7 +5572,7 @@ private:
         const auto target_width =
             selected_width.value_or(whole_width);
         const auto* contextual_target_type =
-            selected_offset
+            selected_offset || dynamic_selection
                 ? nullptr
                 : object_type(target_name);
         const auto assignment_control =
@@ -5609,7 +5678,8 @@ private:
             if (language_ == frontend::Language::Vhdl2008
                 && target_domain
                     == frontend::ValueDomain::Integer
-                && !selected_offset) {
+                && !selected_offset
+                && !dynamic_selection) {
                 if (!is_integer_expression(statement.value)) {
                     report(
                         "FSIM-ELAB-INTEGER-004",
@@ -5631,6 +5701,7 @@ private:
             }
             if (language_ == frontend::Language::Vhdl2008
                 && !selected_offset
+                && !dynamic_selection
                 && contextual_target_type != nullptr
                 && !contextual_target_type
                         ->enumeration_literals.empty()) {
@@ -5649,7 +5720,13 @@ private:
                 process_.operations.emplace_back(
                     WaitFor{statement.delay->magnitude});
             }
-            if (selected_offset) {
+            if (dynamic_selection) {
+                process_.operations.emplace_back(DynamicInsert{
+                    local->second,
+                    local->second,
+                    *value,
+                    *dynamic_selection});
+            } else if (selected_offset) {
                 process_.operations.emplace_back(Insert{
                     local->second,
                     local->second,
@@ -5709,7 +5786,8 @@ private:
                 if (language_ == frontend::Language::Vhdl2008
                     && target_domain
                         == frontend::ValueDomain::Integer
-                    && !selected_offset) {
+                    && !selected_offset
+                    && !dynamic_selection) {
                     if (!is_integer_expression(element.value)) {
                         report(
                             "FSIM-ELAB-INTEGER-004",
@@ -5733,6 +5811,7 @@ private:
                 if (language_
                         == frontend::Language::Vhdl2008
                     && !selected_offset
+                    && !dynamic_selection
                     && contextual_target_type != nullptr
                     && !contextual_target_type
                             ->enumeration_literals.empty()) {
@@ -5778,7 +5857,15 @@ private:
                     statement.span);
                 return;
             }
-            if (selected_offset) {
+            if (dynamic_selection) {
+                process_.operations.emplace_back(
+                    WriteProjectedWaveformDynamicSlice{
+                        signal->second,
+                        std::move(waveform),
+                        *dynamic_selection,
+                        rejection,
+                        mode});
+            } else if (selected_offset) {
                 process_.operations.emplace_back(
                     WriteProjectedWaveformSlice{
                         signal->second,
@@ -5835,7 +5922,8 @@ private:
         }
         if (language_ == frontend::Language::Vhdl2008
             && target_domain == frontend::ValueDomain::Integer
-            && !selected_offset) {
+            && !selected_offset
+            && !dynamic_selection) {
             if (!is_integer_expression(statement.value)) {
                 report(
                     "FSIM-ELAB-INTEGER-004",
@@ -5858,6 +5946,7 @@ private:
         }
         if (language_ == frontend::Language::Vhdl2008
             && !selected_offset
+            && !dynamic_selection
             && contextual_target_type != nullptr
             && !contextual_target_type
                     ->enumeration_literals.empty()) {
@@ -5876,7 +5965,13 @@ private:
                 DebugPointKind::wait, statement.span);
             process_.operations.emplace_back(
                 WaitFor{statement.delay->magnitude});
-            if (selected_offset) {
+            if (dynamic_selection) {
+                process_.operations.emplace_back(
+                    WriteBlockingDynamicSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_selection});
+            } else if (selected_offset) {
                 process_.operations.emplace_back(
                     WriteBlockingSlice{
                         signal->second, *value, *selected_offset});
@@ -5908,7 +6003,16 @@ private:
                     statement.span);
                 return;
             }
-            if (selected_offset) {
+            if (dynamic_selection) {
+                process_.operations.emplace_back(
+                    WriteProjectedDynamicSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_selection,
+                        delay,
+                        rejection,
+                        mode});
+            } else if (selected_offset) {
                 process_.operations.emplace_back(
                     WriteProjectedSlice{
                         signal->second,
@@ -5940,7 +6044,14 @@ private:
                         : statement.delay->additional_values[1].magnitude;
                 const TransitionDelays delays{
                     rise, fall, turnoff};
-                if (selected_offset) {
+                if (dynamic_selection) {
+                    process_.operations.emplace_back(
+                        WriteInertialDynamicSlice{
+                            signal->second,
+                            *value,
+                            *dynamic_selection,
+                            delays});
+                } else if (selected_offset) {
                     process_.operations.emplace_back(
                         WriteInertialSlice{
                             signal->second,
@@ -5952,6 +6063,13 @@ private:
                         WriteInertial{
                             signal->second, *value, delays});
                 }
+            } else if (dynamic_selection) {
+                process_.operations.emplace_back(
+                    WriteAfterDynamicSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_selection,
+                        statement.delay->magnitude});
             } else if (selected_offset) {
                 process_.operations.emplace_back(
                     WriteAfterSlice{
@@ -5967,7 +6085,13 @@ private:
             }
         } else if (
             statement.assignment_kind == AssignmentKind::Blocking) {
-            if (selected_offset) {
+            if (dynamic_selection) {
+                process_.operations.emplace_back(
+                    WriteBlockingDynamicSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_selection});
+            } else if (selected_offset) {
                 process_.operations.emplace_back(WriteBlockingSlice{
                     signal->second, *value, *selected_offset});
             } else {
@@ -5975,7 +6099,13 @@ private:
                     WriteBlocking{signal->second, *value});
             }
         } else {
-            if (selected_offset) {
+            if (dynamic_selection) {
+                process_.operations.emplace_back(
+                    WriteUpdateDynamicSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_selection});
+            } else if (selected_offset) {
                 process_.operations.emplace_back(WriteUpdateSlice{
                     signal->second, *value, *selected_offset});
             } else {
@@ -7635,24 +7765,10 @@ private:
             const auto index =
                 static_integer_value(
                     expression.operands[1]);
-            if (!source_width || !index) {
+            if (!source_width) {
                 report(
                     "FSIM-ELAB-068",
-                    "a bit-select requires an inferable packed source and "
-                    "a constant integer index",
-                    expression.span);
-                return std::nullopt;
-            }
-            const auto offset = select_offset(
-                expression.operands[0], *index, *source_width);
-            if (!offset
-                || *offset
-                    > std::numeric_limits<std::uint32_t>::max()) {
-                report(
-                    "FSIM-ELAB-068",
-                    "bit-select index "
-                        + std::to_string(*index)
-                        + " is outside the source's declared packed range",
+                    "a bit-select requires an inferable packed source",
                     expression.span);
                 return std::nullopt;
             }
@@ -7664,11 +7780,45 @@ private:
             }
             const auto destination =
                 allocate_register(1, register_domain(*source));
-            process_.operations.emplace_back(Extract{
-                destination,
-                *source,
-                static_cast<std::uint32_t>(*offset),
-                1});
+            if (index) {
+                const auto offset = select_offset(
+                    expression.operands[0],
+                    *index,
+                    *source_width);
+                if (!offset
+                    || *offset
+                        > std::numeric_limits<
+                            std::uint32_t>::max()) {
+                    report(
+                        "FSIM-ELAB-068",
+                        "bit-select index "
+                            + std::to_string(*index)
+                            + " is outside the source's declared packed "
+                              "range",
+                        expression.span);
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(Extract{
+                    destination,
+                    *source,
+                    static_cast<std::uint32_t>(*offset),
+                    1});
+            } else {
+                const auto selection = lower_dynamic_index(
+                    expression.operands[0],
+                    expression.operands[1],
+                    *source_width,
+                    0,
+                    expression.span);
+                if (!selection) {
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(
+                    DynamicExtract{
+                        destination,
+                        *source,
+                        *selection});
+            }
             return destination;
         }
         if (expression.kind == ExpressionKind::Slice

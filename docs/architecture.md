@@ -702,6 +702,17 @@ than capturing unrelated bits when the assignment is issued. The appended
 plain-C runtime callbacks carry only normalized offset, width, and one-word
 `aval`/`bval` data.
 
+Dynamic single-element selections retain the elaborated left/right bounds
+and base offset in SimIR together with a signed 32-bit index register.
+Interpreter and LLVM lowering first reject unknown indices, check the source
+index against the declared inclusive range, and then normalize it by distance
+from the declaration's right bound. `DynamicExtract` and `DynamicInsert`
+preserve Logic4/Logic9 planes directly. Dynamic signal writes resolve and
+capture the normalized offset when the assignment executes, then reuse the
+existing static-slice runtime callbacks and driver scheduling; this keeps the
+plain-C callback ABI unchanged while giving delayed, inertial, NBA/update,
+projected, and projected-waveform writes identical target-index semantics.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

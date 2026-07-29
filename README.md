@@ -50,7 +50,8 @@ The current tree contains:
   forms, nominal assignment and hierarchy checks, whole/index/slice reads and
   writes, contextual positional/index/range/choice-list/`others` aggregates,
   object/type/subtype bounds attributes and direction-aware
-  `range`/`reverse_range` loops,
+  `range`/`reverse_range` loops, and signed-32-bit dynamic single-element
+  reads/writes with exact declared-range mapping,
   explicit mixed-language wrapper enforcement, and interpreter/LLVM O0/O2,
   debugger, VCD, and cache equivalence;
 - architecture-local or project-package, non-nested VHDL record types with
@@ -215,12 +216,16 @@ The current tree contains:
   and checked unary/arithmetic/division/power/subtype-store failures shared by
   the interpreter and LLVM O0/O2;
 - declared-range-aware SystemVerilog constant bit/part selects and packed
-  concatenations, including ascending and non-zero-based source ranges;
+  concatenations plus signed-32-bit dynamic single-bit reads/writes,
+  including ascending and non-zero-based source ranges;
 - declared-range-aware VHDL indexed names/slices and correct width-summing
   VHDL `&` concatenation for packed scalar/vector operands;
 - constant bit/part assignment targets for SystemVerilog and VHDL packed
   signals and procedural locals, including blocking, common-update, and
   delayed partial writes with stable source-order merging;
+- dynamic single-element assignment targets for SystemVerilog and VHDL
+  packed signals and procedural locals, including execution-time index
+  capture for blocking, NBA/update, inertial, delayed, and projected writes;
 - locally static VHDL sequential `for` loops in either `to` or `downto`
   direction, including null ranges and loop-indexed packed selections,
   elaborated into deterministic source-order SimIR;

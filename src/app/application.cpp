@@ -292,6 +292,19 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
                 process_.id,
                 error.instruction(),
                 "VHDL integer subtype range check failed");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              dynamic_index_unknown:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "dynamic packed index contains an unknown or "
+                "high-impedance value");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              dynamic_index_range:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "dynamic packed index is outside the declared range");
         }
         throw;
       } catch (...) {

@@ -149,12 +149,40 @@ struct Extract {
   std::uint32_t width{1};
 };
 
+/// Normalize a runtime signed index against an elaborated packed range.
+///
+/// The right bound occupies normalized offset zero in the packed runtime,
+/// independent of whether the source range is ascending or descending.
+struct DynamicIndex {
+  RegisterId index{};
+  std::int64_t left{};
+  std::int64_t right{};
+  std::uint32_t base_offset{};
+
+  friend bool operator==(const DynamicIndex&, const DynamicIndex&) = default;
+};
+
+/// Extract one scalar element selected by a runtime index.
+struct DynamicExtract {
+  RegisterId destination{};
+  RegisterId source{};
+  DynamicIndex selection;
+};
+
 /// Replace a contiguous normalized range in a packed value.
 struct Insert {
   RegisterId destination{};
   RegisterId target{};
   RegisterId source{};
   std::uint32_t offset{};
+};
+
+/// Replace one scalar element selected by a runtime index.
+struct DynamicInsert {
+  RegisterId destination{};
+  RegisterId target{};
+  RegisterId source{};
+  DynamicIndex selection;
 };
 
 /// Concatenate packed operands in source order. The first operand occupies
@@ -370,6 +398,49 @@ struct WriteProjectedWaveformSlice {
   SignalId signal{};
   std::vector<ProjectedWaveformElement> elements;
   std::uint32_t offset{};
+  SimulationTick rejection{};
+  ProjectedDelayMode mode{ProjectedDelayMode::inertial};
+};
+
+struct WriteBlockingDynamicSlice {
+  SignalId signal{};
+  RegisterId source{};
+  DynamicIndex selection;
+};
+
+struct WriteUpdateDynamicSlice {
+  SignalId signal{};
+  RegisterId source{};
+  DynamicIndex selection;
+};
+
+struct WriteAfterDynamicSlice {
+  SignalId signal{};
+  RegisterId source{};
+  DynamicIndex selection;
+  SimulationTick delay{};
+};
+
+struct WriteInertialDynamicSlice {
+  SignalId signal{};
+  RegisterId source{};
+  DynamicIndex selection;
+  TransitionDelays delays;
+};
+
+struct WriteProjectedDynamicSlice {
+  SignalId signal{};
+  RegisterId source{};
+  DynamicIndex selection;
+  SimulationTick delay{};
+  SimulationTick rejection{};
+  ProjectedDelayMode mode{ProjectedDelayMode::inertial};
+};
+
+struct WriteProjectedWaveformDynamicSlice {
+  SignalId signal{};
+  std::vector<ProjectedWaveformElement> elements;
+  DynamicIndex selection;
   SimulationTick rejection{};
   ProjectedDelayMode mode{ProjectedDelayMode::inertial};
 };
@@ -595,7 +666,8 @@ using Operation =
     std::variant<LoadConstant, ReadSignal, SignalEvent, SignalLastValue,
                  SignalLastEvent, SignalActive, CopyRegister, UnaryNot,
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
-                 Shift, Extract, Concatenate, Binary, Insert,
+                 Shift, Extract, DynamicExtract, Concatenate, Binary, Insert,
+                 DynamicInsert,
                  IntegerUnary, IntegerBinary, IntegerCheck,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteInertial, WriteProjected, WriteProjectedWaveform,
@@ -603,6 +675,12 @@ using Operation =
                  WriteUpdateSlice,
                  WriteAfterSlice, WriteInertialSlice,
                  WriteProjectedSlice, WriteProjectedWaveformSlice,
+                 WriteBlockingDynamicSlice,
+                 WriteUpdateDynamicSlice,
+                 WriteAfterDynamicSlice,
+                 WriteInertialDynamicSlice,
+                 WriteProjectedDynamicSlice,
+                 WriteProjectedWaveformDynamicSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
                  Branch, DebugPoint, Assert, Display, FormatDisplay,
                  TimeDisplay, MonitorInstall, MonitorControl, RandomValue,

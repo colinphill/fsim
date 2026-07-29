@@ -2210,6 +2210,62 @@ cache evidence, fetched Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the
 strict native ABI, and every preceding feature batch. No CI state was
 inspected for this local gate.
 
+### Forty-seventh feature batch — dynamic packed indexing
+
+The planned ten implementation features are:
+
+1. Add a typed SimIR dynamic-index descriptor retaining a signed 32-bit index
+   register and the elaborated left/right bounds and direction of a
+   one-dimensional packed object.
+2. Execute dynamic extraction in the reference interpreter with declared
+   ascending, descending, negative, and nonzero range normalization.
+3. Execute dynamic insertion into packed process-local values without
+   changing unselected elements or their exact Logic4/Logic9 state.
+4. Lower nonconstant VHDL array/vector and Verilog/SystemVerilog packed-object
+   index reads while preserving constant-index lowering and contextual
+   element domains.
+5. Lower dynamic blocking writes to process locals and signals through the
+   same normalized index mapping.
+6. Lower dynamic VHDL signal updates and SystemVerilog NBA writes through
+   process-owned selected driver slots so update ordering and multi-driver
+   resolution remain unchanged.
+7. Extend delayed, inertial, projected-waveform, and transition-delay
+   selected writes to capture and use the normalized runtime element offset.
+8. Diagnose non-integer index expressions statically and fail unknown or
+   out-of-range runtime indices deterministically with the process and source
+   safe point preserved in both engines.
+9. Validate, serialize, hash, and lower every dynamic-index SimIR form in
+   LLVM O0/O2 for Logic4 and Logic9 values without widening the public native
+   callback ABI unnecessarily.
+10. Add focused frontend, elaboration, runtime, LLVM/cache, interpreter/JIT,
+    VCD, debugger, range-direction, failure-equivalence, and mixed-language
+    evidence; update the feature matrix and support documentation; then run,
+    record, and push the full local regression gate.
+
+The batch is implemented. SimIR now carries a typed dynamic-index descriptor
+with a signed 32-bit index register, declared left/right bounds, direction,
+and normalized base offset. The interpreter performs checked dynamic
+extraction and insertion for Logic4 and Logic9 values and captures the
+resolved element offset when blocking, common-update/NBA, delayed, inertial,
+projected, or projected-waveform writes execute.
+
+VHDL `integer` indices and SystemVerilog packed 32-bit indices lower through
+the common path while constant selections retain their existing compact
+operations. Static legality rejects noninteger or incorrectly represented
+indices and invalid concrete ranges; unknown and out-of-range runtime values
+fail deterministically with the process instruction preserved. The
+application adapter maps generated LLVM failures to the same interpreter
+diagnostics.
+
+LLVM O0/O2 validates every register, signal, range, delay, waveform, and
+Logic4/Logic9 kind; serializes every dynamic field into native-object identity;
+and lowers variable shifts plus existing static-slice callbacks without
+changing the public callback ABI. Focused runtime, LLVM, elaboration, and
+VHDL application tests pass. They cover ascending, descending, negative, and
+nonzero ranges; exact Logic9 states; all six dynamic write forms; VHDL and
+SystemVerilog source lowering; debugger/VCD visibility; cold/warm cache reuse;
+and interpreter/compiled runtime-failure equivalence.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

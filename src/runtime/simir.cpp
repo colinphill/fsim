@@ -70,6 +70,24 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
           [](const WriteProjectedWaveformSlice& value) {
             return std::optional{value.signal};
           },
+          [](const WriteBlockingDynamicSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteUpdateDynamicSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteAfterDynamicSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteInertialDynamicSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteProjectedDynamicSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteProjectedWaveformDynamicSlice& value) {
+            return std::optional{value.signal};
+          },
           [](const auto&) -> std::optional<SignalId> {
             return std::nullopt;
           }},
@@ -642,6 +660,55 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     }
   }
   return target;
+}
+
+[[nodiscard]] std::uint32_t dynamic_index_offset(
+    const PackedLogic4& index,
+    const DynamicIndex& selection) {
+  if (index.width() != 32) {
+    throw std::invalid_argument(
+        "dynamic packed index must use the signed 32-bit representation");
+  }
+  std::uint32_t raw{};
+  for (std::size_t bit = 0; bit < 32; ++bit) {
+    const auto value = index.get(bit);
+    if (value == Logic4::x || value == Logic4::z) {
+      throw std::invalid_argument(
+          "dynamic packed index contains an unknown or high-impedance "
+          "value");
+    }
+    if (value == Logic4::one) {
+      raw |= UINT32_C(1) << bit;
+    }
+  }
+  const auto signed_index =
+      raw <= static_cast<std::uint32_t>(
+                 std::numeric_limits<std::int32_t>::max())
+          ? static_cast<std::int64_t>(raw)
+          : static_cast<std::int64_t>(raw)
+                - (INT64_C(1) << 32);
+  const auto lower =
+      std::min(selection.left, selection.right);
+  const auto upper =
+      std::max(selection.left, selection.right);
+  if (signed_index < lower || signed_index > upper) {
+    throw std::invalid_argument(
+        "dynamic packed index is outside the declared range");
+  }
+  const auto offset =
+      signed_index >= selection.right
+          ? static_cast<std::uint64_t>(
+                signed_index - selection.right)
+          : static_cast<std::uint64_t>(
+                selection.right - signed_index);
+  if (offset
+      > std::numeric_limits<std::uint32_t>::max()
+            - selection.base_offset) {
+    throw std::invalid_argument(
+        "dynamic packed index offset is not representable");
+  }
+  return selection.base_offset
+      + static_cast<std::uint32_t>(offset);
 }
 
 [[nodiscard]] PackedLogic4 concatenate_values(
@@ -3788,6 +3855,16 @@ void Interpreter::Impl::execute(ProcessId id) {
     const auto instruction = process.pc;
     const auto &operation = process.program.operations[instruction];
     bool boundary = false;
+    const auto selected_offset =
+        [&](const DynamicIndex& selection) -> std::uint32_t {
+          try {
+            return dynamic_index_offset(
+                get_register(process, selection.index),
+                selection);
+          } catch (const std::invalid_argument& error) {
+            fail(process, error.what());
+          }
+        };
     std::visit(
         Overloaded{
             [&](const LoadConstant &op) {
@@ -3917,6 +3994,20 @@ void Interpreter::Impl::execute(ProcessId id) {
               }
               ++process.pc;
             },
+            [&](const DynamicExtract& op) {
+              try {
+                get_register(process, op.destination) =
+                    extract_value(
+                        get_register(process, op.source),
+                        dynamic_index_offset(
+                            get_register(process, op.selection.index),
+                            op.selection),
+                        1);
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
             [&](const Insert& op) {
               try {
                 get_register(process, op.destination) =
@@ -3924,6 +4015,20 @@ void Interpreter::Impl::execute(ProcessId id) {
                         get_register(process, op.target),
                         get_register(process, op.source),
                         op.offset);
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
+            [&](const DynamicInsert& op) {
+              try {
+                get_register(process, op.destination) =
+                    insert_value(
+                        get_register(process, op.target),
+                        get_register(process, op.source),
+                        dynamic_index_offset(
+                            get_register(process, op.selection.index),
+                            op.selection));
               } catch (const std::invalid_argument& error) {
                 fail(process, error.what());
               }
@@ -4141,6 +4246,89 @@ void Interpreter::Impl::execute(ProcessId id) {
                   op.signal,
                   elements,
                   op.offset,
+                  op.rejection,
+                  op.mode);
+            },
+            [&](const WriteBlockingDynamicSlice& op) {
+              auto value = get_register(process, op.source);
+              const auto offset = selected_offset(op.selection);
+              ++process.pc;
+              commit_driver_slice(
+                  process.program.id,
+                  op.signal,
+                  std::move(value),
+                  offset);
+            },
+            [&](const WriteUpdateDynamicSlice& op) {
+              auto value = get_register(process, op.source);
+              const auto offset = selected_offset(op.selection);
+              ++process.pc;
+              stage_update_slice(
+                  process.program.id,
+                  op.signal,
+                  std::move(value),
+                  offset);
+            },
+            [&](const WriteAfterDynamicSlice& op) {
+              auto value = get_register(process, op.source);
+              const auto offset = selected_offset(op.selection);
+              ++process.pc;
+              scheduler.schedule_after(
+                  op.delay,
+                  SchedulerPhase::update,
+                  process.program.id,
+                  [this,
+                   driver = process.program.id,
+                   signal = op.signal,
+                   offset,
+                   value = std::move(value)](
+                      Scheduler&) mutable {
+                    stage_update_slice(
+                        driver,
+                        signal,
+                        std::move(value),
+                        offset);
+                  });
+            },
+            [&](const WriteInertialDynamicSlice& op) {
+              auto value = get_register(process, op.source);
+              const auto offset = selected_offset(op.selection);
+              ++process.pc;
+              schedule_inertial(
+                  process.program.id,
+                  op.signal,
+                  std::move(value),
+                  offset,
+                  op.delays);
+            },
+            [&](const WriteProjectedDynamicSlice& op) {
+              auto value = get_register(process, op.source);
+              const auto offset = selected_offset(op.selection);
+              ++process.pc;
+              schedule_projected(
+                  process.program.id,
+                  op.signal,
+                  value,
+                  offset,
+                  op.delay,
+                  op.rejection,
+                  op.mode);
+            },
+            [&](const WriteProjectedWaveformDynamicSlice& op) {
+              std::vector<ProjectedWaveformValue> elements;
+              elements.reserve(op.elements.size());
+              for (const auto& element : op.elements) {
+                elements.push_back(
+                    {get_register(process, element.source),
+                     element.delay});
+              }
+              const auto offset = selected_offset(op.selection);
+              ++process.pc;
+              schedule_projected_waveform(
+                  process.program.id,
+                  op.signal,
+                  elements,
+                  offset,
                   op.rejection,
                   op.mode);
             },

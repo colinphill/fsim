@@ -118,6 +118,8 @@ enum class JitGeneratedRuntimeErrorReason : std::uint8_t {
   integer_division_by_zero,
   integer_negative_exponent,
   integer_subtype_range,
+  dynamic_index_unknown,
+  dynamic_index_range,
 };
 
 /// A failure deliberately reported by generated SimIR code.

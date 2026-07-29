@@ -3042,6 +3042,257 @@ void test_insert_and_partial_writes_at_level(
   }
 }
 
+void test_dynamic_packed_indices_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  const auto integer = [](const std::int32_t value) {
+    return PackedLogic4::from_aval_bval(
+        32, static_cast<std::uint32_t>(value), 0);
+  };
+
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 41;
+  process.name = std::string{symbol};
+  process.register_count = 8;
+  process.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      DynamicExtract{
+          2, 0, DynamicIndex{1, 7, 0, 0}},
+      WriteBlocking{2, 2},
+      LoadConstant{
+          3, PackedLogic4::from_msb_string("1")},
+      DynamicInsert{
+          4, 0, 3, DynamicIndex{1, 7, 0, 0}},
+      WriteBlocking{3, 4},
+      WriteBlockingDynamicSlice{
+          4, 3, DynamicIndex{1, 7, 0, 0}},
+      WriteUpdateDynamicSlice{
+          5, 3, DynamicIndex{1, 7, 0, 0}},
+      WriteAfterDynamicSlice{
+          6, 3, DynamicIndex{1, 7, 0, 0}, 7},
+      WriteInertialDynamicSlice{
+          7,
+          3,
+          DynamicIndex{1, 7, 0, 0},
+          TransitionDelays{2, 3, 4}},
+      WriteProjectedDynamicSlice{
+          8,
+          3,
+          DynamicIndex{1, 7, 0, 0},
+          5,
+          0,
+          ProjectedDelayMode::transport},
+      LoadConstant{
+          5, PackedLogic4::from_msb_string("0")},
+      LoadConstant{
+          6, PackedLogic4::from_msb_string("X")},
+      WriteProjectedWaveformDynamicSlice{
+          9,
+          {
+              ProjectedWaveformElement{5, 1},
+              ProjectedWaveformElement{6, 6},
+          },
+          DynamicIndex{1, 7, 0, 0},
+          0,
+          ProjectedDelayMode::transport},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 10> widths{
+      8, 32, 1, 8, 8, 8, 8, 8, 8, 8};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  TestRuntime runtime;
+  runtime.signals[0] =
+      encode(PackedLogic4::from_msb_string("10XZ0110"));
+  runtime.signals[1] = encode(integer(5));
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(handle, descriptor)
+      == JitExecutionStatus::completed);
+  assert((
+      runtime.signals[2]
+      == encode(PackedLogic4::from_msb_string("X"))));
+  assert((
+      runtime.signals[3]
+      == encode(PackedLogic4::from_msb_string("101Z0110"))));
+  assert((
+      runtime.signals[4]
+      == encode(PackedLogic4::from_msb_string("00100000"))));
+  assert(runtime.scheduled_writes.size() == 2);
+  assert(
+      runtime.scheduled_writes[0].kind
+              == ScheduledWriteKind::slice_update
+          && runtime.scheduled_writes[0].signal == 5
+          && runtime.scheduled_writes[0].offset == 5
+          && runtime.scheduled_writes[0].width == 1);
+  assert(
+      runtime.scheduled_writes[1].kind
+              == ScheduledWriteKind::slice_after
+          && runtime.scheduled_writes[1].signal == 6
+          && runtime.scheduled_writes[1].offset == 5
+          && runtime.scheduled_writes[1].width == 1
+          && runtime.scheduled_writes[1].delay == 7);
+  assert(
+      runtime.inertial_writes.size() == 1
+          && runtime.inertial_writes[0].signal == 7
+          && runtime.inertial_writes[0].offset == 5
+          && runtime.inertial_writes[0].width == 1);
+  assert(
+      runtime.projected_writes.size() == 3
+          && runtime.projected_writes[0].signal == 8
+          && runtime.projected_writes[0].offset == 5
+          && runtime.projected_writes[0].width == 1
+          && runtime.projected_writes[1].signal == 9
+          && runtime.projected_writes[1].offset == 5
+          && runtime.projected_writes[2].offset == 5);
+
+  const auto run_failure =
+      [&](const std::string_view suffix,
+          PackedLogic4 index,
+          const JitGeneratedRuntimeErrorReason reason,
+          const std::string_view message) {
+        Process failure;
+        failure.id = 42;
+        failure.name =
+            std::string{symbol} + "_" + std::string{suffix};
+        failure.register_count = 3;
+        failure.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("1010")},
+            LoadConstant{1, std::move(index)},
+            DynamicExtract{
+                2, 0, DynamicIndex{1, 3, 0, 0}},
+            Halt{}};
+        const auto failure_symbol =
+            std::string{symbol} + "_" + std::string{suffix};
+        jit.add_process(failure_symbol, failure, {});
+        TestRuntime failed_runtime;
+        auto failed_descriptor = abi(failed_runtime);
+        expect_generated_runtime_error(
+            [&] {
+              (void)jit.execute(
+                  jit.lookup(failure_symbol),
+                  failed_descriptor);
+            },
+            2,
+            reason,
+            message);
+      };
+  run_failure(
+      "range",
+      integer(4),
+      JitGeneratedRuntimeErrorReason::dynamic_index_range,
+      "instruction 2: dynamic packed index is outside the declared range");
+  auto unknown = integer(0);
+  unknown.set(0, Logic4::x);
+  run_failure(
+      "unknown",
+      std::move(unknown),
+      JitGeneratedRuntimeErrorReason::dynamic_index_unknown,
+      "instruction 2: dynamic packed index contains an unknown or "
+      "high-impedance value");
+
+  Process logic9;
+  logic9.id = 43;
+  logic9.name = std::string{symbol} + "_logic9";
+  logic9.register_count = 6;
+  logic9.register_value_kinds = {
+      ValueKind::logic9,
+      ValueKind::logic4,
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic9};
+  logic9.operations = {
+      ReadSignal{0, 0},
+      LoadConstant{1, integer(3)},
+      DynamicExtract{
+          2, 0, DynamicIndex{1, -2, 5, 0}},
+      WriteBlocking{1, 2},
+      LoadConstant{
+          3, PackedLogic4::from_logic9_msb_string("H")},
+      DynamicInsert{
+          4, 0, 3, DynamicIndex{1, -2, 5, 0}},
+      WriteBlocking{2, 4},
+      WriteProjectedDynamicSlice{
+          3,
+          3,
+          DynamicIndex{1, -2, 5, 0},
+          0,
+          0,
+          ProjectedDelayMode::transport},
+      LoadConstant{
+          5, PackedLogic4::from_logic9_msb_string("L")},
+      WriteProjectedWaveformDynamicSlice{
+          4,
+          {
+              ProjectedWaveformElement{5, 1},
+              ProjectedWaveformElement{3, 2},
+          },
+          DynamicIndex{1, -2, 5, 0},
+          0,
+          ProjectedDelayMode::transport},
+      Halt{}};
+  const std::array<std::uint32_t, 5> logic9_widths{
+      8, 1, 8, 8, 8};
+  const std::array<ValueKind, 5> logic9_kinds{
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic9};
+  const auto logic9_symbol = std::string{symbol} + "_logic9";
+  jit.add_process(
+      logic9_symbol,
+      logic9,
+      logic9_widths,
+      logic9_kinds);
+  TestRuntime logic9_runtime;
+  const auto source =
+      PackedLogic4::from_logic9_msb_string("UX01ZWLH")
+          .logic9_low_word();
+  logic9_runtime.logic9_signals[0] = source.planes;
+  logic9_runtime.logic9_signals[1] =
+      PackedLogic4::from_logic9_msb_string("0")
+          .logic9_low_word()
+          .planes;
+  const auto logic9_zero =
+      PackedLogic4::from_logic9_msb_string("00000000")
+          .logic9_low_word()
+          .planes;
+  logic9_runtime.logic9_signals[2] = logic9_zero;
+  logic9_runtime.logic9_signals[3] = logic9_zero;
+  logic9_runtime.logic9_signals[4] = logic9_zero;
+  auto logic9_descriptor = abi(logic9_runtime);
+  assert(
+      jit.execute(
+          jit.lookup(logic9_symbol), logic9_descriptor)
+      == JitExecutionStatus::completed);
+  assert(
+      logic9_runtime.logic9_signals[1]
+      == PackedLogic4::from_logic9_msb_string("W")
+             .logic9_low_word()
+             .planes);
+  assert(
+      logic9_runtime.logic9_signals[2]
+      == PackedLogic4::from_logic9_msb_string("UX01ZHLH")
+             .logic9_low_word()
+             .planes);
+  assert(
+      logic9_runtime.logic9_signals[3]
+      == PackedLogic4::from_logic9_msb_string("00000H00")
+             .logic9_low_word()
+             .planes);
+  assert(
+      logic9_runtime.logic9_signals[4]
+      == PackedLogic4::from_logic9_msb_string("00000H00")
+             .logic9_low_word()
+             .planes);
+}
+
 void test_initialized_bval_slot(const JitOptimizationLevel optimization,
                                 const std::string_view symbol) {
   LlvmJit jit{LlvmJitOptions{optimization, {}}};
@@ -5332,6 +5583,10 @@ int main() {
       JitOptimizationLevel::o0, "insert_partial_writes_o0");
   test_insert_and_partial_writes_at_level(
       JitOptimizationLevel::o2, "insert_partial_writes_o2");
+  test_dynamic_packed_indices_at_level(
+      JitOptimizationLevel::o0, "dynamic_packed_indices_o0");
+  test_dynamic_packed_indices_at_level(
+      JitOptimizationLevel::o2, "dynamic_packed_indices_o2");
   test_initialized_bval_slot(JitOptimizationLevel::o0, "initialized_bval_o0");
   test_initialized_bval_slot(JitOptimizationLevel::o2, "initialized_bval_o2");
   test_debug_point_instrumentation();

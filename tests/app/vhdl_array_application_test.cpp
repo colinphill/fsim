@@ -31,8 +31,9 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 18> values;
+  std::array<std::string, 20> values;
   std::string top_local;
+  std::string dynamic_local;
   std::string top_aggregate;
   std::string child_local;
   std::string generic_aggregate;
@@ -108,6 +109,9 @@ Capture run_once(
       std::size_t>> top_aggregate;
   std::optional<std::pair<
       fsim::runtime::simir::ProcessId,
+      std::size_t>> dynamic_local;
+  std::optional<std::pair<
+      fsim::runtime::simir::ProcessId,
       std::size_t>> generic_aggregate;
   for (const auto& process : project->design.processes()) {
     for (std::size_t index = 0;
@@ -120,6 +124,12 @@ Capture run_once(
             && local.value_kind
                 == fsim::runtime::simir::ValueKind::logic9);
         top_local = std::pair{process.id, index};
+      } else if (local.name == "dynamic_local") {
+        assert(
+            local.width == 8
+            && local.value_kind
+                == fsim::runtime::simir::ValueKind::logic9);
+        dynamic_local = std::pair{process.id, index};
       } else if (local.name == "top_aggregate") {
         assert(
             local.width == 8
@@ -142,7 +152,7 @@ Capture run_once(
     }
   }
   assert(
-      top_local && top_aggregate
+      top_local && dynamic_local && top_aggregate
       && child_local && generic_aggregate);
 
   Capture capture;
@@ -156,7 +166,7 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 18> paths{
+  constexpr std::array<std::string_view, 20> paths{
       "array_top.source",
       "array_top.result",
       "array_top.conditional_result",
@@ -174,12 +184,14 @@ Capture run_once(
       "array_top.attribute_ascending",
       "array_top.range_order",
       "array_top.reverse_order",
-      "array_top.attribute_slice"};
-  constexpr std::array<std::size_t, 18> widths{
+      "array_top.attribute_slice",
+      "array_top.dynamic_read",
+      "array_top.dynamic_result"};
+  constexpr std::array<std::size_t, 20> widths{
       8, 8, 8, 4, 1, 1, 8, 4, 8, 8, 1,
-      32, 32, 32, 1, 32, 32, 4};
-  std::array<fsim::runtime::simir::SignalId, 18> signals{};
-  std::array<fsim::runtime::VcdSignal, 18> traces{};
+      32, 32, 32, 1, 32, 32, 4, 1, 8};
+  std::array<fsim::runtime::simir::SignalId, 20> signals{};
+  std::array<fsim::runtime::VcdSignal, 20> traces{};
   std::ostringstream vcd_output;
   fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 64};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -217,6 +229,9 @@ Capture run_once(
   }
   capture.top_local = simulation.read_process_local(
       top_local->first, top_local->second).to_msb_string();
+  capture.dynamic_local = simulation.read_process_local(
+      dynamic_local->first,
+      dynamic_local->second).to_msb_string();
   capture.top_aggregate = simulation.read_process_local(
       top_aggregate->first,
       top_aggregate->second).to_msb_string();
@@ -249,7 +264,7 @@ void verify_capture(const Capture& capture) {
       == fsim::runtime::RunStatus::completed);
   assert((
       capture.values
-      == std::array<std::string, 18>{
+      == std::array<std::string, 20>{
           "01LH10Z-",
           "11LH10Z-",
           "1111Z0ZH",
@@ -267,8 +282,11 @@ void verify_capture(const Capture& capture) {
           "0",
           "00000000011101001010000001001010",
           "00000000000000000011000000111001",
-          "1111"}));
+          "1111",
+          "L",
+          "00H00000"}));
   assert(capture.top_local == "00LH10Z-");
+  assert(capture.dynamic_local == "01HH10Z-");
   assert(capture.top_aggregate == "1111Z0ZH");
   assert(capture.child_local == "11LH10Z-");
   assert(capture.generic_aggregate == "10000000");
@@ -296,6 +314,28 @@ void verify_capture(const Capture& capture) {
   assert(capture.vcd.find("b110110zx") != std::string::npos);
 }
 
+std::string run_expected_dynamic_failure(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  try {
+    (void)simulation.run();
+    assert(false && "dynamic packed-index failure was not reported");
+  } catch (const fsim::runtime::simir::InterpreterError& error) {
+    const auto message = std::string{error.what()};
+    assert(
+        message.find(
+            "dynamic packed index is outside the declared range")
+        != std::string::npos);
+    return message;
+  }
+  return {};
+}
+
 } // namespace
 
 int main() {
@@ -311,6 +351,8 @@ int main() {
       directory.path / "array_child.vhd";
   const auto top_source =
       directory.path / "array_top.vhd";
+  const auto failure_source =
+      directory.path / "dynamic_failure.vhd";
 
   const auto write_package =
       [&](const std::string_view revision) {
@@ -387,9 +429,13 @@ architecture rtl of Array_Top is
   signal Range_Order : integer;
   signal Reverse_Order : integer;
   signal Attribute_Slice : Nibble_T;
+  signal Dynamic_Read : std_logic;
+  signal Dynamic_Result : Byte_T;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
+    variable Dynamic_Local : Byte_T := "01LH10Z-";
+    variable Dynamic_Index : integer := 5;
     variable Top_Aggregate : Byte_T :=
       (Byte_T'left downto Byte_T'high - 3 => '1',
        3 | 1 => 'Z',
@@ -400,6 +446,10 @@ begin
     Source <= Top_Local;
     Aggregate_Named <= Top_Aggregate;
     Top_Local(6) := '0';
+    Dynamic_Read <= Dynamic_Local(Dynamic_Index);
+    Dynamic_Local(Dynamic_Index) := 'H';
+    Dynamic_Result <= (others => '0');
+    Dynamic_Result(Dynamic_Index) <= 'H';
     Top_Aggregate :=
       (Byte_T'left downto Byte_T'high - 3 => '1',
        3 | 1 => 'Z',
@@ -490,6 +540,7 @@ end architecture;
     assert(reference.result.delta == cold.result.delta);
     assert(reference.values == cold.values);
     assert(reference.top_local == cold.top_local);
+    assert(reference.dynamic_local == cold.dynamic_local);
     assert(reference.top_aggregate == cold.top_aggregate);
     assert(reference.child_local == cold.child_local);
     assert(
@@ -499,6 +550,7 @@ end architecture;
     assert(reference.vcd == cold.vcd);
     assert(cold.values == warm.values);
     assert(cold.top_local == warm.top_local);
+    assert(cold.dynamic_local == warm.dynamic_local);
     assert(cold.top_aggregate == warm.top_aggregate);
     assert(cold.child_local == warm.child_local);
     assert(
@@ -536,6 +588,55 @@ end architecture;
     assert(changed.cache.stores == 2);
 #endif
     write_package("revision one");
+  }
+
+  {
+    std::ofstream output{failure_source};
+    output << R"(
+entity Dynamic_Failure is
+end entity;
+
+architecture rtl of Dynamic_Failure is
+begin
+  fail : process
+    variable Value : std_logic_vector(7 downto 0) :=
+      "00000000";
+    variable Index : integer := 8;
+  begin
+    Value(Index) := '1';
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    fsim::project::Config config;
+    config.base_directory = directory.path;
+    config.project.name = "vhdl-dynamic-index-failure";
+    config.project.top = "vhdl:work.dynamic_failure(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path =
+        directory.path
+        / (optimization == fsim::project::Optimization::o0
+               ? "failure-cache-o0"
+               : "failure-cache-o2");
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.compilation_unit = "file";
+    sources.files = {failure_source};
+    config.source_sets.push_back(std::move(sources));
+    const auto reference = run_expected_dynamic_failure(
+        config, fsim::app::SimulationEngine::interpreter);
+    const auto compiled = run_expected_dynamic_failure(
+        config, fsim::app::SimulationEngine::compiled);
+    assert(reference == compiled);
   }
 
   std::cout << "VHDL array application tests passed\n";

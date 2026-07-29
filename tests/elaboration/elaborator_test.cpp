@@ -8679,19 +8679,66 @@ endmodule
         R"(
 module dynamic_select;
   logic [7:0] value;
+  logic signed [31:0] index;
+  logic result;
+  initial begin
+    value = 8'b00101000;
+    index = 32'd5;
+    result = value[index];
+    value[index] = 1'b0;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_select.ok());
+    const auto elaborated_dynamic_select =
+        fsim::elaboration::elaborate(
+            dynamic_select.design, "sv:work.dynamic_select");
+    assert(elaborated_dynamic_select.ok());
+    const auto dynamic_index_value =
+        elaborated_dynamic_select.design->find_signal("value");
+    const auto dynamic_result =
+        elaborated_dynamic_select.design->find_signal("result");
+    assert(dynamic_index_value && dynamic_result);
+    auto dynamic_select_interpreter =
+        elaborated_dynamic_select.design->create_interpreter();
+    const auto dynamic_select_result =
+        dynamic_select_interpreter->run();
+    assert(
+        dynamic_select_result.status
+            == fsim::runtime::RunStatus::completed);
+    assert(
+        dynamic_select_interpreter
+            ->signal_value(*dynamic_index_value)
+            .to_msb_string()
+        == "00001000");
+    assert(
+        dynamic_select_interpreter
+            ->signal_value(*dynamic_result)
+            .to_msb_string()
+        == "1");
+
+    const auto narrow_dynamic_select =
+        fsim::frontend::parse_text(
+            "narrow_dynamic_select.sv",
+            R"(
+module narrow_dynamic_select;
+  logic [7:0] value;
   logic [2:0] index;
   logic result;
   always_comb result = value[index];
 endmodule
 )",
-        fsim::frontend::Language::SystemVerilog2017);
-    assert(dynamic_select.ok());
-    const auto rejected_dynamic_select =
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(narrow_dynamic_select.ok());
+    const auto rejected_narrow_dynamic_select =
         fsim::elaboration::elaborate(
-            dynamic_select.design, "sv:work.dynamic_select");
-    assert(!rejected_dynamic_select.ok());
+            narrow_dynamic_select.design,
+            "sv:work.narrow_dynamic_select");
+    assert(!rejected_narrow_dynamic_select.ok());
     assert(has_diagnostic(
-        rejected_dynamic_select, "FSIM-ELAB-068"));
+        rejected_narrow_dynamic_select,
+        "FSIM-ELAB-DYNINDEX-002"));
 
     const auto empty_concatenation =
         fsim::frontend::parse_text(
@@ -10965,6 +11012,8 @@ architecture rtl of Array_Dut is
   signal Reverse_Order : integer;
   signal Attribute_Aggregate : Logic_Bus_T;
   signal Attribute_Slice : std_logic_vector(3 downto 0);
+  signal Dynamic_Read : std_logic;
+  signal Dynamic_Result : Logic_Bus_T;
 begin
   Result <= Source;
   Logic_Bus <=
@@ -10984,6 +11033,8 @@ begin
        3 | 1 => 'Z',
        work.array_types.logic_bus_t'right => 'H',
        others => '0');
+    variable Dynamic_Local : Logic_Bus_T := "01LH10Z-";
+    variable Dynamic_Index : integer := 5;
   begin
     for Index in Logic_Bus_T'range loop
       if Index = 5 then
@@ -11009,6 +11060,10 @@ begin
     Attribute_Slice <=
       Attribute_Local(
         Logic_Bus_T'high downto Logic_Bus_T'high - 3);
+    Dynamic_Read <= Dynamic_Local(Dynamic_Index);
+    Dynamic_Local(Dynamic_Index) := 'H';
+    Dynamic_Result <= (others => '0');
+    Dynamic_Result(Dynamic_Index) <= 'H';
     wait;
   end process;
 end architecture;
@@ -11058,6 +11113,10 @@ end architecture;
     const auto attribute_slice_signal =
         array_design.design->find_signal(
             "attribute_slice");
+    const auto dynamic_read_signal =
+        array_design.design->find_signal("dynamic_read");
+    const auto dynamic_result_signal =
+        array_design.design->find_signal("dynamic_result");
     assert(
         array_source_signal && array_result_signal
         && array_logic_signal && array_local_signal
@@ -11066,7 +11125,39 @@ end architecture;
         && attribute_right_signal && attribute_length_signal
         && attribute_ascending_signal && range_order_signal
         && reverse_order_signal && attribute_aggregate_signal
-        && attribute_slice_signal);
+        && attribute_slice_signal && dynamic_read_signal
+        && dynamic_result_signal);
+    bool found_dynamic_extract = false;
+    bool found_dynamic_insert = false;
+    bool found_dynamic_write = false;
+    for (const auto& process :
+         array_design.design->processes()) {
+        for (const auto& operation : process.operations) {
+            found_dynamic_extract =
+                found_dynamic_extract
+                || std::holds_alternative<
+                    fsim::runtime::simir::DynamicExtract>(
+                    operation);
+            found_dynamic_insert =
+                found_dynamic_insert
+                || std::holds_alternative<
+                    fsim::runtime::simir::DynamicInsert>(
+                    operation);
+            found_dynamic_write =
+                found_dynamic_write
+                || std::holds_alternative<
+                    fsim::runtime::simir::
+                        WriteUpdateDynamicSlice>(
+                    operation)
+                || std::holds_alternative<
+                    fsim::runtime::simir::
+                        WriteProjectedDynamicSlice>(
+                    operation);
+        }
+    }
+    assert(found_dynamic_extract);
+    assert(found_dynamic_insert);
+    assert(found_dynamic_write);
     const auto& array_source_info =
         array_design.design->signals().at(*array_source_signal);
     const auto& array_result_info =
@@ -11170,6 +11261,14 @@ end architecture;
         array_interpreter->signal_value(*attribute_slice_signal)
             .to_msb_string()
             == "1111");
+    assert(
+        array_interpreter->signal_value(*dynamic_read_signal)
+            .to_msb_string()
+            == "L");
+    assert(
+        array_interpreter->signal_value(*dynamic_result_signal)
+            .to_msb_string()
+            == "00H00000");
 
     const auto invalid_array_source =
         fsim::frontend::parse_text(
@@ -11232,6 +11331,8 @@ begin
   Wide_Element_Aggregate <=
     (0 => "10", others => '0');
   Scalar_Target <= (0 => '0');
+  Scalar_Target <= A(Logic_Value);
+  A(Logic_Value) <= '1';
   Record_Target <= (X | Y => '0');
   Attribute_Error <= A_T'left;
   Attribute_Error <= Dynamic_Index'left;
@@ -11278,6 +11379,10 @@ end architecture;
         has_diagnostic(
             invalid_array_design,
             "FSIM-ELAB-VHARRAYAGG-003"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-DYNINDEX-002"));
     assert(
         has_diagnostic(
             invalid_array_design,
