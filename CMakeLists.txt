@@ -431,7 +431,16 @@ fsim_configure_library(fsim_cli)
 target_link_libraries(fsim_cli PUBLIC fsim_project fsim_diagnostic)
 
 if(FSIM_WITH_LLVM)
-  add_library(fsim_llvm STATIC src/compiler/llvm_jit.cpp)
+  add_library(
+    fsim_llvm
+    STATIC
+      src/compiler/llvm_jit.cpp
+      src/compiler/llvm_jit_cache_key.cpp
+      src/compiler/llvm_jit_lowering.cpp
+      src/compiler/llvm_jit_module.cpp
+      src/compiler/llvm_jit_validation.cpp
+      src/compiler/llvm_jit_value_lowering.cpp
+  )
   add_library(fsim::llvm ALIAS fsim_llvm)
   fsim_configure_library(fsim_llvm)
   target_link_libraries(fsim_llvm PUBLIC fsim_runtime PRIVATE fsim_object_cache)

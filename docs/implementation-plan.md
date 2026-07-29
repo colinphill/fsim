@@ -2413,6 +2413,15 @@ integration test passes in 169.07 seconds after the split, and the line-budget
 test passes. The LLVM adapter portion and the exact Release regression remain
 to complete this checkpoint.
 
+LLVM checkpoint work has separated the persistent object-cache/LLJIT facade,
+process validation, native cache-key construction, module optimization and
+verification, and packed-value IR kernels into independently compiled units.
+Two private LLVM headers expose only state structures and function
+declarations; they contain no ordinary executable bodies. Focused
+warnings-as-errors LLVM compilation and the `fsim.llvm` differential/cache
+test pass. The process operation emitter remains the one temporarily
+allowlisted LLVM unit and is the remaining work in this checkpoint.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
