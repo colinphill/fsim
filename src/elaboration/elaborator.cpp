@@ -192,6 +192,56 @@ PackedLogic4 default_packed_value(
     return result;
 }
 
+std::optional<std::int64_t> vhdl_enumeration_ordinal(
+    const Expression& expression,
+    const frontend::Type& type) {
+    if (type.enumeration_literals.empty()) {
+        return std::nullopt;
+    }
+    constexpr std::string_view internal_prefix{"@fsim-enum:"};
+    if (expression.kind == ExpressionKind::LogicLiteral
+        && expression.text.starts_with(internal_prefix)) {
+        std::int64_t ordinal = 0;
+        const auto text =
+            std::string_view{expression.text}.substr(
+                internal_prefix.size());
+        const auto parsed = std::from_chars(
+            text.data(), text.data() + text.size(), ordinal);
+        if (parsed.ec == std::errc{}
+            && parsed.ptr == text.data() + text.size()
+            && ordinal >= 0
+            && static_cast<std::uint64_t>(ordinal)
+                < type.enumeration_literals.size()) {
+            return ordinal;
+        }
+        return std::nullopt;
+    }
+    if (expression.kind != ExpressionKind::Identifier
+        && expression.kind != ExpressionKind::LogicLiteral) {
+        return std::nullopt;
+    }
+    const auto separator = expression.text.find_last_of('.');
+    const auto literal_name =
+        separator == std::string::npos
+            ? std::string_view{expression.text}
+            : std::string_view{expression.text}.substr(separator + 1);
+    const auto literal = std::find(
+        type.enumeration_literals.begin(),
+        type.enumeration_literals.end(),
+        literal_name);
+    if (literal == type.enumeration_literals.end()) {
+        return std::nullopt;
+    }
+    const auto ordinal = static_cast<std::size_t>(
+        std::distance(type.enumeration_literals.begin(), literal));
+    if (ordinal
+        > static_cast<std::size_t>(
+            std::numeric_limits<std::int64_t>::max())) {
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(ordinal);
+}
+
 std::optional<LoweredLiteral> literal_value(
     const Expression& expression,
     const std::size_t expected_width,
@@ -361,8 +411,22 @@ std::optional<LoweredLiteral> literal_value(
         : std::nullopt;
 }
 
+struct ConstantTypeInfo {
+    frontend::ValueDomain domain{frontend::ValueDomain::Unknown};
+    bool vhdl_enumeration{};
+
+    ConstantTypeInfo() = default;
+    ConstantTypeInfo(const frontend::ValueDomain value)
+        : domain(value) {}
+    ConstantTypeInfo(
+        const frontend::ValueDomain value,
+        const bool enumeration)
+        : domain(value),
+          vhdl_enumeration(enumeration) {}
+};
+
 using ConstantDomainEnvironment =
-    std::unordered_map<std::string, frontend::ValueDomain>;
+    std::unordered_map<std::string, ConstantTypeInfo>;
 
 std::optional<std::int64_t> constant_literal_integer(
     const Expression& expression,
@@ -805,7 +869,16 @@ Expression constant_expression(
     const std::int64_t value,
     const frontend::SourceSpan& span,
     const frontend::ValueDomain domain,
-    const frontend::Language language) {
+    const frontend::Language language,
+    const bool vhdl_enumeration = false) {
+    if (vhdl_enumeration
+        && language == frontend::Language::Vhdl2008) {
+        return {
+            ExpressionKind::LogicLiteral,
+            "@fsim-enum:" + std::to_string(value),
+            {},
+            span};
+    }
     if (domain == frontend::ValueDomain::Boolean) {
         return {
             ExpressionKind::BooleanLiteral,
@@ -858,8 +931,10 @@ void substitute_parameters(
                 expression.span,
                 domain == domains.end()
                     ? frontend::ValueDomain::Integer
-                    : domain->second,
-                language);
+                    : domain->second.domain,
+                language,
+                domain != domains.end()
+                    && domain->second.vhdl_enumeration);
             return;
         }
     }
@@ -1856,7 +1931,10 @@ void evaluate_generated_constants(
             }
         }
         environment[constant.name] = *value;
-        domains[constant.name] = constant.type.domain;
+        domains[constant.name] = ConstantTypeInfo{
+            constant.type.domain,
+            language == frontend::Language::Vhdl2008
+                && !constant.type.enumeration_literals.empty()};
     }
 }
 
@@ -2340,17 +2418,6 @@ SpecializedUnit specialize_unit(
     bool saw_named = false;
     bool saw_positional = false;
     for (const auto& override : overrides) {
-        std::string error;
-        const auto value = evaluate_constant_expression(
-            override.value, parent_environment, error);
-        if (!value) {
-            diagnostics.push_back({
-                code(SpecializationDiagnostic::actual_evaluation),
-                "cannot evaluate " + std::string{object_kind}
-                    + " actual: " + error,
-                override.span});
-            continue;
-        }
         std::optional<std::size_t> actual_index;
         if (override.name) {
             saw_named = true;
@@ -2411,6 +2478,27 @@ SpecializedUnit specialize_unit(
             actual_index = next_positional++;
         }
         if (actual_index) {
+            std::string error;
+            auto value =
+                is_vhdl
+                    ? vhdl_enumeration_ordinal(
+                          override.value,
+                          overridable[*actual_index]->type)
+                    : std::optional<std::int64_t>{};
+            if (!value) {
+                value = evaluate_constant_expression(
+                    override.value, parent_environment, error);
+            }
+            if (!value) {
+                diagnostics.push_back({
+                    code(
+                        SpecializationDiagnostic::
+                            actual_evaluation),
+                    "cannot evaluate " + std::string{object_kind}
+                        + " actual: " + error,
+                    override.span});
+                continue;
+            }
             if (actuals[*actual_index]) {
                 diagnostics.push_back({
                     code(SpecializationDiagnostic::duplicate_actual),
@@ -2449,10 +2537,18 @@ SpecializedUnit specialize_unit(
                 value = 0;
             } else {
                 std::string error;
-                value = evaluate_constant_expression(
-                    parameter.default_value,
-                    result.environment,
-                    error);
+                value =
+                    is_vhdl
+                        ? vhdl_enumeration_ordinal(
+                              parameter.default_value,
+                              parameter.type)
+                        : std::optional<std::int64_t>{};
+                if (!value) {
+                    value = evaluate_constant_expression(
+                        parameter.default_value,
+                        result.environment,
+                        error);
+                }
                 if (!value) {
                     diagnostics.push_back({
                         code(
@@ -2468,8 +2564,11 @@ SpecializedUnit specialize_unit(
         }
         if (is_vhdl) {
             const auto spelling = parameter.type.spelling;
+            const bool enumeration =
+                !parameter.type.enumeration_literals.empty();
             const bool violates_supported_type =
-                parameter.type.packed_range.has_value()
+                (!enumeration
+                 && parameter.type.packed_range.has_value())
                 || !parameter.type.packed_members.empty()
                 || (parameter.type.domain
                         != frontend::ValueDomain::Integer
@@ -2486,7 +2585,14 @@ SpecializedUnit specialize_unit(
                 && *value != 0 && *value != 1;
             const bool violates_bit =
                 parameter.type.domain == frontend::ValueDomain::Bit2
+                && !enumeration
                 && *value != 0 && *value != 1;
+            const bool violates_enumeration =
+                enumeration
+                && (*value < 0
+                    || static_cast<std::uint64_t>(*value)
+                        >= parameter.type
+                               .enumeration_literals.size());
             const bool violates_integer_range =
                 parameter.type.domain
                     == frontend::ValueDomain::Integer
@@ -2512,7 +2618,8 @@ SpecializedUnit specialize_unit(
             }
             if (violates_natural || violates_positive
                 || violates_boolean || violates_bit
-                || violates_integer_range) {
+                || violates_integer_range
+                || violates_enumeration) {
                 diagnostics.push_back({
                     code(
                         SpecializationDiagnostic::
@@ -2525,13 +2632,25 @@ SpecializedUnit specialize_unit(
             }
         }
         result.environment[parameter.name] = *value;
-        domains[parameter.name] = parameter.type.domain;
+        domains[parameter.name] = ConstantTypeInfo{
+            parameter.type.domain,
+            is_vhdl
+                && !parameter.type.enumeration_literals.empty()};
         result.values.emplace_back(
             parameter.name,
             is_vhdl
                     && parameter.type.domain
                         == frontend::ValueDomain::Boolean
                 ? (*value == 0 ? "false" : "true")
+                : is_vhdl
+                        && !parameter.type
+                                .enumeration_literals.empty()
+                        && *value >= 0
+                        && static_cast<std::uint64_t>(*value)
+                            < parameter.type
+                                  .enumeration_literals.size()
+                    ? parameter.type.enumeration_literals[
+                          static_cast<std::size_t>(*value)]
                 : std::to_string(*value));
     }
 
@@ -2553,7 +2672,10 @@ SpecializedUnit specialize_unit(
             result.environment,
             diagnostics,
             source.language);
-        if (alias.enum_literals.empty()) {
+        if (alias.enum_literals.empty()
+            || alias.declaration_kind
+                == frontend::TypeDeclarationKind::
+                    VhdlEnumeration) {
             continue;
         }
         const auto width = alias.type.width();
@@ -3199,7 +3321,8 @@ private:
                             variable.span.begin.column)},
                     {},
                     {},
-                    value_kind(variable.type.domain)});
+                    value_kind(variable.type.domain),
+                    {}});
                 if (variable.type.integer_range) {
                     const auto [lower, upper] =
                         integer_bounds(variable.type.integer_range);
@@ -3208,6 +3331,8 @@ private:
                     process_.debug_locals.back().integer_upper =
                         upper;
                 }
+                process_.debug_locals.back().enumeration_literals =
+                    variable.type.enumeration_literals;
             } else {
                 register_id = register_found->second;
             }
@@ -4895,8 +5020,20 @@ private:
         }
         const auto selector_width =
             infer_width(statement.condition).value_or(std::size_t{1});
+        const auto* selector_type =
+            statement.condition.kind
+                    == ExpressionKind::Identifier
+                ? object_type(statement.condition.text)
+                : nullptr;
         const auto selector =
-            lower_expression(statement.condition, selector_width);
+            lower_expression(
+                statement.condition,
+                selector_width,
+                selector_type != nullptr
+                        && !selector_type
+                                ->enumeration_literals.empty()
+                    ? selector_type
+                    : nullptr);
         if (!selector) {
             return;
         }
@@ -4912,7 +5049,14 @@ private:
             std::vector<InstructionIndex> branches;
             for (const auto& choice : alternative.choices) {
                 const auto choice_register =
-                    lower_expression(choice, register_width(*selector));
+                    lower_expression(
+                        choice,
+                        register_width(*selector),
+                        selector_type != nullptr
+                                && !selector_type
+                                        ->enumeration_literals.empty()
+                            ? selector_type
+                            : nullptr);
                 if (!choice_register) {
                     continue;
                 }
@@ -5346,9 +5490,42 @@ private:
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type = nullptr) {
+        const auto enumeration_context_compatible =
+            [&](const frontend::Type* source_type) {
+              if (language_
+                      != frontend::Language::Vhdl2008
+                  || expected_type == nullptr
+                  || source_type == nullptr) {
+                  return true;
+              }
+              const bool expected_enumeration =
+                  !expected_type->enumeration_literals.empty();
+              const bool source_enumeration =
+                  !source_type->enumeration_literals.empty();
+              if (!expected_enumeration && !source_enumeration) {
+                  return true;
+              }
+              if (expected_enumeration
+                  && source_enumeration
+                  && expected_type->nominal_type
+                      == source_type->nominal_type) {
+                  return true;
+              }
+              report(
+                  "FSIM-ELAB-VHENUM-002",
+                  "VHDL enumeration values require the same nominal "
+                  "type; expected '" + expected_type->spelling
+                      + "' but found '" + source_type->spelling + "'",
+                  expression.span);
+              return false;
+            };
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
                 local != locals_.end()) {
+                if (!enumeration_context_compatible(
+                        object_type(expression.text))) {
+                    return std::nullopt;
+                }
                 return local->second;
             }
             const auto found = signals_.find(expression.text);
@@ -5357,6 +5534,9 @@ private:
                     design_.signal_info_[found->second];
                 const auto* type =
                     visible_type(expression.text);
+                if (!enumeration_context_compatible(type)) {
+                    return std::nullopt;
+                }
                 const auto destination = allocate_register(
                     signal.width,
                     type != nullptr
@@ -5408,6 +5588,29 @@ private:
                     static_cast<std::uint32_t>(
                         selected->member->lsb_offset),
                     static_cast<std::uint32_t>(*member_width)});
+                return destination;
+            }
+            if (language_ == frontend::Language::Vhdl2008
+                && expected_type != nullptr
+                && !expected_type->enumeration_literals.empty()) {
+                const auto ordinal =
+                    vhdl_enumeration_ordinal(
+                        expression, *expected_type);
+                if (!ordinal) {
+                    report(
+                        "FSIM-ELAB-VHENUM-001",
+                        "enumeration type '" + expected_type->spelling
+                            + "' has no literal '" + expression.text + "'",
+                        expression.span);
+                    return std::nullopt;
+                }
+                const auto destination = allocate_register(
+                    expected_width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant{
+                    destination,
+                    unsigned_value(
+                        static_cast<std::uint64_t>(*ordinal),
+                        expected_width)});
                 return destination;
             }
             {
@@ -5617,6 +5820,29 @@ private:
             || expression.kind == ExpressionKind::BooleanLiteral
             || expression.kind == ExpressionKind::LogicLiteral
             || expression.kind == ExpressionKind::StringLiteral) {
+            if (language_ == frontend::Language::Vhdl2008
+                && expected_type != nullptr
+                && !expected_type->enumeration_literals.empty()) {
+                const auto ordinal =
+                    vhdl_enumeration_ordinal(
+                        expression, *expected_type);
+                if (!ordinal) {
+                    report(
+                        "FSIM-ELAB-VHENUM-001",
+                        "enumeration type '" + expected_type->spelling
+                            + "' has no literal '" + expression.text + "'",
+                        expression.span);
+                    return std::nullopt;
+                }
+                const auto destination = allocate_register(
+                    expected_width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant{
+                    destination,
+                    unsigned_value(
+                        static_cast<std::uint64_t>(*ordinal),
+                        expected_width)});
+                return destination;
+            }
             const auto literal =
                 literal_value(expression, expected_width, language_);
             if (!literal) {
@@ -7085,28 +7311,74 @@ private:
         }
         if (expression.kind == ExpressionKind::Binary && expression.operands.size() == 2) {
             const frontend::Type* binary_context_type = nullptr;
+            const frontend::Type* lhs_object_type =
+                expression.operands[0].kind
+                        == ExpressionKind::Identifier
+                    ? object_type(expression.operands[0].text)
+                    : nullptr;
+            const frontend::Type* rhs_object_type =
+                expression.operands[1].kind
+                        == ExpressionKind::Identifier
+                    ? object_type(expression.operands[1].text)
+                    : nullptr;
             if (language_ == frontend::Language::Vhdl2008
                 && (expression.text == "="
-                    || expression.text == "/=")) {
-                if (expression.operands[0].kind
-                        == ExpressionKind::Aggregate
-                    && expression.operands[1].kind
-                        == ExpressionKind::Identifier) {
-                    binary_context_type = object_type(
-                        expression.operands[1].text);
+                    || expression.text == "/="
+                    || expression.text == "<"
+                    || expression.text == "<="
+                    || expression.text == ">"
+                    || expression.text == ">=")) {
+                if (lhs_object_type != nullptr
+                    && !lhs_object_type
+                            ->enumeration_literals.empty()) {
+                    binary_context_type = lhs_object_type;
                 } else if (
-                    expression.operands[1].kind
-                        == ExpressionKind::Aggregate
-                    && expression.operands[0].kind
-                        == ExpressionKind::Identifier) {
-                    binary_context_type = object_type(
-                        expression.operands[0].text);
+                    rhs_object_type != nullptr
+                    && !rhs_object_type
+                            ->enumeration_literals.empty()) {
+                    binary_context_type = rhs_object_type;
+                } else if (
+                    expression.text == "="
+                    || expression.text == "/=") {
+                    if (expression.operands[0].kind
+                            == ExpressionKind::Aggregate) {
+                        binary_context_type = rhs_object_type;
+                    } else if (
+                        expression.operands[1].kind
+                            == ExpressionKind::Aggregate) {
+                        binary_context_type = lhs_object_type;
+                    }
+                    if (binary_context_type != nullptr
+                        && binary_context_type
+                            ->packed_members.empty()) {
+                        binary_context_type = nullptr;
+                    }
                 }
-                if (binary_context_type != nullptr
-                    && binary_context_type
-                        ->packed_members.empty()) {
-                    binary_context_type = nullptr;
-                }
+            }
+            const bool lhs_enumeration =
+                lhs_object_type != nullptr
+                && !lhs_object_type
+                        ->enumeration_literals.empty();
+            const bool rhs_enumeration =
+                rhs_object_type != nullptr
+                && !rhs_object_type
+                        ->enumeration_literals.empty();
+            const bool comparison =
+                expression.text == "="
+                || expression.text == "/="
+                || expression.text == "<"
+                || expression.text == "<="
+                || expression.text == ">"
+                || expression.text == ">=";
+            if (language_ == frontend::Language::Vhdl2008
+                && (lhs_enumeration || rhs_enumeration)
+                && !comparison) {
+                report(
+                    "FSIM-ELAB-VHENUM-003",
+                    "operator '" + expression.text
+                        + "' is not defined for VHDL enumeration values",
+                    expression.span);
+                return std::nullopt;
             }
             const auto contextual_width =
                 binary_context_type != nullptr
@@ -8629,6 +8901,23 @@ private:
                         == specialized.environment.end()) {
                         continue;
                     }
+                    const auto specialized_declaration =
+                        std::find_if(
+                            specialized.unit.parameters.begin(),
+                            specialized.unit.parameters.end(),
+                            [&](const auto& candidate) {
+                                return candidate.name
+                                        == declaration.name
+                                    && candidate.span.source_name
+                                        == declaration.span.source_name
+                                    && candidate.span.begin.offset
+                                        == declaration.span.begin.offset;
+                            });
+                    const auto& imported_type =
+                        specialized_declaration
+                                == specialized.unit.parameters.end()
+                            ? declaration.type
+                            : specialized_declaration->type;
                     const auto add_alias =
                         [&](std::string alias) {
                           const auto [owner, inserted] =
@@ -8656,12 +8945,14 @@ private:
                           }
                           imports.push_back({
                               std::move(alias),
-                              declaration.type,
+                              imported_type,
                               constant_expression(
                                   value->second,
                                   declaration.span,
-                                  declaration.type.domain,
-                                  frontend::Language::Vhdl2008),
+                                  imported_type.domain,
+                                  frontend::Language::Vhdl2008,
+                                  !imported_type
+                                       .enumeration_literals.empty()),
                               true,
                               declaration.span});
                         };
@@ -8884,13 +9175,45 @@ private:
                     return candidate.name == constant_name;
                 });
             if (declaration == package->parameters.end()) {
-                report(
-                    "FSIM-ELAB-PKG-010",
-                    "VHDL package '" + requested_library
-                        + "." + package_name
-                        + "' has no constant '"
-                        + constant_name + "'",
-                    reference_span);
+                const bool enumeration_literal =
+                    std::any_of(
+                        specialized_package->unit.type_aliases.begin(),
+                        specialized_package->unit.type_aliases.end(),
+                        [&](const auto& alias) {
+                            return std::find(
+                                       alias.type
+                                           .enumeration_literals.begin(),
+                                       alias.type
+                                           .enumeration_literals.end(),
+                                       constant_name)
+                                != alias.type
+                                       .enumeration_literals.end();
+                        });
+                if (!enumeration_literal) {
+                    report(
+                        "FSIM-ELAB-PKG-010",
+                        "VHDL package '" + requested_library
+                            + "." + package_name
+                            + "' has no constant or enumeration literal '"
+                            + constant_name + "'",
+                        reference_span);
+                }
+                if (enumeration_literal) {
+                    const auto package_source = std::string{
+                        frontend::physical_source(package->span)};
+                    if (dependencies.insert(package_source).second) {
+                        unit.source_dependencies.push_back(
+                            package_source);
+                    }
+                    for (const auto& dependency :
+                         specialized_package->unit
+                             .source_dependencies) {
+                        if (dependencies.insert(dependency).second) {
+                            unit.source_dependencies.push_back(
+                                dependency);
+                        }
+                    }
+                }
                 continue;
             }
             const auto value =
@@ -8900,14 +9223,32 @@ private:
                 == specialized_package->environment.end()) {
                 continue;
             }
+            const auto specialized_declaration =
+                std::find_if(
+                    specialized_package->unit.parameters.begin(),
+                    specialized_package->unit.parameters.end(),
+                    [&](const auto& candidate) {
+                        return candidate.name
+                                == declaration->name
+                            && candidate.span.source_name
+                                == declaration->span.source_name
+                            && candidate.span.begin.offset
+                                == declaration->span.begin.offset;
+                    });
+            const auto& imported_type =
+                specialized_declaration
+                        == specialized_package->unit.parameters.end()
+                    ? declaration->type
+                    : specialized_declaration->type;
             imports.push_back({
                 identifier,
-                declaration->type,
+                imported_type,
                 constant_expression(
                     value->second,
                     declaration->span,
-                    declaration->type.domain,
-                    frontend::Language::Vhdl2008),
+                    imported_type.domain,
+                    frontend::Language::Vhdl2008,
+                    !imported_type.enumeration_literals.empty()),
                 true,
                 declaration->span});
             const auto package_source = std::string{
@@ -9789,7 +10130,8 @@ private:
             if (resolved != result.parameters.end()) {
                 resolved->type = generic.type;
             }
-            if (generic.type.packed_range
+            if ((generic.type.packed_range
+                 && generic.type.enumeration_literals.empty())
                 || !generic.type.packed_members.empty()
                 || (generic.type.domain
                     != frontend::ValueDomain::Integer
@@ -10048,6 +10390,8 @@ private:
             declaration.type.packed_range,
             declaration.type.packed_members,
             declaration.type.integer_range,
+            declaration.type.nominal_type,
+            declaration.type.enumeration_literals,
             declaration.is_port,
             declaration.direction,
             declaration.span});
@@ -10179,6 +10523,34 @@ private:
                 "packed aggregate boundary '" + path + "."
                     + port.name
                     + "' requires a same-language scalar/vector wrapper",
+                source);
+            return;
+        }
+        const bool port_enumeration =
+            !port.type.enumeration_literals.empty();
+        const bool actual_enumeration =
+            !actual.enumeration_literals.empty();
+        if (cross_language
+            && (port_enumeration || actual_enumeration)) {
+            report(
+                "FSIM-ELAB-BIND-052",
+                "VHDL enumeration boundary '" + path + "."
+                    + port.name
+                    + "' requires a same-language scalar/vector wrapper",
+                source);
+            return;
+        }
+        if (!cross_language
+            && (port_enumeration || actual_enumeration)
+            && (!port_enumeration
+                || !actual_enumeration
+                || port.type.nominal_type
+                    != actual.nominal_type)) {
+            report(
+                "FSIM-ELAB-BIND-053",
+                "VHDL enumeration boundary '" + path + "."
+                    + port.name
+                    + "' requires the same nominal enumeration type",
                 source);
             return;
         }

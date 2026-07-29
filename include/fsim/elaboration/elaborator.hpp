@@ -171,6 +171,8 @@ struct SignalInfo {
     std::optional<frontend::PackedRange> packed_range;
     std::vector<frontend::PackedMember> packed_members;
     std::optional<frontend::IntegerRange> integer_range;
+    std::string nominal_type;
+    std::vector<std::string> enumeration_literals;
     bool is_port{};
     frontend::PortDirection direction{frontend::PortDirection::Unknown};
     frontend::SourceSpan declaration_span;

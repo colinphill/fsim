@@ -149,6 +149,15 @@ struct Type {
   // elaboration resolves the alias in the owning specialization.
   std::string named_type;
   SourceSpan named_type_span;
+  // Non-empty for a nominal VHDL type declaration. The identity follows
+  // copied/imported type views and is intentionally distinct from spelling,
+  // so two equally sized enumeration types never become assignment
+  // compatible by accident.
+  std::string nominal_type;
+  // Declaration-order spelling of a VHDL enumeration's literals. Identifier
+  // literals are canonicalized case-insensitively; character literals retain
+  // their quoted spelling. The ordinal is the vector index.
+  std::vector<std::string> enumeration_literals;
   // Non-empty for a bounded SystemVerilog packed struct or union. Nested
   // aggregates are intentionally excluded from the current representation.
   std::vector<PackedMember> packed_members;
@@ -187,6 +196,7 @@ struct EnumLiteralDeclaration {
 
 enum class TypeDeclarationKind {
   Alias,
+  VhdlEnumeration,
   VhdlRecord,
   VhdlSubtype,
   SystemVerilogTypedef,
@@ -196,9 +206,10 @@ struct TypeAliasDeclaration {
   std::string name;
   Type type;
   SourceSpan span;
-  // Non-empty only for a bounded SystemVerilog enum typedef. Values retain
-  // their declaration-order expressions while matching immutable local
-  // parameter declarations carry them through specialization.
+  // Non-empty for SystemVerilog enums and VHDL enumerations. Values retain
+  // declaration order and source spans. SystemVerilog matching immutable
+  // local parameters carry explicit values through specialization; VHDL
+  // literals remain contextual and use declaration-order ordinals.
   std::vector<EnumLiteralDeclaration> enum_literals;
   TypeDeclarationKind declaration_kind{
       TypeDeclarationKind::Alias};

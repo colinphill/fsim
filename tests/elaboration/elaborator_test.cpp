@@ -7616,6 +7616,253 @@ end architecture;
                     != std::string::npos;
         }));
 
+    const auto vhdl_enumeration_source =
+        fsim::frontend::parse_text(
+            "vhdl_enumeration_execution.vhd",
+            R"(
+package State_Types is
+  type State_T is (Idle, Load, Running, Done);
+  subtype State_Alias_T is State_T;
+  constant Initial_State : State_T := Load;
+  type Symbol_T is ('A', 'B', 'C');
+end package;
+
+use work.state_types.all;
+entity enumeration_execution is
+  generic (Reset_State : State_T := Initial_State);
+end entity;
+
+use work.state_types.all;
+architecture rtl of enumeration_execution is
+  signal current : State_Alias_T;
+  signal selected : State_T;
+  signal symbol : Symbol_T;
+  signal equal_result : boolean;
+  signal ordered_result : boolean;
+begin
+  drive : process
+    variable local_state : State_T := Reset_State;
+    variable local_symbol : Symbol_T := 'A';
+  begin
+    current <= local_state;
+    local_state := Running;
+    case local_state is
+      when Running =>
+        selected <= state_types.Done;
+      when others =>
+        selected <= Idle;
+    end case;
+    local_symbol := 'C';
+    symbol <= local_symbol;
+    wait;
+  end process;
+
+  equal_result <= current /= Done;
+  ordered_result <= current < Done;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_enumeration_source.ok());
+    const auto vhdl_enumeration_design =
+        fsim::elaboration::elaborate(
+            vhdl_enumeration_source.design,
+            "vhdl:work.enumeration_execution(rtl)");
+    if (!vhdl_enumeration_design.ok()) {
+      for (const auto& diagnostic :
+           vhdl_enumeration_design.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << " at "
+                  << diagnostic.span.begin.line << ":"
+                  << diagnostic.span.begin.column << '\n';
+      }
+    }
+    assert(vhdl_enumeration_design.ok());
+    const auto enum_current =
+        vhdl_enumeration_design.design->find_signal("current");
+    const auto enum_selected =
+        vhdl_enumeration_design.design->find_signal("selected");
+    const auto enum_symbol =
+        vhdl_enumeration_design.design->find_signal("symbol");
+    const auto enum_equal =
+        vhdl_enumeration_design.design->find_signal(
+            "equal_result");
+    const auto enum_ordered =
+        vhdl_enumeration_design.design->find_signal(
+            "ordered_result");
+    assert(
+        enum_current && enum_selected && enum_symbol
+        && enum_equal && enum_ordered);
+    const auto& enum_info =
+        vhdl_enumeration_design.design->signals().at(
+            *enum_current);
+    const std::vector<std::string> expected_state_literals{
+        "idle", "load", "running", "done"};
+    const std::vector<std::string> expected_symbol_literals{
+        "'A'", "'B'", "'C'"};
+    assert(
+        enum_info.width == 2
+        && enum_info.source_domain
+            == fsim::frontend::ValueDomain::Bit2
+        && !enum_info.nominal_type.empty()
+        && enum_info.enumeration_literals
+            == expected_state_literals);
+    const auto enum_process = std::find_if(
+        vhdl_enumeration_design.design->processes().begin(),
+        vhdl_enumeration_design.design->processes().end(),
+        [](const auto& process) {
+            return process.name.ends_with(".drive");
+        });
+    assert(
+        enum_process
+            != vhdl_enumeration_design.design->processes().end()
+        && enum_process->debug_locals.size() == 2
+        && enum_process->debug_locals[0].enumeration_literals
+            == enum_info.enumeration_literals
+        && enum_process->debug_locals[1].enumeration_literals
+            == expected_symbol_literals);
+    auto enum_interpreter =
+        vhdl_enumeration_design.design->create_interpreter();
+    assert(
+        enum_interpreter->signal_value(*enum_current)
+            .to_msb_string()
+        == "00");
+    const auto enum_run = enum_interpreter->run();
+    assert(enum_run.status == fsim::runtime::RunStatus::completed);
+    assert(
+        enum_interpreter->signal_value(*enum_current)
+                .to_msb_string()
+            == "01"
+        && enum_interpreter->signal_value(*enum_selected)
+                .to_msb_string()
+            == "11"
+        && enum_interpreter->signal_value(*enum_symbol)
+                .to_msb_string()
+            == "10"
+        && enum_interpreter->signal_value(*enum_equal)
+                .to_msb_string()
+            == "1"
+        && enum_interpreter->signal_value(*enum_ordered)
+                .to_msb_string()
+            == "1");
+
+    const auto invalid_vhdl_enumerations =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_enumerations.vhd",
+            R"(
+entity invalid_vhdl_enumerations is
+end entity;
+architecture rtl of invalid_vhdl_enumerations is
+  type First_T is (Low, High);
+  type Second_T is (Low, High);
+  signal first : First_T;
+  signal second : Second_T;
+begin
+  first <= second;
+  second <= Missing;
+  first <= first + first;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_enumerations.ok());
+    const auto rejected_vhdl_enumerations =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_enumerations.design,
+            "vhdl:work.invalid_vhdl_enumerations(rtl)");
+    assert(
+        !rejected_vhdl_enumerations.ok()
+        && has_diagnostic(
+            rejected_vhdl_enumerations,
+            "FSIM-ELAB-VHENUM-001")
+        && has_diagnostic(
+            rejected_vhdl_enumerations,
+            "FSIM-ELAB-VHENUM-002")
+        && has_diagnostic(
+            rejected_vhdl_enumerations,
+            "FSIM-ELAB-VHENUM-003"));
+
+    const auto enumeration_boundary_vhdl =
+        fsim::frontend::parse_text(
+            "enumeration_boundaries.vhd",
+            R"(
+package Enumeration_Boundary_Types is
+  type First_T is (Low, High);
+  type Second_T is (Low, High);
+end package;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Child is
+  port (Value : in First_T);
+end entity;
+architecture rtl of enumeration_child is
+begin
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Native_Parent is
+end entity;
+use work.enumeration_boundary_types.all;
+architecture rtl of enumeration_native_parent is
+  signal Actual : Second_T;
+begin
+  Child : entity work.Enumeration_Child(rtl)
+    port map (Value => Actual);
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Mixed_Parent is
+end entity;
+use work.enumeration_boundary_types.all;
+architecture rtl of enumeration_mixed_parent is
+  signal Actual : First_T;
+begin
+  Child : Foreign_Enumeration_Child
+    port map (Value => Actual);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(enumeration_boundary_vhdl.ok());
+    const auto rejected_native_enumeration_boundary =
+        fsim::elaboration::elaborate(
+            enumeration_boundary_vhdl.design,
+            "vhdl:work.enumeration_native_parent(rtl)");
+    assert(
+        !rejected_native_enumeration_boundary.ok()
+        && has_diagnostic(
+            rejected_native_enumeration_boundary,
+            "FSIM-ELAB-BIND-053"));
+
+    const auto enumeration_boundary_sv =
+        fsim::frontend::parse_text(
+            "foreign_enumeration_child.sv",
+            R"(
+module foreign_enumeration_child(input bit value);
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(enumeration_boundary_sv.ok());
+    auto mixed_enumeration_boundary =
+        enumeration_boundary_vhdl.design;
+    mixed_enumeration_boundary.units.insert(
+        mixed_enumeration_boundary.units.end(),
+        enumeration_boundary_sv.design.units.begin(),
+        enumeration_boundary_sv.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        enumeration_boundary_binding{
+            {
+                "enumeration_mixed_parent.child",
+                "sv:work.foreign_enumeration_child",
+                std::nullopt}};
+    const auto rejected_mixed_enumeration_boundary =
+        fsim::elaboration::elaborate(
+            mixed_enumeration_boundary,
+            "vhdl:work.enumeration_mixed_parent(rtl)",
+            enumeration_boundary_binding);
+    assert(
+        !rejected_mixed_enumeration_boundary.ok()
+        && has_diagnostic(
+            rejected_mixed_enumeration_boundary,
+            "FSIM-ELAB-BIND-052"));
+
     const auto invalid_vhdl_shift =
         fsim::frontend::parse_text(
             "invalid_vhdl_shift.vhd",

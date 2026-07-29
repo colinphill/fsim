@@ -289,7 +289,7 @@ class VhdlParser final : private detail::ParserBase {
       if (match_keyword("constant", true)) {
         parse_package_constant(unit, previous());
       } else if (match_keyword("type", true)) {
-        parse_record_type_declaration(unit, previous());
+        parse_type_declaration(unit, previous());
       } else if (match_keyword("subtype", true)) {
         parse_subtype_declaration(unit, previous());
       } else {
@@ -383,6 +383,8 @@ class VhdlParser final : private detail::ParserBase {
         parse_vhdl_ports(unit);
       } else if (match_keyword("generic", true)) {
         parse_vhdl_generics(unit, previous());
+      } else if (match_keyword("type", true)) {
+        parse_type_declaration(unit, previous());
       } else if (match_keyword("subtype", true)) {
         parse_subtype_declaration(unit, previous());
       } else {
@@ -736,7 +738,7 @@ class VhdlParser final : private detail::ParserBase {
       if (match_keyword("signal", true)) {
         parse_signal_declaration(unit.signals);
       } else if (match_keyword("type", true)) {
-        parse_record_type_declaration(unit, previous());
+        parse_type_declaration(unit, previous());
       } else if (match_keyword("subtype", true)) {
         parse_subtype_declaration(unit, previous());
       } else {
@@ -757,17 +759,19 @@ class VhdlParser final : private detail::ParserBase {
     return unit;
   }
 
-  void parse_record_type_declaration(
+  void parse_type_declaration(
       DesignUnit& unit, const Token& start) {
-    const auto name = expect_identifier("record type name");
+    const auto name = expect_identifier("type name");
     const auto canonical_name = vhdl_name(name.text);
-    if (vhdl_named_types_.contains(canonical_name)
+    const bool duplicate =
+        vhdl_named_types_.contains(canonical_name)
         || std::any_of(
             unit.type_aliases.begin(),
             unit.type_aliases.end(),
             [&](const TypeAliasDeclaration& declaration) {
               return declaration.name == canonical_name;
-            })) {
+            });
+    if (duplicate) {
       error(
           name,
           "FSIM-VHDL-SEM-036",
@@ -776,6 +780,109 @@ class VhdlParser final : private detail::ParserBase {
     }
     expect_keyword(
         "is", true, "FSIM-VHDL-PARSE-127");
+    if (match(TokenKind::LeftParen)) {
+      Type type;
+      type.spelling = canonical_name;
+      type.domain = ValueDomain::Bit2;
+      type.nominal_type =
+          start.span.source_name + ":"
+          + std::to_string(start.span.begin.offset) + ":"
+          + canonical_name;
+      std::vector<EnumLiteralDeclaration> literals;
+      std::unordered_set<std::string> literal_names;
+      while (!at_end()
+             && !at(TokenKind::RightParen)
+             && !at(TokenKind::Semicolon)) {
+        if (!at(TokenKind::Identifier)
+            && !at(TokenKind::CharacterLiteral)) {
+          error(
+              current(),
+              "FSIM-VHDL-PARSE-136",
+              "an enumeration literal must be an identifier or character "
+              "literal");
+          advance();
+        } else {
+          const auto literal = advance();
+          const auto literal_name =
+              literal.kind == TokenKind::Identifier
+                  ? vhdl_name(literal.text)
+                  : literal.text;
+          if (!literal_names.insert(literal_name).second) {
+            error(
+                literal,
+                "FSIM-VHDL-SEM-040",
+                "duplicate enumeration literal '" + literal_name + "'");
+          } else {
+            type.enumeration_literals.push_back(literal_name);
+            literals.push_back(EnumLiteralDeclaration{
+                literal_name,
+                Expression{
+                    ExpressionKind::IntegerLiteral,
+                    std::to_string(literals.size()),
+                    {},
+                    literal.span},
+                literal.span});
+          }
+        }
+        if (at(TokenKind::RightParen)) {
+          break;
+        }
+        if (!match(TokenKind::Comma)) {
+          error(
+              current(),
+              "FSIM-VHDL-PARSE-137",
+              "expected ',' between enumeration literals");
+          while (!at_end()
+                 && !at(TokenKind::Comma)
+                 && !at(TokenKind::RightParen)
+                 && !at(TokenKind::Semicolon)) {
+            advance();
+          }
+          (void)match(TokenKind::Comma);
+        } else if (at(TokenKind::RightParen)) {
+          error(
+              previous(),
+              "FSIM-VHDL-PARSE-138",
+              "an enumeration declaration cannot end with ','");
+        }
+      }
+      if (type.enumeration_literals.empty()) {
+        error(
+            name,
+            "FSIM-VHDL-PARSE-139",
+            "an enumeration type requires at least one literal");
+      }
+      expect(
+          TokenKind::RightParen,
+          "')' after enumeration literals",
+          "FSIM-VHDL-PARSE-140");
+      expect(
+          TokenKind::Semicolon,
+          "';' after enumeration type declaration",
+          "FSIM-VHDL-PARSE-141");
+
+      std::uint64_t maximum_ordinal =
+          type.enumeration_literals.empty()
+              ? 0
+              : type.enumeration_literals.size() - 1U;
+      std::uint64_t width = 1;
+      while (maximum_ordinal > 1U) {
+        ++width;
+        maximum_ordinal >>= 1U;
+      }
+      type.packed_range = PackedRange{
+          static_cast<std::int64_t>(width - 1U), 0, true};
+      if (!duplicate && !type.enumeration_literals.empty()) {
+        vhdl_named_types_.insert(canonical_name);
+        unit.type_aliases.push_back(TypeAliasDeclaration{
+            canonical_name,
+            std::move(type),
+            span_from(start, previous()),
+            std::move(literals),
+            TypeDeclarationKind::VhdlEnumeration});
+      }
+      return;
+    }
     if (!match_keyword("record", true)) {
       error(
           current(),
@@ -909,7 +1016,7 @@ class VhdlParser final : private detail::ParserBase {
           true};
     }
 
-    if (!vhdl_named_types_.contains(canonical_name)) {
+    if (!duplicate) {
       vhdl_named_types_.insert(canonical_name);
       unit.type_aliases.push_back(TypeAliasDeclaration{
           canonical_name,

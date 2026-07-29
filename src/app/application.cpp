@@ -3484,8 +3484,12 @@ class DebuggerSession final {
     }
     if (command[0] == "show" && command.size() == 2) {
       if (const auto signal = resolve_signal(command[1])) {
+        const auto& info =
+            simulation_.design().signals().at(signal->second);
         output_ << signal->first << " = "
-                << simulation_.read_signal(signal->second).to_msb_string();
+                << format_value(
+                       simulation_.read_signal(signal->second),
+                       info.enumeration_literals);
         if (simulation_.signal_is_forced(signal->second)) {
           output_ << " (forced)";
         }
@@ -3583,6 +3587,30 @@ class DebuggerSession final {
     bool& executing;
     ~ExecutionGuard() { executing = false; }
   };
+
+  [[nodiscard]] static std::string format_value(
+      const PackedLogic4& value,
+      const std::vector<std::string>& enumeration_literals) {
+    const auto bits = value.to_msb_string();
+    if (enumeration_literals.empty()
+        || value.width()
+            > std::numeric_limits<std::size_t>::digits) {
+      return bits;
+    }
+    std::size_t ordinal = 0;
+    for (std::size_t bit = 0; bit < value.width(); ++bit) {
+      const auto digit = value.get(bit);
+      if (digit == runtime::Logic4::one) {
+        ordinal |= std::size_t{1} << bit;
+      } else if (digit != runtime::Logic4::zero) {
+        return bits;
+      }
+    }
+    if (ordinal >= enumeration_literals.size()) {
+      return bits;
+    }
+    return enumeration_literals[ordinal] + " (" + bits + ")";
+  }
 
   [[nodiscard]] bool canonical_path(const std::string_view path) const {
     if (path == simulation_.design().top()) {
@@ -3731,8 +3759,12 @@ class DebuggerSession final {
         continue;
       }
       found = true;
+      const auto& info =
+          simulation_.design().signals().at(signal);
       output_ << path << " = "
-              << simulation_.read_signal(signal).to_msb_string();
+              << format_value(
+                     simulation_.read_signal(signal),
+                     info.enumeration_literals);
       if (simulation_.signal_is_forced(signal)) {
         output_ << " (forced)";
       }
@@ -3775,9 +3807,11 @@ class DebuggerSession final {
     for (std::size_t index = 0; index < process.debug_locals.size();
          ++index) {
       const auto& local = process.debug_locals[index];
+      const auto& value =
+          simulation_.read_process_local(process_id, index);
       output_ << local.name << " = "
-              << simulation_.read_process_local(
-                     process_id, index).to_msb_string()
+              << format_value(
+                     value, local.enumeration_literals)
               << '\n';
     }
   }

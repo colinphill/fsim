@@ -1696,6 +1696,95 @@ end architecture;
       "malformed and duplicate subtype declarations have stable diagnostics");
 }
 
+void test_vhdl_enumeration_declarations() {
+  const auto result = parse_text(
+      "enumeration_declarations.vhd",
+      R"(
+package State_Types is
+  type State_T is (Idle, RUNNING, 'A', '0');
+  subtype State_Alias_T is State_T;
+  constant Initial_State : State_T := Idle;
+end package;
+
+entity Enumeration_Endpoint is
+  type Local_Flag_T is (Clear, Set);
+end entity;
+
+architecture rtl of enumeration_endpoint is
+  type Phase_T is (Start, Middle, Finish);
+  signal Phase : Phase_T;
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      result.ok() && result.design.units.size() == 3,
+      "package, entity, and architecture enumeration declarations parse");
+  const auto& package = result.design.units[0];
+  require(
+      package.type_aliases.size() == 2
+          && package.type_aliases[0].declaration_kind
+              == TypeDeclarationKind::VhdlEnumeration
+          && package.type_aliases[0].type.domain
+              == ValueDomain::Bit2
+          && package.type_aliases[0].type.width() == 2
+          && !package.type_aliases[0].type.nominal_type.empty()
+          && package.type_aliases[0].type.enumeration_literals
+              == std::vector<std::string>{
+                  "idle", "running", "'A'", "'0'"},
+      "enumeration HIR retains nominal identity, literal spelling, and "
+      "minimum ordinal width");
+  require(
+      package.type_aliases[0].enum_literals.size() == 4
+          && package.type_aliases[0].enum_literals[2].name == "'A'"
+          && package.type_aliases[0].enum_literals[3].value.text == "3"
+          && package.type_aliases[1].declaration_kind
+              == TypeDeclarationKind::VhdlSubtype
+          && package.type_aliases[1].type.named_type == "state_t"
+          && package.parameters[0].type.named_type == "state_t",
+      "enumeration ordinals, aliases, and typed constants remain explicit");
+  require(
+      result.design.units[1].type_aliases[0].type.width() == 1
+          && result.design.units[2].type_aliases[0].type.width() == 2
+          && result.design.units[2].signals[0].type.named_type
+              == "phase_t",
+      "entity- and architecture-local enumeration types retain scope and "
+      "object references");
+
+  const auto invalid = parse_text(
+      "invalid_enumeration_declarations.vhd",
+      R"(
+entity invalid_enumeration_declarations is
+end entity;
+architecture rtl of invalid_enumeration_declarations is
+  type Empty_T is ();
+  type Duplicate_T is (Idle, IDLE);
+  type Trailing_T is (First,);
+  type Missing_Comma_T is (Left Right);
+  type DUPLICATE_T is (Other);
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const auto& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !invalid.ok()
+          && has_code("FSIM-VHDL-PARSE-137")
+          && has_code("FSIM-VHDL-PARSE-138")
+          && has_code("FSIM-VHDL-PARSE-139")
+          && has_code("FSIM-VHDL-SEM-040")
+          && has_code("FSIM-VHDL-SEM-036"),
+      "malformed and duplicate enumeration declarations have stable "
+      "diagnostics");
+}
+
 void test_exponentiation_expression_nodes() {
   const auto systemverilog = parse_text(
       "power.sv",
@@ -7531,6 +7620,7 @@ int main() {
     test_signed_type_and_expression_nodes();
     test_vhdl_runtime_integer_nodes();
     test_vhdl_subtype_declarations();
+    test_vhdl_enumeration_declarations();
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
     test_systemverilog_final_procedures();

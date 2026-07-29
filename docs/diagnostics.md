@@ -198,7 +198,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-124` | error | A VHDL delay mechanism appears anywhere other than immediately after `<=`. |
 | `FSIM-VHDL-PARSE-125` | error | `unaffected` is mixed with other elements instead of forming a complete waveform alternative. |
 | `FSIM-VHDL-PARSE-126` | error | A VHDL waveform is empty or lacks a value. |
-| `FSIM-VHDL-PARSE-127` | error | Expected `is` in a VHDL record type declaration. |
+| `FSIM-VHDL-PARSE-127` | error | Expected `is` in a VHDL type declaration. |
 | `FSIM-VHDL-PARSE-128` | error | Expected `:` after VHDL record element names. |
 | `FSIM-VHDL-PARSE-129` | error | Expected `;` after a VHDL record element declaration. |
 | `FSIM-VHDL-PARSE-130` | error | A bounded VHDL record declaration has no supported elements. |
@@ -207,6 +207,12 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-133` | error | A record aggregate association has no value or a trailing comma has no following association. |
 | `FSIM-VHDL-PARSE-134` | error | A VHDL subtype declaration is missing `is`. |
 | `FSIM-VHDL-PARSE-135` | error | A VHDL subtype declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-136` | error | A VHDL enumeration literal is neither an identifier nor a character literal. |
+| `FSIM-VHDL-PARSE-137` | error | A VHDL enumeration declaration is missing a comma between literals. |
+| `FSIM-VHDL-PARSE-138` | error | A VHDL enumeration declaration has a trailing comma. |
+| `FSIM-VHDL-PARSE-139` | error | A VHDL enumeration declaration contains no valid literals. |
+| `FSIM-VHDL-PARSE-140` | error | A VHDL enumeration declaration is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-141` | error | A VHDL enumeration declaration is missing its terminating semicolon. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -244,6 +250,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-037` | error | A VHDL record's optional end name does not match its declaration name. |
 | `FSIM-VHDL-SEM-038` | error | A positional record-aggregate association follows a named association. |
 | `FSIM-VHDL-SEM-039` | error | A record aggregate contains multiple `others` associations or does not place `others` last. |
+| `FSIM-VHDL-SEM-040` | error | A VHDL enumeration declares the same identifier or character literal more than once. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -693,6 +700,9 @@ therefore excluded.
 | `FSIM-ELAB-VHSUBTYPE-002` | error | A derived integer subtype constraint lies outside its resolved base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-003` | error | A packed index constraint is applied to a scalar, record, or otherwise nonarray base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-004` | error | A constrained packed-array subtype is constrained again. |
+| `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
+| `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
+| `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
@@ -773,6 +783,8 @@ therefore excluded.
 | `FSIM-ELAB-BIND-049` | error | A packed aggregate crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-050` | error | An elaboration binding names a resolver other than `std_logic` or `sv_wire`. |
 | `FSIM-ELAB-BIND-051` | error | Integer subtype ranges on a hierarchy boundary cannot guarantee a range-safe alias in the port's data-flow direction. |
+| `FSIM-ELAB-BIND-052` | error | A VHDL enumeration crosses a language boundary without a same-language scalar/vector wrapper. |
+| `FSIM-ELAB-BIND-053` | error | A same-language VHDL hierarchy boundary connects different nominal enumeration types. |
 
 ## Time, runtime, trace, and design cache
 

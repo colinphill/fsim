@@ -1821,6 +1821,36 @@ package-edit cache invalidation, fetched Boost.Context 1.91.0 and Tcl 9.0.4,
 SystemC, the strict native ABI, and every preceding feature batch. No CI state
 was inspected for this local gate.
 
+### Forty-first feature batch — VHDL user-defined enumeration types
+
+The planned ten implementation features are:
+
+1. Represent VHDL enumeration declarations explicitly in typed HIR with
+   nominal type identity, declaration-ordered literals, ordinals, and source
+   spans.
+2. Parse case-insensitive identifier and character enumeration literals in
+   package, entity, and architecture declarative regions.
+3. Diagnose empty, malformed, duplicate-literal, duplicate-type, and
+   unterminated enumeration declarations with stable diagnostic codes.
+4. Store enumeration values as the minimum-width two-state ordinal, default
+   objects to the first literal, and retain literal names for visibility.
+5. Resolve local, package-visible, and directly selected enumeration types
+   plus contextual overloaded literals without injecting untyped constants.
+6. Execute enumeration-typed constants, generics, ports, signals, variables,
+   initializers, assignments, and conditional alternatives while rejecting
+   literals without a usable type context.
+7. Execute equality, inequality, ordinal relational comparisons, and case or
+   selected choices with exact nominal type checking.
+8. Require exact nominal identity at same-language boundaries and retain
+   enumeration values behind scalar/vector wrappers at mixed-language
+   boundaries.
+9. Preserve hierarchy specialization, interpreter/LLVM O0/O2 equivalence,
+   debugger locals, VCD ordinals, cold/warm native caching, and package-edit
+   invalidation.
+10. Add focused positive, negative, frontend, elaboration, and application
+    evidence; update the VHDL feature matrix; then run, record, and push the
+    full local regression gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
