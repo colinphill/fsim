@@ -93,8 +93,11 @@ try {
     )
   }
 
-  Write-Host "Extracting LLVM TAR archive"
-  & tar.exe -xf $tarArchives[0].FullName -C $DestinationDirectory
+  Write-Host "Extracting LLVM TAR archive with 7-Zip"
+  & 7z.exe x `
+    $tarArchives[0].FullName `
+    "-o$DestinationDirectory" `
+    -y
 } finally {
   Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
   Remove-Item `
