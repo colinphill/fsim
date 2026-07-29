@@ -332,7 +332,22 @@ fsim_configure_library(fsim_runtime)
     fsim_elaboration
     STATIC
       src/elaboration/elaborated_design.cpp
-      src/elaboration/elaborator.cpp
+      src/elaboration/elaborate.cpp
+      src/elaboration/elaboration_analysis.cpp
+      src/elaboration/elaboration_constants.cpp
+      src/elaboration/elaboration_specialization.cpp
+      src/elaboration/elaboration_targets.cpp
+      src/elaboration/hierarchy_packages.cpp
+      src/elaboration/hierarchy_systemc.cpp
+      src/elaboration/hierarchy_types.cpp
+      src/elaboration/lowerer_assignment.cpp
+      src/elaboration/lowerer_control.cpp
+      src/elaboration/lowerer_expression.cpp
+      src/elaboration/lowerer_expression_binary.cpp
+      src/elaboration/lowerer_expression_system.cpp
+      src/elaboration/lowerer_expression_unary.cpp
+      src/elaboration/lowerer_process.cpp
+      src/elaboration/lowerer_types.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)

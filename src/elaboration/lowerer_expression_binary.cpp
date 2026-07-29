@@ -1,0 +1,614 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "elaborator_internal.hpp"
+
+namespace fsim::elaboration {
+using namespace runtime::simir;
+using namespace elaboration_detail;
+
+Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
+        const Expression& expression,
+        const std::size_t expected_width,
+        const frontend::Type*) {
+        if (expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2
+            && (expression.text == "&&"
+                || expression.text == "||")) {
+            const auto lhs_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            const auto rhs_width =
+                infer_width(expression.operands[1])
+                    .value_or(expected_width);
+            const auto lhs =
+                lower_expression(expression.operands[0], lhs_width);
+            const auto rhs =
+                lower_expression(expression.operands[1], rhs_width);
+            if (!lhs || !rhs) {
+                return std::nullopt;
+            }
+            const auto result_domain =
+                is_two_state_domain(register_domain(*lhs))
+                        && is_two_state_domain(register_domain(*rhs))
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            const auto destination =
+                allocate_register(1, result_domain);
+            process_.operations.emplace_back(LogicalBinary{
+                expression.text == "&&"
+                    ? LogicalBinaryOperator::logical_and
+                    : LogicalBinaryOperator::logical_or,
+                destination,
+                *lhs,
+                *rhs});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2
+            && (expression.text == "<<"
+                || expression.text == ">>"
+                || expression.text == "<<<"
+                || expression.text == ">>>"
+                || expression.text == "sll"
+                || expression.text == "srl"
+                || expression.text == "sla"
+                || expression.text == "sra"
+                || expression.text == "rol"
+                || expression.text == "ror")) {
+            auto effective_operator = expression.text;
+            std::optional<std::uint64_t> static_amount;
+            if (language_ == frontend::Language::Vhdl2008) {
+                const auto count =
+                    constant_index(expression.operands[1]);
+                if (count) {
+                    static_amount = index_distance(*count, 0);
+                }
+                if (count && *count < 0) {
+                    if (effective_operator == "sll") {
+                        effective_operator = "srl";
+                    } else if (effective_operator == "srl") {
+                        effective_operator = "sll";
+                    } else if (effective_operator == "sla") {
+                        effective_operator = "sra";
+                    } else if (effective_operator == "sra") {
+                        effective_operator = "sla";
+                    } else if (effective_operator == "rol") {
+                        effective_operator = "ror";
+                    } else if (effective_operator == "ror") {
+                        effective_operator = "rol";
+                    }
+                }
+            }
+            const auto value_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            auto amount_width =
+                infer_width(expression.operands[1])
+                    .value_or(expected_width);
+            if (static_amount) {
+                auto magnitude = *static_amount;
+                std::size_t required_width = 1;
+                while (magnitude > 1) {
+                    ++required_width;
+                    magnitude >>= 1U;
+                }
+                amount_width =
+                    std::max(amount_width, required_width);
+            }
+            const auto value =
+                lower_expression(
+                    expression.operands[0], value_width);
+            std::optional<RegisterId> amount;
+            if (static_amount) {
+                amount = allocate_register(
+                    amount_width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant{
+                    *amount,
+                    unsigned_value(*static_amount, amount_width)});
+            } else {
+                amount = lower_expression(
+                    expression.operands[1], amount_width);
+            }
+            if (!value || !amount) {
+                return std::nullopt;
+            }
+            const bool signed_amount =
+                language_ == frontend::Language::Vhdl2008
+                && !static_amount.has_value();
+            if (signed_amount
+                && register_domain(*amount)
+                    != frontend::ValueDomain::Integer) {
+                report(
+                    "FSIM-ELAB-070",
+                    "a dynamic VHDL packed shift or rotate count must "
+                    "have the base integer subtype",
+                    expression.operands[1].span);
+                return std::nullopt;
+            }
+            const auto value_domain = register_domain(*value);
+            const auto result_domain =
+                value_domain == frontend::ValueDomain::Logic9
+                    ? frontend::ValueDomain::Logic9
+                    : is_two_state_domain(value_domain)
+                        && is_two_state_domain(register_domain(*amount))
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            const auto destination =
+                allocate_register(
+                    register_width(*value), result_domain);
+            process_.operations.emplace_back(Shift{
+                effective_operator == ">>"
+                    || effective_operator == "srl"
+                    || (effective_operator == ">>>"
+                        && !is_signed_expression(
+                            expression.operands[0]))
+                    ? ShiftOperator::logical_right
+                    : effective_operator == ">>>"
+                            || effective_operator == "sra"
+                        ? ShiftOperator::arithmetic_right
+                        : effective_operator == "sla"
+                            ? ShiftOperator::arithmetic_left
+                        : effective_operator == "rol"
+                            ? ShiftOperator::rotate_left
+                        : effective_operator == "ror"
+                            ? ShiftOperator::rotate_right
+                        : ShiftOperator::logical_left,
+                destination,
+                *value,
+                *amount,
+                signed_amount});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Binary && expression.operands.size() == 2) {
+            const frontend::Type* binary_context_type = nullptr;
+            const auto expression_object_type =
+                [&](const Expression& operand)
+                    -> const frontend::Type* {
+                  if (operand.kind == ExpressionKind::Identifier) {
+                      return object_type(operand.text);
+                  }
+                  if ((operand.kind == ExpressionKind::Index
+                       || operand.kind == ExpressionKind::Slice)
+                      && !operand.operands.empty()
+                      && operand.operands[0].kind
+                          == ExpressionKind::Identifier) {
+                      return object_type(
+                          operand.operands[0].text);
+                  }
+                  return nullptr;
+                };
+            const frontend::Type* lhs_object_type =
+                expression_object_type(
+                    expression.operands[0]);
+            const frontend::Type* rhs_object_type =
+                expression_object_type(
+                    expression.operands[1]);
+            const auto* lhs_enumeration_type =
+                enumeration_expression_type(
+                    expression.operands[0]);
+            const auto* rhs_enumeration_type =
+                enumeration_expression_type(
+                    expression.operands[1]);
+            if (language_ == frontend::Language::Vhdl2008
+                && (expression.text == "="
+                    || expression.text == "/="
+                    || expression.text == "<"
+                    || expression.text == "<="
+                    || expression.text == ">"
+                    || expression.text == ">=")) {
+                if (lhs_enumeration_type != nullptr) {
+                    binary_context_type =
+                        lhs_enumeration_type;
+                } else if (rhs_enumeration_type != nullptr) {
+                    binary_context_type =
+                        rhs_enumeration_type;
+                } else if (
+                    expression.text == "="
+                    || expression.text == "/=") {
+                    if (expression.operands[0].kind
+                            == ExpressionKind::Aggregate) {
+                        binary_context_type = rhs_object_type;
+                    } else if (
+                        expression.operands[1].kind
+                            == ExpressionKind::Aggregate) {
+                        binary_context_type = lhs_object_type;
+                    }
+                    if (binary_context_type != nullptr
+                        && binary_context_type
+                            ->packed_members.empty()) {
+                        binary_context_type = nullptr;
+                    }
+                }
+            }
+            if (language_ == frontend::Language::Vhdl2008) {
+                const bool lhs_array =
+                    lhs_object_type != nullptr
+                    && lhs_object_type->vhdl_array.has_value();
+                const bool rhs_array =
+                    rhs_object_type != nullptr
+                    && rhs_object_type->vhdl_array.has_value();
+                if (lhs_array || rhs_array) {
+                    if (expression.text != "="
+                        && expression.text != "/=") {
+                        report(
+                            "FSIM-ELAB-VHARRAY-007",
+                            "operator '" + expression.text
+                                + "' is not implemented for VHDL array "
+                                  "values",
+                            expression.span);
+                        return std::nullopt;
+                    }
+                    if (lhs_object_type != nullptr
+                        && rhs_object_type != nullptr
+                        && (!lhs_array || !rhs_array
+                            || lhs_object_type->nominal_type
+                                != rhs_object_type->nominal_type)) {
+                        report(
+                            "FSIM-ELAB-VHARRAY-006",
+                            "VHDL array values require the same nominal "
+                            "type in equality expressions",
+                            expression.span);
+                        return std::nullopt;
+                    }
+                    binary_context_type =
+                        lhs_array
+                            ? lhs_object_type
+                            : rhs_object_type;
+                }
+            }
+            const bool lhs_enumeration =
+                lhs_enumeration_type != nullptr;
+            const bool rhs_enumeration =
+                rhs_enumeration_type != nullptr;
+            const bool comparison =
+                expression.text == "="
+                || expression.text == "/="
+                || expression.text == "<"
+                || expression.text == "<="
+                || expression.text == ">"
+                || expression.text == ">=";
+            if (language_ == frontend::Language::Vhdl2008
+                && (lhs_enumeration || rhs_enumeration)
+                && !comparison) {
+                report(
+                    "FSIM-ELAB-VHENUM-003",
+                    "operator '" + expression.text
+                        + "' is not defined for VHDL enumeration values",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto contextual_width =
+                binary_context_type != nullptr
+                    ? binary_context_type->width()
+                    : std::nullopt;
+            const auto width =
+                contextual_width
+                    ? static_cast<std::size_t>(*contextual_width)
+                    : infer_width(expression)
+                          .value_or(expected_width);
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.text == "**") {
+                const auto exponent =
+                    constant_index(expression.operands[1]);
+                if (!exponent || *exponent < 0) {
+                    report(
+                        "FSIM-ELAB-091",
+                        "bounded VHDL integer exponentiation requires "
+                        "a locally static nonnegative exponent",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+            }
+            const auto lhs = lower_expression(
+                expression.operands[0],
+                width,
+                binary_context_type);
+            const auto rhs = lower_expression(
+                expression.operands[1],
+                width,
+                binary_context_type);
+            if (!lhs || !rhs) {
+                return std::nullopt;
+            }
+            if (register_width(*lhs) != register_width(*rhs)) {
+                report(
+                    "FSIM-ELAB-049",
+                    "binary operator operands have different widths ("
+                        + std::to_string(register_width(*lhs)) + " and "
+                        + std::to_string(register_width(*rhs))
+                        + "); implicit sizing is not executable in this slice",
+                    expression.span);
+                return std::nullopt;
+            }
+            std::optional<BinaryOperator> operation;
+            bool invert_result = false;
+            if (expression.text == "&" || expression.text == "and"
+                || expression.text == "nand") {
+                operation = BinaryOperator::bit_and;
+                invert_result = expression.text == "nand";
+            } else if (expression.text == "|" || expression.text == "or"
+                       || expression.text == "nor") {
+                operation = BinaryOperator::bit_or;
+                invert_result = expression.text == "nor";
+            } else if (expression.text == "^" || expression.text == "xor"
+                       || expression.text == "xnor"
+                       || expression.text == "~^"
+                       || expression.text == "^~") {
+                operation = BinaryOperator::bit_xor;
+                invert_result =
+                    expression.text == "xnor"
+                    || expression.text == "~^"
+                    || expression.text == "^~";
+            } else if (expression.text == "+") {
+                operation = BinaryOperator::add_unsigned;
+            } else if (expression.text == "-") {
+                operation = BinaryOperator::subtract_unsigned;
+            } else if (expression.text == "*") {
+                operation = BinaryOperator::multiply_unsigned;
+            } else if (expression.text == "**") {
+                operation = BinaryOperator::power_unsigned;
+            } else if (expression.text == "/") {
+                operation = BinaryOperator::divide_unsigned;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "%") {
+                operation = BinaryOperator::modulo_unsigned;
+            } else if (
+                language_ == frontend::Language::Vhdl2008
+                && (expression.text == "mod"
+                    || expression.text == "rem")) {
+                operation = BinaryOperator::modulo_unsigned;
+            } else if (
+                expression.text == "=" || expression.text == "==") {
+                operation =
+                    language_ == frontend::Language::Vhdl2008
+                        ? BinaryOperator::case_equal
+                        : BinaryOperator::equal;
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && (expression.text == "==="
+                    || expression.text == "!==")) {
+                operation = BinaryOperator::case_equal;
+                invert_result = expression.text == "!==";
+            } else if (
+                language_ == frontend::Language::SystemVerilog2017
+                && (expression.text == "==?"
+                    || expression.text == "!=?")) {
+                operation = BinaryOperator::wildcard_equal;
+                invert_result = expression.text == "!=?";
+            } else if (
+                language_ != frontend::Language::Vhdl2008
+                && expression.text == "!=") {
+                operation = BinaryOperator::not_equal;
+            } else if (
+                language_ == frontend::Language::Vhdl2008
+                && expression.text == "/=") {
+                operation = BinaryOperator::case_equal;
+                invert_result = true;
+            } else if (expression.text == "<") {
+                operation = BinaryOperator::less_unsigned;
+            } else if (expression.text == "<=") {
+                operation = BinaryOperator::less_equal_unsigned;
+            } else if (expression.text == ">") {
+                operation = BinaryOperator::greater_unsigned;
+            } else if (expression.text == ">=") {
+                operation = BinaryOperator::greater_equal_unsigned;
+            }
+            if (!operation) {
+                report(
+                    "FSIM-ELAB-042",
+                    "operator '" + expression.text + "' is parsed but not executable yet",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto relational =
+                *operation == BinaryOperator::less_unsigned
+                || *operation
+                    == BinaryOperator::less_equal_unsigned
+                || *operation == BinaryOperator::greater_unsigned
+                || *operation
+                    == BinaryOperator::greater_equal_unsigned;
+            const auto arithmetic =
+                *operation == BinaryOperator::add_unsigned
+                || *operation == BinaryOperator::subtract_unsigned
+                || *operation == BinaryOperator::multiply_unsigned
+                || *operation == BinaryOperator::power_unsigned
+                || *operation == BinaryOperator::divide_unsigned
+                || *operation == BinaryOperator::modulo_unsigned;
+            const bool lhs_signed =
+                is_signed_expression(expression.operands[0]);
+            const bool rhs_signed =
+                is_signed_expression(expression.operands[1]);
+            const bool signed_operation =
+                lhs_signed && rhs_signed;
+            const bool contextual_integer =
+                expression.operands[0].kind
+                    == ExpressionKind::IntegerLiteral
+                || expression.operands[1].kind
+                    == ExpressionKind::IntegerLiteral;
+            if (language_ == frontend::Language::Vhdl2008
+                && (arithmetic || relational)
+                && lhs_signed != rhs_signed
+                && !contextual_integer) {
+                report(
+                    relational ? "FSIM-ELAB-066"
+                               : "FSIM-ELAB-067",
+                    "mixed signed/unsigned VHDL operands require an "
+                    "explicit conversion",
+                    expression.span);
+                return std::nullopt;
+            }
+            if (signed_operation) {
+                if (*operation == BinaryOperator::add_unsigned) {
+                    operation = BinaryOperator::add_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::subtract_unsigned) {
+                    operation = BinaryOperator::subtract_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::multiply_unsigned) {
+                    operation = BinaryOperator::multiply_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::power_unsigned) {
+                    operation = BinaryOperator::power_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::divide_unsigned) {
+                    operation = BinaryOperator::divide_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::modulo_unsigned) {
+                    operation =
+                        language_
+                                    == frontend::Language::Vhdl2008
+                                && expression.text == "mod"
+                            ? BinaryOperator::modulo_signed
+                            : BinaryOperator::remainder_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::less_unsigned) {
+                    operation = BinaryOperator::less_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::less_equal_unsigned) {
+                    operation =
+                        BinaryOperator::less_equal_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::greater_unsigned) {
+                    operation = BinaryOperator::greater_signed;
+                } else if (
+                    *operation
+                    == BinaryOperator::greater_equal_unsigned) {
+                    operation =
+                        BinaryOperator::greater_equal_signed;
+                }
+            }
+            const auto scalar_result =
+                *operation == BinaryOperator::equal
+                || *operation == BinaryOperator::case_equal
+                || *operation == BinaryOperator::wildcard_equal
+                || *operation == BinaryOperator::not_equal
+                || *operation == BinaryOperator::less_unsigned
+                || *operation
+                    == BinaryOperator::less_equal_unsigned
+                || *operation == BinaryOperator::greater_unsigned
+                || *operation
+                    == BinaryOperator::greater_equal_unsigned
+                || *operation == BinaryOperator::less_signed
+                || *operation
+                    == BinaryOperator::less_equal_signed
+                || *operation == BinaryOperator::greater_signed
+                || *operation
+                    == BinaryOperator::greater_equal_signed;
+            const auto result_width =
+                scalar_result ? std::size_t{1}
+                              : register_width(*lhs);
+            auto result_domain =
+                scalar_result
+                    && language_
+                        == frontend::Language::Vhdl2008
+                ? frontend::ValueDomain::Boolean
+                : language_
+                            == frontend::Language::Vhdl2008
+                        && register_domain(*lhs)
+                            == frontend::ValueDomain::Boolean
+                        && register_domain(*rhs)
+                            == frontend::ValueDomain::Boolean
+                    ? frontend::ValueDomain::Boolean
+                : is_two_state_domain(register_domain(*lhs))
+                        && is_two_state_domain(register_domain(*rhs))
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            if (!scalar_result
+                && language_ == frontend::Language::Vhdl2008
+                && (register_domain(*lhs)
+                        == frontend::ValueDomain::Integer
+                    || register_domain(*rhs)
+                        == frontend::ValueDomain::Integer)) {
+                result_domain = frontend::ValueDomain::Integer;
+            }
+            if (!scalar_result
+                && (register_domain(*lhs)
+                        == frontend::ValueDomain::Logic9
+                    || register_domain(*rhs)
+                        == frontend::ValueDomain::Logic9)) {
+                result_domain = frontend::ValueDomain::Logic9;
+            }
+            const auto destination =
+                allocate_register(result_width, result_domain);
+            if (result_domain == frontend::ValueDomain::Integer
+                && arithmetic) {
+                if (!validate_static_integer_assignment(
+                        expression.operands[0],
+                        std::nullopt,
+                        expression.operands[0].span)
+                    || !validate_static_integer_assignment(
+                        expression.operands[1],
+                        std::nullopt,
+                        expression.operands[1].span)) {
+                    return std::nullopt;
+                }
+                auto integer_operation =
+                    IntegerBinaryOperator::add;
+                switch (*operation) {
+                case BinaryOperator::add_signed:
+                case BinaryOperator::add_unsigned:
+                    integer_operation = IntegerBinaryOperator::add;
+                    break;
+                case BinaryOperator::subtract_signed:
+                case BinaryOperator::subtract_unsigned:
+                    integer_operation = IntegerBinaryOperator::subtract;
+                    break;
+                case BinaryOperator::multiply_signed:
+                case BinaryOperator::multiply_unsigned:
+                    integer_operation = IntegerBinaryOperator::multiply;
+                    break;
+                case BinaryOperator::power_signed:
+                case BinaryOperator::power_unsigned:
+                    integer_operation = IntegerBinaryOperator::power;
+                    break;
+                case BinaryOperator::divide_signed:
+                case BinaryOperator::divide_unsigned:
+                    integer_operation = IntegerBinaryOperator::divide;
+                    break;
+                case BinaryOperator::remainder_signed:
+                    integer_operation = IntegerBinaryOperator::remainder;
+                    break;
+                case BinaryOperator::modulo_signed:
+                case BinaryOperator::modulo_unsigned:
+                    integer_operation =
+                        expression.text == "rem"
+                            ? IntegerBinaryOperator::remainder
+                            : IntegerBinaryOperator::modulo;
+                    break;
+                default:
+                    break;
+                }
+                process_.operations.emplace_back(IntegerBinary{
+                    integer_operation,
+                    destination,
+                    *lhs,
+                    *rhs});
+            } else {
+                process_.operations.emplace_back(
+                    Binary{*operation, destination, *lhs, *rhs});
+            }
+            if (invert_result) {
+                const auto inverted =
+                    allocate_register(result_width, result_domain);
+                process_.operations.emplace_back(
+                    UnaryNot{inverted, destination});
+                return inverted;
+            }
+            return destination;
+        }
+        report(
+            "FSIM-ELAB-043",
+            "expression form is parsed but not executable yet",
+            expression.span);
+        return std::nullopt;
+        }
+
+} // namespace fsim::elaboration

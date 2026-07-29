@@ -1,0 +1,1014 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "elaborator_internal.hpp"
+
+namespace fsim::elaboration::elaboration_detail {
+
+
+
+void substitute_parameters(
+    frontend::VariableDeclaration& declaration,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics,
+    const frontend::Language language) {
+    substitute_parameters(
+        declaration.type,
+        environment,
+        domains,
+        diagnostics,
+        language);
+    if (declaration.initializer) {
+        substitute_parameters(
+            *declaration.initializer,
+            environment,
+            domains,
+            language);
+    }
+}
+
+
+
+void substitute_parameters(
+    std::vector<Statement>& statements,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics,
+    const frontend::Language language) {
+    for (auto& statement : statements) {
+        substitute_parameters(
+            statement.target, environment, domains, language);
+        substitute_parameters(
+            statement.value, environment, domains, language);
+        for (auto& element : statement.vhdl_waveform) {
+            substitute_parameters(
+                element.value, environment, domains, language);
+        }
+        substitute_parameters(
+            statement.condition, environment, domains, language);
+        substitute_parameters(
+            statement.loop_initial, environment, domains, language);
+        substitute_parameters(
+            statement.loop_limit, environment, domains, language);
+        for (auto& declaration : statement.declarations) {
+            substitute_parameters(
+                declaration,
+                environment,
+                domains,
+                diagnostics,
+                language);
+        }
+        for (auto& alternative : statement.case_alternatives) {
+            for (auto& choice : alternative.choices) {
+                substitute_parameters(
+                    choice, environment, domains, language);
+            }
+            substitute_parameters(
+                alternative.statements,
+                environment,
+                domains,
+                diagnostics,
+                language);
+        }
+        auto statement_environment = environment;
+        auto statement_domains = domains;
+        if (statement.kind == StatementKind::Loop) {
+            statement_environment.erase(statement.loop_variable);
+            statement_domains.erase(statement.loop_variable);
+        }
+        substitute_parameters(
+            statement.statements,
+            statement_environment,
+            statement_domains,
+            diagnostics,
+            language);
+        substitute_parameters(
+            statement.else_statements,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
+}
+
+
+
+void substitute_parameters(
+    std::vector<frontend::Instance>& instances,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language) {
+    for (auto& instance : instances) {
+        for (auto& override : instance.parameter_overrides) {
+            substitute_parameters(
+                override.value, environment, domains, language);
+        }
+        for (auto& connection : instance.connections) {
+            substitute_parameters(
+                connection.value, environment, domains, language);
+        }
+    }
+}
+
+
+
+void substitute_parameters(
+    frontend::GenerateBody& body,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    std::vector<Diagnostic>& diagnostics) {
+    for (auto& constant : body.constants) {
+        substitute_parameters(
+            constant.type,
+            environment,
+            domains,
+            diagnostics,
+            language);
+        substitute_parameters(
+            constant.default_value,
+            environment,
+            domains,
+            language);
+    }
+    for (auto& signal : body.signals) {
+        substitute_parameters(
+            signal.type,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
+    substitute_parameters(
+        body.concurrent_statements,
+        environment,
+        domains,
+        diagnostics,
+        language);
+    for (auto& process : body.processes) {
+        for (auto& variable : process.variables) {
+            substitute_parameters(
+                variable,
+                environment,
+                domains,
+                diagnostics,
+                language);
+        }
+        substitute_parameters(
+            process.statements,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
+    substitute_parameters(
+        body.instances, environment, domains, language);
+    substitute_parameters(
+        body.generate_regions,
+        environment,
+        domains,
+        language,
+        diagnostics);
+}
+
+
+
+void substitute_parameters(
+    std::vector<frontend::GenerateRegion>& generates,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    std::vector<Diagnostic>& diagnostics) {
+    for (auto& generate : generates) {
+        substitute_parameters(
+            generate.initial, environment, domains, language);
+        auto body_environment = environment;
+        auto body_domains = domains;
+        if (generate.kind == frontend::GenerateKind::Iterative) {
+            body_environment.erase(generate.variable);
+            body_domains.erase(generate.variable);
+        }
+        substitute_parameters(
+            generate.condition,
+            body_environment,
+            body_domains,
+            language);
+        substitute_parameters(
+            generate.iteration,
+            body_environment,
+            body_domains,
+            language);
+        substitute_parameters(
+            generate.then_body,
+            body_environment,
+            body_domains,
+            language,
+            diagnostics);
+        substitute_parameters(
+            generate.else_body,
+            body_environment,
+            body_domains,
+            language,
+            diagnostics);
+        for (auto& alternative : generate.alternatives) {
+            for (auto& choice : alternative.choices) {
+                substitute_parameters(
+                    choice.left,
+                    body_environment,
+                    body_domains,
+                    language);
+                if (choice.right) {
+                    substitute_parameters(
+                        *choice.right,
+                        body_environment,
+                        body_domains,
+                        language);
+                }
+            }
+            substitute_parameters(
+                alternative.body,
+                body_environment,
+                body_domains,
+                language,
+                diagnostics);
+        }
+    }
+}
+
+
+
+void collect_qualified_identifiers(
+    const Expression& expression,
+    QualifiedIdentifierMap& identifiers) {
+    if (expression.kind == ExpressionKind::Identifier
+        && (expression.text.find('.') != std::string::npos
+            || expression.text.find("::")
+                != std::string::npos)) {
+        identifiers.try_emplace(
+            expression.text, expression.span);
+    }
+    for (const auto& association :
+         expression.aggregate_choice_expressions) {
+        for (const auto& choice : association) {
+            collect_qualified_identifiers(
+                choice, identifiers);
+        }
+    }
+    for (const auto& operand : expression.operands) {
+        collect_qualified_identifiers(operand, identifiers);
+    }
+}
+
+
+
+void collect_qualified_identifiers(
+    const frontend::Type& type,
+    QualifiedIdentifierMap& identifiers) {
+    if (!type.named_type.empty()
+        && type.named_type.find("::") != std::string::npos) {
+        identifiers.try_emplace(
+            type.named_type, type.named_type_span);
+    }
+    for (const auto& member : type.packed_members) {
+        if (!member.packed_range_expression) {
+            continue;
+        }
+        collect_qualified_identifiers(
+            member.packed_range_expression->left,
+            identifiers);
+        collect_qualified_identifiers(
+            member.packed_range_expression->right,
+            identifiers);
+    }
+    if (type.integer_range_expression) {
+        collect_qualified_identifiers(
+            type.integer_range_expression->left, identifiers);
+        collect_qualified_identifiers(
+            type.integer_range_expression->right, identifiers);
+    }
+    if (type.integer_base_range_expression) {
+        collect_qualified_identifiers(
+            type.integer_base_range_expression->left,
+            identifiers);
+        collect_qualified_identifiers(
+            type.integer_base_range_expression->right,
+            identifiers);
+    }
+    const auto collect_discrete_range =
+        [&](const std::optional<
+                frontend::DiscreteRangeExpression>& range) {
+          if (!range) {
+              return;
+          }
+          collect_qualified_identifiers(
+              range->left, identifiers);
+          collect_qualified_identifiers(
+              range->right, identifiers);
+        };
+    collect_discrete_range(type.discrete_range_expression);
+    collect_discrete_range(type.enumeration_range_expression);
+    collect_discrete_range(
+        type.enumeration_base_range_expression);
+    if (!type.packed_range_expression) {
+        return;
+    }
+    collect_qualified_identifiers(
+        type.packed_range_expression->left, identifiers);
+    collect_qualified_identifiers(
+        type.packed_range_expression->right, identifiers);
+}
+
+
+
+void collect_qualified_identifiers(
+    const std::vector<Statement>& statements,
+    QualifiedIdentifierMap& identifiers) {
+    for (const auto& statement : statements) {
+        collect_qualified_identifiers(
+            statement.target, identifiers);
+        collect_qualified_identifiers(
+            statement.value, identifiers);
+        for (const auto& element : statement.vhdl_waveform) {
+            collect_qualified_identifiers(
+                element.value, identifiers);
+        }
+        collect_qualified_identifiers(
+            statement.condition, identifiers);
+        for (const auto& declaration : statement.declarations) {
+            collect_qualified_identifiers(
+                declaration.type, identifiers);
+            if (declaration.initializer) {
+                collect_qualified_identifiers(
+                    *declaration.initializer, identifiers);
+            }
+        }
+        for (const auto& alternative :
+             statement.case_alternatives) {
+            for (const auto& choice : alternative.choices) {
+                collect_qualified_identifiers(
+                    choice, identifiers);
+            }
+            collect_qualified_identifiers(
+                alternative.statements, identifiers);
+        }
+        collect_qualified_identifiers(
+            statement.statements, identifiers);
+        collect_qualified_identifiers(
+            statement.else_statements, identifiers);
+    }
+}
+
+
+
+void collect_qualified_identifiers(
+    const frontend::GenerateBody& body,
+    QualifiedIdentifierMap& identifiers) {
+    for (const auto& constant : body.constants) {
+        collect_qualified_identifiers(
+            constant.type, identifiers);
+        collect_qualified_identifiers(
+            constant.default_value, identifiers);
+    }
+    for (const auto& signal : body.signals) {
+        collect_qualified_identifiers(signal.type, identifiers);
+    }
+    collect_qualified_identifiers(
+        body.concurrent_statements, identifiers);
+    for (const auto& process : body.processes) {
+        for (const auto& variable : process.variables) {
+            collect_qualified_identifiers(
+                variable.type, identifiers);
+            if (variable.initializer) {
+                collect_qualified_identifiers(
+                    *variable.initializer, identifiers);
+            }
+        }
+        collect_qualified_identifiers(
+            process.statements, identifiers);
+    }
+    for (const auto& instance : body.instances) {
+        for (const auto& override :
+             instance.parameter_overrides) {
+            collect_qualified_identifiers(
+                override.value, identifiers);
+        }
+        for (const auto& connection : instance.connections) {
+            collect_qualified_identifiers(
+                connection.value, identifiers);
+        }
+    }
+    collect_qualified_identifiers(
+        body.generate_regions, identifiers);
+}
+
+
+
+void collect_qualified_identifiers(
+    const std::vector<frontend::GenerateRegion>& generates,
+    QualifiedIdentifierMap& identifiers) {
+    for (const auto& generate : generates) {
+        collect_qualified_identifiers(
+            generate.initial, identifiers);
+        collect_qualified_identifiers(
+            generate.condition, identifiers);
+        collect_qualified_identifiers(
+            generate.iteration, identifiers);
+        collect_qualified_identifiers(
+            generate.then_body, identifiers);
+        collect_qualified_identifiers(
+            generate.else_body, identifiers);
+        for (const auto& alternative :
+             generate.alternatives) {
+            for (const auto& choice : alternative.choices) {
+                collect_qualified_identifiers(
+                    choice.left, identifiers);
+                if (choice.right) {
+                    collect_qualified_identifiers(
+                        *choice.right, identifiers);
+                }
+            }
+            collect_qualified_identifiers(
+                alternative.body, identifiers);
+        }
+    }
+}
+
+
+
+QualifiedIdentifierMap qualified_identifiers(
+    const DesignUnit& unit) {
+    QualifiedIdentifierMap result;
+    for (const auto& alias : unit.type_aliases) {
+        collect_qualified_identifiers(alias.type, result);
+    }
+    for (const auto& parameter : unit.parameters) {
+        collect_qualified_identifiers(parameter.type, result);
+        collect_qualified_identifiers(
+            parameter.default_value, result);
+    }
+    for (const auto& port : unit.ports) {
+        collect_qualified_identifiers(port.type, result);
+    }
+    for (const auto& signal : unit.signals) {
+        collect_qualified_identifiers(signal.type, result);
+    }
+    collect_qualified_identifiers(
+        unit.concurrent_statements, result);
+    for (const auto& process : unit.processes) {
+        for (const auto& variable : process.variables) {
+            collect_qualified_identifiers(variable.type, result);
+            if (variable.initializer) {
+                collect_qualified_identifiers(
+                    *variable.initializer, result);
+            }
+        }
+        collect_qualified_identifiers(process.statements, result);
+    }
+    for (const auto& instance : unit.instances) {
+        for (const auto& override :
+             instance.parameter_overrides) {
+            collect_qualified_identifiers(
+                override.value, result);
+        }
+        for (const auto& connection : instance.connections) {
+            collect_qualified_identifiers(
+                connection.value, result);
+        }
+    }
+    collect_qualified_identifiers(unit.generate_regions, result);
+    return result;
+}
+
+
+
+void qualify_generated_expression(
+    Expression& expression,
+    const GeneratedNameEnvironment& names) {
+    if (expression.kind == ExpressionKind::Identifier) {
+        if (const auto found = names.find(expression.text);
+            found != names.end()) {
+            expression.text = found->second;
+        }
+    }
+    for (auto& association :
+         expression.aggregate_choice_expressions) {
+        for (auto& choice : association) {
+            qualify_generated_expression(choice, names);
+        }
+    }
+    for (auto& operand : expression.operands) {
+        qualify_generated_expression(operand, names);
+    }
+}
+
+
+
+void qualify_generated_statement(
+    Statement& statement,
+    const GeneratedNameEnvironment& names) {
+    auto body_names = names;
+    for (auto& declaration : statement.declarations) {
+        if (declaration.initializer) {
+            qualify_generated_expression(
+                *declaration.initializer, body_names);
+        }
+        body_names.erase(declaration.name);
+    }
+    qualify_generated_expression(statement.target, body_names);
+    qualify_generated_expression(statement.value, body_names);
+    for (auto& element : statement.vhdl_waveform) {
+        qualify_generated_expression(element.value, body_names);
+    }
+    qualify_generated_expression(statement.condition, body_names);
+    for (auto& sensitivity : statement.sensitivities) {
+        if (const auto found = body_names.find(sensitivity.signal);
+            found != body_names.end()) {
+            sensitivity.signal = found->second;
+        }
+    }
+    for (auto& alternative : statement.case_alternatives) {
+        for (auto& choice : alternative.choices) {
+            qualify_generated_expression(choice, body_names);
+        }
+        qualify_generated_statements(
+            alternative.statements, body_names);
+    }
+    qualify_generated_statements(statement.statements, body_names);
+    qualify_generated_statements(
+        statement.else_statements, body_names);
+}
+
+
+
+void qualify_generated_statements(
+    std::vector<Statement>& statements,
+    const GeneratedNameEnvironment& names) {
+    for (auto& statement : statements) {
+        qualify_generated_statement(statement, names);
+    }
+}
+
+
+
+void qualify_generated_process(
+    frontend::Process& process,
+    const GeneratedNameEnvironment& names,
+    const std::string_view scope) {
+    process.name = process.name.empty()
+        ? std::string{scope}
+        : generated_scope(scope, process.name);
+    auto process_names = names;
+    for (auto& variable : process.variables) {
+        if (variable.initializer) {
+            qualify_generated_expression(
+                *variable.initializer, process_names);
+        }
+        process_names.erase(variable.name);
+    }
+    for (auto& sensitivity : process.sensitivities) {
+        if (const auto found = process_names.find(sensitivity.signal);
+            found != process_names.end()) {
+            sensitivity.signal = found->second;
+        }
+    }
+    qualify_generated_statements(process.statements, process_names);
+}
+
+
+
+void qualify_generated_instance(
+    frontend::Instance& instance,
+    const GeneratedNameEnvironment& names,
+    const std::string_view scope) {
+    instance.name = generated_scope(scope, instance.name);
+    for (auto& override : instance.parameter_overrides) {
+        qualify_generated_expression(override.value, names);
+    }
+    for (auto& connection : instance.connections) {
+        qualify_generated_expression(connection.value, names);
+    }
+}
+
+
+
+void evaluate_generated_constants(
+    frontend::GenerateBody& body,
+    ConstantEnvironment& environment,
+    ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    std::vector<Diagnostic>& diagnostics) {
+    for (auto& constant : body.constants) {
+        substitute_parameters(
+            constant.type,
+            environment,
+            domains,
+            diagnostics,
+            language);
+        substitute_parameters(
+            constant.default_value,
+            environment,
+            domains,
+            language);
+        std::string error;
+        auto value = evaluate_constant_expression(
+            constant.default_value, environment, error);
+        if (!value) {
+            diagnostics.push_back({
+                "FSIM-ELAB-GEN-011",
+                "cannot evaluate generated "
+                    + std::string{
+                        language == frontend::Language::Vhdl2008
+                            ? "constant"
+                            : "parameter"}
+                    + " '" + constant.name + "': " + error,
+                constant.span});
+            value = 0;
+        }
+        const bool exceeds_word =
+            constant.type.packed_range
+            && constant.type.packed_range->width() > 64;
+        if (exceeds_word) {
+            diagnostics.push_back({
+                "FSIM-ELAB-GEN-012",
+                "generated "
+                    + std::string{
+                        language == frontend::Language::Vhdl2008
+                            ? "constant"
+                            : "parameter"}
+                    + " '" + constant.name
+                    + "' exceeds the bounded 64-bit integral width",
+                constant.span});
+        } else if (language == frontend::Language::Vhdl2008) {
+            const auto& spelling = constant.type.spelling;
+            const bool violates_natural =
+                spelling == "natural" && *value < 0;
+            const bool violates_positive =
+                spelling == "positive" && *value <= 0;
+            const bool violates_boolean =
+                constant.type.domain == frontend::ValueDomain::Boolean
+                && *value != 0 && *value != 1;
+            const bool violates_bit =
+                constant.type.domain == frontend::ValueDomain::Bit2
+                && *value != 0 && *value != 1;
+            if (violates_natural || violates_positive
+                || violates_boolean || violates_bit) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-012",
+                    "generated constant '" + constant.name
+                        + "' value is outside subtype '"
+                        + constant.type.spelling + "'",
+                    constant.span});
+            }
+        }
+        environment[constant.name] = *value;
+        domains[constant.name] = ConstantTypeInfo{
+            constant.type.domain,
+            language == frontend::Language::Vhdl2008
+                && !constant.type.enumeration_literals.empty(),
+            constant.type.nominal_type};
+    }
+}
+
+
+
+void append_generated_body(
+    frontend::GenerateBody body,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    const std::string_view scope,
+    const GeneratedNameEnvironment& visible_names,
+    DesignUnit& unit,
+    std::vector<Diagnostic>& diagnostics) {
+    auto body_environment = environment;
+    auto body_domains = domains;
+    evaluate_generated_constants(
+        body,
+        body_environment,
+        body_domains,
+        language,
+        diagnostics);
+    substitute_parameters(
+        body,
+        body_environment,
+        body_domains,
+        language,
+        diagnostics);
+    auto body_names = visible_names;
+    for (auto& signal : body.signals) {
+        const auto local_name = signal.name;
+        signal.name = generated_scope(scope, local_name);
+        body_names[local_name] = signal.name;
+        unit.signals.push_back(std::move(signal));
+    }
+    for (auto& statement : body.concurrent_statements) {
+        qualify_generated_statement(statement, body_names);
+        unit.concurrent_statements.push_back(std::move(statement));
+    }
+    for (auto& process : body.processes) {
+        qualify_generated_process(process, body_names, scope);
+        unit.processes.push_back(std::move(process));
+    }
+    for (auto& instance : body.instances) {
+        qualify_generated_instance(instance, body_names, scope);
+        unit.instances.push_back(std::move(instance));
+    }
+    expand_generate_regions(
+        body.generate_regions,
+        body_environment,
+        body_domains,
+        language,
+        scope,
+        body_names,
+        unit,
+        diagnostics);
+}
+
+
+
+void expand_generate_regions(
+    const std::vector<frontend::GenerateRegion>& generates,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const frontend::Language language,
+    const std::string_view parent_scope,
+    const GeneratedNameEnvironment& visible_names,
+    DesignUnit& unit,
+    std::vector<Diagnostic>& diagnostics) {
+    for (const auto& generate : generates) {
+        if (generate.kind == frontend::GenerateKind::StaticBlock) {
+            append_generated_body(
+                generate.then_body,
+                environment,
+                domains,
+                language,
+                generated_scope(
+                    parent_scope, generate.then_scope),
+                visible_names,
+                unit,
+                diagnostics);
+            continue;
+        }
+        if (generate.kind == frontend::GenerateKind::Selection) {
+            std::string error;
+            const auto selector = evaluate_constant_expression(
+                generate.condition, environment, error);
+            if (!selector) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-008",
+                    "cannot evaluate selection-generate expression: "
+                        + error,
+                    generate.condition.span});
+                continue;
+            }
+            const frontend::GenerateAlternative* selected = nullptr;
+            const frontend::GenerateAlternative* default_alternative =
+                nullptr;
+            bool invalid = false;
+            struct ChoiceInterval {
+                std::int64_t lower;
+                std::int64_t upper;
+            };
+            std::vector<ChoiceInterval> choice_intervals;
+            for (const auto& alternative : generate.alternatives) {
+                if (alternative.is_default) {
+                    if (default_alternative != nullptr) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-GEN-010",
+                            "selection generate has more than one "
+                            "default alternative",
+                            alternative.span});
+                        invalid = true;
+                    } else {
+                        default_alternative = &alternative;
+                    }
+                    continue;
+                }
+                bool alternative_matches = false;
+                for (const auto& choice : alternative.choices) {
+                    error.clear();
+                    const auto left = evaluate_constant_expression(
+                        choice.left, environment, error);
+                    if (!left) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-GEN-009",
+                            "cannot evaluate selection-generate choice: "
+                                + error,
+                            choice.span});
+                        invalid = true;
+                        continue;
+                    }
+                    auto right = left;
+                    if (choice.right) {
+                        error.clear();
+                        right = evaluate_constant_expression(
+                            *choice.right, environment, error);
+                        if (!right) {
+                            diagnostics.push_back({
+                                "FSIM-ELAB-GEN-009",
+                                "cannot evaluate selection-generate range "
+                                "bound: " + error,
+                                choice.span});
+                            invalid = true;
+                            continue;
+                        }
+                    }
+                    const bool empty_range =
+                        choice.right
+                        && (choice.descending
+                                ? *left < *right
+                                : *left > *right);
+                    if (empty_range) {
+                        continue;
+                    }
+                    const ChoiceInterval interval{
+                        std::min(*left, *right),
+                        std::max(*left, *right)};
+                    const bool overlaps =
+                        std::any_of(
+                            choice_intervals.begin(),
+                            choice_intervals.end(),
+                            [&](const ChoiceInterval& existing) {
+                                return interval.lower
+                                           <= existing.upper
+                                    && existing.lower
+                                           <= interval.upper;
+                            });
+                    if (overlaps) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-GEN-010",
+                            "selection generate has overlapping "
+                            "constant choices or ranges",
+                            choice.span});
+                        invalid = true;
+                    } else {
+                        choice_intervals.push_back(interval);
+                    }
+                    alternative_matches =
+                        alternative_matches
+                        || (interval.lower <= *selector
+                            && *selector <= interval.upper);
+                }
+                if (alternative_matches) {
+                    if (selected != nullptr) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-GEN-010",
+                            "selection generate has overlapping matching "
+                            "alternatives",
+                            alternative.span});
+                        invalid = true;
+                    } else {
+                        selected = &alternative;
+                    }
+                }
+            }
+            if (invalid) {
+                continue;
+            }
+            if (selected == nullptr) {
+                selected = default_alternative;
+            }
+            if (selected != nullptr) {
+                append_generated_body(
+                    selected->body,
+                    environment,
+                    domains,
+                    language,
+                    generated_scope(
+                        parent_scope, selected->scope),
+                    visible_names,
+                    unit,
+                    diagnostics);
+            }
+            continue;
+        }
+        if (generate.kind == frontend::GenerateKind::Iterative) {
+            if (environment.contains(generate.variable)) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-007",
+                    "nested loop-generate variable '"
+                        + generate.variable
+                        + "' shadows an enclosing constant; this "
+                          "bounded slice requires a distinct name",
+                    generate.span});
+                continue;
+            }
+            std::string error;
+            const auto initial = evaluate_constant_expression(
+                generate.initial, environment, error);
+            if (!initial) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GEN-002",
+                    "cannot evaluate loop-generate initial value: "
+                        + error,
+                    generate.initial.span});
+                continue;
+            }
+            auto iteration_environment = environment;
+            auto iteration_domains = domains;
+            iteration_domains[generate.variable] =
+                frontend::ValueDomain::Integer;
+            std::int64_t value = *initial;
+            constexpr std::size_t maximum_iterations = 1'000'000;
+            std::size_t count = 0;
+            while (true) {
+                iteration_environment[generate.variable] = value;
+                error.clear();
+                const auto condition = evaluate_constant_expression(
+                    generate.condition,
+                    iteration_environment,
+                    error);
+                if (!condition) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-003",
+                        "cannot evaluate loop-generate condition: "
+                            + error,
+                        generate.condition.span});
+                    break;
+                }
+                if (*condition == 0) {
+                    break;
+                }
+                if (count++ == maximum_iterations) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-004",
+                        "loop generate exceeds the bounded "
+                        "1,000,000-iteration elaboration limit",
+                        generate.span});
+                    break;
+                }
+                auto body = generate.then_body;
+                substitute_parameters(
+                    body,
+                    iteration_environment,
+                    iteration_domains,
+                    language,
+                    diagnostics);
+                const auto indexed_scope =
+                    generate.then_scope + "["
+                    + std::to_string(value) + "]";
+                append_generated_body(
+                    std::move(body),
+                    iteration_environment,
+                    iteration_domains,
+                    language,
+                    generated_scope(parent_scope, indexed_scope),
+                    visible_names,
+                    unit,
+                    diagnostics);
+                error.clear();
+                const auto next = evaluate_constant_expression(
+                    generate.iteration,
+                    iteration_environment,
+                    error);
+                if (!next) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-005",
+                        "cannot evaluate loop-generate iteration: "
+                            + error,
+                        generate.iteration.span});
+                    break;
+                }
+                if (*next == value) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-006",
+                        "loop-generate iteration does not advance",
+                        generate.iteration.span});
+                    break;
+                }
+                value = *next;
+            }
+            continue;
+        }
+        std::string error;
+        const auto condition = evaluate_constant_expression(
+            generate.condition, environment, error);
+        if (!condition) {
+            diagnostics.push_back({
+                "FSIM-ELAB-GEN-001",
+                "cannot evaluate conditional generate expression: "
+                    + error,
+                generate.condition.span});
+            continue;
+        }
+        const bool selected_then = *condition != 0;
+        const auto& selected_body =
+            selected_then
+            ? generate.then_body
+            : generate.else_body;
+        const auto& local_scope =
+            selected_then
+            ? generate.then_scope
+            : generate.else_scope;
+        append_generated_body(
+            selected_body,
+            environment,
+            domains,
+            language,
+            generated_scope(parent_scope, local_scope),
+            visible_names,
+            unit,
+            diagnostics);
+    }
+}
+
+} // namespace fsim::elaboration::elaboration_detail
