@@ -1794,7 +1794,7 @@ The planned ten implementation features are:
     V1-VH-01/V1-VH-02/V1-VH-04/V1-VH-05 documentation, then run, record, and
     push the full local regression gate.
 
-All ten implementation features are complete in the checkpoint 40 worktree.
+All ten implementation features are complete in feature commit `2df6808`.
 Typed HIR distinguishes VHDL subtype declarations from records and
 SystemVerilog typedefs while retaining the unresolved base indication and
 derived constraint. The parser admits package, entity, and architecture
@@ -1809,6 +1809,17 @@ signedness, layout, or debug metadata. The focused three-specialization
 application proves two differently sized instances, range-safe integer ports,
 record aggregates, interpreter/LLVM O0/O2 equality, debugger locals, VCD,
 cold/warm native reuse, and transitive package-edit invalidation.
+
+After feature commit `2df6808`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 39 tests in 89.36 seconds on 2026-07-29. The
+gate includes subtype parser recovery, declaration/scoping/constraint
+diagnostics, package constants and scalar generics, entity-header versus
+entity-declarative visibility, two differently sized child specializations,
+range-safe integer hierarchy aliases, scalar/vector/record execution,
+interpreter/LLVM O0/O2 exact values, debugger-local reads, VCD,
+package-edit cache invalidation, fetched Boost.Context 1.91.0 and Tcl 9.0.4,
+SystemC, the strict native ABI, and every preceding feature batch. No CI state
+was inspected for this local gate.
 
 ## v1 release condition
 
