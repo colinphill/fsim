@@ -1448,8 +1448,25 @@ The planned ten implementation features are:
     cache, and VHDL interpreter/LLVM O0/O2/VCD evidence before the full local
     regression and push gate.
 
-This batch is in progress. Focused tests remain the default until its
-ten-feature regression boundary.
+All ten implementation features are complete in feature commit `84e7ce5`.
+The bounded VHDL base `integer` subtype now executes as a signed 32-bit
+two-state port, signal, or process variable with left-bound default
+initialization, compatible hierarchy aliasing, and in-range signed expression
+behavior. Dynamic base-integer counts reach all six packed VHDL shift/rotate
+operators with negative reversal in both the arbitrary-width interpreter and
+LLVM O0/O2. Focused parser, unsupported-subtype/non-integer-count diagnostic,
+mixed VHDL/SystemVerilog boundary, wide runtime, LLVM truth-table,
+signed-count cache-identity, and interpreter/LLVM/VCD/cold-warm application
+tests pass. Checked integer overflow, explicit scalar ranges, and runtime
+`natural`/`positive` enforcement remain explicitly documented gaps.
+
+After feature commit `84e7ce5`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 34 tests in 86.87 seconds on 2026-07-28. The
+gate includes fetched Boost.Context 1.91.0, fetched Tcl 9.0.4 and relocation,
+SystemC plug-in/fiber/datatype coverage, LLVM/C ABI tests,
+interpreter/LLVM differentials, VCD, cache, debugger-facing application tests,
+the new VHDL integer-shift target, and all preceding feature batches. No CI
+state was inspected for this local gate.
 
 ## v1 release condition
 
