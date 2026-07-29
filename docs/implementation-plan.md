@@ -8,11 +8,14 @@ evidence-backed progress of the current repository. It complements the
 [feature matrix](feature-matrix.md), which tracks individual language and
 runtime features.
 
-Last updated: 2026-07-28.
+Last updated: 2026-07-29.
 
 The repository is currently a pre-alpha architecture vertical slice. It is not
 the fsim v1 release, and a milestone is not complete merely because its
 interfaces or test scaffolding exist.
+
+The concise entry point for a new implementation session is the
+[v1 resume handoff](v1-resume.md).
 
 ## Status definitions
 

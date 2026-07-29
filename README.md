@@ -643,6 +643,7 @@ fixtures and Windows execution evidence remain open.
 ## Design documents
 
 - [Architecture](docs/architecture.md)
+- [v1 resume handoff](docs/v1-resume.md)
 - [Implementation plan and progress](docs/implementation-plan.md)
 - [Deterministic cross-language semantics](docs/cross-language-semantics.md)
 - [Diagnostic code catalog](docs/diagnostics.md)
