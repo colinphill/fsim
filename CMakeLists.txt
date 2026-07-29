@@ -383,6 +383,26 @@ target_include_directories(
 )
 
 add_library(
+  fsim_systemc_support
+  STATIC
+    src/systemc/systemc_api.cpp
+    src/systemc/systemc_core.cpp
+    src/systemc/systemc_foreign.cpp
+)
+add_library(fsim::systemc_support ALIAS fsim_systemc_support)
+fsim_configure_library(fsim_systemc_support)
+target_include_directories(
+  fsim_systemc_support
+  PUBLIC
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+)
+target_link_libraries(
+  fsim_systemc_headers
+  INTERFACE fsim_systemc_support
+)
+
+add_library(
   fsim_systemc
   STATIC
     src/systemc/hierarchy.cpp
@@ -395,6 +415,12 @@ add_library(
 )
 add_library(fsim::systemc ALIAS fsim_systemc)
 fsim_configure_library(fsim_systemc)
+target_compile_definitions(
+  fsim_systemc
+  PRIVATE
+    FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH="$<TARGET_FILE:fsim_systemc_support>"
+    FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}fsim_systemc_support${CMAKE_STATIC_LIBRARY_SUFFIX}"
+)
 target_link_libraries(
   fsim_systemc
   PUBLIC
@@ -598,6 +624,10 @@ install(
     include/fsim/version.hpp
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim"
 )
+install(
+  DIRECTORY include/fsim/systemc/
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/systemc"
+)
 if(FSIM_COMMAND_TARGETS)
   install(
     TARGETS ${FSIM_COMMAND_TARGETS}
@@ -617,7 +647,7 @@ if(FSIM_WITH_BUNDLED_TCL)
   )
 endif()
 install(
-  TARGETS fsim_api
+  TARGETS fsim_api fsim_systemc_support
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"

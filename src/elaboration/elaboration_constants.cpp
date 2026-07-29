@@ -3,6 +3,19 @@
 
 namespace fsim::elaboration::elaboration_detail {
 
+ConstantTypeInfo::ConstantTypeInfo() = default;
+
+ConstantTypeInfo::ConstantTypeInfo(
+        const frontend::ValueDomain value)
+    : domain(value) {}
+
+ConstantTypeInfo::ConstantTypeInfo(
+        const frontend::ValueDomain value,
+        const bool enumeration,
+        std::string nominal)
+    : domain(value),
+      vhdl_enumeration(enumeration),
+      nominal_type(std::move(nominal)) {}
 
 
 [[nodiscard]] bool is_two_state_domain(

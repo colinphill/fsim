@@ -2430,6 +2430,43 @@ checkpoint with the interpreter/JIT differentials, SystemC, Tcl 9.0.4, native
 API, cache, debugger, VCD, and mixed-language coverage green. No CI state was
 inspected.
 
+Checkpoint 5 decomposes the elaborator into independently compiled constant
+evaluation, semantic analysis/generate expansion, specialization, target
+selection, package visibility, hierarchy/type construction, SystemC hierarchy,
+process lowering, assignment/control lowering, expression-family lowering, and
+type-inference units. The private elaborator header contains state layouts,
+method/function declarations, and only the visitor templates whose concrete
+call-site types require definitions in the header.
+
+The former 14,173-line implementation is gone. Its largest replacement is the
+1,779-line constant-evaluation unit; process lowering is 1,433 lines and
+hierarchy/type construction is 1,432 lines. The former 2,403-line expression
+method is a small ordered dispatcher over primary/selection, unary/attribute,
+system-function, and binary implementations, preserving the original
+diagnostic and side-effect order. Focused warnings-as-errors compilation,
+elaboration tests, and the permanent source-budget test pass.
+
+Checkpoint 6 completes the refactor program. The installed `<systemc>`
+umbrella is now four lines and routes to responsibility-oriented core,
+channel, datatype, marshalling, and plug-in headers. Concrete event, wait,
+module lifecycle, primitive-channel, hierarchy-scope, and HDL-child behavior
+is compiled in `fsim_systemc_support`; only width/type-generic channel,
+datatype, marshalling, and factory behavior remains in installed headers.
+Direct CMake consumers link the support archive transitively, generated
+plug-ins link it explicitly, its contents participate in the plug-in cache
+key, and the configured installed archive is used when the build-tree archive
+is unavailable.
+
+The temporary source-budget allowlist is empty. All 214 authored C/C++ source,
+header, and test files satisfy the 2,000-line hard limit; the repository
+maximum is the 1,998-line LLVM process coordinator, and the largest unavoidable
+SystemC template header is 1,507 lines. Focused SystemC header, C ABI, plug-in,
+plug-in compiler/cache, datatype application, elaboration, and line-budget
+tests pass. The final exact LLVM 22.1.8 warnings-as-errors Release build passed
+all 42 tests in 96.58 seconds on 2026-07-29, including the full application
+integration, interpreter/JIT differential, mixed-language, SystemC, Tcl 9.0.4,
+native API, debugger, VCD, and cache coverage. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

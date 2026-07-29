@@ -3,6 +3,13 @@
 
 namespace fsim::elaboration::elaboration_detail {
 
+std::string generated_scope(
+    const std::string_view parent_scope,
+    const std::string_view local_scope) {
+    return parent_scope.empty()
+        ? std::string{local_scope}
+        : std::string{parent_scope} + "." + std::string{local_scope};
+}
 
 
 void substitute_parameters(

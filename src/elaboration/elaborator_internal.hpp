@@ -114,16 +114,12 @@ struct ConstantTypeInfo {
     bool vhdl_enumeration{};
     std::string nominal_type;
 
-    ConstantTypeInfo() = default;
-    ConstantTypeInfo(const frontend::ValueDomain value)
-        : domain(value) {}
+    ConstantTypeInfo();
+    ConstantTypeInfo(frontend::ValueDomain value);
     ConstantTypeInfo(
-        const frontend::ValueDomain value,
-        const bool enumeration,
-        std::string nominal = {})
-        : domain(value),
-          vhdl_enumeration(enumeration),
-          nominal_type(std::move(nominal)) {}
+        frontend::ValueDomain value,
+        bool enumeration,
+        std::string nominal = {});
 };
 
 using ConstantDomainEnvironment =
@@ -357,11 +353,7 @@ void visit_declared_types(
 
 std::string generated_scope(
     const std::string_view parent_scope,
-    const std::string_view local_scope) {
-    return parent_scope.empty()
-        ? std::string{local_scope}
-        : std::string{parent_scope} + "." + std::string{local_scope};
-}
+    const std::string_view local_scope);
 
 using GeneratedNameEnvironment =
     std::unordered_map<std::string, std::string>;

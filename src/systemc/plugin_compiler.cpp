@@ -17,6 +17,22 @@ std::string_view to_string(const HostToolchain toolchain) noexcept {
 std::optional<PluginCompilePlan> plan_plugin_compile(
     const PluginCompileRequest& request,
     diagnostic::Engine& diagnostics) {
+    auto effective_settings = request.settings;
+#if defined(FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH)
+    auto support_library =
+        std::filesystem::path{FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH};
+#if defined(FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH)
+    std::error_code support_error;
+    if (!std::filesystem::is_regular_file(
+            support_library, support_error)) {
+        support_library =
+            FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH;
+    }
+#endif
+    effective_settings.libraries.insert(
+        effective_settings.libraries.begin(),
+        support_library.string());
+#endif
     std::error_code error;
     const auto working_directory = effective_working_directory(request, error);
     if (error || working_directory.empty()) {
@@ -59,15 +75,17 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     }
 
     std::vector<std::filesystem::path> includes;
-    includes.reserve(request.settings.include_directories.size());
-    for (const auto& include : request.settings.include_directories) {
+    includes.reserve(effective_settings.include_directories.size());
+    for (const auto& include : effective_settings.include_directories) {
         includes.push_back(make_absolute(include, working_directory));
     }
 
     const auto compiler_name =
-        request.settings.compiler.empty() ? default_compiler() : request.settings.compiler;
+        effective_settings.compiler.empty()
+            ? default_compiler()
+            : effective_settings.compiler;
     const auto toolchain = infer_toolchain(compiler_name);
-    if (!validate_options(request.settings, toolchain, diagnostics)) {
+    if (!validate_options(effective_settings, toolchain, diagnostics)) {
         return std::nullopt;
     }
     const auto resolved_compiler = resolve_executable(compiler_name, working_directory);
@@ -88,18 +106,20 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
 #endif
     add_compiler_identity(key_builder, compiler_name, resolved_compiler);
     add_paths_to_key(key_builder, "include", includes);
-    add_sequence_to_key(key_builder, "define", request.settings.defines);
-    add_sequence_to_key(key_builder, "compile-option", request.settings.compile_options);
-    add_sequence_to_key(key_builder, "link-option", request.settings.link_options);
-    add_sequence_to_key(key_builder, "library", request.settings.libraries);
+    add_sequence_to_key(key_builder, "define", effective_settings.defines);
+    add_sequence_to_key(
+        key_builder, "compile-option", effective_settings.compile_options);
+    add_sequence_to_key(
+        key_builder, "link-option", effective_settings.link_options);
+    add_sequence_to_key(key_builder, "library", effective_settings.libraries);
     // Raw compiler/linker options can reference response files, plug-ins,
     // profiles, sysroots, forced includes, or other inputs with
     // toolchain-specific spelling. Keep supporting the literal argv contract,
     // but never claim a persistent hit unless all inputs came through the
     // structured manifest fields.
     bool cacheable =
-        request.settings.compile_options.empty()
-        && request.settings.link_options.empty();
+        effective_settings.compile_options.empty()
+        && effective_settings.link_options.empty();
     key_builder.add("source.count", std::to_string(sources.size()));
     for (std::size_t index = 0; index < sources.size(); ++index) {
         if (!key_builder.add_file(
@@ -119,14 +139,14 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
             resolved_compiler,
             sources,
             includes,
-            request.settings,
+            effective_settings,
             working_directory,
             cache_directory,
             cacheable,
             diagnostics)
         || !add_linked_library_contents_to_key(
             key_builder,
-            request.settings.libraries,
+            effective_settings.libraries,
             working_directory,
             cacheable,
             diagnostics)) {
@@ -162,7 +182,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
         resolved_compiler,
         sources,
         includes,
-        request.settings,
+        effective_settings,
         plan.build_path,
         working_directory,
         plan.intermediate_paths);
