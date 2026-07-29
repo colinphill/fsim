@@ -1497,6 +1497,26 @@ The planned ten implementation features are:
     O0/O2/cache, and VHDL application differential evidence before the full
     local regression and push gate.
 
+All ten implementation features are complete in feature commit `1d1e034`.
+The VHDL integer family now retains concrete scalar constraints independently
+from packed ranges, specializes generic-dependent bounds, initializes from the
+left bound, and checks integer arithmetic and stores consistently in the
+interpreter and LLVM O0/O2 generated code. Focused parser, diagnostic,
+elaboration, runtime, LLVM/cache, and VHDL application differential tests
+pass. The first full regression exposed language-local type information being
+lost when a VHDL integer port shared a boundary signal with an SV packed
+vector. Corrective commit `1444e4b` preserves each instance's visible port type
+on both VHDL-to-SV and SV-to-VHDL paths while retaining the common boundary
+signal.
+
+After feature commits `1d1e034` and `1444e4b`, the exact LLVM 22.1.8
+warnings-as-errors Release regression passed all 34 tests in 86.48 seconds on
+2026-07-28. The gate includes fetched Boost.Context 1.91.0, fetched Tcl 9.0.4
+and relocation, SystemC plug-in/fiber/datatype coverage, LLVM/C ABI tests,
+interpreter/LLVM differentials, VCD, cache, debugger-facing application tests,
+the checked VHDL integer subtype and mixed-direction binding coverage, and all
+preceding feature batches. No CI state was inspected for this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
