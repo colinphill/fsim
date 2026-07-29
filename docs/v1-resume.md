@@ -9,16 +9,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-29.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: `18078f8` (`feat: add SystemVerilog parameter
-  sizing semantics`).
-- Baseline was synchronized with `origin/codex/resumable-jit`.
-- The source-size refactor is complete: all 215 authored C/C++ source, header,
+- Implementation baseline: `2185f34` (`feat: add VHDL interface type
+  generics`).
+- The feature baseline and batch documentation are synchronized with
+  `origin/codex/resumable-jit`.
+- The source-size refactor is complete: all 218 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 1,998 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 42
-  configured tests in 185.68 seconds, and Release passed all 43 configured
-  tests in 51.73 seconds on 2026-07-29.
-- No CI state was inspected during feature batch 48 or this handoff.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 43
+  configured tests in 183.94 seconds, and Release passed all 44 configured
+  tests in 52.28 seconds on 2026-07-29. The rebuilt final-source focused gate
+  and LLVM-disabled focused gate each passed all five affected tests.
+- No CI state was inspected during feature batch 49 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -30,7 +32,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Declared integral SystemVerilog parameter conversion now has interpreter/O0/O2/cache evidence; VHDL interface-type generics, remaining SV sizing, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Declared integral SystemVerilog parameter conversion and the bounded entity-level VHDL-2008 interface-type-generic slice now have interpreter/O0/O2/cache evidence; remaining generic-type semantics, SV sizing, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -75,7 +77,9 @@ document merely because the parser accepts a related form.
 
 ### 1. Close the architecture gate
 
-- Complete VHDL-2008 generic type semantics.
+- Complete VHDL generic-type semantics beyond the implemented entity-level
+  VHDL-2008 unclassified `type T` slice, including remaining classified,
+  package/subprogram, dependent element-type, and unconstrained-object cases.
 - Complete remaining SystemVerilog unsigned-64, type/string parameter, and
   self-determined expression sizing rules beyond the declared integral
   parameter conversion slice.
@@ -151,31 +155,35 @@ opaque native session/object model already used by Tcl.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 49: VHDL-2008 interface type generics**:
+Resume with **feature batch 50: SystemVerilog constant-expression sizing**:
 
-1. Parse interface type generic declarations and optional bounded defaults
-   with retained source metadata.
-2. Represent type-generic formals distinctly from scalar value generics.
-3. Parse named and positional type-mark actuals without treating them as
-   value expressions.
-4. Resolve type actuals through the VHDL library/package/type namespace.
-5. Introduce the smallest explicit semantic type environment needed by
-   generic-dependent ports, objects, and subtype constraints.
-6. Specialize generic-dependent packed, enumeration, record, and supported
-   one-dimensional array types without mutating shared frontend declarations.
-7. Canonicalize type actuals into specialization identity, DesignIR metadata,
-   and native-cache keys.
-8. Diagnose missing, duplicate, unknown, cyclic, incompatible, and
-   cross-language-unrepresentable type actuals with stable codes.
-9. Preserve source/debug metadata and require interpreter/O0/O2 behavior and
-   failure equivalence for each supported dependent type family.
-10. Add positive, negative, elaboration, runtime, mixed-hierarchy,
-    cold/warm/invalidation, support-document, and feature-matrix evidence,
+1. Introduce a typed constant value carrying width, signedness, state domain,
+   and bits independently from the legacy signed `int64_t` convenience path.
+2. Retain sized, unsized decimal, and unsized based literal sizing metadata
+   through constant-expression analysis.
+3. Implement self-determined unary, concatenation, replication, cast, and
+   shift operand/result widths for the bounded constant subset.
+4. Implement context-determined arithmetic, bitwise, relational,
+   equality, and conditional sizing and signedness for parameter expressions.
+5. Apply the typed evaluator consistently to defaults, localparams, named and
+   positional overrides, generated parameters, ranges, and generate choices.
+6. Represent the complete unsigned 64-bit `longint`/`time` value range
+   canonically without signed overflow or implementation-defined conversion.
+7. Preserve four-state unknown bits where legal and reject a constant in a
+   two-state or integer-only elaboration context when conversion would be
+   lossy.
+8. Keep enum fit/duplicate checks, division/shift failures, cycles, and
+   overflow diagnostics stable under the typed evaluator.
+9. Version typed constant specialization/cache identity and preserve exact
+   source/expansion provenance.
+10. Add atomic positive/negative, elaboration, generated/dependent-range,
+    interpreter/O0/O2, cold/warm/invalidation, and mixed-boundary evidence,
     then run and push the scheduled regression gate.
 
-Keep this batch bounded. Do not encode semantic type state in parser nodes or
-headers full of executable code; introduce independently compiled semantic
-services where required by the typed-HIR migration.
+Keep this batch bounded to constant/elaboration semantics. Do not silently
+reuse host C++ promotion rules or widen the runtime ABI; add independently
+compiled typed semantic services and explicit checked conversions at existing
+integer-only consumers.
 
 ## Working cadence
 
@@ -210,7 +218,7 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 49 is in progress, for example:
+Use a narrow test expression while batch 50 is in progress, for example:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \

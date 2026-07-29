@@ -2561,6 +2561,71 @@ enum-legality preservation, interpreter/LLVM O0/O2 equivalence, native-cache
 reuse, the permanent source-size check, SystemC, Tcl 9.0.4, mixed-language
 execution, debugger, VCD, and the native APIs. No CI state was inspected.
 
+### Forty-ninth feature batch — VHDL-2008 interface type generics
+
+The completed ten-feature slice is:
+
+1. Represent VHDL value and interface type generics as distinct HIR formal
+   kinds while preserving declaration order and source spans.
+2. Parse the VHDL-2008 unclassified `type T` form and diagnose
+   classified/defaulted forms outside that revision's bounded subset.
+3. Match named and positional type-mark actuals in the same case-insensitive
+   association sequence as existing value generics.
+4. Resolve builtin, parent-local type/subtype, and direct package/library
+   selected type marks at the association site.
+5. Preserve unresolved interface type references through independent entity
+   and architecture analysis, then replace them per specialization without
+   mutating shared frontend declarations.
+6. Specialize dependent ports and internal signals to supported scalar,
+   packed-vector, record, enumeration, and one-dimensional array actuals,
+   including nested type-formal pass-through.
+7. Apply a generic-dependent packed constraint to its actual base type before
+   folding later defaulted or overridden value-generic bounds.
+8. Diagnose missing, non-type, invisible, wrong-base, namespace-conflicting,
+   and non-VHDL-boundary actuals with stable codes.
+9. Serialize nominal, range, enumeration, record-member, and array metadata
+   into a versioned canonical type identity used by specialization and native
+   cache keys.
+10. Add frontend, elaboration, source-metadata, interpreter, LLVM O0/O2,
+    cold/warm reuse, and changed-type selective-invalidation evidence.
+
+The frontend does not infer a type actual merely because a generic-map
+expression is an identifier. It first retains the association designator, and
+elaboration interprets it as a type mark only after matching it to a formal
+whose HIR kind is `Type`. A formal-aware named-type environment allows entity
+ports and architecture declarations to remain unresolved during analysis.
+Each occurrence then inserts a concrete specialization-local alias and reruns
+the ordinary type resolver before value-generic substitution.
+
+The supported actual matrix covers builtin `bit`, constrained vector
+subtypes, bounded records, enumerations, scalar-element arrays, direct package
+selected records, nested forwarding, and an unconstrained `bit_vector` actual
+made concrete by a value-generic formal range. Required, value-expression,
+invisible-name, wrong-base, duplicate/order, namespace, and cross-language
+failures are targeted. Type actuals remain same-language VHDL semantics;
+explicit wrappers are still required at mixed-language boundaries.
+
+The application differential compiles three differently typed occurrences
+from a separate child source, verifies retained child declaration provenance,
+and compares exact final values through the interpreter and LLVM O0/O2. Its
+file-scoped cache fixture changes one vector actual from four to eight bits:
+only that specialization misses and recompiles while the record and scalar
+specializations reuse their native objects.
+
+Classified interface types, generic package/subprogram type formals,
+type-formal-dependent record/array element declarations, and unconstrained
+objects without a concrete formal constraint remain release-gate work. They
+are not hidden behind parser placeholders.
+
+The implementation is recorded in feature commit `2185f34`. The exact LLVM
+22.1.8 warnings-as-errors Debug regression passed all 43 configured tests in
+183.94 seconds; after the final wrong-base negative fixture was added, its
+rebuilt five-test focused gate also passed. The exact Release regression,
+built from the final source state, passed all 44 configured tests in 52.28
+seconds. An LLVM-disabled focused gate passed all five affected tests, and the
+permanent source-size test passed again after the three new translation/test
+units became tracked. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

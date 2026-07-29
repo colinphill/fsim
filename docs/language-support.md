@@ -44,6 +44,22 @@ also participate in array indices, slice bounds, and aggregate choices.
 Unconstrained marks, dimensions other than `1`, and scalar use of a range
 attribute are diagnosed.
 
+VHDL interface-type-generic status update: entity generic clauses accept the
+VHDL-2008 unclassified `type T` form mixed with existing value generics.
+Named or positional actual type marks resolve builtin types, parent-local
+types/subtypes, direct package-selected types, and a type actual passed through
+another type-generic hierarchy level. Supported scalar, packed-vector,
+bounded record, enumeration, and one-dimensional scalar-element array actuals
+specialize dependent ports and internal signals per occurrence. A packed
+formal constraint may use a later value generic after the actual base type is
+known. Type identity participates in native-cache keys, and interface type
+actuals cannot cross a VHDL/SystemVerilog/SystemC boundary implicitly.
+Classified/defaulted interface type forms, generic package/subprogram type
+formals, type-generic-dependent record/array element declarations, and
+unconstrained object actuals without a concrete formal constraint remain
+unsupported. This update supersedes the compact table's blanket statement
+that general generic types are unavailable.
+
 SystemVerilog time status update: compilation-unit and leading module-local
 `timeunit`/`timeprecision` declarations, including the combined
 `timeunit value / value` form, now override inherited `` `timescale`` context.
