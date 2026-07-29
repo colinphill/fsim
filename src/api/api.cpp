@@ -1554,6 +1554,10 @@ fsim_status_t fsim_session_get_object_info(
           value.simulation->signal_is_forced(*signal)
           ? FSIM_OBJECT_FLAG_FORCED
           : 0U;
+      if (info.resolution
+          != fsim::runtime::simir::ResolutionKind::none) {
+        out_info->flags |= FSIM_OBJECT_FLAG_RESOLVED;
+      }
       if (!info.declaration_span.source_name.empty()) {
         set_source(
             info.declaration_span.source_name,
@@ -1662,8 +1666,11 @@ fsim_status_t fsim_session_read_value(
     if (const auto signal = object_signal(value, object)) {
       packed = value.simulation->read_signal(*signal);
     } else if (const auto driver = object_driver(value, object)) {
-      packed = value.simulation->read_signal(
-          value.drivers[*driver].signal);
+      const auto& reference = value.drivers[*driver];
+      packed = value.simulation->read_driver(
+          static_cast<fsim::runtime::simir::ProcessId>(
+              reference.process),
+          reference.signal);
     } else if (const auto variable =
                    object_variable(value, object)) {
       const auto& reference = value.variables[*variable];

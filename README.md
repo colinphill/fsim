@@ -302,8 +302,9 @@ behavior plus named static `begin : label` blocks inside explicit
 
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
-particular, complete semantic analysis, general mixed-boundary conversions and
-multi-driver resolution, complete VHDL generic typing and SystemVerilog
+particular, complete semantic analysis, general mixed-boundary conversions,
+full nine-state VHDL and wired-net resolution, complete VHDL generic typing
+and SystemVerilog
 parameter typing, complete scoped/local type coverage and call
 safe points, broader interpreter/JIT differential coverage, remaining SystemC
 kernel behavior, parameterized/nonconstant and multiple rise/fall/turnoff

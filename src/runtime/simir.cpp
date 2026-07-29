@@ -5,6 +5,7 @@
 #include <array>
 #include <cctype>
 #include <limits>
+#include <map>
 #include <set>
 #include <sstream>
 #include <type_traits>
@@ -28,6 +29,52 @@ template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
 };
 template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
+
+[[nodiscard]] std::optional<SignalId> output_signal(
+    const Operation& operation) {
+  return std::visit(
+      Overloaded{
+          [](const WriteBlocking& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteUpdate& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteAfter& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteInertial& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteProjected& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteProjectedWaveform& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteBlockingSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteUpdateSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteAfterSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteInertialSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteProjectedSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteProjectedWaveformSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const auto&) -> std::optional<SignalId> {
+            return std::nullopt;
+          }},
+      operation);
+}
 
 [[nodiscard]] std::string format_output_value(
     const PackedLogic4& value,
@@ -1122,6 +1169,7 @@ struct Interpreter::Impl {
 
   struct PendingUpdate {
     SignalId signal{};
+    std::optional<ProcessId> driver;
     std::optional<std::size_t> offset;
     PackedLogic4 value;
   };
@@ -1215,6 +1263,8 @@ struct Interpreter::Impl {
   std::uint64_t root_seed{1};
   std::vector<Signal> signals;
   std::vector<PackedLogic4> driven_values;
+  std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
+  std::vector<std::optional<PackedLogic4>> external_driver_values;
   std::vector<PackedLogic4> signal_last_values;
   std::vector<std::optional<PackedLogic4>> forced_values;
   std::vector<ProcessState> processes;
@@ -1932,6 +1982,125 @@ struct Interpreter::Impl {
     }
   }
 
+  [[nodiscard]] PackedLogic4 initial_driver_value(
+      const SignalId signal_id) const {
+    const auto& signal = get_signal(signal_id);
+    const auto initial =
+        signal.resolution == ResolutionKind::sv_wire
+            ? Logic4::z
+            : Logic4::x;
+    return PackedLogic4{signal.initial_value.width(), initial};
+  }
+
+  PackedLogic4& driver_slot(
+      const ProcessId process,
+      const SignalId signal_id) {
+    auto& values = driver_values.at(signal_id);
+    const auto found = values.find(process);
+    if (found != values.end()) {
+      return found->second;
+    }
+    return values
+        .try_emplace(
+            process, initial_driver_value(signal_id))
+        .first->second;
+  }
+
+  [[nodiscard]] PackedLogic4 resolved_driver_value(
+      const SignalId signal_id) const {
+    const auto& values = driver_values.at(signal_id);
+    if (values.empty()
+        && !external_driver_values.at(signal_id)) {
+      return get_signal(signal_id).initial_value;
+    }
+    std::vector<PackedLogic4> drivers;
+    drivers.reserve(values.size());
+    for (const auto& [process, value] : values) {
+      (void)process;
+      drivers.push_back(value);
+    }
+    if (external_driver_values.at(signal_id)) {
+      drivers.push_back(
+          *external_driver_values.at(signal_id));
+    }
+    // The executable SimIR value path is currently four-state. Both supported
+    // policies therefore use the common collapsed 0/1/X/Z resolution kernel;
+    // the distinct policy is retained for elaboration, visibility, and future
+    // nine-state driver storage.
+    return runtime::resolve(
+        std::span<const PackedLogic4>{drivers});
+  }
+
+  PackedLogic4& external_driver_slot(
+      const SignalId signal_id) {
+    auto& value = external_driver_values.at(signal_id);
+    if (!value) {
+      value = initial_driver_value(signal_id);
+    }
+    return *value;
+  }
+
+  void register_driver(
+      const ProcessId process,
+      const SignalId signal_id) {
+    const auto& signal = get_signal(signal_id);
+    if (signal.resolution == ResolutionKind::none) {
+      return;
+    }
+    auto& values = driver_values.at(signal_id);
+    const auto [entry, inserted] = values.try_emplace(
+        process, initial_driver_value(signal_id));
+    (void)entry;
+    if (!inserted) {
+      return;
+    }
+    auto resolved = resolved_driver_value(signal_id);
+    driven_values[signal_id] = resolved;
+    signals[signal_id].initial_value = resolved;
+    signal_last_values[signal_id] = std::move(resolved);
+  }
+
+  void set_driver(
+      const ProcessId process,
+      const SignalId signal_id,
+      PackedLogic4 value) {
+    const auto& signal = get_signal(signal_id);
+    if (signal.initial_value.width() != value.width()) {
+      throw std::invalid_argument(
+          "SimIR driver assignment width mismatch");
+    }
+    driver_slot(process, signal_id) = std::move(value);
+  }
+
+  void commit_driver(
+      const ProcessId process,
+      const SignalId signal_id,
+      PackedLogic4 value) {
+    if (get_signal(signal_id).resolution
+        == ResolutionKind::none) {
+      commit(signal_id, std::move(value));
+      return;
+    }
+    set_driver(process, signal_id, std::move(value));
+    commit(signal_id, resolved_driver_value(signal_id));
+  }
+
+  [[nodiscard]] const PackedLogic4& current_driver_value(
+      const ProcessId process,
+      const SignalId signal_id) const {
+    if (get_signal(signal_id).resolution
+        == ResolutionKind::none) {
+      return driven_values.at(signal_id);
+    }
+    const auto& values = driver_values.at(signal_id);
+    const auto found = values.find(process);
+    if (found == values.end()) {
+      throw std::out_of_range(
+          "process has no driver slot for SimIR signal");
+    }
+    return found->second;
+  }
+
   void commit_slice(
       const SignalId signal_id,
       PackedLogic4 value,
@@ -1943,6 +2112,24 @@ struct Interpreter::Impl {
             driven_values[signal_id], value, offset));
   }
 
+  void commit_driver_slice(
+      const ProcessId process,
+      const SignalId signal_id,
+      PackedLogic4 value,
+      const std::size_t offset) {
+    if (get_signal(signal_id).resolution
+        == ResolutionKind::none) {
+      commit_slice(
+          signal_id, std::move(value), offset);
+      return;
+    }
+    const auto updated = insert_value(
+        driver_slot(process, signal_id),
+        value,
+        offset);
+    commit_driver(process, signal_id, std::move(updated));
+  }
+
   void schedule_update_commit() {
     if (update_commit_scheduled) {
       return;
@@ -1952,30 +2139,84 @@ struct Interpreter::Impl {
         SchedulerPhase::update,
         std::numeric_limits<StableOrder>::max(),
         [this](Scheduler&) {
-          std::unordered_map<SignalId, PackedLogic4> coalesced;
-          coalesced.reserve(pending_updates.size());
+          struct CoalescedDriverUpdate {
+            SignalId signal{};
+            std::optional<ProcessId> driver;
+            PackedLogic4 value;
+          };
+          std::unordered_map<SignalId, PackedLogic4>
+              unresolved_updates;
+          unresolved_updates.reserve(pending_updates.size());
+          std::vector<CoalescedDriverUpdate> driver_updates;
+          std::set<SignalId> resolved_signals;
           for (auto& pending : pending_updates) {
-            auto entry =
-                coalesced
-                    .try_emplace(
-                        pending.signal,
-                        driven_values[pending.signal])
-                    .first;
+            PackedLogic4* destination{};
+            if (get_signal(pending.signal).resolution
+                == ResolutionKind::none) {
+              destination =
+                  &unresolved_updates
+                       .try_emplace(
+                           pending.signal,
+                           driven_values[pending.signal])
+                       .first->second;
+            } else {
+              const auto found = std::find_if(
+                  driver_updates.begin(),
+                  driver_updates.end(),
+                  [&](const CoalescedDriverUpdate& update) {
+                    return update.signal == pending.signal
+                        && update.driver == pending.driver;
+                  });
+              if (found != driver_updates.end()) {
+                destination = &found->value;
+              } else {
+                auto initial =
+                    pending.driver
+                        ? driver_slot(
+                              *pending.driver, pending.signal)
+                        : external_driver_slot(pending.signal);
+                driver_updates.push_back({
+                    pending.signal,
+                    pending.driver,
+                    std::move(initial)});
+                destination = &driver_updates.back().value;
+              }
+              resolved_signals.insert(pending.signal);
+            }
             if (pending.offset) {
-              entry->second = insert_value(
-                  std::move(entry->second),
+              *destination = insert_value(
+                  std::move(*destination),
                   pending.value,
                   *pending.offset);
             } else {
-              entry->second = std::move(pending.value);
+              *destination = std::move(pending.value);
             }
           }
           pending_updates.clear();
           update_commit_scheduled = false;
+
+          for (auto& update : driver_updates) {
+            if (update.driver) {
+              set_driver(
+                  *update.driver,
+                  update.signal,
+                  std::move(update.value));
+            } else {
+              external_driver_slot(update.signal) =
+                  std::move(update.value);
+            }
+          }
+
           std::vector<std::pair<SignalId, PackedLogic4>> updates;
-          updates.reserve(coalesced.size());
-          for (auto& [signal, value] : coalesced) {
+          updates.reserve(
+              unresolved_updates.size()
+              + resolved_signals.size());
+          for (auto& [signal, value] : unresolved_updates) {
             updates.emplace_back(signal, std::move(value));
+          }
+          for (const auto signal : resolved_signals) {
+            updates.emplace_back(
+                signal, resolved_driver_value(signal));
           }
           std::sort(
               updates.begin(),
@@ -1989,17 +2230,41 @@ struct Interpreter::Impl {
         });
   }
 
-  void stage_update(SignalId signal_id, PackedLogic4 staged_value) {
+  void stage_update(
+      const std::optional<ProcessId> driver,
+      SignalId signal_id,
+      PackedLogic4 staged_value) {
     (void)get_signal(signal_id);
     if (driven_values[signal_id].width() != staged_value.width()) {
       throw std::invalid_argument("SimIR signal assignment width mismatch");
     }
     pending_updates.push_back(PendingUpdate{
-        signal_id, std::nullopt, std::move(staged_value)});
+        signal_id,
+        driver,
+        std::nullopt,
+        std::move(staged_value)});
     schedule_update_commit();
   }
 
+  void stage_update(
+      const SignalId signal_id,
+      PackedLogic4 staged_value) {
+    stage_update(
+        std::nullopt, signal_id, std::move(staged_value));
+  }
+
+  void stage_update(
+      const ProcessId process,
+      const SignalId signal_id,
+      PackedLogic4 staged_value) {
+    stage_update(
+        std::optional<ProcessId>{process},
+        signal_id,
+        std::move(staged_value));
+  }
+
   void stage_update_slice(
+      const std::optional<ProcessId> driver,
       const SignalId signal_id,
       PackedLogic4 value,
       const std::size_t offset) {
@@ -2011,8 +2276,31 @@ struct Interpreter::Impl {
           "partial update range is outside its target signal");
     }
     pending_updates.push_back(PendingUpdate{
-        signal_id, offset, std::move(value)});
+        signal_id, driver, offset, std::move(value)});
     schedule_update_commit();
+  }
+
+  void stage_update_slice(
+      const SignalId signal_id,
+      PackedLogic4 value,
+      const std::size_t offset) {
+    stage_update_slice(
+        std::nullopt,
+        signal_id,
+        std::move(value),
+        offset);
+  }
+
+  void stage_update_slice(
+      const ProcessId process,
+      const SignalId signal_id,
+      PackedLogic4 value,
+      const std::size_t offset) {
+    stage_update_slice(
+        std::optional<ProcessId>{process},
+        signal_id,
+        std::move(value),
+        offset);
   }
 
   void schedule_inertial(
@@ -2048,11 +2336,15 @@ struct Interpreter::Impl {
       scheduler.cancel(pending->second.handle);
       pending_inertial_writes.erase(pending);
     }
+    const auto& driver_current =
+        get_signal(signal).resolution == ResolutionKind::none
+            ? driven_values[signal]
+            : driver_slot(process, signal);
     const auto current =
         offset
             ? extract_value(
-                  driven_values[signal], *offset, value.width())
-            : driven_values[signal];
+                  driver_current, *offset, value.width())
+            : driver_current;
     const auto delay = transition_delay(current, value, delays);
     if (!delay) {
       return;
@@ -2070,15 +2362,20 @@ struct Interpreter::Impl {
           process,
           [this,
            key,
+           process,
            signal,
            offset,
            value = std::move(value)](Scheduler&) mutable {
             pending_inertial_writes.erase(key);
             if (offset) {
               stage_update_slice(
-                  signal, std::move(value), *offset);
+                  process,
+                  signal,
+                  std::move(value),
+                  *offset);
             } else {
-              stage_update(signal, std::move(value));
+              stage_update(
+                  process, signal, std::move(value));
             }
           });
     } catch (...) {
@@ -2196,7 +2493,7 @@ struct Interpreter::Impl {
           delay,
           SchedulerPhase::update,
           process,
-          [this, key, id, signal, offset](Scheduler&) {
+          [this, key, id, process, signal, offset](Scheduler&) {
             const auto found_driver =
                 projected_drivers.find(key);
             if (found_driver == projected_drivers.end()) {
@@ -2214,6 +2511,7 @@ struct Interpreter::Impl {
                 found_transaction->value;
             state.transactions.erase(found_transaction);
             stage_update_slice(
+                process,
                 signal,
                 PackedLogic4{1, committed_value},
                 offset);
@@ -2320,13 +2618,14 @@ struct Interpreter::Impl::ExecutionContext final
 
   void write_blocking(
       const SignalId signal, PackedLogic4 value) override {
-    owner.commit(signal, std::move(value));
+    owner.commit_driver(process, signal, std::move(value));
   }
 
   void write_blocking_word(
       const SignalId signal,
       const Logic4Word value) override {
-    owner.commit(
+    owner.commit_driver(
+        process,
         signal,
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval));
@@ -2336,14 +2635,16 @@ struct Interpreter::Impl::ExecutionContext final
       const SignalId signal,
       PackedLogic4 value,
       const std::size_t offset) override {
-    owner.commit_slice(signal, std::move(value), offset);
+    owner.commit_driver_slice(
+        process, signal, std::move(value), offset);
   }
 
   void write_blocking_slice_word(
       const SignalId signal,
       const Logic4Word value,
       const std::uint32_t offset) override {
-    owner.commit_slice(
+    owner.commit_driver_slice(
+        process,
         signal,
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval),
@@ -2352,13 +2653,14 @@ struct Interpreter::Impl::ExecutionContext final
 
   void write_update(
       const SignalId signal, PackedLogic4 value) override {
-    owner.stage_update(signal, std::move(value));
+    owner.stage_update(process, signal, std::move(value));
   }
 
   void write_update_word(
       const SignalId signal,
       const Logic4Word value) override {
     owner.stage_update(
+        process,
         signal,
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval));
@@ -2369,7 +2671,7 @@ struct Interpreter::Impl::ExecutionContext final
       PackedLogic4 value,
       const std::size_t offset) override {
     owner.stage_update_slice(
-        signal, std::move(value), offset);
+        process, signal, std::move(value), offset);
   }
 
   void write_update_slice_word(
@@ -2377,6 +2679,7 @@ struct Interpreter::Impl::ExecutionContext final
       const Logic4Word value,
       const std::uint32_t offset) override {
     owner.stage_update_slice(
+        process,
         signal,
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval),
@@ -2391,9 +2694,11 @@ struct Interpreter::Impl::ExecutionContext final
         delay,
         SchedulerPhase::update,
         process,
-        [&owner = owner, signal, value = std::move(value)](
+        [&owner = owner, driver = process, signal,
+         value = std::move(value)](
             Scheduler&) mutable {
-          owner.stage_update(signal, std::move(value));
+          owner.stage_update(
+              driver, signal, std::move(value));
         });
   }
 
@@ -2407,9 +2712,11 @@ struct Interpreter::Impl::ExecutionContext final
         delay,
         SchedulerPhase::update,
         process,
-        [&owner = owner, signal, value = std::move(packed)](
+        [&owner = owner, driver = process, signal,
+         value = std::move(packed)](
             Scheduler&) mutable {
-          owner.stage_update(signal, std::move(value));
+          owner.stage_update(
+              driver, signal, std::move(value));
         });
   }
 
@@ -2423,11 +2730,12 @@ struct Interpreter::Impl::ExecutionContext final
         SchedulerPhase::update,
         process,
         [&owner = owner,
+         driver = process,
          signal,
          value = std::move(value),
          offset](Scheduler&) mutable {
           owner.stage_update_slice(
-              signal, std::move(value), offset);
+              driver, signal, std::move(value), offset);
         });
   }
 
@@ -3318,21 +3626,30 @@ void Interpreter::Impl::execute(ProcessId id) {
             [&](const WriteBlocking &op) {
               auto value = get_register(process, op.source);
               ++process.pc;
-              commit(op.signal, std::move(value));
+              commit_driver(
+                  process.program.id,
+                  op.signal,
+                  std::move(value));
             },
             [&](const WriteUpdate &op) {
               auto value = get_register(process, op.source);
               ++process.pc;
-              stage_update(op.signal, std::move(value));
+              stage_update(
+                  process.program.id,
+                  op.signal,
+                  std::move(value));
             },
             [&](const WriteAfter &op) {
               auto value = get_register(process, op.source);
               ++process.pc;
               scheduler.schedule_after(
                   op.delay, SchedulerPhase::update, process.program.id,
-                  [this, signal = op.signal,
+                  [this,
+                   driver = process.program.id,
+                   signal = op.signal,
                    value = std::move(value)](Scheduler &) mutable {
-                    stage_update(signal, std::move(value));
+                    stage_update(
+                        driver, signal, std::move(value));
                   });
             },
             [&](const WriteInertial& op) {
@@ -3377,14 +3694,20 @@ void Interpreter::Impl::execute(ProcessId id) {
             [&](const WriteBlockingSlice& op) {
               auto value = get_register(process, op.source);
               ++process.pc;
-              commit_slice(
-                  op.signal, std::move(value), op.offset);
+              commit_driver_slice(
+                  process.program.id,
+                  op.signal,
+                  std::move(value),
+                  op.offset);
             },
             [&](const WriteUpdateSlice& op) {
               auto value = get_register(process, op.source);
               ++process.pc;
               stage_update_slice(
-                  op.signal, std::move(value), op.offset);
+                  process.program.id,
+                  op.signal,
+                  std::move(value),
+                  op.offset);
             },
             [&](const WriteAfterSlice& op) {
               auto value = get_register(process, op.source);
@@ -3394,12 +3717,16 @@ void Interpreter::Impl::execute(ProcessId id) {
                   SchedulerPhase::update,
                   process.program.id,
                   [this,
+                   driver = process.program.id,
                    signal = op.signal,
                    offset = op.offset,
                    value = std::move(value)](
                       Scheduler&) mutable {
                     stage_update_slice(
-                        signal, std::move(value), offset);
+                        driver,
+                        signal,
+                        std::move(value),
+                        offset);
                   });
             },
             [&](const WriteInertialSlice& op) {
@@ -3708,6 +4035,8 @@ SignalId Interpreter::add_signal(Signal signal) {
     throw std::length_error("too many SimIR signals");
   }
   impl_->driven_values.push_back(signal.initial_value);
+  impl_->driver_values.emplace_back();
+  impl_->external_driver_values.emplace_back();
   impl_->signal_last_values.push_back(signal.initial_value);
   impl_->forced_values.emplace_back();
   impl_->signals.push_back(std::move(signal));
@@ -3754,6 +4083,21 @@ ProcessId Interpreter::add_process(Process process) {
     if (!local_names.insert(local.name).second) {
       throw std::invalid_argument{"duplicate SimIR debug-local name"};
     }
+  }
+  std::set<SignalId> outputs;
+  for (const auto& operation : process.operations) {
+    const auto signal = output_signal(operation);
+    if (!signal) {
+      continue;
+    }
+    if (*signal >= impl_->signals.size()) {
+      throw std::invalid_argument(
+          "process output references invalid signal");
+    }
+    outputs.insert(*signal);
+  }
+  for (const auto signal : outputs) {
+    impl_->register_driver(id, signal);
   }
 
   Impl::ProcessState state;
@@ -3892,6 +4236,13 @@ void Interpreter::schedule_signal_after(SignalId signal, PackedLogic4 value,
 
 const PackedLogic4 &Interpreter::signal_value(SignalId signal) const {
   return impl_->get_signal(signal).initial_value;
+}
+
+const PackedLogic4& Interpreter::driver_value(
+    const ProcessId process,
+    const SignalId signal) const {
+  (void)impl_->get_process(process);
+  return impl_->current_driver_value(process, signal);
 }
 
 PackedLogic4 Interpreter::read_debug_local(

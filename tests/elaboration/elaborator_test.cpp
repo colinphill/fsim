@@ -4174,12 +4174,15 @@ endmodule
         "multiple_drivers.sv",
         R"(
 module driver(output logic value);
+  assign value = 1'b0;
+endmodule
+module other_driver(output logic value);
   assign value = 1'b1;
 endmodule
 module driver_top;
   logic shared;
   driver first(.value(shared));
-  driver second(.value(shared));
+  other_driver second(.value(shared));
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
@@ -4190,13 +4193,41 @@ endmodule
     assert(has_diagnostic(missing_resolver, "FSIM-ELAB-BIND-024"));
     const std::vector<fsim::elaboration::Binding> resolver_bindings{
         {"driver_top.first", "sv:work.driver", std::string{"sv_wire"}},
-        {"driver_top.second", "sv:work.driver", std::string{"sv_wire"}},
+        {"driver_top.second", "sv:work.other_driver", std::string{"sv_wire"}},
     };
-    const auto unavailable_resolution = fsim::elaboration::elaborate(
+    const auto resolved_boundary = fsim::elaboration::elaborate(
         multiple_drivers.design, "driver_top", resolver_bindings);
-    assert(!unavailable_resolution.ok());
+    assert(resolved_boundary.ok());
+    const auto shared =
+        resolved_boundary.design->find_signal("shared");
+    assert(shared);
+    assert(
+        resolved_boundary.design->signals().at(*shared).resolution
+        == fsim::runtime::simir::ResolutionKind::sv_wire);
+    auto resolved_boundary_interpreter =
+        resolved_boundary.design->create_interpreter();
+    const auto resolved_boundary_result =
+        resolved_boundary_interpreter->run();
+    assert(
+        resolved_boundary_result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        resolved_boundary_interpreter
+            ->signal_value(*shared)
+            .to_msb_string()
+        == "X");
+
+    const std::vector<fsim::elaboration::Binding> invalid_resolver_bindings{
+        {"driver_top.first", "sv:work.driver", std::string{"wired"}},
+        {"driver_top.second", "sv:work.other_driver", std::string{"wired"}},
+    };
+    const auto invalid_resolver = fsim::elaboration::elaborate(
+        multiple_drivers.design,
+        "driver_top",
+        invalid_resolver_bindings);
+    assert(!invalid_resolver.ok());
     assert(has_diagnostic(
-        unavailable_resolution, "FSIM-ELAB-BIND-029"));
+        invalid_resolver, "FSIM-ELAB-BIND-050"));
 
     const auto process_drivers = fsim::frontend::parse_text(
         "process_drivers.sv",
@@ -4235,6 +4266,89 @@ endmodule
     assert(has_diagnostic(
         rejected_selected_process_drivers,
         "FSIM-ELAB-DRV-001"));
+
+    const auto native_wire_drivers = fsim::frontend::parse_text(
+        "native_wire_drivers.sv",
+        R"(
+module native_wire_drivers;
+  wire q;
+  native_wire_zero zero(.value(q));
+  native_wire_one one(.value(q));
+endmodule
+module native_wire_zero(output logic value);
+  assign value = 1'b0;
+endmodule
+module native_wire_one(output logic value);
+  assign value = 1'b1;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(native_wire_drivers.ok());
+    const auto elaborated_native_wire =
+        fsim::elaboration::elaborate(
+            native_wire_drivers.design, "native_wire_drivers");
+    assert(elaborated_native_wire.ok());
+    const auto native_wire_q =
+        elaborated_native_wire.design->find_signal("q");
+    assert(native_wire_q);
+    assert(
+        elaborated_native_wire.design->signals()
+            .at(*native_wire_q)
+            .resolution
+        == fsim::runtime::simir::ResolutionKind::sv_wire);
+    auto native_wire_interpreter =
+        elaborated_native_wire.design->create_interpreter();
+    const auto native_wire_result =
+        native_wire_interpreter->run();
+    assert(
+        native_wire_result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        native_wire_interpreter
+            ->signal_value(*native_wire_q)
+            .to_msb_string()
+        == "X");
+
+    const auto native_std_logic_drivers =
+        fsim::frontend::parse_text(
+            "native_std_logic_drivers.vhd",
+            R"(
+entity native_std_logic_drivers is
+end entity;
+architecture rtl of native_std_logic_drivers is
+  signal q : std_logic;
+begin
+  q <= '0';
+  q <= '1';
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(native_std_logic_drivers.ok());
+    const auto elaborated_native_std_logic =
+        fsim::elaboration::elaborate(
+            native_std_logic_drivers.design,
+            "native_std_logic_drivers");
+    assert(elaborated_native_std_logic.ok());
+    const auto native_std_logic_q =
+        elaborated_native_std_logic.design->find_signal("q");
+    assert(native_std_logic_q);
+    assert(
+        elaborated_native_std_logic.design->signals()
+            .at(*native_std_logic_q)
+            .resolution
+        == fsim::runtime::simir::ResolutionKind::std_logic);
+    auto native_std_logic_interpreter =
+        elaborated_native_std_logic.design->create_interpreter();
+    const auto native_std_logic_result =
+        native_std_logic_interpreter->run();
+    assert(
+        native_std_logic_result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        native_std_logic_interpreter
+            ->signal_value(*native_std_logic_q)
+            .to_msb_string()
+        == "X");
 
     const auto local_variables = fsim::frontend::parse_text(
         "local_variables.sv",

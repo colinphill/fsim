@@ -622,7 +622,8 @@ therefore excluded.
 | `FSIM-ELAB-103` | error | A value-sensitive `$monitor` operand is not yet a direct packed-signal reference. |
 | `FSIM-ELAB-104` | error | A random system function is used in an unsupported language or with an invalid argument count. |
 | `FSIM-ELAB-105` | error | Procedural assignment timing-control HIR has an inconsistent control kind, delay, or event payload. |
-| `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
+| `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers. |
+| `FSIM-ELAB-DRV-002` | error | A wired-AND or wired-OR net requires an unsupported resolution policy. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
 | `FSIM-ELAB-GEN-001` | error | A conditional-generate expression cannot be evaluated for its specialization. |
@@ -717,9 +718,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-026` | error | An instance port is connected more than once. |
 | `FSIM-ELAB-BIND-027` | error | A boundary actual is not a whole signal. |
 | `FSIM-ELAB-BIND-028` | error | A boundary actual names an unknown parent signal. |
-| `FSIM-ELAB-BIND-029` | error | A resolved multi-driver boundary still requires unimplemented driver-slot resolution. |
 | `FSIM-ELAB-BIND-030` | error | A cross-language `inout` lacks an explicit resolver. |
-| `FSIM-ELAB-BIND-031` | error | A cross-language `inout` has a resolver but still requires unimplemented driver-slot resolution. |
 | `FSIM-ELAB-BIND-032` | error | More than one preconstructed SystemC description names the same instance path. |
 | `FSIM-ELAB-BIND-033` | error | A preconstructed SystemC instance was not reached from the selected top. |
 | `FSIM-ELAB-BIND-034` | error | A SystemC foreign child declares a port absent from its bound HDL target. |
@@ -738,6 +737,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-047` | error | A constructed native SystemC child has an inconsistent parent handle or direct-child path. |
 | `FSIM-ELAB-BIND-048` | error | A typed SystemC export is unbound, cyclic, references an unknown object, or conflicts with another hierarchy alias. |
 | `FSIM-ELAB-BIND-049` | error | A packed aggregate crosses a language boundary without a same-language scalar/vector wrapper. |
+| `FSIM-ELAB-BIND-050` | error | An elaboration binding names a resolver other than `std_logic` or `sv_wire`. |
 
 ## Time, runtime, trace, and design cache
 

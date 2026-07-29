@@ -96,18 +96,16 @@ resolver = "std_logic"
 resolver = "sv_wire"
 ```
 
-`std_logic` uses the VHDL standard-logic resolution table. `sv_wire` uses fsim's
-4-state wire resolution. Multiple unresolved drivers are an elaboration error.
-Strengths are outside v1, so `sv_wire` does not model Verilog strength
-resolution.
-
-The vertical slice automatically accepts single-driver aliases and diagnoses a
-multiple-driver boundary without a resolver. Because competing runtime driver
-values are not yet represented, supplying `std_logic` or `sv_wire` for such a
-boundary is also rejected with an explicit “resolution not implemented”
-diagnostic rather than being accepted without effect. Multiple executable
-process drivers on one signal are likewise rejected. The executable mixed
-example has one driver per boundary.
+The current common executable value path preserves `0`, `1`, `X`, and `Z`.
+Within that bounded domain, `std_logic` follows the corresponding standard
+logic cases and `sv_wire` uses four-state wire resolution. Each executable
+process owns an independent driver slot, including for whole/slice blocking,
+NBA, future, inertial, and projected writes. Native SV `wire`/`tri` and VHDL
+`std_logic`/`std_logic_vector` signals select their policy automatically;
+explicit mixed-boundary resolvers select it on an otherwise unresolved parent.
+Multiple unresolved drivers remain an elaboration error. Full nine-state
+driver storage, strengths, wired-AND/OR nets, and charge storage remain v1
+work.
 
 ## Time and phase lattice
 
@@ -156,7 +154,7 @@ the same commit boundary.
 A debugger deposit changes the current stored value and activates dependents.
 A force overrides effective driver resolution until release. Release restores
 the value determined by drivers; it does not restore a historical snapshot.
-The current interpreter and C API implement deposits plus a bounded force mask:
-updates continue beneath a forced value and release exposes the latest
-underlying value. Integration with the complete multi-driver resolution model
-is still planned.
+The interpreter and C API implement deposits plus a force mask: each driver
+continues updating beneath a force and release exposes the latest resolved
+underlying value. Native C signal metadata identifies resolved objects and
+driver objects expose their pre-resolution process-owned values.

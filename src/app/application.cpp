@@ -5004,6 +5004,12 @@ const PackedLogic4& Simulation::read_signal(const SignalId signal) const {
   return impl_->interpreter->signal_value(signal);
 }
 
+const PackedLogic4& Simulation::read_driver(
+    const runtime::simir::ProcessId process,
+    const SignalId signal) const {
+  return impl_->interpreter->driver_value(process, signal);
+}
+
 PackedLogic4 Simulation::read_process_local(
     const runtime::simir::ProcessId process,
     const std::size_t local_index) const {

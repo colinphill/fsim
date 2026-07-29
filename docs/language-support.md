@@ -156,9 +156,10 @@ the same for loop-generated children using deterministic, language-neutral
 alternative label. This does not yet establish
 complete VHDL generic or SystemVerilog parameter typing and sizing, SystemC
 construction schemas, general vector-direction conversion,
-aggregates/interfaces, or resolved multi-driver behavior. SystemC factories
-already elaborate as peer hierarchy nodes in either direction through
-explicit bindings.
+aggregates/interfaces, or full nine-state/wired-net resolution. Bounded
+four-state `std_logic`/`sv_wire` resolution uses process-owned driver slots
+across explicit mixed bindings. SystemC factories already elaborate as peer
+hierarchy nodes in either direction through explicit bindings.
 
 ## v1 target
 

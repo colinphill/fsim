@@ -1327,6 +1327,41 @@ SystemC plug-in/fiber coverage, LLVM/C ABI tests, interpreter/LLVM
 differentials, VCD, cache, debugger-facing application tests, and the new
 procedural-assignment target. No CI state was inspected for this local gate.
 
+### Thirty-first feature batch — resolved driver slots
+
+The planned ten implementation features are:
+
+1. Add an explicit unresolved, SystemVerilog-wire, or VHDL-standard-logic
+   resolution policy to common signal metadata and elaborated DesignIR.
+2. Select resolution from explicit mixed-language bindings and the supported
+   native `wire`/`tri` and `std_logic`/`std_logic_vector` type forms, while
+   retaining targeted rejection for unresolved variables and unsupported
+   wired-net policies.
+3. Register dense process-owned driver slots before simulation starts, with
+   policy-correct undriven initialization and stable process identity.
+4. Route whole and constant-slice blocking writes through the issuing
+   process's slot, resolve immediately, and publish only effective changes.
+5. Coalesce whole/slice NBA updates independently per driver, apply every slot
+   in the common update phase, and resolve each affected signal exactly once.
+6. Preserve driver identity through `#0`/future transport, inertial
+   continuous, and VHDL projected scalar/slice waveform callbacks.
+7. Keep debugger deposit/force/release semantics coherent: forces mask
+   resolution, driver updates continue underneath, and release exposes the
+   latest resolved value.
+8. Expose resolution metadata and each process driver's current value through
+   the native C hierarchy without changing generated-code callback signatures.
+9. Verify interpreter and LLVM O0/O2 equivalence without a runtime ABI
+   extension, including cache identity from existing binding/source
+   provenance.
+10. Require focused runtime, elaboration, mixed VHDL/SV, C API,
+    interpreter/LLVM O0/O2/VCD/cold-warm-cache evidence before the full local
+    regression and push gate.
+
+All ten implementation features are complete. Focused strict-build runtime,
+elaboration, mixed VHDL/SV interpreter/LLVM O0/O2/VCD/cold-warm-cache, and
+native C API tests pass. The full local regression and push gate remain
+pending.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

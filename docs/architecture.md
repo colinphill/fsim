@@ -28,7 +28,7 @@ The architectural invariants are:
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
-| Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, value changes, deposit, and a force/release mask are current; full driver/resolution model is planned |
+| Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, four-state process-owned driver slots, native/explicit resolution policies, committed value changes, deposit, and force/release masking are current; full nine-state/wired/strength resolution remains planned |
 | Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with source/time/signal breakpoints, all four step modes, and bounded packed process-local reads are current; complete local scopes/types are planned |
 
 The language-specific HIR will retain resolved symbols, types, overload choices,
@@ -181,7 +181,9 @@ The association syntax owns ordering legality, so VHDL may use positional
 actuals followed by named actuals while Verilog/SystemVerilog may not mix the
 two forms. Typed scalar construction actuals also cross SystemC factories in
 both directions. Expression port actuals, unpacked/record boundaries, and
-actual multi-driver resolution remain outside this slice.
+full nine-state, wired-net, and strength-aware multi-driver resolution remain
+outside this slice; bounded four-state native and explicit resolution is
+current.
 
 The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
@@ -880,10 +882,11 @@ as nested generate-region scopes, including indexed names and generated local
 signal/process ownership. A generated process whose internal name equals its
 scope receives a stable `.$process` public path. Each supported process/output
 relationship is a generation-safe driver object beneath its signal, deduplicated
-across repeated whole/slice blocking, update-phase, and delayed writes. In the
-current single-driver executable slice, driver reads return the corresponding
-signal value; driver mutation remains invalid. Resolved multi-driver storage
-and per-driver pre-resolution values remain pending with resolution semantics.
+across repeated whole/slice blocking, update-phase, and delayed writes. Driver
+reads return the issuing process's current pre-resolution slot while driver
+mutation remains invalid. Resolved signal metadata and values are visible
+through the same generation-safe C hierarchy.
+
 An append-only detailed safe-point callback reports scheduler phase or
 statement/call/wait/assertion/process-boundary kind, process handle,
 time/delta, instruction index, and source location. The original callback
@@ -922,8 +925,7 @@ previous handler on every exit path. Tests raise SIGINT through the real handler
 and require both the interpreter and O0 JIT debugger to stop at tick 0, resume
 to terminal completion, and restore a preinstalled handler. The `locals`
 command reads declared packed process variables through an engine-neutral
-interface; richer local types and resolved multi-driver inspection remain
-planned.
+interface; richer local types remain planned.
 
 ## Tcl automation
 

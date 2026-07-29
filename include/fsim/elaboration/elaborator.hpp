@@ -173,6 +173,8 @@ struct SignalInfo {
     bool is_port{};
     frontend::PortDirection direction{frontend::PortDirection::Unknown};
     frontend::SourceSpan declaration_span;
+    runtime::simir::ResolutionKind resolution{
+        runtime::simir::ResolutionKind::none};
 };
 
 using SpecializationId = std::uint32_t;

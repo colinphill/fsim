@@ -513,6 +513,156 @@ void test_simir_update_coalescing() {
       "the equal-deadline winner commits at the requested future time");
 }
 
+void test_resolved_driver_slots() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto whole = interpreter.add_signal(
+      {
+          "top.whole",
+          PackedLogic4::from_msb_string("ZZZZ"),
+          ResolutionKind::sv_wire});
+  const auto sliced = interpreter.add_signal(
+      {
+          "top.sliced",
+          PackedLogic4::from_msb_string("ZZZZ"),
+          ResolutionKind::sv_wire});
+  const auto standard_logic = interpreter.add_signal(
+      {
+          "top.standard_logic",
+          PackedLogic4::from_msb_string("X"),
+          ResolutionKind::std_logic});
+
+  Process first;
+  first.id = 0;
+  first.name = "first_driver";
+  first.register_count = 4;
+  first.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("0000")},
+      WriteUpdate{whole, 0},
+      LoadConstant{1, PackedLogic4::from_msb_string("ZZZZ")},
+      WriteAfter{whole, 1, 5},
+      LoadConstant{2, PackedLogic4::from_msb_string("10")},
+      WriteUpdateSlice{sliced, 2, 0},
+      LoadConstant{3, PackedLogic4::from_msb_string("0")},
+      WriteUpdate{standard_logic, 3},
+      Halt{}};
+  (void)interpreter.add_process(std::move(first));
+
+  Process second;
+  second.id = 1;
+  second.name = "second_driver";
+  second.register_count = 5;
+  second.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1111")},
+      WriteUpdate{whole, 0},
+      LoadConstant{1, PackedLogic4::from_msb_string("0011")},
+      WriteAfter{whole, 1, 3},
+      LoadConstant{2, PackedLogic4::from_msb_string("11")},
+      WriteUpdateSlice{sliced, 2, 2},
+      LoadConstant{3, PackedLogic4::from_msb_string("01")},
+      WriteAfterSlice{sliced, 3, 0, 4},
+      LoadConstant{4, PackedLogic4::from_msb_string("Z")},
+      WriteUpdate{standard_logic, 4},
+      Halt{}};
+  (void)interpreter.add_process(std::move(second));
+
+  struct Change {
+    SignalId signal{};
+    std::string value;
+    SimulationTick time{};
+  };
+  std::vector<Change> changes;
+  interpreter.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        changes.push_back(
+            {signal, value.to_msb_string(), time});
+      });
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed && result.time == 5,
+      "resolved driver simulation reaches its final transaction");
+  require(
+      interpreter.signal_value(whole).to_msb_string() == "0011",
+      "a released wire driver exposes the other process slot");
+  require(
+      interpreter.driver_value(0, whole).to_msb_string() == "ZZZZ"
+          && interpreter.driver_value(1, whole).to_msb_string()
+              == "0011",
+      "whole-signal process driver slots retain independent values");
+  require(
+      interpreter.signal_value(sliced).to_msb_string() == "11XX",
+      "partial driver slots resolve disjoint and overlapping packed bits");
+  require(
+      interpreter.driver_value(0, sliced).to_msb_string() == "ZZ10"
+          && interpreter.driver_value(1, sliced).to_msb_string()
+              == "1101",
+      "slice writes update only the issuing process's full driver slot");
+  require(
+      interpreter.signal_value(standard_logic).to_msb_string() == "0",
+      "the supported std_logic 0/1/X/Z subset uses standard resolution");
+
+  const auto whole_changes =
+      [&] {
+        std::vector<std::pair<std::string, SimulationTick>> observed;
+        for (const auto& change : changes) {
+          if (change.signal == whole) {
+            observed.emplace_back(change.value, change.time);
+          }
+        }
+        return observed;
+      }();
+  require(
+      whole_changes
+          == std::vector<std::pair<std::string, SimulationTick>>{
+              {"XXXX", 0}, {"00XX", 3}, {"0011", 5}},
+      "NBA and future driver updates resolve once per destination slot");
+
+  Interpreter forced;
+  const auto forced_signal = forced.add_signal(
+      {
+          "top.forced",
+          PackedLogic4::from_msb_string("Z"),
+          ResolutionKind::sv_wire});
+  Process forced_first;
+  forced_first.id = 0;
+  forced_first.name = "forced_first";
+  forced_first.register_count = 1;
+  forced_first.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("0")},
+      WriteAfter{forced_signal, 0, 2},
+      Halt{}};
+  (void)forced.add_process(std::move(forced_first));
+  Process forced_second;
+  forced_second.id = 1;
+  forced_second.name = "forced_second";
+  forced_second.register_count = 1;
+  forced_second.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("Z")},
+      WriteAfter{forced_signal, 0, 2},
+      Halt{}};
+  (void)forced.add_process(std::move(forced_second));
+  forced.force_signal(
+      forced_signal,
+      PackedLogic4::from_msb_string("1"));
+  const auto forced_result = forced.run();
+  require(
+      forced_result.status == RunStatus::completed
+          && forced.signal_value(forced_signal).to_msb_string() == "1",
+      "a force masks resolved driver activity through completion");
+  require(
+      forced.driver_value(0, forced_signal).to_msb_string() == "0"
+          && forced.driver_value(1, forced_signal).to_msb_string() == "Z",
+      "resolved drivers continue updating beneath a force");
+  forced.release_signal(forced_signal);
+  require(
+      forced.signal_value(forced_signal).to_msb_string() == "0",
+      "force release publishes the latest resolved underlying value");
+}
+
 void test_simir_expressions_and_edges() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -4053,6 +4203,7 @@ int main() {
     test_simir();
     test_simir_permanent_wait();
     test_simir_update_coalescing();
+    test_resolved_driver_slots();
     test_simir_expressions_and_edges();
     test_simir_noninitializing_static_process();
     test_simir_wide_truth_and_comparison();

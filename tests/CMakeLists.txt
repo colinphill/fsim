@@ -362,6 +362,24 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_resolution_application_tests
+    app/resolution_application_test.cpp
+  )
+  fsim_configure_test(fsim_resolution_application_tests)
+  target_link_libraries(
+    fsim_resolution_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.resolution
+    COMMAND fsim_resolution_application_tests
+  )
+  set_tests_properties(
+    fsim.application.resolution
+    PROPERTIES LABELS "fast;resolution;mixed-language"
+  )
+
+  add_executable(
     fsim_vhdl_projected_application_tests
     app/vhdl_projected_application_test.cpp
   )

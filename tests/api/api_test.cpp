@@ -255,6 +255,9 @@ endmodule
 module child;
   logic child_value;
   initial child_value = 1'b1;
+  wire resolved;
+  assign resolved = 1'b0;
+  assign resolved = 1'b1;
 endmodule
 )";
   }
@@ -670,7 +673,7 @@ max_deltas = 1000
           collect_object,
           &child_instance_children)
       == FSIM_STATUS_OK);
-  assert(child_instance_children.size() == 2);
+  assert(child_instance_children.size() == 5);
   for (const auto child : child_instance_children) {
     fsim_object_info_t child_info{};
     child_info.struct_size = sizeof(child_info);
@@ -1031,6 +1034,34 @@ max_deltas = 1000
   assert(info.source_line == 3);
   assert(info.source_column > 0);
 
+  fsim_object_t resolved = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session,
+          text("tb.selected.lane[0].u.resolved"),
+          &resolved)
+      == FSIM_STATUS_OK);
+  fsim_object_info_t resolved_info{};
+  resolved_info.struct_size = sizeof(resolved_info);
+  resolved_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(
+          session, resolved, &resolved_info)
+      == FSIM_STATUS_OK);
+  assert(resolved_info.kind == FSIM_OBJECT_SIGNAL);
+  assert(
+      (resolved_info.flags & FSIM_OBJECT_FLAG_RESOLVED)
+      == FSIM_OBJECT_FLAG_RESOLVED);
+  std::vector<fsim_object_t> resolved_drivers;
+  assert(
+      fsim_session_visit_children(
+          session,
+          resolved,
+          collect_object,
+          &resolved_drivers)
+      == FSIM_STATUS_OK);
+  assert(resolved_drivers.size() == 2);
+
   fsim_object_t q_driver = FSIM_INVALID_OBJECT;
   assert(
       fsim_session_find_object(
@@ -1170,7 +1201,7 @@ max_deltas = 1000
           sizeof(value),
           &required)
       == FSIM_STATUS_OK);
-  assert(std::string(value) == "1");
+  assert(std::string(value) == "0");
   assert(fsim_session_release(session, q) == FSIM_STATUS_OK);
   assert(
       fsim_session_read_value(session, q, value, sizeof(value), &required)
@@ -1182,6 +1213,31 @@ max_deltas = 1000
       fsim_session_read_value(session, q, value, sizeof(value), &required)
       == FSIM_STATUS_OK);
   assert(std::string(value) == "1");
+  assert(
+      fsim_session_read_value(
+          session,
+          resolved,
+          value,
+          sizeof(value),
+          &required)
+      == FSIM_STATUS_OK);
+  assert(std::string(value) == "X");
+  std::vector<std::string> resolved_driver_values;
+  for (const auto driver : resolved_drivers) {
+    assert(
+        fsim_session_read_value(
+            session,
+            driver,
+            value,
+            sizeof(value),
+            &required)
+        == FSIM_STATUS_OK);
+    resolved_driver_values.emplace_back(value);
+  }
+  std::ranges::sort(resolved_driver_values);
+  assert((
+      resolved_driver_values
+      == std::vector<std::string>{"0", "1"}));
   for (const auto& [local, expected] :
        std::array{
            std::pair{control_state, std::string_view{"0"}},

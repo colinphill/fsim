@@ -17,6 +17,12 @@ _Static_assert(
     FSIM_OBJECT_FLAG_INITIALIZED != FSIM_OBJECT_FLAG_ENTERED,
     "C ABI debug-state flags overlap");
 _Static_assert(
+    FSIM_OBJECT_FLAG_RESOLVED != FSIM_OBJECT_FLAG_FORCED
+        && FSIM_OBJECT_FLAG_RESOLVED != FSIM_OBJECT_FLAG_HAS_SOURCE
+        && FSIM_OBJECT_FLAG_RESOLVED != FSIM_OBJECT_FLAG_INITIALIZED
+        && FSIM_OBJECT_FLAG_RESOLVED != FSIM_OBJECT_FLAG_ENTERED,
+    "C ABI resolved flag overlaps");
+_Static_assert(
     FSIM_CALLBACKS_V1_SIZE
         == offsetof(fsim_callbacks_t, safe_point_info),
     "C ABI callback prefix changed");

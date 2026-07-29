@@ -565,9 +565,16 @@ using Operation =
                  TimeDisplay, MonitorInstall, MonitorControl, RandomValue,
                  Report, Pause, Stop, Halt>;
 
+enum class ResolutionKind : std::uint8_t {
+  none,
+  sv_wire,
+  std_logic,
+};
+
 struct Signal {
   std::string name;
   PackedLogic4 initial_value;
+  ResolutionKind resolution{ResolutionKind::none};
 };
 
 struct Sensitivity {
@@ -1104,6 +1111,10 @@ public:
                              SimulationTick delay, StableOrder order = 0);
 
   [[nodiscard]] const PackedLogic4 &signal_value(SignalId signal) const;
+  /// Return one process-owned driver slot. For an unresolved signal this is
+  /// the single underlying driven value.
+  [[nodiscard]] const PackedLogic4& driver_value(
+      ProcessId process, SignalId signal) const;
   [[nodiscard]] PackedLogic4 read_debug_local(
       ProcessId process, std::size_t local_index) const;
   /// True once a language-level Stop operation (`$finish` or equivalent) has
