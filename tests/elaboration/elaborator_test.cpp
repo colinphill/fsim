@@ -10957,6 +10957,14 @@ architecture rtl of Array_Dut is
   signal Aggregate_Positional : Quartet_T;
   signal Aggregate_Named : Quartet_T;
   signal Aggregate_Equal : boolean;
+  signal Attribute_Left : integer;
+  signal Attribute_Right : integer;
+  signal Attribute_Length : integer;
+  signal Attribute_Ascending : boolean;
+  signal Range_Order : integer;
+  signal Reverse_Order : integer;
+  signal Attribute_Aggregate : Logic_Bus_T;
+  signal Attribute_Slice : std_logic_vector(3 downto 0);
 begin
   Result <= Source;
   Logic_Bus <=
@@ -10968,6 +10976,41 @@ begin
   Aggregate_Equal <=
     Aggregate_Named =
       (0 to 0 => true, 2 => true, others => false);
+  attribute_forms : process
+    variable Forward_Order : integer := 0;
+    variable Backward_Order : integer := 0;
+    variable Attribute_Local : Logic_Bus_T :=
+      (Logic_Bus_T'left downto 4 => '1',
+       3 | 1 => 'Z',
+       work.array_types.logic_bus_t'right => 'H',
+       others => '0');
+  begin
+    for Index in Logic_Bus_T'range loop
+      if Index = 5 then
+        next;
+      end if;
+      Forward_Order := Forward_Order * 10 + Index;
+    end loop;
+    for Index in Logic_Bus_T'reverse_range(1) loop
+      if Index = 6 then
+        exit;
+      end if;
+      Backward_Order := Backward_Order * 10 + Index;
+    end loop;
+    Attribute_Local(Logic_Bus_T'right) := 'H';
+    Attribute_Left <= Logic_Bus'left;
+    Attribute_Right <=
+      work.array_types.logic_bus_t'right(1);
+    Attribute_Length <= Logic_Bus_T'length;
+    Attribute_Ascending <= Logic_Bus_T'ascending;
+    Range_Order <= Forward_Order;
+    Reverse_Order <= Backward_Order;
+    Attribute_Aggregate <= Attribute_Local;
+    Attribute_Slice <=
+      Attribute_Local(
+        Logic_Bus_T'high downto Logic_Bus_T'high - 3);
+    wait;
+  end process;
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -10996,11 +11039,34 @@ end architecture;
         array_design.design->find_signal("aggregate_named");
     const auto array_equal_signal =
         array_design.design->find_signal("aggregate_equal");
+    const auto attribute_left_signal =
+        array_design.design->find_signal("attribute_left");
+    const auto attribute_right_signal =
+        array_design.design->find_signal("attribute_right");
+    const auto attribute_length_signal =
+        array_design.design->find_signal("attribute_length");
+    const auto attribute_ascending_signal =
+        array_design.design->find_signal(
+            "attribute_ascending");
+    const auto range_order_signal =
+        array_design.design->find_signal("range_order");
+    const auto reverse_order_signal =
+        array_design.design->find_signal("reverse_order");
+    const auto attribute_aggregate_signal =
+        array_design.design->find_signal(
+            "attribute_aggregate");
+    const auto attribute_slice_signal =
+        array_design.design->find_signal(
+            "attribute_slice");
     assert(
         array_source_signal && array_result_signal
         && array_logic_signal && array_local_signal
         && array_positional_signal && array_named_signal
-        && array_equal_signal);
+        && array_equal_signal && attribute_left_signal
+        && attribute_right_signal && attribute_length_signal
+        && attribute_ascending_signal && range_order_signal
+        && reverse_order_signal && attribute_aggregate_signal
+        && attribute_slice_signal);
     const auto& array_source_info =
         array_design.design->signals().at(*array_source_signal);
     const auto& array_result_info =
@@ -11070,6 +11136,40 @@ end architecture;
         array_interpreter->signal_value(*array_equal_signal)
             .to_msb_string()
             == "1");
+    assert(
+        array_interpreter->signal_value(*attribute_left_signal)
+            .to_msb_string()
+            == "00000000000000000000000000000111");
+    assert(
+        array_interpreter->signal_value(*attribute_right_signal)
+            .to_msb_string()
+            == "00000000000000000000000000000000");
+    assert(
+        array_interpreter->signal_value(*attribute_length_signal)
+            .to_msb_string()
+            == "00000000000000000000000000001000");
+    assert(
+        array_interpreter
+            ->signal_value(*attribute_ascending_signal)
+            .to_msb_string()
+            == "0");
+    assert(
+        array_interpreter->signal_value(*range_order_signal)
+            .to_msb_string()
+            == "00000000011101001010000001001010");
+    assert(
+        array_interpreter->signal_value(*reverse_order_signal)
+            .to_msb_string()
+            == "00000000000000000011000000111001");
+    assert(
+        array_interpreter
+            ->signal_value(*attribute_aggregate_signal)
+            .to_msb_string()
+            == "1111Z0ZH");
+    assert(
+        array_interpreter->signal_value(*attribute_slice_signal)
+            .to_msb_string()
+            == "1111");
 
     const auto invalid_array_source =
         fsim::frontend::parse_text(
@@ -11117,6 +11217,7 @@ architecture rtl of Invalid_Arrays is
   signal Wide_Element_Aggregate : A_T(0 to 3);
   signal Scalar_Target : bit;
   signal Record_Target : Record_T;
+  signal Attribute_Error : integer;
 begin
   B <= A;
   Equal <= A = B;
@@ -11132,6 +11233,12 @@ begin
     (0 => "10", others => '0');
   Scalar_Target <= (0 => '0');
   Record_Target <= (X | Y => '0');
+  Attribute_Error <= A_T'left;
+  Attribute_Error <= Dynamic_Index'left;
+  Attribute_Error <= Fixed_T'left(2);
+  Attribute_Error <= Fixed_T'left(Dynamic_Index);
+  Attribute_Error <= Missing_T'left;
+  Attribute_Error <= Fixed_T'range;
   Child : entity work.Invalid_Array_Child(rtl)
     port map (Value => B);
 end architecture;
@@ -11195,6 +11302,18 @@ end architecture;
         has_diagnostic(
             invalid_array_design,
             "FSIM-ELAB-VHAGG-008"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHARRAYATTR-001"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHARRAYATTR-002"));
+    assert(
+        has_diagnostic(
+            invalid_array_design,
+            "FSIM-ELAB-VHARRAYATTR-003"));
 
     auto malformed_array_aggregate =
         fsim::frontend::parse_text(

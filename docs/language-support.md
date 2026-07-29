@@ -35,6 +35,15 @@ table's older blanket references to unsupported “array aggregates” and
 nested, multidimensional, qualified, composite-element, and dynamically
 chosen aggregates remain unsupported.
 
+VHDL array-attribute status update: concrete user-array objects and visible
+type/subtype marks support `left`, `right`, `low`, `high`, `length`, and
+`ascending`, with optional dimension `1`. Sequential loops accept `range` and
+`reverse_range` as complete discrete ranges and preserve declared direction,
+including bounded `next` and `exit` behavior. These static scalar attributes
+also participate in array indices, slice bounds, and aggregate choices.
+Unconstrained marks, dimensions other than `1`, and scalar use of a range
+attribute are diagnosed.
+
 SystemVerilog time status update: compilation-unit and leading module-local
 `timeunit`/`timeprecision` declarations, including the combined
 `timeunit value / value` form, now override inherited `` `timescale`` context.

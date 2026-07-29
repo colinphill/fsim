@@ -49,6 +49,8 @@ The current tree contains:
   subtypes, with constrained and `integer`/`natural`/`positive range <>`
   forms, nominal assignment and hierarchy checks, whole/index/slice reads and
   writes, contextual positional/index/range/choice-list/`others` aggregates,
+  object/type/subtype bounds attributes and direction-aware
+  `range`/`reverse_range` loops,
   explicit mixed-language wrapper enforcement, and interpreter/LLVM O0/O2,
   debugger, VCD, and cache equivalence;
 - architecture-local or project-package, non-nested VHDL record types with

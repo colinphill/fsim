@@ -31,7 +31,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 11> values;
+  std::array<std::string, 18> values;
   std::string top_local;
   std::string top_aggregate;
   std::string child_local;
@@ -156,7 +156,7 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 11> paths{
+  constexpr std::array<std::string_view, 18> paths{
       "array_top.source",
       "array_top.result",
       "array_top.conditional_result",
@@ -167,11 +167,19 @@ Capture run_once(
       "array_top.boolean_result",
       "array_top.aggregate_positional",
       "array_top.aggregate_named",
-      "array_top.aggregate_equal"};
-  constexpr std::array<std::size_t, 11> widths{
-      8, 8, 8, 4, 1, 1, 8, 4, 8, 8, 1};
-  std::array<fsim::runtime::simir::SignalId, 11> signals{};
-  std::array<fsim::runtime::VcdSignal, 11> traces{};
+      "array_top.aggregate_equal",
+      "array_top.attribute_left",
+      "array_top.attribute_right",
+      "array_top.attribute_length",
+      "array_top.attribute_ascending",
+      "array_top.range_order",
+      "array_top.reverse_order",
+      "array_top.attribute_slice"};
+  constexpr std::array<std::size_t, 18> widths{
+      8, 8, 8, 4, 1, 1, 8, 4, 8, 8, 1,
+      32, 32, 32, 1, 32, 32, 4};
+  std::array<fsim::runtime::simir::SignalId, 18> signals{};
+  std::array<fsim::runtime::VcdSignal, 18> traces{};
   std::ostringstream vcd_output;
   fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 64};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -225,6 +233,7 @@ Capture run_once(
     debugger.execute({"show", "source"});
     debugger.execute({"show", "result"});
     debugger.execute({"show", "aggregate_named"});
+    debugger.execute({"show", "attribute_slice"});
     debugger.execute({"show", "slice_result"});
     assert(debugger_error.str().empty());
     capture.debugger_output = debugger_output.str();
@@ -240,7 +249,7 @@ void verify_capture(const Capture& capture) {
       == fsim::runtime::RunStatus::completed);
   assert((
       capture.values
-      == std::array<std::string, 11>{
+      == std::array<std::string, 18>{
           "01LH10Z-",
           "11LH10Z-",
           "1111Z0ZH",
@@ -251,7 +260,14 @@ void verify_capture(const Capture& capture) {
           "1010",
           "01LH10Z-",
           "1111Z0ZH",
-          "1"}));
+          "1",
+          "00000000000000000000000000000111",
+          "00000000000000000000000000000000",
+          "00000000000000000000000000001000",
+          "0",
+          "00000000011101001010000001001010",
+          "00000000000000000011000000111001",
+          "1111"}));
   assert(capture.top_local == "00LH10Z-");
   assert(capture.top_aggregate == "1111Z0ZH");
   assert(capture.child_local == "11LH10Z-");
@@ -267,6 +283,10 @@ void verify_capture(const Capture& capture) {
   assert(
       capture.debugger_output.find(
           "aggregate_named = 1111Z0ZH")
+      != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "attribute_slice = 1111")
       != std::string::npos);
   assert(
       capture.debugger_output.find(
@@ -360,19 +380,52 @@ architecture rtl of Array_Top is
   signal Aggregate_Positional : Byte_T;
   signal Aggregate_Named : Byte_T;
   signal Aggregate_Equal : boolean;
+  signal Attribute_Left : integer;
+  signal Attribute_Right : integer;
+  signal Attribute_Length : integer;
+  signal Attribute_Ascending : boolean;
+  signal Range_Order : integer;
+  signal Reverse_Order : integer;
+  signal Attribute_Slice : Nibble_T;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
     variable Top_Aggregate : Byte_T :=
-      (7 downto 4 => '1', 3 | 1 => 'Z',
+      (Byte_T'left downto Byte_T'high - 3 => '1',
+       3 | 1 => 'Z',
        First_Index => 'H', others => '0');
+    variable Forward_Order : integer := 0;
+    variable Backward_Order : integer := 0;
   begin
     Source <= Top_Local;
     Aggregate_Named <= Top_Aggregate;
     Top_Local(6) := '0';
     Top_Aggregate :=
-      (Byte_Width - 1 downto 4 => '1',
-       3 | 1 => 'Z', First_Index => 'H', others => '0');
+      (Byte_T'left downto Byte_T'high - 3 => '1',
+       3 | 1 => 'Z',
+       work.array_types.byte_t'right => 'H',
+       others => '0');
+    Top_Aggregate(Byte_T'right) := 'H';
+    for Index in Byte_T'range loop
+      if Index = 5 then
+        next;
+      end if;
+      Forward_Order := Forward_Order * 10 + Index;
+    end loop;
+    for Index in
+      work.array_types.byte_t'reverse_range(1) loop
+      if Index = 6 then
+        exit;
+      end if;
+      Backward_Order := Backward_Order * 10 + Index;
+    end loop;
+    Attribute_Left <= Top_Aggregate'left;
+    Attribute_Right <=
+      work.array_types.byte_t'right(1);
+    Attribute_Length <= Byte_T'length;
+    Attribute_Ascending <= Byte_T'ascending;
+    Range_Order <= Forward_Order;
+    Reverse_Order <= Backward_Order;
     wait;
   end process;
 
@@ -400,6 +453,9 @@ begin
     Aggregate_Named =
       (7 downto 4 => '1', 3 | 1 => 'Z',
        First_Index => 'H', others => '0');
+  Attribute_Slice <=
+    Aggregate_Named(
+      Byte_T'high downto Byte_T'high - 3);
 end architecture;
 )";
     assert(output.good());

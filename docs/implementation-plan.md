@@ -2149,6 +2149,58 @@ interpreter/LLVM O0/O2, debugger, VCD, and cache evidence, fetched
 Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the strict native ABI, and every
 preceding feature batch. No CI state was inspected for this local gate.
 
+### Forty-sixth feature batch — VHDL array type marks and range attributes
+
+The planned ten implementation features are:
+
+1. Parse `range` and `reverse_range` in the bounded VHDL attribute grammar,
+   retaining the prefix, optional dimension, source span, and distinct
+   direction request in expression HIR.
+2. Accept a `range` or `reverse_range` attribute as the complete discrete
+   range of a sequential `for` loop without requiring a following explicit
+   `to` or `downto`.
+3. Resolve attribute prefixes against concrete array signals, locals,
+   package-visible type marks, constrained subtype marks, and directly
+   selected package subtype marks without confusing object and type
+   namespaces.
+4. Lower `left`, `right`, `low`, `high`, `length`, and `ascending` for
+   concrete user-array type/subtype marks as locally static scalar results,
+   matching the existing bounded object-attribute behavior.
+5. Unroll `for I in A'range` from the declared left bound to right bound in
+   its declared direction for ascending, descending, nonzero, and negative
+   index ranges.
+6. Unroll `for I in A'reverse_range` over the same bounds in the opposite
+   direction, retaining loop-index constant substitution, selected writes,
+   `next`, and `exit` behavior.
+7. Accept the optional constant dimension `1` on scalar and range attributes;
+   reject missing, dynamic, zero, negative, or multidimensional arguments
+   with stable diagnostics.
+8. Fold scalar array attributes used as locally static array indices, slice
+   bounds, aggregate choices, and ordinary integer/Boolean expressions.
+9. Diagnose scalar use of `range`/`reverse_range`, nonarray or unknown
+   prefixes, unconstrained type marks, unsupported dimensions, and
+   unrepresentable results without silently guessing a range.
+10. Add focused frontend, elaboration, loop, aggregate, interpreter/LLVM
+    O0/O2, debugger, VCD, specialization, and cache evidence; update the
+    feature matrix and support documentation; then run, record, and push the
+    full local regression gate.
+
+The batch is implemented. The handwritten VHDL parser now preserves
+`range`/`reverse_range` attributes as discrete loop ranges, including an
+optional dimension expression. Elaboration resolves bounded array objects,
+local and package-visible type/subtype marks, and directly selected package
+marks; folds scalar bounds attributes in expressions, indices, slices, and
+aggregate choices; and unrolls both declared and reversed ranges with
+constant loop-index substitution plus working `next`/`exit` control.
+
+Targeted diagnostics cover nonarray, unknown, unconstrained, scalar-range,
+and unsupported-dimension uses. The loop-control evidence also exposed and
+fixed a pre-existing width-context bug: substituted VHDL integer literals in
+Boolean conditions now retain the runtime's 32-bit integer width rather than
+being narrowed to one bit. Focused frontend, diagnostic-catalog, elaboration,
+interpreter/LLVM O0/O2, debugger, VCD, specialization, and cold/warm-cache
+tests pass.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

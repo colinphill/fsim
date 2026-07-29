@@ -642,7 +642,6 @@ therefore excluded.
 | `FSIM-ELAB-090` | error | `$dimensions` or `$unpacked_dimensions` is used outside SystemVerilog or without one statically sized packed argument. |
 | `FSIM-ELAB-091` | error | Bounded VHDL packed exponentiation has a dynamic or negative exponent. |
 | `FSIM-ELAB-092` | error | A VHDL conditional-assignment condition is not Boolean. |
-| `FSIM-ELAB-093` | error | A VHDL array attribute has no representable static packed range or selects an unsupported dimension. |
 | `FSIM-ELAB-094` | error | The VHDL `'event` attribute does not name one visible signal. |
 | `FSIM-ELAB-095` | error | The VHDL `'last_value` attribute does not name one visible signal. |
 | `FSIM-ELAB-096` | error | The VHDL `'last_event` attribute does not name one visible signal. |
@@ -727,6 +726,10 @@ therefore excluded.
 | `FSIM-ELAB-VHARRAYAGG-006` | error | A VHDL array aggregate element value is not scalar width. |
 | `FSIM-ELAB-VHARRAYAGG-007` | error | A VHDL array aggregate would implicitly lose four- or nine-state information in a two-state element. |
 | `FSIM-ELAB-VHARRAYAGG-008` | error | A VHDL array aggregate combines `others` with another choice in the same association. |
+| `FSIM-ELAB-VHARRAYATTR-001` | error | A VHDL array attribute prefix is unknown, nonarray, unconstrained, null, or otherwise lacks a concrete bounded range. |
+| `FSIM-ELAB-VHARRAYATTR-002` | error | A VHDL array attribute selects a nonstatic or unsupported dimension instead of dimension `1`. |
+| `FSIM-ELAB-VHARRAYATTR-003` | error | VHDL `range` or `reverse_range` is used as a scalar expression rather than a discrete range. |
+| `FSIM-ELAB-VHARRAYATTR-004` | error | A scalar VHDL array attribute result is outside the portable signed 32-bit integer representation. |
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |

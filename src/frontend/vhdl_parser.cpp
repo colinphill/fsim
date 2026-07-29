@@ -2277,17 +2277,31 @@ class VhdlParser final : private detail::ParserBase {
       statement.loop_variable = vhdl_name(variable.text);
       expect_keyword("in", true, "FSIM-VHDL-PARSE-100");
       statement.loop_initial = parse_expression();
-      if (match_keyword("to", true)) {
+      const bool attribute_range =
+          statement.loop_initial.kind
+              == ExpressionKind::Call
+          && (statement.loop_initial.text == "'range"
+              || statement.loop_initial.text
+                  == "'reverse_range");
+      if (attribute_range) {
+        statement.loop_limit = Expression{
+            ExpressionKind::Invalid,
+            {},
+            {},
+            statement.loop_initial.span};
+      } else if (match_keyword("to", true)) {
         statement.loop_descending = false;
+        statement.loop_limit = parse_expression();
       } else if (match_keyword("downto", true)) {
         statement.loop_descending = true;
+        statement.loop_limit = parse_expression();
       } else {
         error(
             current(),
             "FSIM-VHDL-PARSE-101",
             "expected 'to' or 'downto' in sequential for-loop range");
+        statement.loop_limit = parse_expression();
       }
-      statement.loop_limit = parse_expression();
       expect_keyword("loop", true, "FSIM-VHDL-PARSE-102");
       validate_opening_loop_label(
           statement.loop_label,
@@ -2988,12 +3002,12 @@ class VhdlParser final : private detail::ParserBase {
         const auto attribute =
             expect_identifier("attribute designator");
         const auto designator = vhdl_name(attribute.text);
-        static constexpr std::array<std::string_view, 17>
+        static constexpr std::array<std::string_view, 19>
             supported_attributes{
                 "left", "right", "low", "high", "length",
                 "ascending", "event", "last_value", "last_event",
                 "stable", "active", "pos", "val", "succ", "pred",
-                "leftof", "rightof"};
+                "leftof", "rightof", "range", "reverse_range"};
         if (std::ranges::find(
                 supported_attributes, designator)
             == supported_attributes.end()) {

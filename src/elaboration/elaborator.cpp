@@ -5122,6 +5122,170 @@ private:
                 static_cast<std::uint32_t>(statement.span.begin.column)}});
     }
 
+    [[nodiscard]] const frontend::Type*
+    vhdl_array_attribute_prefix_type(
+        const Expression& expression) const {
+        if (language_ != frontend::Language::Vhdl2008
+            || expression.kind != ExpressionKind::Call
+            || expression.operands.empty()
+            || expression.operands.front().kind
+                != ExpressionKind::Identifier) {
+            return nullptr;
+        }
+        const auto& prefix =
+            expression.operands.front().text;
+        if (const auto* object = object_type(prefix);
+            object != nullptr) {
+            return object;
+        }
+        return visible_type_mark(prefix);
+    }
+
+    [[nodiscard]] static bool is_vhdl_array_like(
+        const frontend::Type& type) {
+        if (type.vhdl_array) {
+            return true;
+        }
+        const auto separator =
+            type.spelling.find_last_of('.');
+        const auto name = type.spelling.substr(
+            separator == std::string::npos
+                ? 0
+                : separator + 1);
+        return name == "bit_vector"
+            || name == "std_logic_vector"
+            || name == "std_ulogic_vector"
+            || name == "signed"
+            || name == "unsigned";
+    }
+
+    std::optional<frontend::PackedRange>
+    vhdl_array_attribute_range(
+        const Expression& expression,
+        const bool report_errors) {
+        const auto* type =
+            vhdl_array_attribute_prefix_type(expression);
+        if (type == nullptr || !is_vhdl_array_like(*type)) {
+            if (report_errors) {
+                report(
+                    "FSIM-ELAB-VHARRAYATTR-001",
+                    expression.text
+                        + " requires a visible bounded array object, "
+                          "type, or subtype mark",
+                    expression.span);
+            }
+            return std::nullopt;
+        }
+        if (expression.operands.size() < 1
+            || expression.operands.size() > 2) {
+            if (report_errors) {
+                report(
+                    "FSIM-ELAB-VHARRAYATTR-001",
+                    expression.text
+                        + " accepts at most one dimension argument",
+                    expression.span);
+            }
+            return std::nullopt;
+        }
+        if (expression.operands.size() == 2) {
+            const auto dimension =
+                constant_index(expression.operands[1]);
+            if (!dimension || *dimension != 1) {
+                if (report_errors) {
+                    report(
+                        "FSIM-ELAB-VHARRAYATTR-002",
+                        expression.text
+                            + " supports only the locally static "
+                              "dimension 1",
+                        expression.operands[1].span);
+                }
+                return std::nullopt;
+            }
+        }
+        if (!type->packed_range
+            || type->packed_range->width() == 0) {
+            if (report_errors) {
+                report(
+                    "FSIM-ELAB-VHARRAYATTR-001",
+                    expression.text
+                        + " requires a concrete non-null array "
+                          "constraint",
+                    expression.operands.front().span);
+            }
+            return std::nullopt;
+        }
+        return type->packed_range;
+    }
+
+    std::optional<std::int64_t>
+    static_integer_value(const Expression& expression) {
+        if (language_ != frontend::Language::Vhdl2008) {
+            return constant_index(expression);
+        }
+        auto folded = expression;
+        const auto fold_attributes =
+            [&](const auto& self,
+                Expression& candidate) -> bool {
+              for (auto& operand : candidate.operands) {
+                  if (!self(self, operand)) {
+                      return false;
+                  }
+              }
+              if (candidate.kind != ExpressionKind::Call
+                  || (candidate.text != "'left"
+                      && candidate.text != "'right"
+                      && candidate.text != "'low"
+                      && candidate.text != "'high"
+                      && candidate.text != "'length"
+                      && candidate.text != "'ascending")
+                  || vhdl_array_attribute_prefix_type(candidate)
+                      == nullptr) {
+                  return true;
+              }
+              const auto span = candidate.span;
+              const auto range =
+                  vhdl_array_attribute_range(candidate, false);
+              if (!range) {
+                  return false;
+              }
+              std::int64_t value = 0;
+              if (candidate.text == "'left") {
+                  value = range->left;
+              } else if (candidate.text == "'right") {
+                  value = range->right;
+              } else if (candidate.text == "'low") {
+                  value = std::min(
+                      range->left, range->right);
+              } else if (candidate.text == "'high") {
+                  value = std::max(
+                      range->left, range->right);
+              } else if (candidate.text == "'ascending") {
+                  value = range->descending ? 0 : 1;
+              } else {
+                  const auto width = range->width();
+                  if (width
+                      > static_cast<std::uint64_t>(
+                          std::numeric_limits<
+                              std::int64_t>::max())) {
+                      return false;
+                  }
+                  value =
+                      static_cast<std::int64_t>(width);
+              }
+              candidate = constant_expression(
+                  value,
+                  span,
+                  frontend::ValueDomain::Integer,
+                  frontend::Language::Vhdl2008);
+              return true;
+            };
+        if (!fold_attributes(
+                fold_attributes, folded)) {
+            return std::nullopt;
+        }
+        return constant_index(folded);
+    }
+
     struct ConstantSliceSelection {
         std::size_t offset{};
         std::size_t width{};
@@ -5130,7 +5294,7 @@ private:
     std::optional<ConstantSliceSelection>
     constant_slice_selection(
         const Expression& expression,
-        const std::size_t source_width) const {
+        const std::size_t source_width) {
         if (expression.kind != ExpressionKind::Slice
             || expression.operands.size() != 3) {
             return std::nullopt;
@@ -5148,9 +5312,9 @@ private:
         if (expression.text == "+:"
             || expression.text == "-:") {
             const auto base =
-                constant_index(expression.operands[1]);
+                static_integer_value(expression.operands[1]);
             const auto selected_width =
-                constant_index(expression.operands[2]);
+                static_integer_value(expression.operands[2]);
             if (!base || !selected_width
                 || *selected_width <= 0) {
                 return std::nullopt;
@@ -5185,9 +5349,9 @@ private:
             width = static_cast<std::uint64_t>(*selected_width);
         } else {
             const auto parsed_left =
-                constant_index(expression.operands[1]);
+                static_integer_value(expression.operands[1]);
             const auto parsed_right =
-                constant_index(expression.operands[2]);
+                static_integer_value(expression.operands[2]);
             if (!parsed_left || !parsed_right) {
                 return std::nullopt;
             }
@@ -5287,7 +5451,8 @@ private:
 
         if (statement.target.kind == ExpressionKind::Index) {
             const auto index =
-                constant_index(statement.target.operands[1]);
+                static_integer_value(
+                    statement.target.operands[1]);
             const auto offset =
                 index
                     ? select_offset(
@@ -6036,31 +6201,62 @@ private:
             return;
         }
 
-        std::string error;
-        const auto initial = evaluate_constant_expression(
-            statement.loop_initial, {}, error);
-        if (!initial) {
-            report(
-                "FSIM-ELAB-071",
-                "cannot evaluate sequential for-loop initial bound: "
-                    + error,
-                statement.loop_initial.span);
-            return;
-        }
-        error.clear();
-        const auto limit = evaluate_constant_expression(
-            statement.loop_limit, {}, error);
-        if (!limit) {
-            report(
-                statement.loop_repeat
-                    ? "FSIM-ELAB-075"
-                    : "FSIM-ELAB-072",
-                (statement.loop_repeat
-                     ? "cannot evaluate repeat count: "
-                     : "cannot evaluate sequential for-loop final bound: ")
-                    + error,
-                statement.loop_limit.span);
-            return;
+        std::optional<std::int64_t> initial;
+        std::optional<std::int64_t> limit;
+        bool loop_descending =
+            statement.loop_descending;
+        const bool attribute_range =
+            language_ == frontend::Language::Vhdl2008
+            && statement.loop_initial.kind
+                == ExpressionKind::Call
+            && (statement.loop_initial.text == "'range"
+                || statement.loop_initial.text
+                    == "'reverse_range");
+        if (attribute_range) {
+            const auto range =
+                vhdl_array_attribute_range(
+                    statement.loop_initial, true);
+            if (!range) {
+                return;
+            }
+            const bool reverse =
+                statement.loop_initial.text
+                    == "'reverse_range";
+            initial =
+                reverse ? range->right : range->left;
+            limit =
+                reverse ? range->left : range->right;
+            loop_descending =
+                reverse ? !range->descending
+                        : range->descending;
+        } else {
+            std::string error;
+            initial = evaluate_constant_expression(
+                statement.loop_initial, {}, error);
+            if (!initial) {
+                report(
+                    "FSIM-ELAB-071",
+                    "cannot evaluate sequential for-loop initial bound: "
+                        + error,
+                    statement.loop_initial.span);
+                return;
+            }
+            error.clear();
+            limit = evaluate_constant_expression(
+                statement.loop_limit, {}, error);
+            if (!limit) {
+                report(
+                    statement.loop_repeat
+                        ? "FSIM-ELAB-075"
+                        : "FSIM-ELAB-072",
+                    (statement.loop_repeat
+                         ? "cannot evaluate repeat count: "
+                         : "cannot evaluate sequential for-loop final "
+                           "bound: ")
+                        + error,
+                    statement.loop_limit.span);
+                return;
+            }
         }
         if (statement.loop_repeat && *limit < 0) {
             report(
@@ -6071,7 +6267,7 @@ private:
         }
 
         const bool null_range =
-            statement.loop_descending
+            loop_descending
                 ? (statement.loop_limit_exclusive
                        ? *initial <= *limit
                        : *initial < *limit)
@@ -6106,7 +6302,7 @@ private:
         auto value = *initial;
         std::size_t count = 0;
         const auto in_range = [&]() {
-            if (statement.loop_descending) {
+            if (loop_descending) {
                 return statement.loop_limit_exclusive
                     ? value > *limit
                     : value >= *limit;
@@ -6154,7 +6350,7 @@ private:
                 && value == *limit) {
                 break;
             }
-            value += statement.loop_descending ? -1 : 1;
+            value += loop_descending ? -1 : 1;
         }
         auto loop_control = std::move(loop_controls_.back());
         loop_controls_.pop_back();
@@ -6851,9 +7047,11 @@ private:
                         continue;
                     }
                     const auto left =
-                        constant_index(choice.operands[0]);
+                        static_integer_value(
+                            choice.operands[0]);
                     const auto right =
-                        constant_index(choice.operands[1]);
+                        static_integer_value(
+                            choice.operands[1]);
                     if (!left || !right) {
                         report(
                             "FSIM-ELAB-VHARRAYAGG-003",
@@ -6881,7 +7079,8 @@ private:
                     }
                     continue;
                 }
-                const auto index = constant_index(choice);
+                const auto index =
+                    static_integer_value(choice);
                 if (!index) {
                     report(
                         "FSIM-ELAB-VHARRAYAGG-003",
@@ -7434,7 +7633,8 @@ private:
             const auto source_width =
                 infer_width(expression.operands[0]);
             const auto index =
-                constant_index(expression.operands[1]);
+                static_integer_value(
+                    expression.operands[1]);
             if (!source_width || !index) {
                 report(
                     "FSIM-ELAB-068",
@@ -8120,51 +8320,32 @@ private:
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
+            && (expression.text == "'range"
+                || expression.text == "'reverse_range")) {
+            if (!vhdl_array_attribute_range(
+                    expression, true)) {
+                return std::nullopt;
+            }
+            report(
+                "FSIM-ELAB-VHARRAYATTR-003",
+                expression.text
+                    + " is a discrete range and cannot be used as a "
+                      "scalar expression",
+                expression.span);
+            return std::nullopt;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
             && (expression.text == "'left"
                 || expression.text == "'right"
                 || expression.text == "'low"
                 || expression.text == "'high"
                 || expression.text == "'length"
                 || expression.text == "'ascending")) {
-            if (expression.operands.empty()
-                || expression.operands.size() > 2) {
-                report(
-                    "FSIM-ELAB-093",
-                    expression.text
-                        + " requires one bounded array object and at "
-                          "most one dimension",
-                    expression.span);
-                return std::nullopt;
-            }
-            if (expression.operands.size() == 2) {
-                const auto dimension =
-                    constant_index(expression.operands[1]);
-                if (!dimension || *dimension != 1) {
-                    report(
-                        "FSIM-ELAB-093",
-                        expression.text
-                            + " supports only the constant dimension 1",
-                        expression.operands[1].span);
-                    return std::nullopt;
-                }
-            }
-            const auto operand_width =
-                infer_width(expression.operands.front());
             const auto range =
-                operand_width
-                    ? expression_range(
-                          expression.operands.front(),
-                          *operand_width)
-                    : std::nullopt;
-            if (!operand_width || !range || *operand_width == 0
-                || *operand_width
-                    > std::numeric_limits<std::int32_t>::max()) {
-                report(
-                    "FSIM-ELAB-093",
-                    expression.text
-                        + " cannot infer a representable static packed "
-                          "range for its object",
-                    expression.operands.front().span);
+                vhdl_array_attribute_range(
+                    expression, true);
+            if (!range) {
                 return std::nullopt;
             }
             if (expression.text == "'ascending") {
@@ -8189,13 +8370,25 @@ private:
             } else if (expression.text == "'high") {
                 result = std::max(range->left, range->right);
             } else {
-                result = static_cast<std::int64_t>(*operand_width);
+                const auto width = range->width();
+                if (width
+                    > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int32_t>::max())) {
+                    report(
+                        "FSIM-ELAB-VHARRAYATTR-004",
+                        expression.text
+                            + " result is outside the bounded 32-bit "
+                              "integer range",
+                        expression.span);
+                    return std::nullopt;
+                }
+                result = static_cast<std::int64_t>(width);
             }
             if (result < std::numeric_limits<std::int32_t>::min()
                 || result
                     > std::numeric_limits<std::int32_t>::max()) {
                 report(
-                    "FSIM-ELAB-093",
+                    "FSIM-ELAB-VHARRAYATTR-004",
                     expression.text
                         + " result is outside the bounded 32-bit "
                           "integer range",
@@ -8203,11 +8396,11 @@ private:
                 return std::nullopt;
             }
             const auto destination = allocate_register(
-                32, frontend::ValueDomain::Bit2);
+                32, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(LoadConstant{
                 destination,
-                unsigned_value(
-                    static_cast<std::uint32_t>(result), 32)});
+                integer_value(
+                    static_cast<std::int32_t>(result))});
             return destination;
         }
         if (expression.kind == ExpressionKind::Call
@@ -9321,6 +9514,10 @@ private:
     std::optional<std::size_t> infer_width(const Expression& expression) const {
         if (expression.kind == ExpressionKind::BooleanLiteral) {
             return std::size_t{1};
+        }
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::IntegerLiteral) {
+            return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Aggregate) {
             return std::nullopt;
@@ -10871,7 +11068,14 @@ private:
                                 != alias.type
                                        .enumeration_literals.end();
                         });
-                if (!enumeration_literal) {
+                const bool type_mark =
+                    std::any_of(
+                        specialized_package->unit.type_aliases.begin(),
+                        specialized_package->unit.type_aliases.end(),
+                        [&](const auto& alias) {
+                            return alias.name == constant_name;
+                        });
+                if (!enumeration_literal && !type_mark) {
                     report(
                         "FSIM-ELAB-PKG-010",
                         "VHDL package '" + requested_library
@@ -10880,7 +11084,7 @@ private:
                             + constant_name + "'",
                         reference_span);
                 }
-                if (enumeration_literal) {
+                if (enumeration_literal || type_mark) {
                     const auto package_source = std::string{
                         frontend::physical_source(package->span)};
                     if (dependencies.insert(package_source).second) {
@@ -10980,6 +11184,53 @@ private:
                 }
             },
             true);
+        const auto owner_library =
+            unit.library.empty()
+                ? std::string{"work"}
+                : unit.library;
+        const auto expression_identifiers =
+            qualified_identifiers(unit);
+        for (const auto& [name, span] :
+             expression_identifiers) {
+            const auto parts = selected_name_parts(name);
+            if (parts.size() != 2 && parts.size() != 3) {
+                continue;
+            }
+            const auto package_name =
+                parts[parts.size() - 2];
+            const auto type_name = parts.back();
+            const auto requested_library =
+                parts.size() == 2
+                    ? owner_library
+                    : parts.front() == "work"
+                        ? owner_library
+                        : parts.front();
+            const auto package = std::find_if(
+                parsed_.units.begin(),
+                parsed_.units.end(),
+                [&](const DesignUnit& candidate) {
+                    const auto candidate_library =
+                        candidate.library.empty()
+                            ? std::string_view{"work"}
+                            : std::string_view{
+                                  candidate.library};
+                    return candidate.kind
+                            == frontend::UnitKind::VhdlPackage
+                        && candidate.name == package_name
+                        && candidate_library
+                            == requested_library;
+                });
+            if (package == parsed_.units.end()
+                || std::none_of(
+                    package->type_aliases.begin(),
+                    package->type_aliases.end(),
+                    [&](const auto& alias) {
+                        return alias.name == type_name;
+                    })) {
+                continue;
+            }
+            referenced_types.try_emplace(name, span);
+        }
         std::vector<std::string> ordered;
         ordered.reserve(referenced_types.size());
         for (const auto& [name, span] : referenced_types) {
@@ -10987,10 +11238,6 @@ private:
             ordered.push_back(name);
         }
         std::sort(ordered.begin(), ordered.end());
-        const auto owner_library =
-            unit.library.empty()
-                ? std::string{"work"}
-                : unit.library;
         for (const auto& name : ordered) {
             const auto& reference_span =
                 referenced_types.at(name);
@@ -11952,7 +12199,8 @@ private:
         resolve_named_types(
             result, type_environment, true, false);
         for (const auto& [name, binding] : type_environment) {
-            if (binding.type.enumeration_literals.empty()
+            if ((binding.type.enumeration_literals.empty()
+                 && !binding.type.vhdl_array)
                 || std::any_of(
                     result.type_aliases.begin(),
                     result.type_aliases.end(),
@@ -13466,7 +13714,8 @@ private:
         const auto expose_type_mark =
             [&](const std::string_view name,
                 const frontend::Type& type) {
-              if (!type.enumeration_literals.empty()) {
+              if (!type.enumeration_literals.empty()
+                  || type.vhdl_array) {
                   visible_type_marks.try_emplace(
                       std::string{name}, &type);
               }

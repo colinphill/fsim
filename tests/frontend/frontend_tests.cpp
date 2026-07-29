@@ -2644,7 +2644,10 @@ entity array_attributes is
 end entity;
 
 architecture rtl of array_attributes is
+  type User_Array_T is array (integer range <>) of bit;
+  subtype Desc_Array_T is User_Array_T(3 downto -2);
   signal descending : std_logic_vector(7 downto 4);
+  signal user_array : Desc_Array_T;
   signal result : signed(31 downto 0);
   signal direction : boolean;
 begin
@@ -2661,6 +2664,14 @@ begin
     result <= descending'last_event;
     direction <= descending'stable;
     direction <= descending'active;
+    result <= Desc_Array_T'left;
+    direction <= Desc_Array_T'ascending(1);
+    for Index in user_array'range loop
+      null;
+    end loop;
+    for Index in Desc_Array_T'reverse_range(1) loop
+      null;
+    end loop;
     wait;
   end process;
 end architecture;
@@ -2673,7 +2684,7 @@ end architecture;
       "'left", "'right", "'low", "'high", "'length",
       "'ascending", "'event", "'last_value", "'last_event",
       "'stable", "'active"};
-  require(statements.size() == 12, "VHDL attribute statement count");
+  require(statements.size() == 16, "VHDL attribute statement count");
   for (std::size_t index = 0; index < attributes.size(); ++index) {
     require(
         statements[index].value.kind == ExpressionKind::Call
@@ -2686,6 +2697,28 @@ end architecture;
       statements[1].value.operands.size() == 2
           && statements[1].value.operands[1].text == "1",
       "VHDL attribute optional dimension");
+  require(
+      statements[11].value.kind == ExpressionKind::Call
+          && statements[11].value.text == "'left"
+          && statements[11].value.operands.front().text
+              == "desc_array_t"
+          && statements[12].value.text == "'ascending"
+          && statements[12].value.operands.size() == 2,
+      "VHDL user-array subtype-mark scalar attributes retain HIR");
+  require(
+      statements[13].kind == StatementKind::Loop
+          && statements[13].loop_initial.kind
+              == ExpressionKind::Call
+          && statements[13].loop_initial.text == "'range"
+          && statements[13].loop_initial.operands.front().text
+              == "user_array"
+          && statements[13].loop_limit.kind
+              == ExpressionKind::Invalid
+          && statements[14].kind == StatementKind::Loop
+          && statements[14].loop_initial.text
+              == "'reverse_range"
+          && statements[14].loop_initial.operands.size() == 2,
+      "range attributes form complete sequential-loop discrete ranges");
 
   const auto unsupported = parse_text(
       "unsupported_attribute.vhd",
