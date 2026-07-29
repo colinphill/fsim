@@ -2201,6 +2201,15 @@ being narrowed to one bit. Focused frontend, diagnostic-catalog, elaboration,
 interpreter/LLVM O0/O2, debugger, VCD, specialization, and cold/warm-cache
 tests pass.
 
+The feature state recorded in commit `b9e4b03` passed the exact LLVM 22.1.8
+warnings-as-errors Release regression: all 41 tests completed successfully in
+50.02 seconds on 2026-07-29. The gate includes the new array type/subtype
+attribute resolution, declared/reversed loop ordering, integer loop-control
+width correction, interpreter/LLVM O0/O2, debugger, VCD, specialization, and
+cache evidence, fetched Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the
+strict native ABI, and every preceding feature batch. No CI state was
+inspected for this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
