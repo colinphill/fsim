@@ -1690,6 +1690,27 @@ The planned ten implementation features are:
     update V1-VH-01/V1-VH-04/V1-VH-05 documentation, then run and push the
     full local regression gate.
 
+All ten implementation features are complete in feature commit `eab3a53`.
+Bounded record declarations now live in either architectures or project
+packages. Entity and architecture declarations retain semantic named-type
+references, resolve selected/all use visibility plus direct two-/three-part
+package type names, and diagnose unknown, missing, or ambiguously visible
+types. Entity interfaces resolve outside the architecture-local type region
+before being merged into each specialization. Same-language VHDL hierarchy
+aliases exact record ports, while foreign boundaries continue to require a
+scalar/vector wrapper. Package and transitive source dependencies participate
+in every consuming specialization and invalidate each corresponding native
+object after a package-only edit.
+
+After feature commit `eab3a53`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 37 tests in 88.29 seconds on 2026-07-29. The
+gate includes package-record parser and visibility diagnostics, recursive
+record-port hierarchy, source provenance, package-edit cache invalidation,
+interpreter/LLVM O0/O2 exact Logic9 execution, debugger-local reads, VCD,
+fetched Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the strict native ABI,
+and all preceding feature batches. No CI state was inspected for this local
+gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
