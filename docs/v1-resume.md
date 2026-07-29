@@ -9,18 +9,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-29.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: `cfc54fa` (`feat: add SystemVerilog string
-  parameters`).
+- Implementation baseline: `9aee9e4` (`feat: add SystemVerilog functions`).
 - The feature baseline and batch documentation are synchronized with
   `origin/codex/resumable-jit`.
-- The source-size refactor is complete: all 227 authored C/C++ source, header,
+- The source-size refactor is complete: all 233 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
-  empty and the maximum is 1,998 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 45
-  configured tests in 287.87 seconds, and Release passed all 46 configured
-  tests in 113.45 seconds on 2026-07-29. Focused LLVM Debug and LLVM-disabled
-  gates passed all five affected tests.
-- No CI state was inspected during feature batch 52 or this handoff.
+  empty and the maximum is 1,987 lines.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 46
+  configured tests in 304.19 seconds, and Release passed all 47 configured
+  tests in 123.26 seconds on 2026-07-29. Focused LLVM Debug and LLVM-disabled
+  gates passed all seven and six affected tests, respectively.
+- The diagnostic catalog covers all 834 production codes.
+- No CI state was inspected during feature batch 53 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -32,7 +32,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, full unsigned-64 values, and entity-level VHDL-2008 interface type generics now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL generic-type semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, automatic integral functions, full unsigned-64 values, and entity-level VHDL-2008 interface type generics now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL generic-type semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -48,6 +48,10 @@ not rebuilt:
   scope, source, and specialization identities;
 - typed SimIR, a deterministic reference interpreter, and a single-thread
   active/inactive/update/postponed scheduler with delta-oscillation diagnosis;
+- bounded SystemVerilog module/package functions with explicit automatic
+  activation frames, constant evaluation, package visibility, nested
+  nonrecursive runtime calls, SimIR call/return control, debugger safe points,
+  and transitive native-cache provenance;
 - packed Bit2, Logic4, and exact Logic9 values, wide-value runtime kernels,
   process-owned drivers, standard resolution, delayed/projected transactions,
   NBA/update writes, dynamic packed indexing, and committed-change visibility;
@@ -121,8 +125,9 @@ document merely because the parser accepts a related form.
 - Finish directive semantics, parameters, generates, hierarchy, and
   specialization.
 - Add interfaces/modports and complete packages.
-- Complete packed/unpacked types, nested aggregates, memories, functions,
-  tasks, all `always` forms, expressions, gates, and assignment semantics.
+- Complete packed/unpacked types, nested aggregates, memories, remaining
+  function forms, tasks, all `always` forms, expressions, gates, and
+  assignment semantics.
 - Complete general delays/events, fork/join, named events, and NBA/delta
   matrices.
 - Complete mutable strings and add files, dynamic/associative arrays, queues,
@@ -156,34 +161,37 @@ opaque native session/object model already used by Tcl.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 53: synthesizable SystemVerilog functions**:
+Resume with **feature batch 54: synthesizable SystemVerilog tasks**:
 
-1. Represent function declarations, return types, formal arguments, local
-   declarations, bodies, and source spans explicitly in SystemVerilog HIR.
-2. Parse bounded module/package functions in ANSI and classic no-argument
-   forms, including function-name assignment and explicit `return`.
-3. Resolve lexical, imported, and directly package-selected function names
-   with stable duplicate, visibility, arity, and direction diagnostics.
-4. Specialize 1–64-bit integral return/formal types and parameter-dependent
-   packed ranges using existing typed constant/type environments.
-5. Give each runtime call an isolated automatic activation frame containing
-   value arguments, locals, and a deterministic return value.
-6. Execute the supported nonsuspending assignment, block, conditional, case,
-   bounded loop, and expression subset inside function bodies.
-7. Evaluate eligible constant functions in parameter/localparam defaults,
-   ranges, and generate conditions without routing them through runtime state.
-8. Lower runtime calls through explicit SimIR call/return control with a
-   debugger safe point and no C++ object or exception crossing the native ABI.
-9. Support bounded nested calls while diagnosing recursion/cycles and retain
-   transitive source provenance in specialization/native-cache identity.
-10. Add frontend, negative, elaboration, constant-call, runtime,
-    interpreter/LLVM O0/O2, debugger-safe-point, cold/warm, and edited-function
-    invalidation evidence, then run and push the scheduled regression gate.
+1. Represent task declarations, formal directions, local declarations,
+   executable bodies, lifetime, and source spans explicitly in SystemVerilog
+   HIR without conflating them with value-returning functions.
+2. Parse bounded module/package tasks in ANSI and classic no-argument forms
+   with explicit `automatic` lifetime and checked closing names.
+3. Resolve lexical, wildcard-imported, and directly package-selected task
+   names with stable duplicate, visibility, and ambiguity diagnostics.
+4. Specialize 1–64-bit integral input, output, and inout formal types plus
+   parameter-dependent packed ranges using the existing typed environments.
+5. Give each task invocation an isolated automatic activation frame with
+   deterministic value copy-in and output/inout copy-out semantics.
+6. Execute the supported nonsuspending blocking-assignment, block,
+   conditional, exact-case, bounded-loop, expression, function-call, and
+   nested task-call subset inside task bodies.
+7. Lower task calls through the existing explicit SimIR call/return control
+   while applying copy-out operations only after a normal task return.
+8. Diagnose direct or indirect function/task recursion cycles and reject task
+   use from constant expressions.
+9. Retain task-call debugger safe points, addressable locals/formals, and
+   transitive package-source provenance in specialization/native-cache
+   identity.
+10. Add frontend, negative, elaboration, runtime, interpreter/LLVM O0/O2,
+    debugger, cold/warm, and edited-task invalidation evidence, then run and
+    push the scheduled regression gate.
 
-Keep this batch bounded to nonsuspending integral functions. Tasks, timing or
-event controls in subprograms, ref/inout/output formals, recursion, DPI,
-runtime strings, unpacked arguments, and generated subprogram declarations
-remain separate release-gate work.
+Keep this batch bounded to nonsuspending integral automatic tasks. Static or
+implicit lifetimes, timing/event controls in tasks, `ref`, runtime strings,
+unpacked arguments, recursion, DPI, generated tasks, and cross-language task
+calls remain separate release-gate work.
 
 ## Working cadence
 

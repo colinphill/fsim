@@ -2817,6 +2817,77 @@ diagnostic-catalog, source-budget, and string-application gates also passed.
 The final tracked-source gate covers 227 authored files with an empty
 allowlist. No CI state was inspected.
 
+### Fifty-third feature batch — synthesizable SystemVerilog functions
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent function declarations, integral return/formal/local types,
+   bodies, lifetime, and source spans explicitly in SystemVerilog HIR.
+2. Parse bounded module/package functions in ANSI and classic no-argument
+   forms with explicit automatic lifetime, function-name assignment, explicit
+   value return, and checked end names.
+3. Resolve lexical, wildcard-imported, and directly package-selected function
+   names with stable duplicate, ambiguity, visibility, and arity diagnostics.
+4. Specialize 1–64-bit integral return/formal/local types and
+   parameter-dependent packed ranges through the existing typed constant/type
+   environments.
+5. Give runtime calls deterministic automatic argument, local, result, and
+   return-address storage that is initialized on every invocation.
+6. Execute the bounded nonsuspending block, blocking-assignment, conditional,
+   exact-case, canonical-loop, break/continue, expression, and return subset
+   inside function bodies.
+7. Evaluate eligible constant functions in parameters/localparams, packed
+   ranges, and generate conditions, including bounded loop/case control.
+8. Lower runtime calls to explicit persistent SimIR `Call`/`Return` control
+   with debugger call safe points, checked metadata/failures, LLVM O0/O2
+   lowering, and cache serialization.
+9. Support nested distinct-function calls, diagnose direct/indirect recursion,
+   and retain package-function source provenance in specialization/native
+   cache identity.
+10. Require frontend/negative/elaboration/runtime evidence plus exact
+    interpreter/LLVM O0/O2 state and safe-point parity, cold/warm reuse, and
+    edited-function invalidation.
+
+The handwritten function parser is isolated in its own compilation unit and
+retains only declaration/state interfaces in the internal header. Function
+HIR remains language-specific until specialization substitutes parameter
+ranges and package imports. Runtime lowering allocates one frame per visible
+function in the owning process, reinitializes arguments, locals, and results
+for every call, and rejects recursive call graphs; consequently the bounded
+call-stack capacity is the number of distinct visible functions.
+
+SimIR now has versioned `CallStack`, `Call`, and `Return` operations. The
+reference interpreter and LLVM lowering both keep the return stack in
+persistent plain packed registers, so suspension at a debugger safe point
+inside a nested call resumes with identical state and no C++ object,
+exception, or compiler-specific integer crossing the native ABI. Validation
+checks target and stack metadata before compilation, while runtime checks
+cover unknown pointers, overflow, underflow, and invalid dynamic return
+targets. LLVM lowering for jump/call/return/branch control lives in a separate
+159-line implementation unit, keeping the original lowering unit at 1,987
+lines.
+
+The standalone application fixture uses a loop/case constant function to
+derive a packed width, calls local nested functions and both imported and
+directly selected package functions, compares exact safe-point sequences and
+final values through the interpreter and LLVM O0/O2, requires one cold store
+and one warm hit, then edits only the separate package function source and
+requires a new specialization/native object.
+
+Static or implicit function lifetimes, classic body argument declarations,
+output/inout/ref/default/unpacked arguments, widths above 64 bits, recursion,
+timing/event/task statements, runtime strings, DPI, generated functions, and
+all tasks remain release-gate work.
+
+The implementation is recorded in feature commit `9aee9e4`. The exact LLVM
+22.1.8 warnings-as-errors Debug regression passed all 46 configured tests in
+304.19 seconds, and Release passed all 47 configured tests in 123.26 seconds
+on 2026-07-29. Focused LLVM Debug and LLVM-disabled gates passed all seven and
+six affected tests, respectively. The diagnostic catalog covers all 834
+production codes. The final tracked-source gate covers 233 authored files
+with an empty allowlist and a maximum of 1,987 lines. No CI state was
+inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
