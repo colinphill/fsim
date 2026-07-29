@@ -1592,6 +1592,25 @@ The planned ten implementation features are:
     update VH-015 documentation, then run and push the full local regression
     gate.
 
+All ten implementation features are complete in feature commit `403ffc2`.
+The append-only v1 JIT ABI now carries exact Logic9 values through
+pointer-based four-plane words, waveform elements, and caller-owned resumable
+frame planes without changing any existing field offset. LLVM O0/O2 directly
+executes exact constants, reads, structural operations, IEEE logic/equality,
+mixed-domain conversions, formatted output, locals, and every supported
+whole/slice scheduling form. Native-object identity includes only the signal
+value kinds referenced by each process, retaining reuse after unrelated
+signal-kind changes. Focused differential testing also corrected vacated-bit
+encoding in exact logical shifts and preserved the Logic9 result domain for
+VHDL shifts, preventing spurious delta-zero `U`-to-`X` changes.
+
+After feature commit `403ffc2`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 35 tests in 89.16 seconds on 2026-07-28. The
+gate includes strict C ABI layout checks, direct LLVM O0/O2 Logic9 and cache
+tests, exact locals, resolution, shifts, projected waveforms, mixed-language
+boundaries, VCD, fetched Boost.Context 1.91.0, fetched Tcl 9.0.4, SystemC, and
+all preceding feature batches. No CI state was inspected for this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
