@@ -44,6 +44,9 @@ if (Test-Path $llvmRoot) {
 $archivePath = Join-Path `
   $env:RUNNER_TEMP `
   "fsim-llvm-$Version-$([Guid]::NewGuid().ToString('N')).tar.xz"
+$stagingDirectory = Join-Path `
+  $env:RUNNER_TEMP `
+  "fsim-llvm-stage-$([Guid]::NewGuid().ToString('N'))"
 
 try {
   Write-Host "Downloading LLVM $Version from $ArchiveUrl"
@@ -70,10 +73,35 @@ try {
     )
   }
 
-  Write-Host "Extracting verified LLVM archive"
-  & tar.exe -xf $archivePath -C $DestinationDirectory
+  New-Item `
+    -ItemType Directory `
+    -Path $stagingDirectory | Out-Null
+
+  Write-Host "Decompressing verified LLVM archive with 7-Zip"
+  & 7z.exe x $archivePath "-o$stagingDirectory" -y
+
+  $tarArchives = @(
+    Get-ChildItem `
+      -LiteralPath $stagingDirectory `
+      -File `
+      -Filter "*.tar"
+  )
+  if ($tarArchives.Count -ne 1) {
+    throw (
+      "Expected one TAR archive after XZ decompression, found {0}" `
+      -f $tarArchives.Count
+    )
+  }
+
+  Write-Host "Extracting LLVM TAR archive"
+  & tar.exe -xf $tarArchives[0].FullName -C $DestinationDirectory
 } finally {
   Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+  Remove-Item `
+    -LiteralPath $stagingDirectory `
+    -Recurse `
+    -Force `
+    -ErrorAction SilentlyContinue
 }
 
 $llvmConfig = Join-Path $llvmRoot "lib/cmake/llvm/LLVMConfig.cmake"
