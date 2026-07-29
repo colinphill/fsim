@@ -2501,6 +2501,66 @@ LLVM-disabled and exact LLVM 22.1.8 Release SystemC compiler and datatype
 application tests pass locally. The supplied Windows test log was analyzed;
 no CI state was queried directly.
 
+### Forty-eighth feature batch — SystemVerilog declared parameter sizing
+
+The architecture-gate batch was split at the typed-HIR boundary so the
+SystemVerilog value-parameter work could land as one coherent, tested change
+without embedding VHDL interface-type semantics in the shared parser model.
+Its ten completed features are:
+
+1. Retain the intrinsic 8-, 16-, and 64-bit widths and default signedness of
+   `byte`, `shortint`, and `longint` value parameters.
+2. Retain the unsigned four-state 64-bit representation of `time` parameters
+   within the current signed-64-bit constant envelope.
+3. Apply explicit `signed` and `unsigned` modifiers to supported integral
+   parameter types.
+4. Preserve packed `bit`/`logic`/`reg` ranges and `int`/`integer` width,
+   domain, and signedness metadata.
+5. Truncate and sign-extend explicitly typed default values at the declared
+   parameter boundary.
+6. Apply the same declared-type conversion to named and positional override
+   values before specialization identity is finalized.
+7. Fold prior-parameter-dependent packed ranges before converting dependent
+   parameters and localparams.
+8. Normalize declaration-ordered localparams and generated parameters while
+   preserving original packed-enum fit and duplicate-value legality checks.
+9. Carry normalized values into per-instance specialization and native-cache
+   identity.
+10. Add targeted unsupported type/string diagnostics plus frontend,
+    elaboration, interpreter, LLVM O0/O2, and cold/warm-cache evidence.
+
+The handwritten frontend now distinguishes the supported integral atom types
+from packed vector types instead of accepting their keywords as unsupported
+placeholders. Elaboration performs one declared-type conversion after either
+default or override evaluation, using the specialized packed width and
+signedness. Enum enumerator constants deliberately bypass this conversion so
+an out-of-range declaration cannot be truncated into an apparently legal
+value before the existing enum diagnostics run.
+
+The source application fixture instantiates default and overridden typed
+parameter specializations, observes exact 32-bit results, and requires
+interpreter, LLVM O0, and LLVM O2 agreement across cold and warm cache runs.
+Focused frontend and elaboration tests cover intrinsic metadata, explicit
+signedness, dependent packed ranges, dependent localparams, normalized
+specialization values, enum regression behavior, and targeted rejection of
+the still-unsupported type and string parameter forms.
+
+This batch does not claim complete SystemVerilog expression sizing. Full
+unsigned-64 constant values, self-determined expression width propagation,
+type parameters, and string parameters remain release-gate work. VHDL
+interface type generics are intentionally carried into batch 49, where they
+can be implemented with an explicit semantic type environment and canonical
+type specialization identity.
+
+The implementation is recorded in feature commit `18078f8`. The exact LLVM
+22.1.8 warnings-as-errors Debug regression passed all 42 configured tests in
+185.68 seconds, and the exact Release regression passed all 43 configured
+tests in 51.73 seconds on 2026-07-29. The gates include intrinsic and packed
+parameter typing, default/override/localparam conversion, dependent widths,
+enum-legality preservation, interpreter/LLVM O0/O2 equivalence, native-cache
+reuse, the permanent source-size check, SystemC, Tcl 9.0.4, mixed-language
+execution, debugger, VCD, and the native APIs. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

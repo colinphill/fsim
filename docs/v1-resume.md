@@ -9,15 +9,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-29.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: `dbe5fc9` (`refactor: complete source size
-  decomposition`).
+- Implementation baseline: `18078f8` (`feat: add SystemVerilog parameter
+  sizing semantics`).
 - Baseline was synchronized with `origin/codex/resumable-jit`.
-- The source-size refactor is complete: all 214 authored C/C++ source, header,
+- The source-size refactor is complete: all 215 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 1,998 lines.
-- The last exact LLVM 22.1.8 warnings-as-errors Release regression passed all
-  42 tests in 96.58 seconds on 2026-07-29.
-- No CI state was inspected during the final refactor gate or this handoff.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 42
+  configured tests in 185.68 seconds, and Release passed all 43 configured
+  tests in 51.73 seconds on 2026-07-29.
+- No CI state was inspected during feature batch 48 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -29,7 +30,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Generic/parameter semantics, remaining source metadata, and complete interpreter/JIT differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Declared integral SystemVerilog parameter conversion now has interpreter/O0/O2/cache evidence; VHDL interface-type generics, remaining SV sizing, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -75,7 +76,9 @@ document merely because the parser accepts a related form.
 ### 1. Close the architecture gate
 
 - Complete VHDL-2008 generic type semantics.
-- Complete SystemVerilog parameter type, width, signedness, and sizing rules.
+- Complete remaining SystemVerilog unsigned-64, type/string parameter, and
+  self-determined expression sizing rules beyond the declared integral
+  parameter conversion slice.
 - Retain source/debug metadata for every remaining executable construct.
 - Make the semantic differential harness compare interpreter, O0, and O2
   final state, assertions, scheduling observations, failures, and normalized
@@ -148,30 +151,31 @@ opaque native session/object model already used by Tcl.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 48: generic/parameter semantics and architecture
-gate differential closure**:
+Resume with **feature batch 49: VHDL-2008 interface type generics**:
 
-1. Parse VHDL-2008 interface type generic declarations with retained source
-   metadata.
-2. Resolve named and positional type-generic actual associations.
-3. Resolve generic-type-dependent ports, objects, and subtype constraints.
-4. Include canonical type actuals in specialization identity and cache keys.
-5. Parse and type SystemVerilog integral typed value parameters/localparams.
-6. Apply SystemVerilog signedness, explicit-width, and unsized-literal sizing
-   rules to defaults and overrides.
-7. Fold parameter-dependent packed ranges and constant expressions after
-   specialization.
-8. Enforce width, signedness, type, duplicate, unknown, and cyclic-actual
-   diagnostics at same-language and mixed-language boundaries.
-9. Add interpreter/O0/O2 final-state, assertion, scheduler, failure, and
-   normalized-trace differential cases for the new semantics.
-10. Add positive, negative, elaboration, runtime, source-metadata, and
-    cold/warm/invalidation evidence to the feature matrix.
+1. Parse interface type generic declarations and optional bounded defaults
+   with retained source metadata.
+2. Represent type-generic formals distinctly from scalar value generics.
+3. Parse named and positional type-mark actuals without treating them as
+   value expressions.
+4. Resolve type actuals through the VHDL library/package/type namespace.
+5. Introduce the smallest explicit semantic type environment needed by
+   generic-dependent ports, objects, and subtype constraints.
+6. Specialize generic-dependent packed, enumeration, record, and supported
+   one-dimensional array types without mutating shared frontend declarations.
+7. Canonicalize type actuals into specialization identity, DesignIR metadata,
+   and native-cache keys.
+8. Diagnose missing, duplicate, unknown, cyclic, incompatible, and
+   cross-language-unrepresentable type actuals with stable codes.
+9. Preserve source/debug metadata and require interpreter/O0/O2 behavior and
+   failure equivalence for each supported dependent type family.
+10. Add positive, negative, elaboration, runtime, mixed-hierarchy,
+    cold/warm/invalidation, support-document, and feature-matrix evidence,
+    then run and push the scheduled regression gate.
 
-Keep this batch bounded. If a generic-type-dependent construct requires the
-typed-HIR migration to remain sound, introduce the smallest explicit semantic
-layer needed and record the dependency instead of embedding more semantic
-state in parser nodes.
+Keep this batch bounded. Do not encode semantic type state in parser nodes or
+headers full of executable code; introduce independently compiled semantic
+services where required by the typed-HIR migration.
 
 ## Working cadence
 
@@ -206,16 +210,16 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 48 is in progress, for example:
+Use a narrow test expression while batch 49 is in progress, for example:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
   -R 'fsim\.(frontend|elaboration|llvm|application|source-line-budget)'
 ```
 
-The Debug build tree was not rebuilt after the final source refactor when this
-handoff was recorded, so build the affected targets before relying on its test
-inventory. The Release tree is the source of the recorded 42-test clean gate.
+Both exact-LLVM build trees were rebuilt for feature batch 48. The configured
+test counts differ because the Release tree includes the fetched-Tcl
+relocation test; both recorded inventories are clean.
 
 For a fresh checkout, configure exact LLVM explicitly:
 
@@ -235,4 +239,3 @@ Before declaring any row complete, consult:
 - [language support](language-support.md);
 - [cross-language semantic contract](cross-language-semantics.md); and
 - [SystemC subset and plug-in model](systemc-subset.md).
-
