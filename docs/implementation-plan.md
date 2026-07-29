@@ -1169,9 +1169,14 @@ LLVM O0/O2 callback/cache-identity, prior time/delay-mode, and
 interpreter/LLVM O0/O2 scalar/vector/slice/gate/VCD/pulse-rejection
 application tests pass. Cancelled inertial transactions are removed from the
 scheduler rather than merely ignored, so a rejected pulse cannot leave a
-phantom future timestamp. The full local regression, feature commit,
-checkpoint commit, and push remain pending. GitHub Actions will not be
-queried.
+phantom future timestamp. The Release build also replaced an optimizer-only
+GCC `maybe-uninitialized` warning around optional timeprecision state with
+explicit validated integer control flow. The exact LLVM 22.1.8
+warnings-as-errors Release regression then passed all 29 tests in 70.81
+seconds on 2026-07-28, including enabled Boost.Context SystemC fibers,
+fetched Tcl 9.0.4, and the fetched-Tcl relocation test. The batch ends at
+feature commit `4813460`; GitHub Actions state was not queried for this local
+gate.
 
 ## v1 release condition
 
