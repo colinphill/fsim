@@ -28,7 +28,7 @@ jobs:
             preset: ci-linux-release
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -53,7 +53,7 @@ jobs:
             build_dir: build/ci-linux-llvm22-release
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install LLVM 22.1.8 development package
         shell: bash
@@ -93,7 +93,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure
         run: cmake --preset ci-sanitizers
@@ -110,7 +110,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Clang
         run: |
@@ -151,12 +151,13 @@ jobs:
             preset: ci-windows-release
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Initialize MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        shell: pwsh
+        run: >
+          & ./.github/scripts/setup-msvc.ps1
+          -Architecture x64
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -189,62 +190,24 @@ jobs:
           - Release
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Initialize MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Install LLVM 22.1.8
-        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
-        with:
-          version: "22.1.8"
-          force-url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang%2Bllvm-22.1.8-x86_64-pc-windows-msvc.tar.xz
-          directory: ${{ runner.temp }}/llvm-22.1.8-stage
-          env: false
-
-      - name: Validate LLVM 22.1.8 development installation
         shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          $llvmRoot = Join-Path `
-            $env:RUNNER_TEMP `
-            "clang+llvm-22.1.8-x86_64-pc-windows-msvc"
-          $llvmConfig = Join-Path `
-            $llvmRoot `
-            "lib/cmake/llvm/LLVMConfig.cmake"
-          if (-not (Test-Path -PathType Leaf $llvmConfig)) {
-            $nestedArchive = Get-ChildItem `
-              -Path $env:LLVM_PATH `
-              -File `
-              -Recurse |
-                Sort-Object Length -Descending |
-                Select-Object -First 1
-            if ($null -eq $nestedArchive) {
-              throw "The LLVM action did not produce an archive to unpack"
-            }
-            tar -xf $nestedArchive.FullName -C $env:RUNNER_TEMP
-            if ($LASTEXITCODE -ne 0) {
-              throw "LLVM development archive extraction failed"
-            }
-            Remove-Item -Force $nestedArchive.FullName
-          }
-          $llvmConfig = Join-Path `
-            $llvmRoot `
-            "lib/cmake/llvm/LLVMConfig.cmake"
-          if (-not (Test-Path -PathType Leaf $llvmConfig)) {
-            throw "LLVMConfig.cmake was not present in the development archive"
-          }
-          $installedVersion = (
-            & "$llvmRoot/bin/llvm-config.exe" --version
-          ).Trim()
-          if ($installedVersion -ne "22.1.8") {
-            throw "Expected LLVM 22.1.8, found $installedVersion"
-          }
-          "LLVM_PATH=$llvmRoot" >> $env:GITHUB_ENV
-          (Join-Path $llvmRoot "bin") >> $env:GITHUB_PATH
+        run: >
+          & ./.github/scripts/setup-msvc.ps1
+          -Architecture x64
+
+      - name: Install and validate LLVM 22.1.8
+        shell: pwsh
+        # SHA-256 is published with the official GitHub release asset.
+        run: >
+          & ./.github/scripts/install-windows-llvm.ps1
+          -Version "22.1.8"
+          -ArchiveUrl
+          "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang%2Bllvm-22.1.8-x86_64-pc-windows-msvc.tar.xz"
+          -Sha256
+          "d96c2cc1736f4eb7fa43cb9bbdf56d93551a9ae0a9aadb9c99c3c3b2b712a234"
 
       - name: Configure with required LLVM backend
         shell: pwsh
