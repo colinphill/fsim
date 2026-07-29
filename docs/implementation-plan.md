@@ -1905,6 +1905,35 @@ The planned ten implementation features are:
     update the VHDL feature matrix; then run, record, and push the full local
     regression gate.
 
+All ten implementation features are complete in feature commit `f8625c4`.
+Typed lowering now retains enumeration type marks independently from object
+names across local declarations, imported package visibility, entity regions,
+and nominal subtypes. The parser preserves all twelve scalar attribute forms
+and diagnoses missing arguments; elaboration enforces prefix, arity, nominal
+argument/result, and integer-family rules with separate legality and range
+diagnostics. Declaration bounds, length, direction, position/value conversion,
+successor/predecessor, and left/right adjacency execute through checked typed
+SimIR without ordinal wraparound. Package constants, generic defaults, and
+generic actuals fold the same operations while retaining enumeration identity
+inside contextual comparisons and conditional values.
+
+The focused application exercises imported and subtype type marks, package
+constant and generic folding, every result kind, debugger-visible literals,
+normalized VCD ordinals, interpreter and LLVM O0/O2 success equivalence,
+interpreter/JIT dynamic successor failure equivalence, cold/warm object-cache
+reuse, and package-edit invalidation. Negative evidence covers missing and
+extra arguments, object prefixes, integer-versus-enumeration argument typing,
+nominal result mismatch, invalid operators, and static/executable range
+failures.
+
+After feature commit `f8625c4`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 40 tests in 91.74 seconds on 2026-07-29. The
+gate includes enumeration-attribute parser recovery, static and dynamic
+typed diagnostics, package/generic folding, interpreter/LLVM O0/O2 values and
+failure behavior, debugger/VCD/cache evidence, fetched Boost.Context 1.91.0
+and Tcl 9.0.4, SystemC, the strict native ABI, and every preceding feature
+batch. No CI state was inspected for this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
