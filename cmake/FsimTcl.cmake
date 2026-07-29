@@ -30,6 +30,7 @@ function(fsim_add_fetched_tcl)
 
   if(WIN32)
     find_program(FSIM_NMAKE_EXECUTABLE NAMES nmake REQUIRED)
+    fsim_tcl_windows_build_targets(tcl_build_targets)
     if(
       CMAKE_MSVC_RUNTIME_LIBRARY
       AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL"
@@ -60,7 +61,8 @@ function(fsim_add_fetched_tcl)
       SOURCE_DIR "${tcl_source}"
       CONFIGURE_COMMAND ""
       BUILD_COMMAND
-        "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc core shell dlls
+        "${FSIM_NMAKE_EXECUTABLE}" /f makefile.vc
+        ${tcl_build_targets}
         "${tcl_options}" "${tcl_optimization}"
         "INSTALLDIR=<INSTALL_DIR>"
       INSTALL_COMMAND

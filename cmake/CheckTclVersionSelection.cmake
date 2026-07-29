@@ -111,3 +111,14 @@ if(
     "unexpected static-CRT Tcl options: ${windows_static_crt_options}"
   )
 endif()
+
+fsim_tcl_windows_build_targets(windows_build_targets)
+if(
+  NOT windows_build_targets
+  STREQUAL "core;shell;dlls;libtclzip"
+)
+  message(
+    FATAL_ERROR
+    "unexpected Windows Tcl build targets: ${windows_build_targets}"
+  )
+endif()

@@ -91,3 +91,16 @@ function(
   endif()
   set(${output_variable} "${options}" PARENT_SCOPE)
 endfunction()
+
+function(fsim_tcl_windows_build_targets output_variable)
+  # install-libraries always copies Tcl's script archive, including for a
+  # noembed build, so the narrowed Windows build must create it explicitly.
+  set(
+    targets
+    core
+    shell
+    dlls
+    libtclzip
+  )
+  set(${output_variable} "${targets}" PARENT_SCOPE)
+endfunction()
