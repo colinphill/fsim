@@ -2424,7 +2424,11 @@ unit is the 1,996-line process coordinator. LLVM has been removed from the
 temporary allowlist, leaving only the elaborator and installed SystemC header,
 and the permanent budget gate now checks 189 authored sources. Focused
 warnings-as-errors LLVM compilation and the `fsim.llvm` differential/cache
-test pass. The exact Release regression remains to close this checkpoint.
+test pass. The exact LLVM 22.1.8 warnings-as-errors Release build passed all
+42 tests in 95.25 seconds on 2026-07-29. This closes the application/LLVM
+checkpoint with the interpreter/JIT differentials, SystemC, Tcl 9.0.4, native
+API, cache, debugger, VCD, and mixed-language coverage green. No CI state was
+inspected.
 
 ## v1 release condition
 
