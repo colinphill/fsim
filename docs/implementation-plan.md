@@ -1851,6 +1851,30 @@ The planned ten implementation features are:
     evidence; update the VHDL feature matrix; then run, record, and push the
     full local regression gate.
 
+All ten implementation features are complete in feature commit `e4f21ed`.
+Typed HIR now distinguishes nominal VHDL enumeration declarations and retains
+identifier/character literal spelling, source spans, declaration-order
+ordinals, and minimum-width two-state storage. Package, entity, architecture,
+subtype, constant, generic, port, signal, and process-local paths preserve the
+nominal type through specialization and hierarchy. Contextual literals execute
+in initializers, assignments, conditional alternatives, exact/ordinal
+comparisons, and case choices without becoming untyped package constants.
+Same-language aliases require identical nominal identity, raw enumerations are
+rejected at foreign boundaries, and debugger signal/local views display the
+literal name alongside its packed ordinal. The focused application proves
+interpreter/LLVM O0/O2 equality, VCD ordinals, cold/warm native reuse, and
+package-edit invalidation.
+
+After feature commit `e4f21ed`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 40 tests in 90.11 seconds on 2026-07-29. The
+gate includes enumeration parser recovery and typed diagnostics, package
+constants and generics, selected literals, nominal hierarchy and mixed-wrapper
+checks, assignments, conditional alternatives, equality/ordinal comparisons,
+case choices, debugger literal rendering, interpreter/LLVM O0/O2 equality,
+VCD, package-edit cache invalidation, fetched Boost.Context 1.91.0 and Tcl
+9.0.4, SystemC, the strict native ABI, and every preceding feature batch. No
+CI state was inspected for this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
