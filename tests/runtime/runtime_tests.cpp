@@ -3385,6 +3385,168 @@ void test_deterministic_random_values() {
       "stable process IDs derive independent random streams");
 }
 
+void test_transition_delay_selection() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const TransitionDelays delays{7, 11, 13};
+  require(
+      transition_delay(
+          PackedLogic4::from_msb_string("0000"),
+          PackedLogic4::from_msb_string("1000"),
+          delays)
+          == 7,
+      "a rising transition selects the rise delay");
+  require(
+      transition_delay(
+          PackedLogic4::from_msb_string("1111"),
+          PackedLogic4::from_msb_string("1011"),
+          delays)
+          == 11,
+      "a falling transition selects the fall delay");
+  require(
+      transition_delay(
+          PackedLogic4::from_msb_string("1111"),
+          PackedLogic4::from_msb_string("11Z1"),
+          delays)
+          == 13,
+      "a high-impedance transition selects the turnoff delay");
+  require(
+      transition_delay(
+          PackedLogic4::from_msb_string("0000"),
+          PackedLogic4::from_msb_string("00X0"),
+          delays)
+          == 7,
+      "a transition to unknown selects the shortest delay");
+  require(
+      transition_delay(
+          PackedLogic4::from_msb_string("0000"),
+          PackedLogic4::from_msb_string("1Z00"),
+          delays)
+          == 7,
+      "a packed mixed transition selects the shortest applicable delay");
+  require(
+      !transition_delay(
+          PackedLogic4::from_msb_string("10XZ"),
+          PackedLogic4::from_msb_string("10XZ"),
+          delays),
+      "an unchanged packed value has no transition delay");
+
+  bool rejected = false;
+  try {
+    static_cast<void>(
+        transition_delay(
+            PackedLogic4::from_msb_string("0"),
+            PackedLogic4::from_msb_string("00"),
+            delays));
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  require(rejected, "transition-delay width mismatch must be rejected");
+}
+
+void test_simir_inertial_transition_writes() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter pulse_filter{{1000, 32}};
+  const auto output = pulse_filter.add_signal(
+      {"output", PackedLogic4::from_msb_string("0")});
+  Process pulse;
+  pulse.name = "pulse-filter";
+  pulse.register_count = 2;
+  pulse.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteInertial{output, 0, {5, 7, 9}},
+      WaitFor{2},
+      LoadConstant{1, PackedLogic4::from_msb_string("0")},
+      WriteInertial{output, 1, {5, 7, 9}},
+      WaitFor{10},
+      WriteInertial{output, 0, {5, 7, 9}},
+      WaitFor{6},
+      Halt{},
+  };
+  static_cast<void>(pulse_filter.add_process(std::move(pulse)));
+  std::vector<SimulationTick> pulse_changes;
+  pulse_filter.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4&,
+          const SimulationTick time) {
+        if (signal == output) {
+          pulse_changes.push_back(time);
+        }
+      });
+  pulse_filter.start();
+  const auto pulse_result = pulse_filter.run();
+  require(
+      pulse_result.status == RunStatus::completed
+          && pulse_filter.signal_value(output)
+              == PackedLogic4::from_msb_string("1")
+          && pulse_changes == std::vector<SimulationTick>{17},
+      "a superseded inertial pulse is rejected before the later rise");
+
+  Interpreter rejected_only{{1000, 32}};
+  const auto rejected_output = rejected_only.add_signal(
+      {"rejected-output", PackedLogic4::from_msb_string("0")});
+  Process rejected_pulse;
+  rejected_pulse.name = "rejected-only";
+  rejected_pulse.register_count = 2;
+  rejected_pulse.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteInertial{rejected_output, 0, {5, 7, 9}},
+      WaitFor{2},
+      LoadConstant{1, PackedLogic4::from_msb_string("0")},
+      WriteInertial{rejected_output, 1, {5, 7, 9}},
+      Halt{},
+  };
+  static_cast<void>(
+      rejected_only.add_process(std::move(rejected_pulse)));
+  rejected_only.start();
+  const auto rejected_result = rejected_only.run();
+  require(
+      rejected_result.status == RunStatus::completed
+          && rejected_result.time == 2
+          && rejected_only.signal_value(rejected_output)
+              == PackedLogic4::from_msb_string("0")
+          && !rejected_only.scheduler().has_pending(),
+      "a rejected pulse removes its cancelled future timestamp");
+
+  Interpreter packed{{1000, 32}};
+  const auto vector_output = packed.add_signal(
+      {"vector", PackedLogic4::from_msb_string("0000")});
+  Process vector;
+  vector.name = "packed-transition";
+  vector.register_count = 2;
+  vector.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1Z00")},
+      WriteInertial{vector_output, 0, {5, 7, 3}},
+      WaitFor{4},
+      LoadConstant{1, PackedLogic4::from_msb_string("11")},
+      WriteInertialSlice{vector_output, 1, 1, {2, 6, 8}},
+      WaitFor{3},
+      Halt{},
+  };
+  static_cast<void>(packed.add_process(std::move(vector)));
+  std::vector<SimulationTick> packed_changes;
+  packed.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4&,
+          const SimulationTick time) {
+        if (signal == vector_output) {
+          packed_changes.push_back(time);
+        }
+      });
+  packed.start();
+  const auto packed_result = packed.run();
+  require(
+      packed_result.status == RunStatus::completed
+          && packed.signal_value(vector_output)
+              == PackedLogic4::from_msb_string("1110")
+          && packed_changes
+              == std::vector<SimulationTick>{3, 6},
+      "packed whole/slice writes use the shortest changed transition");
+}
+
 void test_vcd() {
   using namespace fsim::runtime;
 
@@ -3456,6 +3618,8 @@ int main() {
     test_simir_execution_point_ordering();
     test_simir_display_output();
     test_deterministic_random_values();
+    test_transition_delay_selection();
+    test_simir_inertial_transition_writes();
     test_vcd();
   } catch (const std::exception &error) {
     std::cerr << "runtime test failure: " << error.what() << '\n';

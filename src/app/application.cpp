@@ -201,6 +201,8 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.install_monitor = install_monitor;
     runtime.control_monitor = control_monitor;
     runtime.random_value = random_value;
+    runtime.write_inertial = write_inertial;
+    runtime.write_inertial_slice = write_inertial_slice;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -484,6 +486,30 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_inertial(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint64_t aval,
+      const std::uint64_t bval,
+      const std::uint64_t rise_delay,
+      const std::uint64_t fall_delay,
+      const std::uint64_t turnoff_delay) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value =
+          checked_write_word(state, signal, aval, bval);
+      state.context->write_inertial_word(
+          signal,
+          value,
+          {rise_delay, fall_delay, turnoff_delay});
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   static void write_signal_slice(
       void* context,
       const std::uint32_t signal,
@@ -543,6 +569,33 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           state, signal, offset, width, aval, bval);
       state.context->write_after_slice_word(
           signal, value, offset, delay);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_inertial_slice(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const std::uint64_t aval,
+      const std::uint64_t bval,
+      const std::uint64_t rise_delay,
+      const std::uint64_t fall_delay,
+      const std::uint64_t turnoff_delay) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value = checked_slice_word(
+          state, signal, offset, width, aval, bval);
+      state.context->write_inertial_slice_word(
+          signal,
+          value,
+          offset,
+          {rise_delay, fall_delay, turnoff_delay});
     } catch (...) {
       capture_failure(state);
     }
@@ -3654,10 +3707,20 @@ std::optional<std::uint64_t> unit_femtoseconds(std::string_view unit) {
 }
 
 template <typename Function>
-void visit_delays(std::vector<frontend::Statement>& statements, Function&& function) {
+void visit_delay(frontend::Delay& delay, Function& function) {
+  function(delay);
+  for (auto& additional : delay.additional_values) {
+    visit_delay(additional, function);
+  }
+}
+
+template <typename Function>
+void visit_delays(
+    std::vector<frontend::Statement>& statements,
+    Function&& function) {
   for (auto& statement : statements) {
     if (statement.delay) {
-      function(*statement.delay);
+      visit_delay(*statement.delay, function);
     }
     visit_delays(statement.statements, function);
     visit_delays(statement.else_statements, function);
@@ -3747,13 +3810,7 @@ bool normalize_delays(
         return;
       }
       const auto unit_factor = unit_femtoseconds(delay.unit);
-      const auto precision_femtoseconds =
-          unit.time_precision.empty()
-              ? std::optional<std::uint64_t>{}
-              : femtoseconds(unit.time_precision);
       if (!unit_factor || !tick_femtoseconds
-          || (!unit.time_precision.empty()
-              && !precision_femtoseconds)
           || delay.divisor == 0) {
         diagnostics.error(
             "FSIM-TIME-0003",
@@ -3762,12 +3819,27 @@ bool normalize_delays(
         valid = false;
         return;
       }
+      const bool has_declared_precision =
+          !unit.time_precision.empty();
+      auto rounding_femtoseconds = *tick_femtoseconds;
+      if (has_declared_precision) {
+        const auto declared_precision =
+            femtoseconds(unit.time_precision);
+        if (!declared_precision) {
+          diagnostics.error(
+              "FSIM-TIME-0003",
+              "invalid HDL delay unit, precision, or project resolution",
+              span(delay.span));
+          valid = false;
+          return;
+        }
+        rounding_femtoseconds = *declared_precision;
+      }
 
       std::array<std::uint64_t, 2> numerator{
           delay.magnitude, *unit_factor};
       std::array<std::uint64_t, 2> denominator{
-          delay.divisor,
-          precision_femtoseconds.value_or(*tick_femtoseconds)};
+          delay.divisor, rounding_femtoseconds};
       for (auto& numerator_factor : numerator) {
         for (auto& denominator_factor : denominator) {
           const auto common =
@@ -3811,7 +3883,7 @@ bool normalize_delays(
       }
       auto quanta = numerator_value / denominator_value;
       const auto remainder = numerator_value % denominator_value;
-      if (precision_femtoseconds) {
+      if (has_declared_precision) {
         const auto half =
             denominator_value / 2
             + static_cast<std::uint64_t>(
@@ -3838,8 +3910,8 @@ bool normalize_delays(
       }
 
       std::uint64_t ticks_per_quantum = 1;
-      if (precision_femtoseconds) {
-        if (*precision_femtoseconds % *tick_femtoseconds != 0) {
+      if (has_declared_precision) {
+        if (rounding_femtoseconds % *tick_femtoseconds != 0) {
           diagnostics.error(
               "FSIM-TIME-0003",
               "rounded SystemVerilog delay is not representable at "
@@ -3850,7 +3922,7 @@ bool normalize_delays(
           return;
         }
         ticks_per_quantum =
-            *precision_femtoseconds / *tick_femtoseconds;
+            rounding_femtoseconds / *tick_femtoseconds;
       }
       if (quanta != 0
           && ticks_per_quantum

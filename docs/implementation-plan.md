@@ -1134,6 +1134,45 @@ warnings-as-errors regression then passed all 27 tests in 202.09 seconds on
 feature commit `efdc0a7`; GitHub Actions state was not queried for this local
 gate.
 
+### Twenty-seventh feature batch — transition-specific inertial delays
+
+The planned ten implementation features are:
+
+1. Preserve parenthesized one-, two-, and three-value
+   Verilog/SystemVerilog delay lists in typed HIR, with every value retaining
+   an independent optional `min:typ:max` triple.
+2. Accept rise/fall and rise/fall/turnoff delays on continuous assignments.
+3. Accept one or two rise/fall delays on the currently supported
+   `buf`/`not`/logic gate primitives, while diagnosing illegal third values.
+4. Apply the standard one-value all-transition default and derive an omitted
+   turnoff delay as the minimum of the selected rise and fall delays.
+5. Select every `min`/`typ`/`max` component before precision rounding and
+   include every selected component in automatic global-resolution choice.
+6. Add whole-signal and packed-slice transition-delay operations to SimIR
+   without changing procedural delayed-NBA transport behavior.
+7. Select scalar and packed-vector delays from the actual changed
+   transitions, using the shortest applicable delay for mixed transitions
+   and transitions to unknown.
+8. Give delayed continuous assignments inertial behavior by cancelling
+   superseded pending updates, including rejection of pulses shorter than the
+   effective delay.
+9. Append transition-write callbacks to the versioned plain-C JIT runtime
+   table and include all transition delays in validation, native-object
+   identity, LLVM O0, and LLVM O2 lowering.
+10. Require targeted list diagnostics plus interpreter/LLVM O0/O2,
+    scalar/vector/slice, timestamp, VCD, pulse-rejection, and cold/warm cache
+    evidence.
+
+All ten implementation features are complete. Focused frontend,
+diagnostic-catalog, transition-selection/runtime cancellation, strict C ABI,
+LLVM O0/O2 callback/cache-identity, prior time/delay-mode, and
+interpreter/LLVM O0/O2 scalar/vector/slice/gate/VCD/pulse-rejection
+application tests pass. Cancelled inertial transactions are removed from the
+scheduler rather than merely ignored, so a rejected pulse cannot leave a
+phantom future timestamp. The full local regression, feature commit,
+checkpoint commit, and push remain pending. GitHub Actions will not be
+queried.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

@@ -70,6 +70,18 @@ struct ObservedWrite {
   friend bool operator==(ObservedWrite, ObservedWrite) = default;
 };
 
+struct InertialWrite {
+  std::uint32_t signal{};
+  EncodedSignal value;
+  std::uint32_t offset{};
+  std::uint32_t width{};
+  std::uint64_t rise{};
+  std::uint64_t fall{};
+  std::uint64_t turnoff{};
+
+  friend bool operator==(InertialWrite, InertialWrite) = default;
+};
+
 struct TestRuntime {
   std::array<EncodedSignal, 16> signals{};
   std::uint32_t assertion_count{};
@@ -91,6 +103,7 @@ struct TestRuntime {
   std::vector<std::uint32_t> monitor_install_instructions;
   std::vector<std::uint32_t> monitor_control_instructions;
   std::vector<std::uint32_t> random_instructions;
+  std::vector<InertialWrite> inertial_writes;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -339,6 +352,36 @@ extern "C" std::uint64_t random_value(
   return UINT64_C(0x89abcdef);
 }
 
+extern "C" void write_inertial(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint64_t aval,
+    const std::uint64_t bval,
+    const std::uint64_t rise,
+    const std::uint64_t fall,
+    const std::uint64_t turnoff) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  runtime.inertial_writes.push_back(
+      {signal, {aval, bval}, 0, 0, rise, fall, turnoff});
+}
+
+extern "C" void write_inertial_slice(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const std::uint64_t aval,
+    const std::uint64_t bval,
+    const std::uint64_t rise,
+    const std::uint64_t fall,
+    const std::uint64_t turnoff) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  runtime.inertial_writes.push_back(
+      {signal, {aval, bval}, offset, width, rise, fall, turnoff});
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -366,6 +409,8 @@ extern "C" std::uint64_t random_value(
       &install_monitor,
       &control_monitor,
       &random_value,
+      &write_inertial,
+      &write_inertial_slice,
   };
 }
 
@@ -677,6 +722,84 @@ void test_scheduled_callbacks_at_level(
   assert(after_runtime.scheduled_writes.front().kind ==
          ScheduledWriteKind::after);
   assert(after_runtime.scheduled_writes.front().delay == 7);
+}
+
+void test_inertial_callbacks_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol_prefix) {
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  Process process;
+  process.id = 6;
+  process.name = "inertial_callbacks";
+  process.register_count = 2;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10XZ0101")},
+      WriteInertial{0, 0, {2, 3, 4}},
+      LoadConstant{1, PackedLogic4::from_msb_string("XZ")},
+      WriteInertialSlice{1, 1, 3, {5, 6, 7}},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 2> widths{8, 8};
+  const auto symbol =
+      std::string{symbol_prefix} + "_inertial_callbacks";
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(handle, descriptor)
+      == JitExecutionStatus::completed);
+  const std::vector<InertialWrite> expected{
+      {
+          0,
+          encode(PackedLogic4::from_msb_string("10XZ0101")),
+          0,
+          0,
+          2,
+          3,
+          4},
+      {
+          1,
+          encode(PackedLogic4::from_msb_string("XZ")),
+          3,
+          2,
+          5,
+          6,
+          7},
+  };
+  assert(runtime.inertial_writes == expected);
+
+  {
+    auto too_short = descriptor;
+    too_short.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_inertial));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, too_short); },
+        "does not include write_inertial");
+  }
+  {
+    auto missing = descriptor;
+    missing.write_inertial = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing); },
+        "requires write_inertial");
+  }
+  {
+    auto too_short = descriptor;
+    too_short.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_inertial_slice));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, too_short); },
+        "does not include write_inertial_slice");
+  }
+  {
+    auto missing = descriptor;
+    missing.write_inertial_slice = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing); },
+        "requires write_inertial_slice");
+  }
 }
 
 [[nodiscard]] Process make_scheduling_differential_process() {
@@ -2345,6 +2468,20 @@ make_cached_scheduled_process(const bool delayed,
   return process;
 }
 
+[[nodiscard]] Process make_cached_inertial_process(
+    const TransitionDelays delays) {
+  Process process;
+  process.id = 16;
+  process.name = "cached_inertial_process";
+  process.register_count = 1;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10100101")},
+      WriteInertial{0, 0, delays},
+      Halt{},
+  };
+  return process;
+}
+
 [[nodiscard]] Process
 make_cached_wait_process(const bool static_wait,
                          std::vector<SignalId> signals,
@@ -3190,6 +3327,44 @@ void test_cache_pruning_integration(
   assert(broken.cache_statistics().prune_failures == 1);
 }
 
+void test_inertial_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol{"cached_inertial"};
+  const std::array<std::uint32_t, 1> widths{8};
+  const auto run =
+      [&](const TransitionDelays delays,
+          const std::size_t hits,
+          const std::size_t misses) {
+        LlvmJit jit{
+            LlvmJitOptions{
+                JitOptimizationLevel::o2, cache_directory}};
+        jit.add_process(
+            symbol, make_cached_inertial_process(delays), widths);
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        assert(
+            jit.execute(jit.lookup(symbol), descriptor)
+            == JitExecutionStatus::completed);
+        assert((
+            runtime.inertial_writes
+            == std::vector<InertialWrite>{
+                {
+                    0,
+                    encode(PackedLogic4::from_msb_string("10100101")),
+                    0,
+                    0,
+                    delays.rise,
+                    delays.fall,
+                    delays.turnoff}}));
+        expect_cache_statistics(jit, hits, misses, misses);
+      };
+  run({2, 3, 4}, 0, 1);
+  run({2, 3, 4}, 1, 0);
+  run({5, 3, 4}, 0, 1);
+  run({2, 6, 4}, 0, 1);
+  run({2, 3, 7}, 0, 1);
+}
+
 void test_persistent_object_cache() {
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -3207,6 +3382,7 @@ void test_persistent_object_cache() {
   test_process_module_grouping_at_level(
       JitOptimizationLevel::o2, root / "group-o2");
   test_cache_pruning_integration(root / "pruning");
+  test_inertial_cache_identity(root / "inertial");
 
   std::filesystem::remove_all(root, error);
   assert(!error);
@@ -3929,6 +4105,10 @@ int main() {
       JitOptimizationLevel::o0, "scheduled_o0");
   test_scheduled_callbacks_at_level(
       JitOptimizationLevel::o2, "scheduled_o2");
+  test_inertial_callbacks_at_level(
+      JitOptimizationLevel::o0, "inertial_o0");
+  test_inertial_callbacks_at_level(
+      JitOptimizationLevel::o2, "inertial_o2");
   test_scheduling_differential_at_level(
       JitOptimizationLevel::o0, "scheduled_diff_o0");
   test_scheduling_differential_at_level(

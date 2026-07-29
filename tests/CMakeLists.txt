@@ -325,6 +325,24 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;delay-modes"
   )
 
+  add_executable(
+    fsim_transition_delay_application_tests
+    app/transition_delay_application_test.cpp
+  )
+  fsim_configure_test(fsim_transition_delay_application_tests)
+  target_link_libraries(
+    fsim_transition_delay_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.transition_delays
+    COMMAND fsim_transition_delay_application_tests
+  )
+  set_tests_properties(
+    fsim.application.transition_delays
+    PROPERTIES LABELS "fast;transition-delays"
+  )
+
   add_executable(fsim_application_tests app/application_test.cpp)
   fsim_configure_test(fsim_application_tests)
   target_compile_definitions(

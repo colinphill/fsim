@@ -3128,7 +3128,7 @@ class VerilogParser final : private detail::ParserBase {
   std::optional<Statement> parse_continuous_assignment(const Token& start) {
     std::optional<Delay> delay;
     if (match(TokenKind::Hash)) {
-      delay = parse_verilog_delay(previous());
+      delay = parse_verilog_delay(previous(), 3);
     }
     if (!at(TokenKind::Identifier)) {
       error(current(), "FSIM-SV-PARSE-009",
@@ -3186,7 +3186,7 @@ class VerilogParser final : private detail::ParserBase {
     }
     std::optional<Delay> delay;
     if (match(TokenKind::Hash)) {
-      delay = parse_verilog_delay(previous());
+      delay = parse_verilog_delay(previous(), 2);
     }
 
     const bool unary = operation == "buf" || operation == "not";
@@ -4762,9 +4762,8 @@ class VerilogParser final : private detail::ParserBase {
     delay.unit = alternative.unit;
   }
 
-  Delay parse_verilog_delay(const Token& start) {
+  Delay parse_verilog_delay_value(const bool parenthesized) {
     Delay delay;
-    const bool parenthesized = match(TokenKind::LeftParen);
     auto first = parse_verilog_delay_alternative();
     set_selected_delay(delay, first);
     if (match(TokenKind::Colon)) {
@@ -4785,7 +4784,38 @@ class VerilogParser final : private detail::ParserBase {
       delay.maximum = std::move(maximum);
       set_selected_delay(delay, *delay.typical);
     }
+    delay.span = cover(first.span, previous().span);
+    return delay;
+  }
+
+  Delay parse_verilog_delay(
+      const Token& start,
+      const std::size_t maximum_values = 1) {
+    const bool parenthesized = match(TokenKind::LeftParen);
+    auto delay = parse_verilog_delay_value(parenthesized);
     if (parenthesized) {
+      while (match(TokenKind::Comma)) {
+        const auto comma = previous();
+        if (at(TokenKind::RightParen)) {
+          error(
+              comma,
+              "FSIM-SV-PARSE-135",
+              "expected a delay value after ','");
+          break;
+        }
+        const auto value_start = current();
+        delay.additional_values.push_back(
+            parse_verilog_delay_value(true));
+        if (delay.additional_values.size() + 1 > maximum_values) {
+          error(
+              value_start,
+              "FSIM-SV-SEM-053",
+              "this delay control accepts at most "
+                  + std::to_string(maximum_values)
+                  + " transition delay value"
+                  + (maximum_values == 1 ? "" : "s"));
+        }
+      }
       expect(TokenKind::RightParen, "')' after delay",
              "FSIM-SV-PARSE-024");
     }

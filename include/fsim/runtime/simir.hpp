@@ -234,6 +234,24 @@ struct WriteAfter {
   SimulationTick delay{};
 };
 
+struct TransitionDelays {
+  SimulationTick rise{};
+  SimulationTick fall{};
+  SimulationTick turnoff{};
+
+  friend bool operator==(
+      const TransitionDelays&,
+      const TransitionDelays&) = default;
+};
+
+/// Queue a continuous-assignment value with transition-specific inertial
+/// delay. A later evaluation of the same driver supersedes its pending value.
+struct WriteInertial {
+  SignalId signal{};
+  RegisterId source{};
+  TransitionDelays delays;
+};
+
 /// Replace a contiguous packed range immediately in the active phase.
 struct WriteBlockingSlice {
   SignalId signal{};
@@ -255,6 +273,21 @@ struct WriteAfterSlice {
   std::uint32_t offset{};
   SimulationTick delay{};
 };
+
+struct WriteInertialSlice {
+  SignalId signal{};
+  RegisterId source{};
+  std::uint32_t offset{};
+  TransitionDelays delays;
+};
+
+/// Return the shortest delay required by the bits that actually change.
+/// A transition to X uses the shortest rise/fall/turnoff delay. No value is
+/// returned when the packed values are equal.
+[[nodiscard]] std::optional<SimulationTick> transition_delay(
+    const PackedLogic4& current,
+    const PackedLogic4& next,
+    const TransitionDelays& delays);
 
 struct WaitFor {
   SimulationTick delay{};
@@ -466,7 +499,8 @@ using Operation =
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
                  Shift, Extract, Concatenate, Binary, Insert,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
-                 WriteBlockingSlice, WriteUpdateSlice, WriteAfterSlice,
+                 WriteInertial, WriteBlockingSlice, WriteUpdateSlice,
+                 WriteAfterSlice, WriteInertialSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
                  Branch, DebugPoint, Assert, Display, FormatDisplay,
                  TimeDisplay, MonitorInstall, MonitorControl, RandomValue,
@@ -607,6 +641,37 @@ public:
             value.width, value.aval, value.bval),
         offset,
         delay);
+  }
+  virtual void write_inertial(
+      SignalId signal,
+      PackedLogic4 value,
+      const TransitionDelays& delays) = 0;
+  virtual void write_inertial_word(
+      SignalId signal,
+      const Logic4Word value,
+      const TransitionDelays& delays) {
+    write_inertial(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        delays);
+  }
+  virtual void write_inertial_slice(
+      SignalId signal,
+      PackedLogic4 value,
+      std::size_t offset,
+      const TransitionDelays& delays) = 0;
+  virtual void write_inertial_slice_word(
+      SignalId signal,
+      const Logic4Word value,
+      std::uint32_t offset,
+      const TransitionDelays& delays) {
+    write_inertial_slice(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset,
+        delays);
   }
 
   /// Notify a kernel-owned event identity from an alternate language

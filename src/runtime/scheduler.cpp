@@ -21,6 +21,11 @@ struct Entry {
   StableOrder order{};
   std::uint64_t sequence{};
   Scheduler::Task task;
+  std::shared_ptr<bool> cancelled;
+
+  [[nodiscard]] bool is_cancelled() const noexcept {
+    return cancelled && *cancelled;
+  }
 };
 
 struct WorkQueue {
@@ -28,7 +33,12 @@ struct WorkQueue {
   std::size_t cursor{};
   bool needs_sort{};
 
-  [[nodiscard]] bool empty() const noexcept { return cursor == entries.size(); }
+  [[nodiscard]] bool empty() const noexcept {
+    return std::none_of(
+        entries.begin() + static_cast<std::ptrdiff_t>(cursor),
+        entries.end(),
+        [](const Entry &entry) { return !entry.is_cancelled(); });
+  }
 
   void push(Entry entry) {
     entries.push_back(std::move(entry));
@@ -46,6 +56,9 @@ struct WorkQueue {
                        });
       needs_sort = false;
     }
+    while (cursor < entries.size() && entries[cursor].is_cancelled()) {
+      ++cursor;
+    }
     return std::move(entries.at(cursor++));
   }
 
@@ -61,7 +74,9 @@ struct WorkQueue {
     std::vector<StableOrder> result;
     result.reserve(entries.size() - cursor);
     for (auto index = cursor; index < entries.size(); ++index) {
-      result.push_back(entries[index].order);
+      if (!entries[index].is_cancelled()) {
+        result.push_back(entries[index].order);
+      }
     }
     return result;
   }
@@ -137,14 +152,18 @@ struct Scheduler::Impl {
   std::vector<RuntimeSignalId> recent_signals;
   std::size_t recent_signal_cursor{};
 
-  [[nodiscard]] Entry make_entry(StableOrder order, Task task) {
+  [[nodiscard]] Entry make_entry(
+      StableOrder order,
+      Task task,
+      std::shared_ptr<bool> cancelled = {}) {
     if (!task) {
       throw std::invalid_argument("cannot schedule an empty task");
     }
     if (next_sequence == std::numeric_limits<std::uint64_t>::max()) {
       throw std::overflow_error("scheduler insertion sequence overflow");
     }
-    return Entry{order, next_sequence++, std::move(task)};
+    return Entry{
+        order, next_sequence++, std::move(task), std::move(cancelled)};
   }
 
   void load_next_slot() {
@@ -206,6 +225,40 @@ void Scheduler::schedule_after(SimulationTick delay, SchedulerPhase phase,
     throw std::overflow_error("simulation time overflow while scheduling event");
   }
   schedule_at(impl_->now + delay, phase, stable_order, std::move(task));
+}
+
+ScheduledTaskHandle Scheduler::schedule_after_cancelable(
+    const SimulationTick delay,
+    const SchedulerPhase phase,
+    const StableOrder stable_order,
+    Task task) {
+  if (delay > std::numeric_limits<SimulationTick>::max() - impl_->now) {
+    throw std::overflow_error("simulation time overflow while scheduling event");
+  }
+  const auto time = impl_->now + delay;
+  const auto cancelled = std::make_shared<bool>(false);
+  auto entry =
+      impl_->make_entry(stable_order, std::move(task), cancelled);
+  const auto index = phase_index(phase);
+  if (index >= phase_count) {
+    throw std::invalid_argument("invalid scheduler phase");
+  }
+
+  if (impl_->current && time == impl_->current->time) {
+    const bool phase_finished = index < impl_->current->phase;
+    auto &bucket =
+        phase_finished ? impl_->current->next_delta : impl_->current->current;
+    bucket.queues[index].push(std::move(entry));
+  } else {
+    impl_->future[time].queues[index].push(std::move(entry));
+  }
+  return ScheduledTaskHandle{cancelled};
+}
+
+void Scheduler::cancel(const ScheduledTaskHandle &handle) noexcept {
+  if (handle.cancelled_) {
+    *handle.cancelled_ = true;
+  }
 }
 
 void Scheduler::schedule(SchedulerPhase phase, StableOrder stable_order,
@@ -272,6 +325,10 @@ RunResult Scheduler::run(std::optional<SimulationTick> until) {
     }
 
     if (!impl_->current) {
+      while (!impl_->future.empty()
+             && impl_->future.begin()->second.empty()) {
+        impl_->future.erase(impl_->future.begin());
+      }
       if (impl_->future.empty()) {
         if (until && impl_->now < *until) {
           impl_->now = *until;
@@ -355,7 +412,13 @@ void Scheduler::discard_pending() {
 }
 
 bool Scheduler::has_pending() const noexcept {
-  return impl_->current.has_value() || !impl_->future.empty();
+  if (impl_->current) {
+    return true;
+  }
+  return std::any_of(
+      impl_->future.begin(),
+      impl_->future.end(),
+      [](const auto &entry) { return !entry.second.empty(); });
 }
 
 bool Scheduler::running() const noexcept { return impl_->in_run; }

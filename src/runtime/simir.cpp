@@ -1036,6 +1036,44 @@ struct SignedDivision {
 
 } // namespace
 
+std::optional<SimulationTick> transition_delay(
+    const PackedLogic4& current,
+    const PackedLogic4& next,
+    const TransitionDelays& delays) {
+  if (current.width() == 0 || current.width() != next.width()) {
+    throw std::invalid_argument(
+        "transition-delay values must have the same non-zero width");
+  }
+  std::optional<SimulationTick> selected;
+  const auto consider =
+      [&](const SimulationTick candidate) {
+        if (!selected || candidate < *selected) {
+          selected = candidate;
+        }
+      };
+  for (std::size_t bit = 0; bit < current.width(); ++bit) {
+    if (current.get(bit) == next.get(bit)) {
+      continue;
+    }
+    switch (next.get(bit)) {
+      case Logic4::zero:
+        consider(delays.fall);
+        break;
+      case Logic4::one:
+        consider(delays.rise);
+        break;
+      case Logic4::z:
+        consider(delays.turnoff);
+        break;
+      case Logic4::x:
+        consider(std::min(
+            {delays.rise, delays.fall, delays.turnoff}));
+        break;
+    }
+  }
+  return selected;
+}
+
 InterpreterError::InterpreterError(ProcessId process,
                                    InstructionIndex instruction,
                                    std::string message)
@@ -1100,6 +1138,34 @@ struct Interpreter::Impl {
     std::uint64_t generation{};
   };
 
+  struct InertialDriverKey {
+    ProcessId process{};
+    SignalId signal{};
+    std::uint32_t offset{};
+    std::uint32_t width{};
+
+    friend bool operator==(
+        const InertialDriverKey&,
+        const InertialDriverKey&) = default;
+  };
+
+  struct InertialDriverKeyHash {
+    [[nodiscard]] std::size_t operator()(
+        const InertialDriverKey& key) const noexcept {
+      auto result = static_cast<std::size_t>(key.process);
+      result ^= static_cast<std::size_t>(key.signal)
+          + UINT64_C(0x9e3779b97f4a7c15)
+          + (result << 6U) + (result >> 2U);
+      result ^= static_cast<std::size_t>(key.offset)
+          + UINT64_C(0x9e3779b97f4a7c15)
+          + (result << 6U) + (result >> 2U);
+      result ^= static_cast<std::size_t>(key.width)
+          + UINT64_C(0x9e3779b97f4a7c15)
+          + (result << 6U) + (result >> 2U);
+      return result;
+    }
+  };
+
   explicit Impl(
       SchedulerOptions options,
       const std::uint64_t seed)
@@ -1121,6 +1187,10 @@ struct Interpreter::Impl {
       SimulationTick, std::uint64_t>>> signal_transactions;
   std::vector<PendingUpdate> pending_updates;
   std::unordered_set<std::uint64_t> pending_channel_updates;
+  std::unordered_map<
+      InertialDriverKey,
+      ScheduledTaskHandle,
+      InertialDriverKeyHash> pending_inertial_writes;
   SignalChangeHook signal_change_hook;
   ExecutionPointHook execution_point_hook;
   OutputHook output_hook;
@@ -1900,6 +1970,70 @@ struct Interpreter::Impl {
     schedule_update_commit();
   }
 
+  void schedule_inertial(
+      const ProcessId process,
+      const SignalId signal,
+      PackedLogic4 value,
+      const std::optional<std::size_t> offset,
+      const TransitionDelays& delays) {
+    (void)get_signal(signal);
+    const auto target_width = driven_values[signal].width();
+    if (value.width() == 0
+        || value.width()
+            > std::numeric_limits<std::uint32_t>::max()
+        || offset.value_or(0)
+            > std::numeric_limits<std::uint32_t>::max()
+        || (offset
+            && (*offset > target_width
+                || value.width() > target_width - *offset))
+        || (!offset && value.width() != target_width)) {
+      throw std::invalid_argument(
+          "inertial write range is outside its target signal");
+    }
+    const InertialDriverKey key{
+        process,
+        signal,
+        static_cast<std::uint32_t>(offset.value_or(0)),
+        static_cast<std::uint32_t>(value.width())};
+    auto [pending, inserted] =
+        pending_inertial_writes.try_emplace(key);
+    if (!inserted) {
+      scheduler.cancel(pending->second);
+    }
+    const auto current =
+        offset
+            ? extract_value(
+                  driven_values[signal], *offset, value.width())
+            : driven_values[signal];
+    const auto delay = transition_delay(current, value, delays);
+    if (!delay) {
+      pending_inertial_writes.erase(pending);
+      return;
+    }
+    try {
+      pending->second = scheduler.schedule_after_cancelable(
+          *delay,
+          SchedulerPhase::update,
+          process,
+          [this,
+           key,
+           signal,
+           offset,
+           value = std::move(value)](Scheduler&) mutable {
+            pending_inertial_writes.erase(key);
+            if (offset) {
+              stage_update_slice(
+                  signal, std::move(value), *offset);
+            } else {
+              stage_update(signal, std::move(value));
+            }
+          });
+    } catch (...) {
+      pending_inertial_writes.erase(pending);
+      throw;
+    }
+  }
+
   [[noreturn]] void fail(const ProcessState &process,
                          const std::string &message) const {
     throw InterpreterError(process.program.id, process.pc, message);
@@ -2048,6 +2182,31 @@ struct Interpreter::Impl::ExecutionContext final
             value.width, value.aval, value.bval),
         offset,
         delay);
+  }
+
+  void write_inertial(
+      const SignalId signal,
+      PackedLogic4 value,
+      const TransitionDelays& delays) override {
+    owner.schedule_inertial(
+        process,
+        signal,
+        std::move(value),
+        std::nullopt,
+        delays);
+  }
+
+  void write_inertial_slice(
+      const SignalId signal,
+      PackedLogic4 value,
+      const std::size_t offset,
+      const TransitionDelays& delays) override {
+    owner.schedule_inertial(
+        process,
+        signal,
+        std::move(value),
+        offset,
+        delays);
   }
 
   void notify_event(
@@ -2854,6 +3013,16 @@ void Interpreter::Impl::execute(ProcessId id) {
                     stage_update(signal, std::move(value));
                   });
             },
+            [&](const WriteInertial& op) {
+              auto value = get_register(process, op.source);
+              ++process.pc;
+              schedule_inertial(
+                  process.program.id,
+                  op.signal,
+                  std::move(value),
+                  std::nullopt,
+                  op.delays);
+            },
             [&](const WriteBlockingSlice& op) {
               auto value = get_register(process, op.source);
               ++process.pc;
@@ -2881,6 +3050,16 @@ void Interpreter::Impl::execute(ProcessId id) {
                     stage_update_slice(
                         signal, std::move(value), offset);
                   });
+            },
+            [&](const WriteInertialSlice& op) {
+              auto value = get_register(process, op.source);
+              ++process.pc;
+              schedule_inertial(
+                  process.program.id,
+                  op.signal,
+                  std::move(value),
+                  op.offset,
+                  op.delays);
             },
             [&](const WaitFor &op) {
               (void)op;

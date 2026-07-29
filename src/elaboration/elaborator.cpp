@@ -4030,12 +4030,38 @@ private:
             return;
         }
         if (statement.delay) {
-            if (selected_offset) {
-                process_.operations.emplace_back(WriteAfterSlice{
-                    signal->second,
-                    *value,
-                    *selected_offset,
-                    statement.delay->magnitude});
+            if (statement.assignment_kind
+                == AssignmentKind::Continuous) {
+                const auto rise = statement.delay->magnitude;
+                const auto fall =
+                    statement.delay->additional_values.empty()
+                        ? rise
+                        : statement.delay->additional_values[0].magnitude;
+                const auto turnoff =
+                    statement.delay->additional_values.size() < 2
+                        ? std::min(rise, fall)
+                        : statement.delay->additional_values[1].magnitude;
+                const TransitionDelays delays{
+                    rise, fall, turnoff};
+                if (selected_offset) {
+                    process_.operations.emplace_back(
+                        WriteInertialSlice{
+                            signal->second,
+                            *value,
+                            *selected_offset,
+                            delays});
+                } else {
+                    process_.operations.emplace_back(
+                        WriteInertial{
+                            signal->second, *value, delays});
+                }
+            } else if (selected_offset) {
+                process_.operations.emplace_back(
+                    WriteAfterSlice{
+                        signal->second,
+                        *value,
+                        *selected_offset,
+                        statement.delay->magnitude});
             } else {
                 process_.operations.emplace_back(WriteAfter{
                     signal->second,

@@ -241,6 +241,10 @@ struct Delay {
   std::optional<DelayAlternative> minimum;
   std::optional<DelayAlternative> typical;
   std::optional<DelayAlternative> maximum;
+  // Parenthesized transition-delay values after the first. Continuous
+  // assignments accept fall and turnoff values; supported gate primitives
+  // accept a fall value.
+  std::vector<Delay> additional_values;
   SourceSpan span;
 };
 

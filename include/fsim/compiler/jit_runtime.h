@@ -204,6 +204,29 @@ typedef struct fsim_jit_runtime_v1 {
       uint64_t minimum_aval,
       uint64_t minimum_bval,
       uint64_t* result_bval);
+
+  /*
+   * Append-only transition-specific inertial writes. A later invocation for
+   * the same generated continuous driver supersedes its pending update.
+   */
+  void (*write_inertial)(
+      void* context,
+      uint32_t signal,
+      uint64_t aval,
+      uint64_t bval,
+      uint64_t rise_delay,
+      uint64_t fall_delay,
+      uint64_t turnoff_delay);
+  void (*write_inertial_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      uint64_t aval,
+      uint64_t bval,
+      uint64_t rise_delay,
+      uint64_t fall_delay,
+      uint64_t turnoff_delay);
 } fsim_jit_runtime_v1;
 
 /*

@@ -77,7 +77,12 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, control_monitor) == 168,
                "runtime monitor-control callback was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, random_value) == 176,
                "runtime random-value callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 184,
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_inertial) == 184,
+               "runtime inertial-write callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_inertial_slice) == 192,
+    "runtime partial inertial-write callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 200,
                "unexpected extended runtime ABI size");
 
 typedef struct callback_state {
@@ -112,6 +117,10 @@ typedef struct callback_state {
   uint32_t monitor_install_count;
   uint32_t monitor_control_count;
   uint32_t random_count;
+  uint32_t inertial_count;
+  uint64_t inertial_rise;
+  uint64_t inertial_fall;
+  uint64_t inertial_turnoff;
 } callback_state;
 
 static uint64_t read_signal(
@@ -329,6 +338,46 @@ static uint64_t random_value(
   return UINT64_C(0x12345678);
 }
 
+static void write_inertial(
+    void* context,
+    uint32_t signal,
+    uint64_t aval,
+    uint64_t bval,
+    uint64_t rise_delay,
+    uint64_t fall_delay,
+    uint64_t turnoff_delay) {
+  callback_state* state = (callback_state*)context;
+  ++state->inertial_count;
+  (void)signal;
+  (void)aval;
+  (void)bval;
+  state->inertial_rise = rise_delay;
+  state->inertial_fall = fall_delay;
+  state->inertial_turnoff = turnoff_delay;
+}
+
+static void write_inertial_slice(
+    void* context,
+    uint32_t signal,
+    uint32_t offset,
+    uint32_t width,
+    uint64_t aval,
+    uint64_t bval,
+    uint64_t rise_delay,
+    uint64_t fall_delay,
+    uint64_t turnoff_delay) {
+  (void)offset;
+  (void)width;
+  write_inertial(
+      context,
+      signal,
+      aval,
+      bval,
+      rise_delay,
+      fall_delay,
+      turnoff_delay);
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -356,7 +405,9 @@ int main(void) {
       write_time,
       install_monitor,
       control_monitor,
-      random_value};
+      random_value,
+      write_inertial,
+      write_inertial_slice};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -413,6 +464,24 @@ int main(void) {
       UINT64_C(3),
       UINT64_C(0),
       &random_bval);
+  runtime.write_inertial(
+      runtime.context,
+      UINT32_C(13),
+      UINT64_C(1),
+      UINT64_C(0),
+      UINT64_C(2),
+      UINT64_C(3),
+      UINT64_C(4));
+  runtime.write_inertial_slice(
+      runtime.context,
+      UINT32_C(14),
+      UINT32_C(2),
+      UINT32_C(1),
+      UINT64_C(0),
+      UINT64_C(0),
+      UINT64_C(5),
+      UINT64_C(6),
+      UINT64_C(7));
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -461,6 +530,10 @@ int main(void) {
       state.monitor_install_count != UINT32_C(1) ||
       state.monitor_control_count != UINT32_C(1) ||
       state.random_count != UINT32_C(1) ||
+      state.inertial_count != UINT32_C(2) ||
+      state.inertial_rise != UINT64_C(5) ||
+      state.inertial_fall != UINT64_C(6) ||
+      state.inertial_turnoff != UINT64_C(7) ||
       state.report_instruction != UINT32_C(24) ||
       random_aval != UINT64_C(0x12345678) ||
       random_bval != UINT64_C(0) ||

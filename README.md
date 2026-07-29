@@ -58,14 +58,16 @@ The current tree contains:
   compilation-unit-wide cache provenance;
 - bounded Verilog/SystemVerilog `` `timescale`` context plus SystemVerilog
   compilation/module `timeunit`/`timeprecision`, exact fractional/scientific
-  and explicit-unit delays, precision-first half-up rounding, and automatic
-  selection of the finest declared precision;
+  and explicit-unit delays, independently selected `min:typ:max`
+  rise/fall/turnoff lists, precision-first half-up rounding, automatic
+  selection of the finest declared precision, and inertial whole/slice
+  continuous writes with packed transition selection and pulse rejection;
 - executable scalar `` `default_nettype`` implicit nets plus
   reset/cell/keyword-version/unconnected-drive compiler state, including
   cell specialization metadata and pull initialization for omitted inputs;
 - bounded scalar `buf`/`not`/`and`/`nand`/`or`/`nor`/`xor`/`xnor` gate
-  primitives with shared integer delays and comma-separated instances,
-  lowered through the common continuous-process path;
+  primitives with shared one/two-value transition delays and comma-separated
+  instances, lowered through the common continuous-process path;
 - recursive VHDL/SV instance elaboration in both hierarchy directions with
   explicit cross-language bindings, whole-signal port aliasing, and boundary
   validation;
@@ -465,7 +467,11 @@ overridden with options such as `--top`, `--duration`, `--max-deltas`,
 `--delay-mode`, `--trace`, `--seed`, `-O`, and `-j`. Parenthesized Verilog or
 SystemVerilog `min:typ:max` delays use schema-1
 `[run].delay_mode = "min" | "typ" | "max"`; `typ` is the deterministic
-default and `--delay-mode` overrides it.
+default and `--delay-mode` overrides it. Continuous assignments accept one,
+two, or three delay values for rise, fall, and turnoff; each may be a triplet.
+Supported gates accept one or two. Selection precedes precision rounding and
+automatic resolution, and delayed continuous writes reject superseded pulses
+inertially while procedural delayed NBA remains transport.
 
 Random facilities use deterministic per-process streams and default to project
 seed `1`. A numeric `seed`/`--seed` value reproduces a run. Explicit

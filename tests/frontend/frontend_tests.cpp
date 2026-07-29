@@ -2580,8 +2580,11 @@ module delay_triples;
   logic gate_result;
   event fired;
 
-  assign #(1e-3:2e-3:3e-3) continuous_result = source;
-  buf #(1ps:2ps:3ps) (gate_result, source);
+  assign #(
+      1e-3:2e-3:3e-3,
+      4ps:5ps:6ps,
+      7fs:8fs:9fs) continuous_result = source;
+  buf #(1ps:2ps:3ps, 4ps:5ps:6ps) (gate_result, source);
 
   initial begin
     #(0.1:0.2:0.3) source = 1'b1;
@@ -2646,6 +2649,27 @@ endmodule
       {1, 2, 3},
       {1, 1, 1},
       "ps");
+  require(
+      unit.concurrent_statements[0].delay->additional_values.size() == 2
+          && unit.concurrent_statements[1].delay
+                 ->additional_values.size()
+              == 1,
+      "continuous and gate rise/fall/turnoff delay-list arity");
+  verify(
+      unit.concurrent_statements[0].delay->additional_values[0],
+      {4, 5, 6},
+      {1, 1, 1},
+      "ps");
+  verify(
+      unit.concurrent_statements[0].delay->additional_values[1],
+      {7, 8, 9},
+      {1, 1, 1},
+      "fs");
+  verify(
+      unit.concurrent_statements[1].delay->additional_values[0],
+      {4, 5, 6},
+      {1, 1, 1},
+      "ps");
   verify(*process[0].delay, {1, 1, 3}, {10, 5, 10}, "ns");
   verify(*process[1].delay, {4, 5, 6}, {1, 1, 1}, "ps");
   verify(*process[2].delay, {7, 8, 9}, {1, 1, 1}, "ps");
@@ -2654,10 +2678,16 @@ endmodule
   const auto malformed = parse_text(
       "bad-delay-triples.sv",
       R"(module bad_delay_triples;
+  wire source;
+  wire result;
+  assign #(1, 2, 3, 4) result = source;
+  buf #(1, 2, 3) (result, source);
   initial begin
     #1:2:3;
     #(1:2);
     #(1::3);
+    #(1, 2);
+    #(1,);
   end
 endmodule
 )",
@@ -2673,9 +2703,11 @@ endmodule
   require(
       !malformed.ok()
           && has_code("FSIM-SV-SEM-052")
+          && has_code("FSIM-SV-SEM-053")
           && has_code("FSIM-SV-PARSE-134")
+          && has_code("FSIM-SV-PARSE-135")
           && has_code("FSIM-SV-PARSE-023"),
-      "unparenthesized, truncated, and empty delay triples are targeted");
+      "malformed triples and illegal transition-delay lists are targeted");
 }
 
 void test_systemverilog_compiler_directives() {

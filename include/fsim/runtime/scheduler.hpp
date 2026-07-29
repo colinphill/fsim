@@ -8,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime {
@@ -41,6 +42,23 @@ struct RunResult {
   SimulationTick time = 0;
   std::uint64_t delta = 0;
   std::uint64_t callbacks_executed = 0;
+};
+
+class ScheduledTaskHandle {
+public:
+  ScheduledTaskHandle() = default;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return static_cast<bool>(cancelled_);
+  }
+
+private:
+  friend class Scheduler;
+
+  explicit ScheduledTaskHandle(std::shared_ptr<bool> cancelled)
+      : cancelled_(std::move(cancelled)) {}
+
+  std::shared_ptr<bool> cancelled_;
 };
 
 /// Raised before executing a delta cycle beyond max_delta_cycles.
@@ -89,6 +107,10 @@ public:
                    StableOrder stable_order, Task task);
   void schedule_after(SimulationTick delay, SchedulerPhase phase,
                       StableOrder stable_order, Task task);
+  [[nodiscard]] ScheduledTaskHandle
+  schedule_after_cancelable(SimulationTick delay, SchedulerPhase phase,
+                            StableOrder stable_order, Task task);
+  void cancel(const ScheduledTaskHandle &handle) noexcept;
   void schedule(SchedulerPhase phase, StableOrder stable_order, Task task);
   void schedule_next_delta(SchedulerPhase phase, StableOrder stable_order,
                            Task task);

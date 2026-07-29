@@ -431,6 +431,7 @@ therefore excluded.
 | `FSIM-SV-PARSE-132` | error | Expected a physical unit in a SystemVerilog time declaration. |
 | `FSIM-SV-PARSE-133` | error | Expected `;` after a SystemVerilog time declaration. |
 | `FSIM-SV-PARSE-134` | error | Expected the second `:` and maximum value in a `min:typ:max` delay triple. |
+| `FSIM-SV-PARSE-135` | error | Expected another delay value after a comma in a parenthesized transition-delay list. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -501,6 +502,7 @@ therefore excluded.
 | `FSIM-SV-SEM-050` | error | A fractional delay has neither an explicit unit nor an active timeunit/timescale. |
 | `FSIM-SV-SEM-051` | error | A Verilog-2005 delay uses a SystemVerilog explicit physical-unit suffix. |
 | `FSIM-SV-SEM-052` | error | A Verilog/SystemVerilog `min:typ:max` delay triple is not parenthesized. |
+| `FSIM-SV-SEM-053` | error | A Verilog/SystemVerilog delay list supplies more transition values than the containing assignment or gate form permits. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

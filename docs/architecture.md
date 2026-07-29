@@ -261,11 +261,15 @@ global ticks. Half steps round upward. Parenthesized `min:typ:max` delay
 triples retain all branches; schema-1 `[run].delay_mode` or `--delay-mode`
 selects `min`, `typ`, or `max` before precision rounding and automatic global
 resolution, with `typ` as the deterministic default. The selected mode is part
-of whole-design and specialization native-cache identity. Inexact,
-overflowing, malformed, late/duplicate, or coarser-than-unit declarations are
-rejected. Parameterized/nonconstant delay expressions, multiple
-rise/fall/turnoff delays, and SystemC participation in automatic resolution
-selection are not complete.
+of whole-design and specialization native-cache identity. Parenthesized
+continuous-assignment delays retain up to three independently selectable
+values for rise, fall, and turnoff; the supported gate forms retain up to two.
+One value applies to all transitions and an omitted turnoff delay is the
+minimum selected rise/fall value. Every list member participates in automatic
+resolution selection. Inexact, overflowing, malformed, late/duplicate, or
+coarser-than-unit declarations are rejected. Parameterized/nonconstant delay
+expressions and SystemC participation in automatic resolution selection are
+not complete.
 
 The same ordered token stream carries Verilog compiler state across shared
 roots. `` `default_nettype`` selects scalar implicit-net and untyped-port net
@@ -321,8 +325,8 @@ SimIR processes are explicit state machines. The current operation set includes:
   elapsed-since-event queries;
 - unary/logical/reduction operations plus typed bitwise, fixed-width
   arithmetic, shift, conditional-select, and comparison operations;
-- whole and normalized partial blocking writes, update-phase writes, and
-  delayed writes;
+- whole and normalized partial blocking writes, update-phase and transport
+  delayed writes, plus whole/slice transition-aware inertial writes;
 - timed, dynamic-signal, static-sensitivity, and combined event-or-timeout
   waits;
 - next-delta yields;
@@ -342,6 +346,17 @@ wakeups rearm the sensitivity set; an internal scalar frame register records
 whether the eventual wake was the timeout. A VHDL process containing explicit
 waits jumps back to its post-initializer entry when its body completes,
 preserving implicit process repetition without reinitializing locals.
+
+Delayed Verilog/SystemVerilog continuous assignments lower to the inertial
+write forms with normalized rise/fall/turnoff ticks. At scheduling time, the
+kernel compares the new packed value with the currently driven target:
+transitions to `1`, `0`, and `Z` select rise, fall, and turnoff respectively,
+while transitions to `X` select the shortest delay. A packed write uses the
+shortest delay required by any changed element. Each process/target/slice has
+an independent cancelable scheduler handle so a later evaluation removes its
+pending transaction and timestamp, including a short pulse that returns to
+the current driven value. Procedural delayed nonblocking assignments retain
+`WriteAfter` transport behavior.
 
 The initial output slices lower literal or empty Verilog/SystemVerilog
 `$display`, `$write`, and `$strobe` calls to a typed `Display` operation
@@ -653,12 +668,14 @@ paths and compare output, final state, assertions, and trace events.
 Supported compiled builds use LLVM 22.1.8, ORC, and LLJIT. The adapter public
 header exposes no LLVM class. Generated functions receive a versioned C table
 containing opaque context plus signal-read, blocking-write, assertion,
-update-write, delayed-write, and signal-event callbacks. The `write_update`,
-`write_after`, `signal_event`, `signal_last_value`, `signal_last_event`, and
-`signal_active` callbacks are append-only extensions of the v1 table: original
-field offsets remain fixed, and each compiled process checks `struct_size`
-only for the callback tail it actually uses. A process using only an earlier
-operation set therefore remains valid with the corresponding v1 prefix.
+update-write, delayed-write, transition-aware whole/slice inertial-write, and
+signal-event callbacks. The `write_update`, `write_after`, `signal_event`,
+`signal_last_value`, `signal_last_event`, `signal_active`, `write_inertial`,
+and `write_inertial_slice` callbacks are append-only extensions of the v1
+table: original field offsets remain fixed, and each compiled process checks
+`struct_size` only for the callback tail it actually uses. A process using
+only an earlier operation set therefore remains valid with the corresponding
+v1 prefix.
 `SignalEvent` and `SignalLastEvent` consult the kernel-owned value-change
 stamp, `SignalActive` consults the separate transaction stamp, and
 `SignalLastValue` reads the previous effective packed value retained at commit;
@@ -675,7 +692,8 @@ meaningful only for `WAIT_FOR`.
 The current adapter compiles control-flow graphs containing loads, reads,
 common operations, blocking writes, assertions, jumps, branches, timed waits,
 dynamic-signal waits, static-sensitivity and permanent waits, next-delta yields,
-update-phase writes, delayed writes, signal-event, transaction-activity,
+update-phase writes, transport delayed writes, whole/slice inertial writes,
+signal-event, transaction-activity,
 previous-value, and elapsed-event-time queries, design stop, and halt.
 A versioned caller-owned plain-C frame holds the process PC plus separate
 `aval`/`bval` register planes; a versioned result reports completion, assertion
@@ -732,6 +750,9 @@ referenced signal ID or width change invalidates it.
 Scheduled-write operation kind and signal/source identity participate in this
 key, as does the exact 64-bit delay for `WriteAfter`; changing a delayed write
 to an update write or changing its delay cannot reuse the object.
+`WriteInertial` and `WriteInertialSlice` additionally key their target slice
+and exact rise, fall, and turnoff delays, so changing any transition timing
+invalidates the native object.
 Wait identity includes `WaitOn`, `WaitSensitivity`, or `WaitForever`, the
 ordered dynamic signal operands, widths, and edge kinds, plus every static
 sensitivity signal, width, and edge kind.
@@ -742,8 +763,9 @@ participate in each process key and in frame-layout identity. Group tests at O0
 and O2 verify two functions per object, warm reuse, whole-module invalidation
 when one member changes, and stable frame identity for an unchanged member.
 Cold, warm, corruption-recovery, SimIR/referenced-width invalidation,
-scheduled-write kind/delay invalidation, wait-kind/operand invalidation, and
-optimization-mode invalidation are also tested at O0 and O2.
+scheduled-write kind/delay invalidation, three-component inertial-delay
+invalidation, wait-kind/operand invalidation, and optimization-mode
+invalidation are also tested at O0 and O2.
 
 LLVM-enabled `fsim build` and `fsim run` select this cache beneath the
 configured project cache as `llvm-native`. The adapter and application expose
