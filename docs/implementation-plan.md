@@ -1969,6 +1969,35 @@ The planned ten implementation features are:
     evidence; update the VHDL feature matrix; then run, record, and push the
     full local regression gate.
 
+All ten implementation features are complete in feature commit `d7bc6fa`.
+The typed HIR now retains unresolved and resolved enumeration constraints,
+base-subtype constraints, source spans, ordinal bounds, and direction without
+changing the base enumeration's width, literal table, or nominal identity.
+Elaboration resolves local, imported, chained, direct-object, constant-bound,
+and prior-generic-bound constraints; rejects unknown, wrong-nominal, null, and
+out-of-base ranges; and applies subtype-left initialization plus checked
+constant, generic, local, signal, delayed, projected, and ordered-waveform
+stores.
+
+All enumeration scalar attributes now use the resolved subtype bounds and
+direction while preserving base-declaration ordinals for `pos` and `val`.
+Same-language hierarchy checks prove range containment in the data-flow
+direction for input and output ports and exact range equality for inout ports.
+The application differential covers interpreter and LLVM O0/O2 successful
+execution, interpreter/JIT range failures, debugger literal rendering,
+normalized VCD ordinals, cold/warm object reuse, hierarchy specialization, and
+package-edit invalidation. Focused negative evidence covers every new
+diagnostic and unsafe input, output, and inout boundary case.
+
+After feature commit `d7bc6fa`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 40 tests in 93.65 seconds on 2026-07-29. The
+gate includes constrained-enumeration parser recovery, specialization and
+typed range diagnostics, direction-aware attributes, checked stores,
+interpreter/LLVM O0/O2 success and failure behavior, debugger/VCD/cache
+evidence, fetched Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the strict
+native ABI, and every preceding feature batch. No CI state was inspected for
+this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
