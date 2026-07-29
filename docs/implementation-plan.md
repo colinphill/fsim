@@ -1400,8 +1400,23 @@ The planned ten implementation features are:
     interpreter/LLVM-hybrid signal tests for known and unknown vector paths
     before the full local regression and push gate.
 
-This batch is in progress. Focused tests remain the default until its
-ten-feature regression boundary.
+All ten implementation features are complete in feature commit `73cfb83`.
+The standalone facade now provides bounded four-state/vector behavior and
+portable wrapping 1–64-bit signed/unsigned operations without allowing a C++
+datatype object to cross the plug-in ABI. Focused strict-build header,
+plug-in-loader, plug-in-compiler, and real compiled SystemC
+interpreter/LLVM-hybrid O0/O2/VCD/cold-warm-cache tests pass. The support
+contract and executable feature matrix explicitly defer concatenation/range
+proxies, mixed-width result typing, arbitrary-precision integers, and the full
+Accellera overload set.
+
+After feature commit `73cfb83`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 33 tests in 85.26 seconds on 2026-07-28. The
+gate includes fetched Boost.Context 1.91.0, fetched Tcl 9.0.4 and relocation,
+SystemC plug-in/fiber/datatype coverage, LLVM/C ABI tests,
+interpreter/LLVM differentials, VCD, cache, debugger-facing application tests,
+and all preceding feature batches. No CI state was inspected for this local
+gate.
 
 ## v1 release condition
 
