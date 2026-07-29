@@ -1373,6 +1373,36 @@ SystemC plug-in/fiber coverage, LLVM/C ABI tests, interpreter/LLVM
 differentials, VCD, cache, debugger-facing application tests, and the new
 mixed-resolution target. No CI state was inspected for this local gate.
 
+### Thirty-second feature batch — SystemC fixed-width datatypes
+
+The planned ten implementation features are:
+
+1. Add standard four-state `sc_logic` NOT/AND/OR/XOR behavior with `Z`
+   participating as unknown and compound assignment support.
+2. Add integral construction, checked mutable bit references, low-word
+   conversion, and binary rendering for arbitrary-width `sc_bv<W>`.
+3. Add width-preserving `sc_bv<W>` bitwise, logical-shift, compound, and
+   reduction operations.
+4. Add checked mutable bits plus four-state bitwise, zero-fill shift,
+   compound, and reduction behavior for `sc_lv<W>`.
+5. Add checked mutable bit references, explicit raw-bit conversion, binary
+   rendering, and vector construction for `sc_uint<W>`.
+6. Add width-wrapping unsigned arithmetic, division/modulo rejection,
+   compounds, and prefix/postfix increment/decrement for `sc_uint<W>`.
+7. Add width-wrapping unsigned bitwise, shift, compound, and reduction
+   operations for `sc_uint<W>`.
+8. Add checked mutable bit references, raw-bit conversion, binary rendering,
+   and vector construction for `sc_int<W>`.
+9. Add portable width-wrapping signed arithmetic, division/modulo edge
+   handling, bitwise, arithmetic/logical shifts, compounds, and increments for
+   `sc_int<W>`.
+10. Require focused standalone façade plus real compiled SystemC
+    interpreter/LLVM-hybrid signal tests for known and unknown vector paths
+    before the full local regression and push gate.
+
+This batch is in progress. Focused tests remain the default until its
+ten-feature regression boundary.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

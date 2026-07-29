@@ -56,16 +56,27 @@ The current facade defines:
   `SC_CTHREAD`;
 - `sc_dt::sc_logic`, `sc_bv<N>`, `sc_lv<N>`, `sc_uint<N>`, and `sc_int<N>`.
 
-`sc_uint` and `sc_int` currently support widths 1 through 64. Outside an fsim
-elaboration/process host, `sc_signal` retains a deliberately local standalone
-behavior useful for compiling and testing plug-ins. A module-local
-`sc_signal` constructed by a registered factory instead attaches typed value
-metadata to its primitive-channel handle and enters the common kernel.
+`sc_bv` and `sc_lv` support arbitrary positive compile-time widths.
+`sc_uint` and `sc_int` support widths 1 through 64. The implemented datatype
+slice includes checked mutable bit selection, binary rendering, vector/integer
+construction, width-preserving bitwise and shift operations, reductions, and
+wrapping fixed-width integer arithmetic. `sc_logic` and `sc_lv` propagate
+four-state unknowns through bitwise operations; conversion of an `sc_lv`
+containing `X` or `Z` to an integer is rejected. Signed right shift is
+arithmetic, vector shifts insert zeroes, and division or remainder by zero is
+rejected. Concatenation/range proxies, mixed-width result typing, arbitrary
+precision integer types, and the complete Accellera datatype overload set are
+not part of this bounded slice.
 
-The v1 subset also requires named hierarchy, exports, static and dynamic
-sensitivity, port binding, channel update semantics, event cancellation rules,
-and the common fixed-width signed/unsigned operations needed by signal-level
-models.
+Outside an fsim elaboration/process host, `sc_signal` retains a deliberately
+local standalone behavior useful for compiling and testing plug-ins. A
+module-local `sc_signal` constructed by a registered factory instead attaches
+typed value metadata to its primitive-channel handle and enters the common
+kernel.
+
+The remaining v1 subset work includes broader named hierarchy, exports,
+static and dynamic sensitivity, port binding, channel update semantics, and
+event cancellation rules.
 
 ## Bidirectional mixed-language hierarchy
 

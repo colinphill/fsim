@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <limits>
 #include <string_view>
 #include <type_traits>
 
@@ -72,6 +73,29 @@ int main() {
 
     const sc_dt::sc_logic unknown{'X'};
     assert(unknown.to_char() == 'X');
+    constexpr sc_dt::sc_logic zero{false};
+    constexpr sc_dt::sc_logic one{true};
+    constexpr sc_dt::sc_logic high_impedance{
+        sc_dt::sc_logic::Log_Z};
+    static_assert((~zero).value() == sc_dt::sc_logic::Log_1);
+    static_assert((one & high_impedance).value()
+                  == sc_dt::sc_logic::Log_X);
+    static_assert((zero & high_impedance).value()
+                  == sc_dt::sc_logic::Log_0);
+    static_assert((one | high_impedance).value()
+                  == sc_dt::sc_logic::Log_1);
+    static_assert((zero | high_impedance).value()
+                  == sc_dt::sc_logic::Log_X);
+    static_assert((one ^ zero).value()
+                  == sc_dt::sc_logic::Log_1);
+    static_assert((one ^ high_impedance).value()
+                  == sc_dt::sc_logic::Log_X);
+    auto assigned_logic = high_impedance;
+    assigned_logic &= zero;
+    assert(assigned_logic.to_char() == '0');
+    assigned_logic = 'Z';
+    assigned_logic |= one;
+    assert(assigned_logic.to_char() == '1');
     bool rejected_logic = false;
     try {
         (void)sc_dt::sc_logic{
@@ -83,9 +107,203 @@ int main() {
 
     const sc_dt::sc_bv<4> bits{"1010"};
     assert(bits.to_string() == "1010");
+    sc_dt::sc_bv<4> mutable_bits{UINT64_C(5)};
+    assert(
+        mutable_bits.to_string() == "0101"
+        && mutable_bits.to_uint64() == 5
+        && sc_dt::sc_bv<4>::length() == 4);
+    mutable_bits[1] = true;
+    mutable_bits[0].flip();
+    assert(mutable_bits.to_string() == "0110");
+    assert(
+        (mutable_bits & sc_dt::sc_bv<4>{"1010"}).to_string()
+        == "0010");
+    assert(
+        (mutable_bits | sc_dt::sc_bv<4>{"1001"}).to_string()
+        == "1111");
+    assert(
+        (mutable_bits ^ sc_dt::sc_bv<4>{"1111"}).to_string()
+        == "1001");
+    assert((~mutable_bits).to_string() == "1001");
+    assert((mutable_bits << 2).to_string() == "1000");
+    assert((mutable_bits >> 2).to_string() == "0001");
+    assert(sc_dt::sc_bv<4>{"1111"}.and_reduce());
+    assert(sc_dt::sc_bv<4>{"1000"}.or_reduce());
+    assert(sc_dt::sc_bv<4>{"1011"}.xor_reduce());
+    sc_dt::sc_bv<80> wide_bits{UINT64_C(0x8000000000000001)};
+    wide_bits[79] = true;
+    assert(
+        wide_bits.to_uint64() == UINT64_C(0x8000000000000001)
+        && wide_bits.to_string().front() == '1');
+    bool rejected_bv_index = false;
+    try {
+        (void)mutable_bits[4];
+    } catch (const std::out_of_range&) {
+        rejected_bv_index = true;
+    }
+    assert(rejected_bv_index);
+
+    sc_dt::sc_lv<4> logic_bits{"10XZ"};
+    assert(!logic_bits.is_01());
+    assert((~logic_bits).to_string() == "01XX");
+    assert(
+        (logic_bits & sc_dt::sc_lv<4>{"1100"}).to_string()
+        == "1000");
+    assert(
+        (logic_bits | sc_dt::sc_lv<4>{"0011"}).to_string()
+        == "1011");
+    assert(
+        (logic_bits ^ sc_dt::sc_lv<4>{"1001"}).to_string()
+        == "00XX");
+    assert((logic_bits << 1).to_string() == "0XZ0");
+    assert((logic_bits >> 2).to_string() == "0010");
+    assert(
+        sc_dt::sc_lv<4>{"1111"}.and_reduce().to_char()
+        == '1');
+    assert(
+        sc_dt::sc_lv<4>{"00XZ"}.or_reduce().to_char()
+        == 'X');
+    logic_bits[0] = sc_dt::sc_logic{'1'};
+    assert(logic_bits.to_string() == "10X1");
+    bool rejected_lv_conversion = false;
+    try {
+        (void)logic_bits.to_uint64();
+    } catch (const std::logic_error&) {
+        rejected_lv_conversion = true;
+    }
+    assert(rejected_lv_conversion);
+
+    sc_dt::sc_uint<4> unsigned_value{15};
+    assert(
+        (unsigned_value + 1).to_uint64() == 0
+        && (unsigned_value - sc_dt::sc_uint<4>{2}).to_uint64()
+            == 13
+        && (unsigned_value * sc_dt::sc_uint<4>{3}).to_uint64()
+            == 13);
+    unsigned_value = 6;
+    assert(
+        (unsigned_value / sc_dt::sc_uint<4>{4}).to_uint64()
+            == 1
+        && (unsigned_value % sc_dt::sc_uint<4>{4}).to_uint64()
+            == 2);
+    unsigned_value[3] = true;
+    unsigned_value[1].flip();
+    assert(
+        unsigned_value.to_string() == "1100"
+        && unsigned_value.raw_bits() == 12);
+    assert(
+        (~unsigned_value).to_string() == "0011"
+        && (unsigned_value & sc_dt::sc_uint<4>{10}).to_uint64()
+            == 8
+        && (unsigned_value | sc_dt::sc_uint<4>{3}).to_uint64()
+            == 15
+        && (unsigned_value ^ sc_dt::sc_uint<4>{15}).to_uint64()
+            == 3);
+    assert(
+        (unsigned_value << 2).to_uint64() == 0
+        && (unsigned_value >> 2).to_uint64() == 3);
+    assert(unsigned_value.or_reduce());
+    assert(!unsigned_value.and_reduce());
+    assert(!unsigned_value.xor_reduce());
+    assert(unsigned_value > 5 && 12 == unsigned_value);
+    const auto unsigned_before_increment = unsigned_value++;
+    assert(
+        unsigned_before_increment.to_uint64() == 12
+        && unsigned_value.to_uint64() == 13);
+    --unsigned_value;
+    assert(unsigned_value.to_uint64() == 12);
+    const sc_dt::sc_uint<4> unsigned_from_vector{
+        sc_dt::sc_bv<6>{"101101"}};
+    assert(unsigned_from_vector.to_uint64() == 13);
+    bool rejected_uint_division = false;
+    try {
+        (void)(unsigned_value / sc_dt::sc_uint<4>{0});
+    } catch (const std::domain_error&) {
+        rejected_uint_division = true;
+    }
+    assert(rejected_uint_division);
+    bool rejected_uint_shift = false;
+    try {
+        (void)(unsigned_value << -1);
+    } catch (const std::invalid_argument&) {
+        rejected_uint_shift = true;
+    }
+    assert(rejected_uint_shift);
+    bool rejected_uint_index = false;
+    try {
+        (void)unsigned_value[4];
+    } catch (const std::out_of_range&) {
+        rejected_uint_index = true;
+    }
+    assert(rejected_uint_index);
 
     sc_dt::sc_int<4> negative{-1};
     assert(negative.to_int64() == -1);
+    assert(
+        (sc_dt::sc_int<4>{7} + sc_dt::sc_int<4>{1}).to_int64()
+        == -8);
+    assert(
+        (sc_dt::sc_int<4>{-8} - sc_dt::sc_int<4>{1}).to_int64()
+        == 7);
+    assert(
+        (sc_dt::sc_int<4>{-3} * sc_dt::sc_int<4>{3}).to_int64()
+        == 7);
+    assert(
+        (sc_dt::sc_int<4>{-7} / sc_dt::sc_int<4>{2}).to_int64()
+            == -3
+        && (sc_dt::sc_int<4>{-7} % sc_dt::sc_int<4>{2})
+                   .to_int64()
+            == -1);
+    assert(
+        (sc_dt::sc_int<4>{-4} >> 1).to_int64() == -2
+        && (sc_dt::sc_int<4>{-4} << 1).to_int64() == -8);
+    auto signed_bits = sc_dt::sc_int<4>{-2};
+    signed_bits[3] = false;
+    signed_bits[0].flip();
+    assert(
+        signed_bits.to_int64() == 7
+        && signed_bits.to_string() == "0111");
+    assert(
+        (~signed_bits).to_int64() == -8
+        && (-signed_bits).to_int64() == -7);
+    assert(sc_dt::sc_int<4>{-1}.and_reduce());
+    assert(sc_dt::sc_int<4>{-8}.or_reduce());
+    assert(sc_dt::sc_int<4>{7}.xor_reduce());
+    assert(
+        sc_dt::sc_int<4>{-1} < sc_dt::sc_int<4>{1}
+        && sc_dt::sc_int<4>{-1} < 0
+        && -1 == sc_dt::sc_int<4>{-1});
+    const sc_dt::sc_int<4> signed_from_vector{
+        sc_dt::sc_bv<4>{"1001"}};
+    assert(signed_from_vector.to_int64() == -7);
+    sc_dt::sc_int<64> minimum{
+        std::numeric_limits<std::int64_t>::min()};
+    assert(
+        (minimum / sc_dt::sc_int<64>{-1}).to_int64()
+        == std::numeric_limits<std::int64_t>::min());
+    assert(
+        (minimum % sc_dt::sc_int<64>{-1}).to_int64() == 0);
+    bool rejected_int_modulo = false;
+    try {
+        (void)(negative % sc_dt::sc_int<4>{0});
+    } catch (const std::domain_error&) {
+        rejected_int_modulo = true;
+    }
+    assert(rejected_int_modulo);
+    bool rejected_int_shift = false;
+    try {
+        (void)(negative >> -1);
+    } catch (const std::invalid_argument&) {
+        rejected_int_shift = true;
+    }
+    assert(rejected_int_shift);
+    bool rejected_int_index = false;
+    try {
+        (void)negative[4];
+    } catch (const std::out_of_range&) {
+        rejected_int_index = true;
+    }
+    assert(rejected_int_index);
 
     sc_core::sc_signal<bool> clock;
     sc_core::sc_signal<sc_dt::sc_uint<8>> value;

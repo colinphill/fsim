@@ -380,6 +380,28 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_systemc_datatype_application_tests
+    app/systemc_datatype_application_test.cpp
+  )
+  fsim_configure_test(fsim_systemc_datatype_application_tests)
+  target_compile_definitions(
+    fsim_systemc_datatype_application_tests
+    PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    fsim_systemc_datatype_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.systemc_datatypes
+    COMMAND fsim_systemc_datatype_application_tests
+  )
+  set_tests_properties(
+    fsim.application.systemc_datatypes
+    PROPERTIES LABELS "fast;systemc;datatypes"
+  )
+
+  add_executable(
     fsim_vhdl_projected_application_tests
     app/vhdl_projected_application_test.cpp
   )

@@ -991,6 +991,15 @@ single deterministic simulation thread. Wait callbacks yield a resumable
 external process to the common scheduler; terminal shutdown resumes suspended
 stacks with an explicit stop request before plug-in code is unloaded.
 
+The facade's bounded fixed-width datatypes execute entirely inside plug-in
+C++ code. `sc_bv` and `sc_lv` retain arbitrary compile-time widths while
+`sc_uint` and `sc_int` cover widths 1 through 64 with explicit masking after
+wrapping operations. Typed port and signal adapters canonicalize those values
+at the plug-in boundary, so known and four-state results use the same packed
+common-kernel representation, VCD path, and interpreter/LLVM-hybrid scheduling
+semantics as HDL-produced values. No C++ datatype object crosses the native
+plug-in ABI.
+
 This cache boundary does not yet fingerprint every helper behind the selected
 compiler driver or every environment-injected code-generation setting. The
 MSVC fallback also does not consume `/sourceDependencies`, so extensions such

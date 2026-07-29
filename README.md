@@ -234,10 +234,13 @@ The current tree contains:
 - an executable versioned C session API for build, hierarchy/value access,
   simulation control, and synchronous callbacks;
 - versioned SystemC plug-in ABI, dynamic-library loading, typed factory
-  construction, and foreign-child registration; and
+  construction, and foreign-child registration;
 - an fsim SystemC compatibility header plus a shell-free, cached host compiler
   for plug-in shared libraries, with build-time entry-point and factory
-  validation; and
+  validation;
+- bounded `sc_logic`, arbitrary-width `sc_bv`/`sc_lv`, and 1–64-bit
+  `sc_uint`/`sc_int` operations with checked bit selection, four-state
+  propagation, shifts, reductions, and wrapping integer arithmetic;
 - executable facade-defined `SC_METHOD` processes with time-zero
   initialization, `dont_initialize()`, static any-change/edge sensitivity,
   dynamic time/event `next_trigger`, immediate/delta/timed named events with
