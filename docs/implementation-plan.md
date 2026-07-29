@@ -372,6 +372,7 @@ Current and most recent aggregate regression snapshots:
 | Design-stop final isolation | LLVM 22 runtime/elaboration and full 15/15 aggregate regression for `$finish` with a timed `forever` process still pending; ordinary queued work is discarded before exactly-once final procedures run at the stop timestamp |
 | VHDL conditional assignments | Exact LLVM 22 frontend/elaboration/diagnostic-catalog plus the fast expression application target for concurrent and sequential VHDL-2008 `when`/`else` assignments, chained source-order alternatives, Boolean-condition enforcement, missing-else recovery, and interpreter/LLVM O0/O2 equivalence |
 | VHDL selected signal assignments | Exact LLVM 22 frontend/diagnostic-catalog plus the fast expression application target for labeled/unlabeled `with`/`select`, grouped exact choices, final `others`, retained waveform delays, inferred selector/value sensitivity, timed reactive selection, and interpreter/LLVM O0/O2 equivalence |
+| VHDL projected output waveforms | Exact LLVM 22 frontend/runtime/elaboration/compiler/C-ABI/diagnostic-catalog plus the focused VHDL projected-waveform application target pass for implicit/explicit inertial, transport, explicit rejection, sequential/conditional/selected concurrent whole and slice assignments, per-scalar transaction editing, exact pulse boundaries, VCD, interpreter/LLVM O0/O2 equality, and cold/warm native-cache behavior |
 | VHDL clock-edge guards | Exact LLVM 22 frontend/elaboration plus the fast expression application target for sole outer `rising_edge`/`falling_edge` sensitivity refinement, negative-edge scheduling, and interpreter/LLVM O0/O2 equivalence |
 | VHDL concurrent assertions | Exact LLVM 22 frontend/elaboration plus the fast expression application target for labeled assertion HIR, stable process naming, inferred condition sensitivity, event-driven interpreter failure metadata, and interpreter/LLVM O0/O2 execution |
 | SystemVerilog signedness casts | Exact LLVM 22 frontend/elaboration plus the fast expression application target for bit/width-preserving `$signed`/`$unsigned`, arity rejection, signed/unsigned comparisons, signedness-sensitive `>>>`, and interpreter/LLVM O0/O2 equivalence |
@@ -1213,6 +1214,18 @@ The planned ten implementation features are:
     sequential/concurrent/selected, pulse-boundary, transport, interpreter/
     LLVM O0/O2, VCD, and cold/warm-cache evidence before the full local
     regression gate.
+
+All ten implementation features are complete. Focused frontend, runtime,
+elaboration, diagnostic-catalog, strict C ABI, native API, LLVM O0/O2, VCD,
+rejection-boundary, exact-time-normalization, and cold/warm native-cache tests
+pass. VHDL whole and slice writes use cancelable per-scalar projected
+transaction queues, while unchanged SystemVerilog continuous RHS evaluations
+retain their original pending publication time. The append-only runtime table
+is now 216 bytes and the native-object schema advances to v14. The exact LLVM
+22.1.8 warnings-as-errors Release regression then passed all 30 tests in 53.63
+seconds on 2026-07-28, including Boost.Context fibers, fetched Tcl 9.0.4, and
+the fetched-Tcl relocation test. The batch ends at feature commit `9317089`;
+no CI state was inspected for this local gate.
 
 ## v1 release condition
 
