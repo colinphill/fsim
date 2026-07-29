@@ -2392,6 +2392,27 @@ application integration, mixed-language execution, interpreter/JIT
 equivalence, Tcl, debugger, VCD, cache, and strict ABI coverage. No CI state
 was inspected.
 
+Checkpoint 4 is in progress. The application implementation is now compiled
+as executor/callback, analysis, check, build, run, simulation, debugger,
+debug-control, time/value, CLI-service, and public-facade translation units.
+Its private header contains declarations and state layouts only; it has no
+ordinary executable function bodies. The former 5,953-line implementation is
+now headed by a 1,713-line executor unit.
+
+The 7,212-line application integration test has also been replaced by a small
+runner, three compiled source-fixture units, a compiled source-update helper,
+compiled capture support, and five responsibility-oriented test groups. Its
+shared header contains fixture/result declarations only. Source text embedded
+in raw HDL literals is preserved byte-for-byte so diagnostic source locations
+remain stable. The largest application test unit is 1,200 lines.
+
+Both application files have been removed from the temporary allowlist, leaving
+only the installed SystemC header, LLVM adapter, and elaborator. The permanent
+budget gate now checks 178 authored sources. The exact Debug application
+integration test passes in 169.07 seconds after the split, and the line-budget
+test passes. The LLVM adapter portion and the exact Release regression remain
+to complete this checkpoint.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

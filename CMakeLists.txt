@@ -470,6 +470,16 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     fsim_application
     STATIC
       src/app/application.cpp
+      src/app/application_analysis.cpp
+      src/app/application_build.cpp
+      src/app/application_check.cpp
+      src/app/application_debug_control.cpp
+      src/app/application_debugger.cpp
+      src/app/application_executors.cpp
+      src/app/application_run.cpp
+      src/app/application_services.cpp
+      src/app/application_simulation.cpp
+      src/app/application_time.cpp
       src/app/tcl.cpp
   )
   add_library(fsim::application ALIAS fsim_application)

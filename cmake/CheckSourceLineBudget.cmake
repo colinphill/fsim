@@ -8,10 +8,8 @@ set(FSIM_SOURCE_LINE_LIMIT 2000)
 set(
   FSIM_SOURCE_LINE_ALLOWLIST
   "include/fsim/systemc.hpp"
-  "src/app/application.cpp"
   "src/compiler/llvm_jit.cpp"
   "src/elaboration/elaborator.cpp"
-  "tests/app/application_test.cpp"
 )
 
 file(

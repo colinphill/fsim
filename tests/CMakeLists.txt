@@ -631,7 +631,21 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;vhdl;projected-waveforms"
   )
 
-  add_executable(fsim_application_tests app/application_test.cpp)
+  add_executable(
+    fsim_application_tests
+    app/application_test.cpp
+    app/application_test_cli.cpp
+    app/application_test_fixture.cpp
+    app/application_test_mixed.cpp
+    app/application_test_simulation.cpp
+    app/application_test_source_updates.cpp
+    app/application_test_sources_common.cpp
+    app/application_test_sources_mixed.cpp
+    app/application_test_sources_systemc.cpp
+    app/application_test_specialization.cpp
+    app/application_test_support.cpp
+    app/application_test_systemc.cpp
+  )
   fsim_configure_test(fsim_application_tests)
   target_compile_definitions(
     fsim_application_tests
