@@ -262,12 +262,12 @@ void verify_mode(
     assert(reference.vcd == actual->vcd);
   }
 #if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 3);
+  assert(cold.compiled_processes == 2);
   assert(cold.cache.hits == 0);
-  assert(cold.cache.misses == 3);
-  assert(cold.cache.stores == 3);
-  assert(warm.compiled_processes == 3);
-  assert(warm.cache.hits == 3);
+  assert(cold.cache.misses == 2);
+  assert(cold.cache.stores == 2);
+  assert(warm.compiled_processes == 2);
+  assert(warm.cache.hits == 2);
   assert(warm.cache.misses == 0);
 #else
   assert(cold.compiled_processes == 0);

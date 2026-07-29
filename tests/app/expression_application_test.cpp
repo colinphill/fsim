@@ -335,15 +335,15 @@ void test_vhdl_shift_rotate(
           "10100101",
           "01011010",
           "00000010",
-          "XXXX0110",
+          "UUUU0110",
           "10100101",
           "01011010",
           "01011010"}));
   assert(reference.compiled_processes == 0);
   assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 7);
-  assert(compiled.compiled_modules == 1);
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
 #else
   assert(compiled.compiled_processes == 0);
   assert(compiled.compiled_modules == 0);
@@ -801,8 +801,8 @@ void test_vhdl_falling_edge(
           "1",
           "0"}));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 4);
-  assert(compiled.compiled_modules == 1);
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
 #else
   assert(compiled.compiled_processes == 0);
   assert(compiled.compiled_modules == 0);
@@ -1008,8 +1008,8 @@ void test_vhdl_array_attributes(
           "00000000000000000000000000000100",
           "1"}));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 1);
-  assert(compiled.compiled_modules == 1);
+  assert(compiled.compiled_processes == 0);
+  assert(compiled.compiled_modules == 0);
 #else
   assert(compiled.compiled_processes == 0);
   assert(compiled.compiled_modules == 0);

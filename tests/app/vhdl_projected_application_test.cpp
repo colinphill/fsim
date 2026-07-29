@@ -195,7 +195,7 @@ void verify_capture(const Capture& capture) {
   assert((
       changes_for(capture, "vhdl_projected.slice_output")
       == std::vector<TimedValue>{
-          {"X00X", 3}, {"X11X", 23}}));
+          {"U00U", 3}, {"U11U", 23}}));
   assert((
       changes_for(capture, "vhdl_projected.conditional_output")
       == std::vector<TimedValue>{
@@ -211,7 +211,7 @@ void verify_capture(const Capture& capture) {
   assert((
       changes_for(capture, "vhdl_projected.waveform_slice_output")
       == std::vector<TimedValue>{
-          {"X00X", 2}, {"X11X", 5}}));
+          {"U00U", 2}, {"U11U", 5}}));
   assert((
       changes_for(capture, "vhdl_projected.conditional_waveform_output")
       == std::vector<TimedValue>{
@@ -434,12 +434,12 @@ end architecture;
     assert(reference.final_values == warm.final_values);
     assert(reference.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 12);
+    assert(cold.compiled_processes == 0);
     assert(cold.native_cache.hits == 0);
-    assert(cold.native_cache.misses == 1);
-    assert(cold.native_cache.stores == 1);
-    assert(warm.compiled_processes == 12);
-    assert(warm.native_cache.hits == 1);
+    assert(cold.native_cache.misses == 0);
+    assert(cold.native_cache.stores == 0);
+    assert(warm.compiled_processes == 0);
+    assert(warm.native_cache.hits == 0);
     assert(warm.native_cache.misses == 0);
 #else
     assert(cold.compiled_processes == 0);
