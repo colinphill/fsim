@@ -290,6 +290,8 @@ class VhdlParser final : private detail::ParserBase {
         parse_package_constant(unit, previous());
       } else if (match_keyword("type", true)) {
         parse_record_type_declaration(unit, previous());
+      } else if (match_keyword("subtype", true)) {
+        parse_subtype_declaration(unit, previous());
       } else {
         const auto declaration = advance();
         error(
@@ -318,10 +320,11 @@ class VhdlParser final : private detail::ParserBase {
         "':' after package constant names",
         "FSIM-VHDL-PARSE-087");
     const auto type = parse_vhdl_type(true);
-    if (type.packed_range
-        || (type.domain != ValueDomain::Integer
-            && type.domain != ValueDomain::Boolean
-            && type.domain != ValueDomain::Bit2)) {
+    if (type.named_type.empty()
+        && (type.packed_range
+            || (type.domain != ValueDomain::Integer
+                && type.domain != ValueDomain::Boolean
+                && type.domain != ValueDomain::Bit2))) {
       error(
           names.front(),
           "FSIM-VHDL-UNSUPPORTED-023",
@@ -380,6 +383,8 @@ class VhdlParser final : private detail::ParserBase {
         parse_vhdl_ports(unit);
       } else if (match_keyword("generic", true)) {
         parse_vhdl_generics(unit, previous());
+      } else if (match_keyword("subtype", true)) {
+        parse_subtype_declaration(unit, previous());
       } else {
         const auto declaration = advance();
         error(declaration, "FSIM-VHDL-UNSUPPORTED-003",
@@ -452,10 +457,11 @@ class VhdlParser final : private detail::ParserBase {
           "':' after generic name",
           "FSIM-VHDL-PARSE-051");
       const auto type = parse_vhdl_type(true);
-      if (type.packed_range
-          || (type.domain != ValueDomain::Integer
-              && type.domain != ValueDomain::Boolean
-              && type.domain != ValueDomain::Bit2)) {
+      if (type.named_type.empty()
+          && (type.packed_range
+              || (type.domain != ValueDomain::Integer
+                  && type.domain != ValueDomain::Boolean
+                  && type.domain != ValueDomain::Bit2))) {
         error(
             names.front(),
             "FSIM-VHDL-UNSUPPORTED-018",
@@ -637,8 +643,7 @@ class VhdlParser final : private detail::ParserBase {
           "in this frontend slice");
     }
 
-    if (type.domain == ValueDomain::Integer
-        && match_keyword("range", true)) {
+    if (match_keyword("range", true)) {
       const auto range_start = previous();
       auto left_expression = parse_expression();
       bool descending = false;
@@ -653,6 +658,11 @@ class VhdlParser final : private detail::ParserBase {
       auto right_expression = parse_expression();
       const auto left = simple_integer_constant(left_expression);
       const auto right = simple_integer_constant(right_expression);
+      if (type.domain == ValueDomain::Integer) {
+        type.integer_base_range = type.integer_range;
+        type.integer_base_range_expression =
+            type.integer_range_expression;
+      }
       if (left && right) {
         type.integer_range =
             IntegerRange{*left, *right, descending};
@@ -727,6 +737,8 @@ class VhdlParser final : private detail::ParserBase {
         parse_signal_declaration(unit.signals);
       } else if (match_keyword("type", true)) {
         parse_record_type_declaration(unit, previous());
+      } else if (match_keyword("subtype", true)) {
+        parse_subtype_declaration(unit, previous());
       } else {
         const auto declaration = advance();
         error(declaration, "FSIM-VHDL-UNSUPPORTED-004",
@@ -903,8 +915,47 @@ class VhdlParser final : private detail::ParserBase {
           canonical_name,
           std::move(type),
           span_from(start, previous()),
-          {}});
+          {},
+          TypeDeclarationKind::VhdlRecord});
     }
+  }
+
+  void parse_subtype_declaration(
+      DesignUnit& unit, const Token& start) {
+    const auto name = expect_identifier("subtype name");
+    const auto canonical_name = vhdl_name(name.text);
+    const bool duplicate =
+        vhdl_named_types_.contains(canonical_name)
+        || std::any_of(
+            unit.type_aliases.begin(),
+            unit.type_aliases.end(),
+            [&](const TypeAliasDeclaration& declaration) {
+              return declaration.name == canonical_name;
+            });
+    if (duplicate) {
+      error(
+          name,
+          "FSIM-VHDL-SEM-036",
+          "duplicate bounded type declaration '"
+              + canonical_name + "'");
+    }
+    expect_keyword(
+        "is", true, "FSIM-VHDL-PARSE-134");
+    auto type = parse_vhdl_type(true, true);
+    expect(
+        TokenKind::Semicolon,
+        "';' after subtype declaration",
+        "FSIM-VHDL-PARSE-135");
+    if (duplicate) {
+      return;
+    }
+    vhdl_named_types_.insert(canonical_name);
+    unit.type_aliases.push_back(TypeAliasDeclaration{
+        canonical_name,
+        std::move(type),
+        span_from(start, previous()),
+        {},
+        TypeDeclarationKind::VhdlSubtype});
   }
 
   void parse_signal_declaration(

@@ -205,6 +205,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-131` | error | A VHDL record declaration has a malformed `end record` clause. |
 | `FSIM-VHDL-PARSE-132` | error | A bounded record-aggregate choice is not an element name or `others`. |
 | `FSIM-VHDL-PARSE-133` | error | A record aggregate association has no value or a trailing comma has no following association. |
+| `FSIM-VHDL-PARSE-134` | error | A VHDL subtype declaration is missing `is`. |
+| `FSIM-VHDL-PARSE-135` | error | A VHDL subtype declaration is missing its terminating semicolon. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -687,6 +689,10 @@ therefore excluded.
 | `FSIM-ELAB-VHAGG-005` | error | A record aggregate omits an element without supplying `others`. |
 | `FSIM-ELAB-VHAGG-006` | error | A record aggregate element value does not have the element's exact packed width. |
 | `FSIM-ELAB-VHAGG-007` | error | A record aggregate would implicitly lose four- or nine-state information in a two-state element. |
+| `FSIM-ELAB-VHSUBTYPE-001` | error | A scalar `range` constraint is applied to a resolved noninteger base subtype. |
+| `FSIM-ELAB-VHSUBTYPE-002` | error | A derived integer subtype constraint lies outside its resolved base subtype. |
+| `FSIM-ELAB-VHSUBTYPE-003` | error | A packed index constraint is applied to a scalar, record, or otherwise nonarray base subtype. |
+| `FSIM-ELAB-VHSUBTYPE-004` | error | A constrained packed-array subtype is constrained again. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
@@ -702,6 +708,7 @@ therefore excluded.
 | `FSIM-ELAB-GENERIC-007` | error | A generic-dependent packed range width overflows the supported range. |
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
+| `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves to something other than scalar integer, Boolean, or bit. |
 | `FSIM-ELAB-PARAM-001` | error | A parameter override has an unknown/local target, is missing or excessive, or is applied to a SystemC factory. |
 | `FSIM-ELAB-PARAM-002` | error | A parameter override is duplicated during elaboration. |
 | `FSIM-ELAB-PARAM-003` | error | Named and positional parameter overrides are mixed during elaboration. |

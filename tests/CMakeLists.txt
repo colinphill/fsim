@@ -502,6 +502,26 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_vhdl_subtype_application_tests
+    app/vhdl_subtype_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_vhdl_subtype_application_tests
+  )
+  target_link_libraries(
+    fsim_vhdl_subtype_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.vhdl_subtypes
+    COMMAND fsim_vhdl_subtype_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vhdl_subtypes
+    PROPERTIES LABELS "fast;vhdl;subtypes;packages;hierarchy;integer;logic9"
+  )
+
+  add_executable(
     fsim_vhdl_projected_application_tests
     app/vhdl_projected_application_test.cpp
   )

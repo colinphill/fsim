@@ -157,6 +157,11 @@ struct Type {
   // changes the fixed 32-bit runtime representation returned by width().
   std::optional<IntegerRange> integer_range;
   std::optional<IntegerRangeExpression> integer_range_expression;
+  // When a derived VHDL subtype adds an integer range, retain the resolved
+  // base subtype's range independently so specialization can prove that the
+  // derived constraint remains inside it.
+  std::optional<IntegerRange> integer_base_range;
+  std::optional<IntegerRangeExpression> integer_base_range_expression;
 
   Type() = default;
   Type(
@@ -180,6 +185,13 @@ struct EnumLiteralDeclaration {
   SourceSpan span;
 };
 
+enum class TypeDeclarationKind {
+  Alias,
+  VhdlRecord,
+  VhdlSubtype,
+  SystemVerilogTypedef,
+};
+
 struct TypeAliasDeclaration {
   std::string name;
   Type type;
@@ -188,6 +200,8 @@ struct TypeAliasDeclaration {
   // their declaration-order expressions while matching immutable local
   // parameter declarations carry them through specialization.
   std::vector<EnumLiteralDeclaration> enum_literals;
+  TypeDeclarationKind declaration_kind{
+      TypeDeclarationKind::Alias};
 };
 
 struct SignalDeclaration {

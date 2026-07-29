@@ -2820,7 +2820,8 @@ class VerilogParser final : private detail::ParserBase {
         name.text,
         std::move(type),
         cover(start.span, previous().span),
-        std::move(enum_literals)});
+        std::move(enum_literals),
+        TypeDeclarationKind::SystemVerilogTypedef});
     for (auto& [parameter, parameter_name] :
          enum_parameters) {
       add_parameter(

@@ -7371,6 +7371,251 @@ end architecture;
           == negative_expected[index]);
     }
 
+    const auto vhdl_subtype_source =
+        fsim::frontend::parse_text(
+            "vhdl_subtype_execution.vhd",
+            R"(
+package Subtype_Types is
+  subtype Count_Base_T is natural range 0 to 15;
+  subtype Count_T is Count_Base_T range 2 to 9;
+  constant Default_Count : Count_T := 5;
+  type Packet_T is record
+    Data : std_logic_vector(3 downto 0);
+    Valid : boolean;
+  end record Packet_T;
+  subtype Packet_Alias_T is Packet_T;
+end package;
+
+use work.subtype_types.all;
+entity subtype_execution is
+  generic (
+    Width : natural := 4;
+    Initial_Count : Count_T := Default_Count
+  );
+  subtype Entity_Word_T is std_logic_vector(Width - 1 downto 0);
+end entity;
+
+use work.subtype_types.all;
+architecture rtl of subtype_execution is
+  subtype Local_Count_T is Count_T range 4 to 7;
+  subtype Local_Packet_T is Packet_Alias_T;
+  signal source : Entity_Word_T;
+  signal result : Entity_Word_T;
+  signal count : Local_Count_T;
+  signal count_result : Count_T;
+  signal packet : Local_Packet_T;
+begin
+  drive : process
+    variable local_count : Local_Count_T := Initial_Count;
+    variable local_packet : Local_Packet_T :=
+      (Valid => true, Data => "ULH-");
+  begin
+    source <= "10Z-";
+    count <= local_count;
+    packet <= local_packet;
+    wait;
+  end process;
+
+  result <= source;
+  count_result <= count;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_subtype_source.ok());
+    const auto vhdl_subtype_design =
+        fsim::elaboration::elaborate(
+            vhdl_subtype_source.design,
+            "vhdl:work.subtype_execution(rtl)");
+    if (!vhdl_subtype_design.ok()) {
+      for (const auto& diagnostic :
+           vhdl_subtype_design.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << " at "
+                  << diagnostic.span.begin.line << ":"
+                  << diagnostic.span.begin.column << '\n';
+      }
+    }
+    assert(vhdl_subtype_design.ok());
+    const auto subtype_source_signal =
+        vhdl_subtype_design.design->find_signal("source");
+    const auto subtype_result_signal =
+        vhdl_subtype_design.design->find_signal("result");
+    const auto subtype_count_signal =
+        vhdl_subtype_design.design->find_signal("count");
+    const auto subtype_count_result_signal =
+        vhdl_subtype_design.design->find_signal(
+            "count_result");
+    const auto subtype_packet_signal =
+        vhdl_subtype_design.design->find_signal("packet");
+    assert(
+        subtype_source_signal && subtype_result_signal
+        && subtype_count_signal
+        && subtype_count_result_signal
+        && subtype_packet_signal);
+    const auto& subtype_source_info =
+        vhdl_subtype_design.design->signals().at(
+            *subtype_source_signal);
+    const auto& subtype_count_info =
+        vhdl_subtype_design.design->signals().at(
+            *subtype_count_signal);
+    const auto& subtype_count_result_info =
+        vhdl_subtype_design.design->signals().at(
+            *subtype_count_result_signal);
+    const auto& subtype_packet_info =
+        vhdl_subtype_design.design->signals().at(
+            *subtype_packet_signal);
+    assert(
+        subtype_source_info.width == 4
+        && subtype_source_info.source_domain
+            == fsim::frontend::ValueDomain::Logic9
+        && subtype_count_info.width == 32
+        && subtype_count_info.integer_range
+        && subtype_count_info.integer_range->left == 4
+        && subtype_count_info.integer_range->right == 7
+        && subtype_count_result_info.integer_range
+        && subtype_count_result_info.integer_range->left == 2
+        && subtype_count_result_info.integer_range->right == 9
+        && subtype_packet_info.width == 5
+        && subtype_packet_info.packed_members.size() == 2);
+    assert(
+        std::ranges::any_of(
+            vhdl_subtype_design.design->processes(),
+            [](const auto& process) {
+                return std::ranges::any_of(
+                    process.operations,
+                    [](const auto& operation) {
+                        return std::holds_alternative<
+                            fsim::runtime::simir::IntegerCheck>(
+                            operation);
+                    });
+            }));
+    auto subtype_interpreter =
+        vhdl_subtype_design.design->create_interpreter();
+    assert(
+        subtype_interpreter
+            ->signal_value(*subtype_count_signal)
+            .to_msb_string()
+        == "00000000000000000000000000000100");
+    const auto subtype_run = subtype_interpreter->run();
+    assert(
+        subtype_run.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        subtype_interpreter
+            ->signal_value(*subtype_source_signal)
+            .to_msb_string()
+        == "10Z-");
+    assert(
+        subtype_interpreter
+            ->signal_value(*subtype_result_signal)
+            .to_msb_string()
+        == "10Z-");
+    assert(
+        subtype_interpreter
+            ->signal_value(*subtype_count_signal)
+            .to_msb_string()
+        == "00000000000000000000000000000101");
+    assert(
+        subtype_interpreter
+            ->signal_value(*subtype_count_result_signal)
+            .to_msb_string()
+        == "00000000000000000000000000000101");
+    assert(
+        subtype_interpreter
+            ->signal_value(*subtype_packet_signal)
+            .to_msb_string()
+        == "ULH-1");
+
+    const auto invalid_vhdl_subtypes =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_subtypes.vhd",
+            R"(
+package Invalid_Subtype_Types is
+  subtype Imported_Count_T is natural range 2 to 9;
+  subtype Imported_Vector_T is bit_vector(3 downto 0);
+  constant Bad_Constant : Imported_Count_T := 10;
+end package;
+
+use work.invalid_subtype_types.all;
+entity invalid_vhdl_subtypes is
+  generic (
+    Bad_Generic : Imported_Count_T := 10;
+    Bad_Vector_Generic : Imported_Vector_T := "0000"
+  );
+  subtype Later_Port_T is bit;
+  port (Bad_Port : in Later_Port_T);
+end entity;
+
+use work.invalid_subtype_types.all;
+architecture rtl of invalid_vhdl_subtypes is
+  subtype Bad_Scalar_T is boolean range 0 to 1;
+  subtype Count_Base_T is integer range 0 to 3;
+  subtype Bad_Count_T is Count_Base_T range 0 to 4;
+  subtype Null_Count_T is integer range 3 to 2;
+  subtype Bad_Packed_T is bit(3 downto 0);
+  subtype Vector_T is bit_vector(3 downto 0);
+  subtype Reconstraint_T is Vector_T(1 downto 0);
+  subtype Unknown_T is Missing_T;
+  subtype Cycle_A_T is Cycle_B_T;
+  subtype Cycle_B_T is Cycle_A_T;
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_subtypes.ok());
+    const auto rejected_vhdl_subtypes =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_subtypes.design,
+            "vhdl:work.invalid_vhdl_subtypes(rtl)");
+    assert(!rejected_vhdl_subtypes.ok());
+    const bool all_subtype_diagnostics =
+        has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-VHSUBTYPE-001")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-VHSUBTYPE-002")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-VHSUBTYPE-003")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-VHSUBTYPE-004")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-INTEGER-002")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-PKG-006")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-GENERIC-008")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-GENERIC-010")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-VHTYPE-001")
+        && has_diagnostic(
+            rejected_vhdl_subtypes,
+            "FSIM-ELAB-VHTYPE-002");
+    if (!all_subtype_diagnostics) {
+      for (const auto& diagnostic :
+           rejected_vhdl_subtypes.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(all_subtype_diagnostics);
+    assert(std::ranges::any_of(
+        rejected_vhdl_subtypes.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code
+                    == "FSIM-ELAB-VHTYPE-001"
+                && diagnostic.message.find("later_port_t")
+                    != std::string::npos;
+        }));
+
     const auto invalid_vhdl_shift =
         fsim::frontend::parse_text(
             "invalid_vhdl_shift.vhd",

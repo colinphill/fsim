@@ -1544,6 +1544,158 @@ end architecture;
       "integer subtype HIR retains fixed width, bounds, and direction");
 }
 
+void test_vhdl_subtype_declarations() {
+  const auto result = parse_text(
+      "subtype_declarations.vhd",
+      R"(
+package Subtype_Types is
+  subtype Nibble_T is std_logic_vector(3 downto 0);
+  subtype Signed_Nibble_T is signed(3 downto 0);
+  subtype Flag_T is boolean;
+  subtype Bit_Flag_T is bit;
+  subtype Level_T is std_logic;
+  subtype Count_Base_T is natural range 0 to 15;
+  subtype Count_T is Count_Base_T range 2 to 9;
+  constant Default_Count : Count_T := 4;
+  type Packet_T is record
+    Data : std_logic_vector(3 downto 0);
+    Valid : boolean;
+  end record Packet_T;
+  subtype Packet_Alias_T is Packet_T;
+end package;
+
+use work.subtype_types.all;
+entity Subtype_Endpoint is
+  generic (Initial_Count : Count_T := 5);
+  port (
+    Source : in Nibble_T;
+    Count : in Count_T
+  );
+  subtype Port_Count_T is Count_T range 3 to 8;
+end entity;
+
+use work.subtype_types.all;
+architecture rtl of subtype_endpoint is
+  subtype Ascending_T is bit_vector(0 to 3);
+  subtype Local_Count_T is Count_T range 4 to 7;
+  signal Result : Ascending_T;
+  signal Current : Local_Count_T;
+  signal Port_Current : Port_Count_T;
+begin
+  observe : process
+    variable Local : Packet_Alias_T;
+  begin
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      result.ok(),
+      "package, entity, and architecture VHDL subtype declarations parse");
+  require(
+      result.design.units.size() == 3,
+      "subtype fixture retains package, entity, and architecture units");
+  const auto& package = result.design.units[0];
+  require(
+      package.type_aliases.size() == 9
+          && package.type_aliases[0].name == "nibble_t"
+          && package.type_aliases[0].declaration_kind
+              == TypeDeclarationKind::VhdlSubtype
+          && package.type_aliases[0].type.domain
+              == ValueDomain::Logic9
+          && package.type_aliases[0].type.packed_range
+          && package.type_aliases[0].type.packed_range->left == 3
+          && package.type_aliases[0].type.packed_range->right == 0,
+      "packed subtype HIR retains declaration kind, domain, and direction");
+  require(
+      package.type_aliases[1].type.is_signed
+          && package.type_aliases[1].type.width() == 4
+          && package.type_aliases[2].type.domain
+              == ValueDomain::Boolean
+          && package.type_aliases[3].type.domain
+              == ValueDomain::Bit2
+          && package.type_aliases[4].type.domain
+              == ValueDomain::Logic9,
+      "signed and scalar logic/bit/Boolean subtype bases retain their "
+      "domains");
+  require(
+      package.type_aliases[5].type.domain
+              == ValueDomain::Integer
+          && package.type_aliases[5].type.integer_range
+          && package.type_aliases[5].type.integer_range->left == 0
+          && package.type_aliases[5].type.integer_range->right == 15
+          && package.type_aliases[5].type.integer_base_range
+          && package.type_aliases[5].type.integer_base_range->left == 0,
+      "built-in integer subtype HIR retains derived and base constraints");
+  require(
+      package.type_aliases[6].type.named_type
+              == "count_base_t"
+          && package.parameters.size() == 1
+          && package.parameters[0].type.named_type
+              == "count_t"
+          && package.type_aliases[6].type.integer_range_expression
+          && package.type_aliases[7].declaration_kind
+              == TypeDeclarationKind::VhdlRecord
+          && package.type_aliases[8].type.named_type
+              == "packet_t",
+      "chained integer and record subtype indications remain named until "
+      "semantic resolution");
+  const auto& entity = result.design.units[1];
+  require(
+      entity.type_aliases.size() == 1
+          && entity.type_aliases[0].name == "port_count_t"
+          && entity.parameters.size() == 1
+          && entity.parameters[0].type.named_type == "count_t"
+          && entity.ports.size() == 2
+          && entity.ports[1].type.named_type == "count_t",
+      "entity interfaces retain package subtype references before the "
+      "declarative region");
+  const auto& architecture = result.design.units[2];
+  require(
+      architecture.type_aliases.size() == 2
+          && architecture.type_aliases[0].type.packed_range
+          && !architecture.type_aliases[0]
+                  .type.packed_range->descending
+          && architecture.signals[0].type.named_type
+              == "ascending_t"
+          && architecture.signals[2].type.named_type
+              == "port_count_t"
+          && architecture.processes[0].variables[0]
+                 .type.named_type
+              == "packet_alias_t",
+      "architecture subtype directions and object references are retained");
+
+  const auto invalid = parse_text(
+      "invalid_subtype_declarations.vhd",
+      R"(
+entity invalid_subtype_declarations is
+end entity;
+architecture rtl of invalid_subtype_declarations is
+  subtype Duplicate_T is bit;
+  subtype DUPLICATE_T is boolean;
+  subtype Missing_Is bit;
+  subtype Missing_Semicolon is bit
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const auto& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !invalid.ok()
+          && has_code("FSIM-VHDL-PARSE-134")
+          && has_code("FSIM-VHDL-PARSE-135")
+          && has_code("FSIM-VHDL-SEM-036"),
+      "malformed and duplicate subtype declarations have stable diagnostics");
+}
+
 void test_exponentiation_expression_nodes() {
   const auto systemverilog = parse_text(
       "power.sv",
@@ -7378,6 +7530,7 @@ int main() {
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
     test_vhdl_runtime_integer_nodes();
+    test_vhdl_subtype_declarations();
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
     test_systemverilog_final_procedures();

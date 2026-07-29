@@ -1760,6 +1760,56 @@ reads, VCD, package-edit cache invalidation, fetched Boost.Context 1.91.0 and
 Tcl 9.0.4, SystemC, the strict native ABI, and every preceding feature batch.
 No CI state was inspected for this local gate.
 
+### Fortieth feature batch — bounded VHDL subtype declarations
+
+The planned ten implementation features are:
+
+1. Represent VHDL subtype declarations explicitly in typed HIR while reusing
+   the common named-type graph and retaining source spans and base subtype
+   indications.
+2. Parse case-insensitive `subtype NAME is SUBTYPE_INDICATION;` declarations
+   in package, entity, and architecture declarative regions with stable
+   malformed/duplicate diagnostics.
+3. Support scalar `bit`/`std_logic`/Boolean, packed vector, signed/unsigned,
+   and portable integer-family bases, including constrained built-in bases.
+4. Resolve chained local subtype references deterministically, diagnose
+   unknown/cyclic bases, and preserve concrete packed direction, signedness,
+   element domain, record layout, and integer constraints.
+5. Apply a derived integer range only within its resolved base subtype and
+   reject null, out-of-base, noninteger, and portable-width violations before
+   executable lowering.
+6. Apply packed index constraints only to unconstrained packed-array bases,
+   reject constraints on scalar/record/already constrained bases, and retain
+   specialization-dependent bounds until generic folding.
+7. Export/import package subtypes through selected/all use clauses and direct
+   package/library selected names with transitive source provenance and exact
+   cache invalidation.
+8. Resolve package subtypes in an entity's generic/port header independently,
+   then expose later entity-declarative subtypes to the associated
+   architecture without retroactively changing the interface region.
+9. Execute subtype-typed generics, ports, signals, variables, record aliases,
+   defaults, assignments, range checks, hierarchy aliases, debugger locals,
+   VCD, and interpreter/LLVM O0/O2 paths identically.
+10. Add focused positive/negative/parser/elaboration/runtime evidence, update
+    V1-VH-01/V1-VH-02/V1-VH-04/V1-VH-05 documentation, then run, record, and
+    push the full local regression gate.
+
+All ten implementation features are complete in the checkpoint 40 worktree.
+Typed HIR distinguishes VHDL subtype declarations from records and
+SystemVerilog typedefs while retaining the unresolved base indication and
+derived constraint. The parser admits package, entity, and architecture
+subtypes plus subtype-typed package constants and scalar generics. Elaboration
+resolves local, imported, and direct selected subtype chains; exposes
+independently resolved entity subtypes to the associated architecture; folds
+generic-dependent packed bounds per specialization; and proves derived
+integer containment and packed reconstraint legality before lowering.
+Scalar, signed/unsigned vector, portable integer, and record aliases reach
+the existing typed runtime paths without losing range, direction, domain,
+signedness, layout, or debug metadata. The focused three-specialization
+application proves two differently sized instances, range-safe integer ports,
+record aggregates, interpreter/LLVM O0/O2 equality, debugger locals, VCD,
+cold/warm native reuse, and transitive package-edit invalidation.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

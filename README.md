@@ -37,6 +37,13 @@ The current tree contains:
 - bounded VHDL context declarations/references with recursive reusable
   library/use visibility, cycle diagnostics, and transitive context-source
   cache provenance;
+- package-, entity-, and architecture-declared VHDL subtypes over scalar
+  logic/bit/Boolean, constrained signed/unsigned and logic/bit vectors,
+  portable integer ranges, and bounded records; chained/use/direct-name
+  visibility; derived-constraint legality; specialization-dependent packed
+  bounds; subtype-typed constants/generics; entity-to-architecture visibility;
+  range-safe hierarchy aliases; and interpreter/LLVM O0/O2, debugger-local,
+  VCD, and transitive native-cache equivalence;
 - architecture-local or project-package, non-nested VHDL record types with
   case-insensitive scalar/packed logic, bit, and Boolean elements;
   use-clause or selected-name visibility; reusable same-language entity ports;

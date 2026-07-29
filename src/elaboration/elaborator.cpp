@@ -874,32 +874,57 @@ void substitute_parameters(
     const ConstantEnvironment& environment,
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
+    const auto evaluate_integer_range =
+        [&](std::optional<frontend::IntegerRangeExpression>& expression,
+            std::optional<frontend::IntegerRange>& range,
+            const std::string_view description) {
+          auto span = frontend::SourceSpan{};
+          if (!expression) {
+              return span;
+          }
+          span = expression->span;
+          std::string error;
+          const auto left = evaluate_constant_expression(
+              expression->left, environment, error);
+          const auto right = left
+              ? evaluate_constant_expression(
+                    expression->right, environment, error)
+              : std::nullopt;
+          if (!left || !right) {
+              diagnostics.push_back({
+                  "FSIM-ELAB-INTEGER-001",
+                  "cannot evaluate VHDL " + std::string{description}
+                      + " constraint: " + error,
+                  expression->span});
+              range.reset();
+          } else {
+              range = frontend::IntegerRange{
+                  *left, *right, expression->descending};
+          }
+          expression.reset();
+          return span;
+        };
+    const auto integer_base_range_span =
+        evaluate_integer_range(
+            type.integer_base_range_expression,
+            type.integer_base_range,
+            "base integer subtype");
     auto integer_range_span = frontend::SourceSpan{};
-    if (type.integer_range_expression) {
-        integer_range_span = type.integer_range_expression->span;
-        std::string error;
-        const auto left = evaluate_constant_expression(
-            type.integer_range_expression->left, environment, error);
-        const auto right = left
-            ? evaluate_constant_expression(
-                  type.integer_range_expression->right,
-                  environment,
-                  error)
-            : std::nullopt;
-        if (!left || !right) {
-            diagnostics.push_back({
-                "FSIM-ELAB-INTEGER-001",
-                "cannot evaluate VHDL integer subtype constraint: "
-                    + error,
-                type.integer_range_expression->span});
-            type.integer_range.reset();
-        } else {
-            type.integer_range = frontend::IntegerRange{
-                *left,
-                *right,
-                type.integer_range_expression->descending};
-        }
-        type.integer_range_expression.reset();
+    integer_range_span =
+        evaluate_integer_range(
+            type.integer_range_expression,
+            type.integer_range,
+            "integer subtype");
+    if (type.domain != frontend::ValueDomain::Integer
+        && (type.integer_range
+            || type.integer_base_range)) {
+        diagnostics.push_back({
+            "FSIM-ELAB-VHSUBTYPE-001",
+            "a VHDL range constraint is valid only for an integer-family "
+            "subtype in the current bounded scalar path",
+            integer_range_span});
+        type.integer_range.reset();
+        type.integer_base_range.reset();
     }
     if (type.domain == frontend::ValueDomain::Integer
         && type.integer_range) {
@@ -941,6 +966,33 @@ void substitute_parameters(
                     "VHDL integer subtype constraint is outside the "
                     "range of base subtype '" + simple_name + "'",
                     integer_range_span});
+                type.integer_range.reset();
+            }
+        }
+        if (type.integer_range
+            && type.integer_base_range) {
+            const auto& base = *type.integer_base_range;
+            const auto base_lower =
+                std::min(base.left, base.right);
+            const auto base_upper =
+                std::max(base.left, base.right);
+            const auto derived_lower =
+                std::min(
+                    type.integer_range->left,
+                    type.integer_range->right);
+            const auto derived_upper =
+                std::max(
+                    type.integer_range->left,
+                    type.integer_range->right);
+            if (derived_lower < base_lower
+                || derived_upper > base_upper) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-VHSUBTYPE-002",
+                    "derived VHDL integer subtype constraint lies outside "
+                    "its resolved base subtype range",
+                    integer_range_span.begin.offset != 0
+                        ? integer_range_span
+                        : integer_base_range_span});
                 type.integer_range.reset();
             }
         }
@@ -1354,6 +1406,14 @@ void collect_qualified_identifiers(
             type.integer_range_expression->left, identifiers);
         collect_qualified_identifiers(
             type.integer_range_expression->right, identifiers);
+    }
+    if (type.integer_base_range_expression) {
+        collect_qualified_identifiers(
+            type.integer_base_range_expression->left,
+            identifiers);
+        collect_qualified_identifiers(
+            type.integer_base_range_expression->right,
+            identifiers);
     }
     if (!type.packed_range_expression) {
         return;
@@ -2408,6 +2468,15 @@ SpecializedUnit specialize_unit(
         }
         if (is_vhdl) {
             const auto spelling = parameter.type.spelling;
+            const bool violates_supported_type =
+                parameter.type.packed_range.has_value()
+                || !parameter.type.packed_members.empty()
+                || (parameter.type.domain
+                        != frontend::ValueDomain::Integer
+                    && parameter.type.domain
+                        != frontend::ValueDomain::Boolean
+                    && parameter.type.domain
+                        != frontend::ValueDomain::Bit2);
             const bool violates_natural =
                 spelling == "natural" && *value < 0;
             const bool violates_positive =
@@ -2418,8 +2487,32 @@ SpecializedUnit specialize_unit(
             const bool violates_bit =
                 parameter.type.domain == frontend::ValueDomain::Bit2
                 && *value != 0 && *value != 1;
+            const bool violates_integer_range =
+                parameter.type.domain
+                    == frontend::ValueDomain::Integer
+                && parameter.type.integer_range
+                && (*value
+                        < std::min(
+                            parameter.type.integer_range->left,
+                            parameter.type.integer_range->right)
+                    || *value
+                        > std::max(
+                            parameter.type.integer_range->left,
+                            parameter.type.integer_range->right));
+            if (violates_supported_type) {
+                diagnostics.push_back({
+                    code(
+                        SpecializationDiagnostic::
+                            subtype_constraint),
+                    std::string{object_kind} + " '"
+                        + parameter.name
+                        + "' resolves outside the bounded scalar integer, "
+                          "Boolean, or bit subtype set",
+                    parameter.span});
+            }
             if (violates_natural || violates_positive
-                || violates_boolean || violates_bit) {
+                || violates_boolean || violates_bit
+                || violates_integer_range) {
                 diagnostics.push_back({
                     code(
                         SpecializationDiagnostic::
@@ -9332,6 +9425,115 @@ private:
             unit.type_aliases.size(), 0);
         std::function<bool(frontend::Type&)> resolve_type;
         std::function<bool(std::size_t)> resolve_alias;
+        const auto simple_type_name =
+            [](const std::string_view spelling) {
+                const auto separator =
+                    spelling.find_last_of('.');
+                return std::string{
+                    spelling.substr(
+                        separator == std::string_view::npos
+                            ? 0
+                            : separator + 1)};
+            };
+        const auto is_packed_array_type =
+            [&](const frontend::Type& type) {
+                const auto name =
+                    simple_type_name(type.spelling);
+                return name == "bit_vector"
+                    || name == "std_logic_vector"
+                    || name == "std_ulogic_vector"
+                    || name == "signed"
+                    || name == "unsigned";
+            };
+        const auto constraint_span =
+            [](const frontend::Type& type) {
+                if (type.integer_range_expression) {
+                    return type.integer_range_expression->span;
+                }
+                if (type.packed_range_expression) {
+                    return type.packed_range_expression->span;
+                }
+                return type.named_type_span;
+            };
+        const auto validate_direct_constraints =
+            [&](const frontend::Type& type) {
+                bool valid = true;
+                if (type.integer_range_expression
+                    && type.domain
+                        != frontend::ValueDomain::Integer) {
+                    report(
+                        "FSIM-ELAB-VHSUBTYPE-001",
+                        "a VHDL range constraint requires an "
+                        "integer-family base subtype",
+                        constraint_span(type));
+                    valid = false;
+                }
+                if (type.packed_range_expression
+                    && (!is_packed_array_type(type)
+                        || !type.packed_members.empty())) {
+                    report(
+                        "FSIM-ELAB-VHSUBTYPE-003",
+                        "a VHDL packed index constraint requires an "
+                        "unconstrained one-dimensional packed-array base",
+                        constraint_span(type));
+                    valid = false;
+                }
+                return valid;
+            };
+        const auto apply_derived_constraints =
+            [&](frontend::Type base,
+                const frontend::Type& derived)
+                -> std::optional<frontend::Type> {
+                const bool has_integer_constraint =
+                    derived.integer_range_expression.has_value();
+                const bool has_packed_constraint =
+                    derived.packed_range_expression.has_value();
+                if (has_integer_constraint) {
+                    if (base.domain
+                        != frontend::ValueDomain::Integer) {
+                        report(
+                            "FSIM-ELAB-VHSUBTYPE-001",
+                            "a derived VHDL range constraint requires an "
+                            "integer-family base subtype",
+                            constraint_span(derived));
+                        return std::nullopt;
+                    }
+                    base.integer_base_range =
+                        base.integer_range;
+                    base.integer_base_range_expression =
+                        base.integer_range_expression;
+                    base.integer_range =
+                        derived.integer_range;
+                    base.integer_range_expression =
+                        derived.integer_range_expression;
+                }
+                if (has_packed_constraint) {
+                    if (!is_packed_array_type(base)
+                        || !base.packed_members.empty()) {
+                        report(
+                            "FSIM-ELAB-VHSUBTYPE-003",
+                            "a derived VHDL packed index constraint "
+                            "requires an unconstrained one-dimensional "
+                            "packed-array base",
+                            constraint_span(derived));
+                        return std::nullopt;
+                    }
+                    if (base.packed_range
+                        || base.packed_range_expression) {
+                        report(
+                            "FSIM-ELAB-VHSUBTYPE-004",
+                            "a constrained VHDL packed-array subtype cannot "
+                            "be constrained again",
+                            constraint_span(derived));
+                        return std::nullopt;
+                    }
+                    base.packed_range =
+                        derived.packed_range;
+                    base.packed_range_expression =
+                        derived.packed_range_expression;
+                }
+                return base;
+            };
         resolve_alias = [&](const std::size_t index) {
             if (states[index] == 2) {
                 return true;
@@ -9360,36 +9562,52 @@ private:
         };
         resolve_type = [&](frontend::Type& type) {
             if (type.named_type.empty()) {
-                return true;
+                return !vhdl
+                    || validate_direct_constraints(type);
             }
             const auto name = type.named_type;
             const auto use_span = type.named_type_span;
+            const auto derived = type;
+            std::optional<frontend::Type> base;
             if (name.find("::") == std::string::npos) {
                 if (const auto local = local_types.find(name);
                     local != local_types.end()) {
                     if (!resolve_alias(local->second)) {
                         return false;
                     }
-                    type =
+                    base =
                         unit.type_aliases[local->second].type;
-                    return true;
                 }
             }
-            const auto imported = imported_types.find(name);
-            if (imported == imported_types.end()) {
-                report(
-                    vhdl
-                        ? "FSIM-ELAB-VHTYPE-001"
-                        : "FSIM-ELAB-SVTYPE-001",
-                    std::string{
+            if (!base) {
+                const auto imported =
+                    imported_types.find(name);
+                if (imported == imported_types.end()) {
+                    report(
                         vhdl
-                            ? "VHDL type '"
-                            : "SystemVerilog type alias '"}
-                        + name + "' is not visible in this unit",
-                    use_span);
+                            ? "FSIM-ELAB-VHTYPE-001"
+                            : "FSIM-ELAB-SVTYPE-001",
+                        std::string{
+                            vhdl
+                                ? "VHDL type '"
+                                : "SystemVerilog type alias '"}
+                            + name + "' is not visible in this unit",
+                        use_span);
+                    return false;
+                }
+                base = imported->second.type;
+            }
+            if (!vhdl) {
+                type = std::move(*base);
+                return true;
+            }
+            auto constrained =
+                apply_derived_constraints(
+                    std::move(*base), derived);
+            if (!constrained) {
                 return false;
             }
-            type = imported->second.type;
+            type = std::move(*constrained);
             return true;
         };
 
@@ -9548,10 +9766,64 @@ private:
         // Entity interfaces have their own declarative region. Resolve them
         // without exposing architecture-local type declarations, then merge
         // the typed ports back into the architecture specialization.
-        auto effective_entity = *entity;
+        // Generic and port clauses precede the entity declarative part in
+        // VHDL. Resolve the interface without entity-local type declarations,
+        // then resolve those declarations separately for architecture
+        // visibility.
+        auto effective_interface = *entity;
+        effective_interface.type_aliases.clear();
         resolve_named_types(
-            effective_entity, type_environment, true);
-        result.ports = std::move(effective_entity.ports);
+            effective_interface, type_environment, true);
+        for (const auto& generic :
+             effective_interface.parameters) {
+            const auto resolved = std::find_if(
+                result.parameters.begin(),
+                result.parameters.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == generic.name
+                        && candidate.span.source_name
+                            == generic.span.source_name
+                        && candidate.span.begin.offset
+                            == generic.span.begin.offset;
+                });
+            if (resolved != result.parameters.end()) {
+                resolved->type = generic.type;
+            }
+            if (generic.type.packed_range
+                || !generic.type.packed_members.empty()
+                || (generic.type.domain
+                    != frontend::ValueDomain::Integer
+                && generic.type.domain
+                    != frontend::ValueDomain::Boolean
+                && generic.type.domain
+                    != frontend::ValueDomain::Bit2)) {
+                report(
+                    "FSIM-ELAB-GENERIC-010",
+                    "a bounded VHDL generic subtype must resolve to scalar "
+                    "integer, Boolean, or bit",
+                    generic.span);
+            }
+        }
+        result.ports = std::move(effective_interface.ports);
+        auto effective_entity_declarations = *entity;
+        effective_entity_declarations.parameters.clear();
+        effective_entity_declarations.ports.clear();
+        resolve_named_types(
+            effective_entity_declarations,
+            type_environment,
+            true,
+            false);
+        for (const auto& alias :
+             effective_entity_declarations.type_aliases) {
+            type_environment.insert_or_assign(
+                alias.name,
+                NamedTypeBinding{
+                    alias.type,
+                    (entity->library.empty()
+                         ? std::string{"work"}
+                         : entity->library)
+                        + "." + entity->name});
+        }
         resolve_named_types(
             result, type_environment, true, false);
         return result;
