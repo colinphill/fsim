@@ -2417,10 +2417,14 @@ LLVM checkpoint work has separated the persistent object-cache/LLJIT facade,
 process validation, native cache-key construction, module optimization and
 verification, and packed-value IR kernels into independently compiled units.
 Two private LLVM headers expose only state structures and function
-declarations; they contain no ordinary executable bodies. Focused
+declarations; they contain no ordinary executable bodies. Process emission is
+further separated into logic/arithmetic, value selection/indexing, signal
+transaction, output/control, and packed-value kernel units. The largest LLVM
+unit is the 1,996-line process coordinator. LLVM has been removed from the
+temporary allowlist, leaving only the elaborator and installed SystemC header,
+and the permanent budget gate now checks 189 authored sources. Focused
 warnings-as-errors LLVM compilation and the `fsim.llvm` differential/cache
-test pass. The process operation emitter remains the one temporarily
-allowlisted LLVM unit and is the remaining work in this checkpoint.
+test pass. The exact Release regression remains to close this checkpoint.
 
 ## v1 release condition
 

@@ -972,1596 +972,159 @@ void lower_process(llvm::Module &module, const std::string &symbol,
           }
           branch_to_next();
         };
+    ValueOperationLowerer value_lowerer{
+        builder,
+        registers,
+        context,
+        i32,
+        i64,
+        branch_to_next,
+        runtime_error_if,
+        dynamic_offset};
+    SignalOperationLowerer signal_lowerer{
+        builder,
+        registers,
+        signal_widths,
+        signal_value_kinds,
+        context,
+        i32,
+        i64,
+        context_pointer,
+        read_callback,
+        read_logic9_callback,
+        write_projected_waveform_callback,
+        write_projected_waveform_logic9_callback,
+        write_projected_callback,
+        write_projected_logic9_callback,
+        write_inertial_callback,
+        write_inertial_logic9_callback,
+        signal_event_callback,
+        signal_last_value_callback,
+        signal_last_value_logic9_callback,
+        signal_last_event_callback,
+        signal_active_callback,
+        read_type,
+        read_logic9_type,
+        write_projected_waveform_type,
+        write_projected_waveform_logic9_type,
+        write_projected_type,
+        write_projected_logic9_type,
+        write_inertial_type,
+        write_inertial_logic9_type,
+        signal_event_type,
+        signal_last_value_type,
+        signal_last_event_type,
+        signal_active_type,
+        projected_element_type,
+        logic9_projected_element_type,
+        read_bval_slot,
+        logic9_word_slot,
+        branch_to_next,
+        store_logic9_word,
+        load_logic9_word,
+        runtime_error_if};
+    OutputOperationLowerer output_lowerer{
+        builder,
+        context,
+        i32,
+        context_pointer,
+        process.id,
+        instruction,
+        index,
+        symbol,
+        output_type,
+        time_output_type,
+        report_type,
+        output_callback,
+        postponed_output_callback,
+        time_output_callback,
+        monitor_install_callback,
+        monitor_control_callback,
+        report_callback,
+        branch_to_next,
+        return_result};
     std::visit(
         Overloaded{
-            [&](const LoadConstant &operation) {
-              EncodedValue value{};
-              if (operation.value.is_logic9()) {
-                const auto word = operation.value.logic9_low_word();
-                value = {
-                    constant_i64(context, word.planes[0]),
-                    constant_i64(context, word.planes[1]),
-                    static_cast<std::uint32_t>(word.width),
-                    constant_i64(context, word.planes[2]),
-                    constant_i64(context, word.planes[3]),
-                    ValueKind::logic9};
-              } else {
-                const auto word = operation.value.low_word();
-                value = {
-                    constant_i64(context, word.aval),
-                    constant_i64(context, word.bval),
-                    static_cast<std::uint32_t>(word.width)};
-              }
-              store_register(
-                  builder, registers, operation.destination,
-                  value);
-              branch_to_next();
+            [&](const LoadConstant& operation) {
+              signal_lowerer.lower(operation);
             },
             [&](const WriteProjectedWaveform& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              if (signal_kind == ValueKind::logic9) {
-                auto* array_type = llvm::ArrayType::get(
-                    logic9_projected_element_type,
-                    operation.elements.size());
-                auto* storage = builder.CreateAlloca(
-                    array_type,
-                    nullptr,
-                    "projected.logic9.waveform");
-                for (std::size_t element_index = 0;
-                     element_index < operation.elements.size();
-                     ++element_index) {
-                  const auto& element =
-                      operation.elements[element_index];
-                  auto source = coerce_value_kind(
-                      builder,
-                      load_register(
-                          builder,
-                          registers,
-                          element.source),
-                      ValueKind::logic9);
-                  auto* slot = builder.CreateInBoundsGEP(
-                      array_type,
-                      storage,
-                      {
-                          llvm::ConstantInt::get(i32, 0),
-                          llvm::ConstantInt::get(
-                              i32,
-                              static_cast<std::uint32_t>(
-                                  element_index))});
-                  store_logic9_word(
-                      builder.CreateStructGEP(
-                          logic9_projected_element_type,
-                          slot,
-                          0),
-                      source);
-                  builder.CreateStore(
-                      constant_i64(context, element.delay),
-                      builder.CreateStructGEP(
-                          logic9_projected_element_type,
-                          slot,
-                          1));
-                }
-                const auto first = load_register(
-                    builder,
-                    registers,
-                    operation.elements.front().source);
-                builder.CreateCall(
-                    write_projected_waveform_logic9_type,
-                    write_projected_waveform_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        llvm::ConstantInt::get(i32, first.width),
-                        storage,
-                        llvm::ConstantInt::get(
-                            i32,
-                            static_cast<std::uint32_t>(
-                                operation.elements.size())),
-                        constant_i64(
-                            context, operation.rejection),
-                        llvm::ConstantInt::get(
-                            i32,
-                            static_cast<std::uint32_t>(
-                                operation.mode))});
-                branch_to_next();
-                return;
-              }
-              auto* array_type = llvm::ArrayType::get(
-                  projected_element_type, operation.elements.size());
-              auto* storage = builder.CreateAlloca(
-                  array_type, nullptr, "projected.waveform");
-              for (std::size_t element_index = 0;
-                   element_index < operation.elements.size();
-                   ++element_index) {
-                const auto& element =
-                    operation.elements[element_index];
-                const auto source =
-                    load_register(builder, registers, element.source);
-                auto* slot = builder.CreateInBoundsGEP(
-                    array_type,
-                    storage,
-                    {llvm::ConstantInt::get(i32, 0),
-                     llvm::ConstantInt::get(
-                         i32,
-                         static_cast<std::uint32_t>(element_index))});
-                builder.CreateStore(
-                    source.aval,
-                    builder.CreateStructGEP(
-                        projected_element_type, slot, 0));
-                builder.CreateStore(
-                    source.bval,
-                    builder.CreateStructGEP(
-                        projected_element_type, slot, 1));
-                builder.CreateStore(
-                    constant_i64(context, element.delay),
-                    builder.CreateStructGEP(
-                        projected_element_type, slot, 2));
-              }
-              const auto first = load_register(
-                  builder, registers, operation.elements.front().source);
-              builder.CreateCall(
-                  write_projected_waveform_type,
-                  write_projected_waveform_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
-                      llvm::ConstantInt::get(i32, first.width),
-                      storage,
-                      llvm::ConstantInt::get(
-                          i32,
-                          static_cast<std::uint32_t>(
-                              operation.elements.size())),
-                      constant_i64(context, operation.rejection),
-                      llvm::ConstantInt::get(
-                          i32,
-                          static_cast<std::uint32_t>(
-                              operation.mode))});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const WriteProjected& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_projected_logic9_type,
-                    write_projected_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        logic9_word_slot,
-                        constant_i64(
-                            context, operation.delay),
-                        constant_i64(
-                            context, operation.rejection),
-                        llvm::ConstantInt::get(
-                            i32,
-                            static_cast<std::uint32_t>(
-                                operation.mode))});
-                branch_to_next();
-                return;
-              }
-              builder.CreateCall(
-                  write_projected_type,
-                  write_projected_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
-                      source.aval,
-                      source.bval,
-                      constant_i64(context, operation.delay),
-                      constant_i64(context, operation.rejection),
-                      llvm::ConstantInt::get(
-                          i32,
-                          static_cast<std::uint32_t>(
-                              operation.mode))});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const WriteInertial& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_inertial_logic9_type,
-                    write_inertial_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        logic9_word_slot,
-                        constant_i64(
-                            context, operation.delays.rise),
-                        constant_i64(
-                            context, operation.delays.fall),
-                        constant_i64(
-                            context,
-                            operation.delays.turnoff)});
-                branch_to_next();
-                return;
-              }
-              builder.CreateCall(
-                  write_inertial_type,
-                  write_inertial_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
-                      source.aval,
-                      source.bval,
-                      constant_i64(context, operation.delays.rise),
-                      constant_i64(context, operation.delays.fall),
-                      constant_i64(
-                          context, operation.delays.turnoff)});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
-            [&](const ReadSignal &operation) {
-              const auto width = signal_widths[operation.signal];
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              if (signal_kind == ValueKind::logic9) {
-                builder.CreateCall(
-                    read_logic9_type,
-                    read_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        logic9_word_slot});
-                auto value =
-                    load_logic9_word(logic9_word_slot, width);
-                auto* mask =
-                    constant_i64(context, width_mask(width));
-                value.aval = builder.CreateAnd(value.aval, mask);
-                value.bval = builder.CreateAnd(value.bval, mask);
-                value.logic9_plane2 =
-                    builder.CreateAnd(value.logic9_plane2, mask);
-                value.logic9_plane3 =
-                    builder.CreateAnd(value.logic9_plane3, mask);
-                store_register(
-                    builder,
-                    registers,
-                    operation.destination,
-                    value);
-                branch_to_next();
-                return;
-              }
-              builder.CreateStore(constant_i64(context, 0), read_bval_slot);
-              auto *aval = builder.CreateCall(
-                  read_type, read_callback,
-                  {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
-                   read_bval_slot},
-                  "aval");
-              auto *bval =
-                  builder.CreateLoad(i64, read_bval_slot, "bval.value");
-              auto *mask = constant_i64(context, width_mask(width));
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(aval, mask),
-                      builder.CreateAnd(bval, mask),
-                      width});
-              branch_to_next();
+            [&](const ReadSignal& operation) {
+              signal_lowerer.lower(operation);
             },
             [&](const SignalEvent& operation) {
-              auto* active = builder.CreateCall(
-                  signal_event_type,
-                  signal_event_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(
-                          i32, operation.signal)},
-                  "signal.event");
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateZExt(active, i64),
-                      constant_i64(context, 0),
-                      1});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const SignalLastValue& operation) {
-              const auto width = signal_widths[operation.signal];
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              if (signal_kind == ValueKind::logic9) {
-                builder.CreateCall(
-                    read_logic9_type,
-                    signal_last_value_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        logic9_word_slot});
-                store_register(
-                    builder,
-                    registers,
-                    operation.destination,
-                    load_logic9_word(logic9_word_slot, width));
-                branch_to_next();
-                return;
-              }
-              builder.CreateStore(
-                  constant_i64(context, 0), read_bval_slot);
-              auto* aval = builder.CreateCall(
-                  signal_last_value_type,
-                  signal_last_value_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
-                      read_bval_slot},
-                  "signal.last_value.aval");
-              auto* bval = builder.CreateLoad(
-                  i64, read_bval_slot, "signal.last_value.bval");
-              auto* mask = constant_i64(context, width_mask(width));
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(aval, mask),
-                      builder.CreateAnd(bval, mask),
-                      width});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const SignalLastEvent& operation) {
-              auto* elapsed = builder.CreateCall(
-                  signal_last_event_type,
-                  signal_last_event_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal)},
-                  "signal.last_event");
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      elapsed,
-                      constant_i64(context, 0),
-                      64});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const SignalActive& operation) {
-              auto* active = builder.CreateCall(
-                  signal_active_type,
-                  signal_active_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal)},
-                  "signal.active");
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateZExt(active, i64),
-                      constant_i64(context, 0),
-                      1});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const CopyRegister& operation) {
-              store_register(
-                  builder, registers, operation.destination,
-                  load_register(
-                      builder, registers, operation.source));
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
-            [&](const UnaryNot &operation) {
-              const auto source =
-                  load_register(builder, registers, operation.source);
-              if (source.kind == ValueKind::logic9) {
-                constexpr auto table = [] {
-                  std::array<Logic9, 9> values{};
-                  for (std::size_t state = 0;
-                       state < values.size();
-                       ++state) {
-                    values[state] = runtime::logic_not(
-                        static_cast<Logic9>(state));
-                  }
-                  return values;
-                }();
-                store_register(
-                    builder,
-                    registers,
-                    operation.destination,
-                    map_logic9_unary(builder, source, table));
-                branch_to_next();
-                return;
-              }
-              auto *mask = constant_i64(context, width_mask(source.width));
-              auto *aval = builder.CreateAnd(
-                  builder.CreateOr(builder.CreateNot(source.aval),
-                                   source.bval),
-                  mask);
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{aval, source.bval, source.width});
-              branch_to_next();
+            [&](const UnaryNot& operation) {
+              value_lowerer.lower(operation);
             },
             [&](const LogicalNot& operation) {
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  ValueKind::logic4);
-              auto *mask =
-                  constant_i64(context, width_mask(source.width));
-              auto *known_ones = builder.CreateAnd(
-                  builder.CreateAnd(source.aval, mask),
-                  builder.CreateNot(source.bval));
-              auto *has_one = builder.CreateICmpNE(
-                  known_ones, constant_i64(context, 0));
-              auto *has_unknown = builder.CreateICmpNE(
-                  builder.CreateAnd(source.bval, mask),
-                  constant_i64(context, 0));
-              auto *not_true = builder.CreateNot(has_one);
-              auto *unknown =
-                  builder.CreateAnd(not_true, has_unknown);
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateZExt(
-                          not_true,
-                          llvm::Type::getInt64Ty(context)),
-                      builder.CreateZExt(
-                          unknown,
-                          llvm::Type::getInt64Ty(context)),
-                      1});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const LogicalBinary& operation) {
-              const auto left = truth_bit(
-                  builder,
-                  coerce_value_kind(
-                      builder,
-                      load_register(
-                          builder, registers, operation.lhs),
-                      ValueKind::logic4));
-              const auto right = truth_bit(
-                  builder,
-                  coerce_value_kind(
-                      builder,
-                      load_register(
-                          builder, registers, operation.rhs),
-                      ValueKind::logic4));
-              const auto result =
-                  operation.operation
-                          == LogicalBinaryOperator::logical_and
-                      ? bit_and(builder, left, right)
-                      : bit_or(builder, left, right);
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateZExt(
-                          result.aval,
-                          llvm::Type::getInt64Ty(context)),
-                      builder.CreateZExt(
-                          result.bval,
-                          llvm::Type::getInt64Ty(context)),
-                      1});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const Reduction& operation) {
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  ValueKind::logic4);
-              if (operation.operation
-                      == ReductionOperator::one_hot
-                  || operation.operation
-                      == ReductionOperator::one_hot_or_zero) {
-                llvm::Value* seen_one =
-                    llvm::ConstantInt::getFalse(context);
-                llvm::Value* multiple_ones =
-                    llvm::ConstantInt::getFalse(context);
-                for (std::uint32_t bit = 0;
-                     bit < source.width;
-                     ++bit) {
-                  const auto value =
-                      bit_at(builder, source, bit);
-                  auto* exact_one = builder.CreateAnd(
-                      value.aval,
-                      builder.CreateNot(value.bval));
-                  multiple_ones = builder.CreateOr(
-                      multiple_ones,
-                      builder.CreateAnd(seen_one, exact_one));
-                  seen_one =
-                      builder.CreateOr(seen_one, exact_one);
-                }
-                auto* matched =
-                    operation.operation
-                            == ReductionOperator::one_hot
-                        ? builder.CreateAnd(
-                              seen_one,
-                              builder.CreateNot(multiple_ones))
-                        : builder.CreateNot(multiple_ones);
-                store_register(
-                    builder,
-                    registers,
-                    operation.destination,
-                    EncodedValue{
-                        builder.CreateZExt(
-                            matched,
-                            llvm::Type::getInt64Ty(context)),
-                        llvm::ConstantInt::get(
-                            llvm::Type::getInt64Ty(context), 0),
-                        1});
-                branch_to_next();
-                return;
-              }
-              EncodedBit result{
-                  operation.operation == ReductionOperator::bit_and
-                      ? llvm::ConstantInt::getTrue(context)
-                      : llvm::ConstantInt::getFalse(context),
-                  llvm::ConstantInt::getFalse(context)};
-              for (std::uint32_t bit = 0; bit < source.width; ++bit) {
-                const auto value = bit_at(builder, source, bit);
-                if (operation.operation
-                    == ReductionOperator::bit_and) {
-                  result = bit_and(builder, result, value);
-                } else if (
-                    operation.operation
-                    == ReductionOperator::bit_or) {
-                  result = bit_or(builder, result, value);
-                } else {
-                  result = bit_xor(builder, result, value);
-                }
-              }
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateZExt(
-                          result.aval,
-                          llvm::Type::getInt64Ty(context)),
-                      builder.CreateZExt(
-                          result.bval,
-                          llvm::Type::getInt64Ty(context)),
-                      1});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const CountOnes& operation) {
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  ValueKind::logic4);
-              llvm::Value* count = llvm::ConstantInt::get(
-                  llvm::Type::getInt64Ty(context), 0);
-              for (std::uint32_t bit = 0;
-                   bit < source.width;
-                   ++bit) {
-                const auto value =
-                    bit_at(builder, source, bit);
-                auto* exact_one = builder.CreateAnd(
-                    value.aval,
-                    builder.CreateNot(value.bval));
-                count = builder.CreateAdd(
-                    count,
-                    builder.CreateZExt(
-                        exact_one,
-                        llvm::Type::getInt64Ty(context)));
-              }
-              store_register(
-                  builder,
-                  registers,
-                  operation.destination,
-                  EncodedValue{
-                      count,
-                      llvm::ConstantInt::get(
-                          llvm::Type::getInt64Ty(context), 0),
-                      32});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const CountBits& operation) {
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  ValueKind::logic4);
-              llvm::Value* count = llvm::ConstantInt::get(
-                  llvm::Type::getInt64Ty(context), 0);
-              for (std::uint32_t bit = 0;
-                   bit < source.width;
-                   ++bit) {
-                const auto value =
-                    bit_at(builder, source, bit);
-                auto* not_aval = builder.CreateNot(value.aval);
-                auto* not_bval = builder.CreateNot(value.bval);
-                llvm::Value* selected =
-                    llvm::ConstantInt::getFalse(context);
-                if ((operation.state_mask & 0x1U) != 0) {
-                  selected = builder.CreateOr(
-                      selected,
-                      builder.CreateAnd(not_aval, not_bval));
-                }
-                if ((operation.state_mask & 0x2U) != 0) {
-                  selected = builder.CreateOr(
-                      selected,
-                      builder.CreateAnd(value.aval, not_bval));
-                }
-                if ((operation.state_mask & 0x4U) != 0) {
-                  selected = builder.CreateOr(
-                      selected,
-                      builder.CreateAnd(value.aval, value.bval));
-                }
-                if ((operation.state_mask & 0x8U) != 0) {
-                  selected = builder.CreateOr(
-                      selected,
-                      builder.CreateAnd(not_aval, value.bval));
-                }
-                count = builder.CreateAdd(
-                    count,
-                    builder.CreateZExt(
-                        selected,
-                        llvm::Type::getInt64Ty(context)));
-              }
-              store_register(
-                  builder,
-                  registers,
-                  operation.destination,
-                  EncodedValue{
-                      count,
-                      llvm::ConstantInt::get(
-                          llvm::Type::getInt64Ty(context), 0),
-                      32});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const Shift& operation) {
-              const auto value =
-                  load_register(
-                      builder, registers, operation.value);
-              const auto amount = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.amount),
-                  ValueKind::logic4);
-              auto* value_mask =
-                  constant_i64(context, width_mask(value.width));
-              auto* amount_mask =
-                  constant_i64(context, width_mask(amount.width));
-              auto* amount_unknown = builder.CreateICmpNE(
-                  builder.CreateAnd(amount.bval, amount_mask),
-                  constant_i64(context, 0));
-              auto* raw_amount_bits =
-                  builder.CreateAnd(amount.aval, amount_mask);
-              llvm::Value* amount_negative =
-                  llvm::ConstantInt::getFalse(context);
-              llvm::Value* amount_bits = raw_amount_bits;
-              if (operation.signed_amount) {
-                auto* sign_mask = constant_i64(
-                    context,
-                    std::uint64_t{1}
-                        << (amount.width - 1U));
-                amount_negative = builder.CreateICmpNE(
-                    builder.CreateAnd(
-                        raw_amount_bits, sign_mask),
-                    constant_i64(context, 0));
-                auto* magnitude = builder.CreateAnd(
-                    builder.CreateSub(
-                        constant_i64(context, 0),
-                        raw_amount_bits),
-                    amount_mask);
-                amount_bits = builder.CreateSelect(
-                    amount_negative,
-                    magnitude,
-                    raw_amount_bits);
-              }
-              auto* amount_too_large = builder.CreateICmpUGE(
-                  amount_bits, constant_i64(context, value.width));
-              const auto rotating =
-                  operation.operation == ShiftOperator::rotate_left
-                  || operation.operation == ShiftOperator::rotate_right;
-              auto* safe_amount =
-                  rotating
-                      ? builder.CreateURem(
-                            amount_bits,
-                            constant_i64(context, value.width))
-                      : builder.CreateSelect(
-                            amount_too_large,
-                            constant_i64(context, 0),
-                            amount_bits);
-              const auto shift_component =
-                  [&](llvm::Value* component,
-                      const ShiftOperator selected_operation,
-                      const bool zero_plane)
-                      -> llvm::Value* {
-                    if (selected_operation
-                            == ShiftOperator::rotate_left
-                        || selected_operation
-                            == ShiftOperator::rotate_right) {
-                      auto* inverse_amount = builder.CreateURem(
-                          builder.CreateSub(
-                              constant_i64(context, value.width),
-                              safe_amount),
-                          constant_i64(context, value.width));
-                      auto* left_amount =
-                          selected_operation
-                                  == ShiftOperator::rotate_left
-                              ? safe_amount
-                              : inverse_amount;
-                      auto* right_amount =
-                          selected_operation
-                                  == ShiftOperator::rotate_left
-                              ? inverse_amount
-                              : safe_amount;
-                      return builder.CreateOr(
-                          builder.CreateShl(component, left_amount),
-                          builder.CreateLShr(component, right_amount));
-                    }
-                    if (selected_operation
-                            == ShiftOperator::logical_left
-                        || selected_operation
-                            == ShiftOperator::arithmetic_left) {
-                      auto* shifted = builder.CreateShl(
-                          component, safe_amount);
-                      if (selected_operation
-                          == ShiftOperator::arithmetic_left) {
-                        auto* fill_mask = builder.CreateSub(
-                            builder.CreateShl(
-                                constant_i64(context, 1),
-                                safe_amount),
-                            constant_i64(context, 1));
-                        auto* rightmost = builder.CreateAnd(
-                            component, constant_i64(context, 1));
-                        auto* fill = builder.CreateSelect(
-                            builder.CreateICmpNE(
-                                rightmost,
-                                constant_i64(context, 0)),
-                            fill_mask,
-                            constant_i64(context, 0));
-                        return builder.CreateOr(shifted, fill);
-                      }
-                      if (zero_plane) {
-                        auto* fill_mask = builder.CreateSub(
-                            builder.CreateShl(
-                                constant_i64(context, 1),
-                                safe_amount),
-                            constant_i64(context, 1));
-                        return builder.CreateOr(
-                            shifted, fill_mask);
-                      }
-                      return shifted;
-                    }
-                    if (selected_operation
-                        == ShiftOperator::logical_right) {
-                      auto* shifted = builder.CreateLShr(
-                          component, safe_amount);
-                      if (zero_plane) {
-                        auto* fill_mask = builder.CreateXor(
-                            value_mask,
-                            builder.CreateLShr(
-                                value_mask, safe_amount));
-                        return builder.CreateOr(
-                            shifted, fill_mask);
-                      }
-                      return shifted;
-                    }
-                    const auto extension_shift =
-                        64U - value.width;
-                    auto* sign_extended = builder.CreateAShr(
-                        builder.CreateShl(
-                            component,
-                            constant_i64(
-                                context, extension_shift)),
-                        constant_i64(
-                            context, extension_shift));
-                    return builder.CreateAShr(
-                        sign_extended, safe_amount);
-                  };
-              const auto selected_shift_component =
-                  [&](llvm::Value* component,
-                      const bool zero_plane) -> llvm::Value* {
-                    auto* positive = shift_component(
-                        component, operation.operation, zero_plane);
-                    if (!operation.signed_amount) {
-                      return positive;
-                    }
-                    auto* negative = shift_component(
-                        component,
-                        reverse_shift(operation.operation),
-                        zero_plane);
-                    return builder.CreateSelect(
-                        amount_negative, negative, positive);
-                  };
-              auto* shifted_aval =
-                  selected_shift_component(value.aval, false);
-              auto* shifted_bval =
-                  selected_shift_component(
-                      value.bval,
-                      value.kind == ValueKind::logic9);
-              auto* shifted_plane2 =
-                  selected_shift_component(
-                      value.logic9_plane2, false);
-              auto* shifted_plane3 =
-                  selected_shift_component(
-                      value.logic9_plane3, false);
-              const auto oversized_component =
-                  [&](llvm::Value* component,
-                      const ShiftOperator selected_operation,
-                      const bool zero_plane)
-                      -> llvm::Value* {
-                    if (selected_operation
-                        == ShiftOperator::arithmetic_right) {
-                      const auto sign_offset =
-                          value.width - 1U;
-                      auto* sign = builder.CreateAnd(
-                          builder.CreateLShr(
-                              component,
-                              constant_i64(
-                                  context, sign_offset)),
-                          constant_i64(context, 1));
-                      return builder.CreateSelect(
-                          builder.CreateICmpNE(
-                              sign, constant_i64(context, 0)),
-                          value_mask,
-                          constant_i64(context, 0));
-                    }
-                    if (selected_operation
-                        == ShiftOperator::arithmetic_left) {
-                      auto* rightmost = builder.CreateAnd(
-                          component, constant_i64(context, 1));
-                      return builder.CreateSelect(
-                          builder.CreateICmpNE(
-                              rightmost,
-                              constant_i64(context, 0)),
-                          value_mask,
-                          constant_i64(context, 0));
-                    }
-                    return constant_i64(
-                        context, zero_plane ? width_mask(value.width) : 0);
-                  };
-              const auto selected_oversized_component =
-                  [&](llvm::Value* component,
-                      const bool zero_plane) -> llvm::Value* {
-                    auto* positive = oversized_component(
-                        component, operation.operation, zero_plane);
-                    if (!operation.signed_amount) {
-                      return positive;
-                    }
-                    auto* negative = oversized_component(
-                        component,
-                        reverse_shift(operation.operation),
-                        zero_plane);
-                    return builder.CreateSelect(
-                        amount_negative, negative, positive);
-                  };
-              auto* oversized_aval =
-                  selected_oversized_component(value.aval, false);
-              auto* oversized_bval =
-                  selected_oversized_component(
-                      value.bval,
-                      value.kind == ValueKind::logic9);
-              auto* oversized_plane2 =
-                  selected_oversized_component(
-                      value.logic9_plane2, false);
-              auto* oversized_plane3 =
-                  selected_oversized_component(
-                      value.logic9_plane3, false);
-              auto* known_aval = builder.CreateSelect(
-                  rotating
-                      ? llvm::ConstantInt::getFalse(context)
-                      : amount_too_large,
-                  oversized_aval,
-                  builder.CreateAnd(shifted_aval, value_mask));
-              auto* known_bval = builder.CreateSelect(
-                  rotating
-                      ? llvm::ConstantInt::getFalse(context)
-                      : amount_too_large,
-                  oversized_bval,
-                  builder.CreateAnd(shifted_bval, value_mask));
-              auto* known_plane2 = builder.CreateSelect(
-                  rotating
-                      ? llvm::ConstantInt::getFalse(context)
-                      : amount_too_large,
-                  oversized_plane2,
-                  builder.CreateAnd(shifted_plane2, value_mask));
-              auto* known_plane3 = builder.CreateSelect(
-                  rotating
-                      ? llvm::ConstantInt::getFalse(context)
-                      : amount_too_large,
-                  oversized_plane3,
-                  builder.CreateAnd(shifted_plane3, value_mask));
-              if (value.kind == ValueKind::logic9) {
-                store_register(
-                    builder,
-                    registers,
-                    operation.destination,
-                    EncodedValue{
-                        builder.CreateSelect(
-                            amount_unknown,
-                            value_mask,
-                            known_aval),
-                        builder.CreateSelect(
-                            amount_unknown,
-                            constant_i64(context, 0),
-                            known_bval),
-                        value.width,
-                        builder.CreateSelect(
-                            amount_unknown,
-                            constant_i64(context, 0),
-                            known_plane2),
-                        builder.CreateSelect(
-                            amount_unknown,
-                            constant_i64(context, 0),
-                            known_plane3),
-                        ValueKind::logic9});
-                branch_to_next();
-                return;
-              }
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateSelect(
-                          amount_unknown, value_mask, known_aval),
-                      builder.CreateSelect(
-                          amount_unknown, value_mask, known_bval),
-                      value.width});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const Extract& operation) {
-              const auto source =
-                  load_register(
-                      builder, registers, operation.source);
-              auto* shift =
-                  constant_i64(context, operation.offset);
-              auto* mask =
-                  constant_i64(context, width_mask(operation.width));
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(
-                          builder.CreateLShr(source.aval, shift),
-                          mask),
-                      builder.CreateAnd(
-                          builder.CreateLShr(source.bval, shift),
-                          mask),
-                      operation.width,
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              source.logic9_plane2, shift),
-                          mask),
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              source.logic9_plane3, shift),
-                          mask),
-                      source.kind});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const DynamicExtract& operation) {
-              const auto source = load_register(
-                  builder, registers, operation.source);
-              auto* shift = dynamic_offset(operation.selection);
-              store_register(
-                  builder,
-                  registers,
-                  operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(
-                          builder.CreateLShr(source.aval, shift),
-                          constant_i64(context, 1)),
-                      builder.CreateAnd(
-                          builder.CreateLShr(source.bval, shift),
-                          constant_i64(context, 1)),
-                      1,
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              source.logic9_plane2, shift),
-                          constant_i64(context, 1)),
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              source.logic9_plane3, shift),
-                          constant_i64(context, 1)),
-                      source.kind});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const Insert& operation) {
-              const auto destination_kind =
-                  registers[operation.destination].kind;
-              const auto target = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.target),
-                  destination_kind);
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  destination_kind);
-              auto* source_mask =
-                  constant_i64(context, width_mask(source.width));
-              auto* shifted_mask =
-                  builder.CreateShl(
-                      source_mask,
-                      constant_i64(context, operation.offset));
-              auto* keep_mask =
-                  builder.CreateAnd(
-                      builder.CreateNot(shifted_mask),
-                      constant_i64(
-                          context, width_mask(target.width)));
-              auto* shift =
-                  constant_i64(context, operation.offset);
-              auto* aval = builder.CreateOr(
-                  builder.CreateAnd(target.aval, keep_mask),
-                  builder.CreateShl(
-                      builder.CreateAnd(source.aval, source_mask),
-                      shift));
-              auto* bval = builder.CreateOr(
-                  builder.CreateAnd(target.bval, keep_mask),
-                  builder.CreateShl(
-                      builder.CreateAnd(source.bval, source_mask),
-                      shift));
-              auto* plane2 = builder.CreateOr(
-                  builder.CreateAnd(
-                      target.logic9_plane2, keep_mask),
-                  builder.CreateShl(
-                      builder.CreateAnd(
-                          source.logic9_plane2, source_mask),
-                      shift));
-              auto* plane3 = builder.CreateOr(
-                  builder.CreateAnd(
-                      target.logic9_plane3, keep_mask),
-                  builder.CreateShl(
-                      builder.CreateAnd(
-                          source.logic9_plane3, source_mask),
-                      shift));
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      aval,
-                      bval,
-                      target.width,
-                      plane2,
-                      plane3,
-                      destination_kind});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const DynamicInsert& operation) {
-              const auto destination_kind =
-                  registers[operation.destination].kind;
-              const auto target = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.target),
-                  destination_kind);
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  destination_kind);
-              auto* shift = dynamic_offset(operation.selection);
-              auto* shifted_mask = builder.CreateShl(
-                  constant_i64(context, 1), shift);
-              auto* keep_mask = builder.CreateAnd(
-                  builder.CreateNot(shifted_mask),
-                  constant_i64(
-                      context, width_mask(target.width)));
-              const auto insert_plane =
-                  [&](llvm::Value* target_plane,
-                      llvm::Value* source_plane) {
-                    return builder.CreateOr(
-                        builder.CreateAnd(
-                            target_plane, keep_mask),
-                        builder.CreateShl(
-                            builder.CreateAnd(
-                                source_plane,
-                                constant_i64(context, 1)),
-                            shift));
-                  };
-              store_register(
-                  builder,
-                  registers,
-                  operation.destination,
-                  EncodedValue{
-                      insert_plane(target.aval, source.aval),
-                      insert_plane(target.bval, source.bval),
-                      target.width,
-                      insert_plane(
-                          target.logic9_plane2,
-                          source.logic9_plane2),
-                      insert_plane(
-                          target.logic9_plane3,
-                          source.logic9_plane3),
-                      destination_kind});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const Concatenate& operation) {
-              llvm::Value* aval = constant_i64(context, 0);
-              llvm::Value* bval = constant_i64(context, 0);
-              llvm::Value* plane2 = constant_i64(context, 0);
-              llvm::Value* plane3 = constant_i64(context, 0);
-              const auto destination_kind =
-                  registers[operation.destination].kind;
-              std::uint32_t offset = 0;
-              for (auto operand = operation.operands.rbegin();
-                   operand != operation.operands.rend(); ++operand) {
-                const auto source = coerce_value_kind(
-                    builder,
-                    load_register(builder, registers, *operand),
-                    destination_kind);
-                auto* source_mask =
-                    constant_i64(context, width_mask(source.width));
-                auto* source_aval =
-                    builder.CreateAnd(source.aval, source_mask);
-                auto* source_bval =
-                    builder.CreateAnd(source.bval, source_mask);
-                auto* source_plane2 = builder.CreateAnd(
-                    source.logic9_plane2, source_mask);
-                auto* source_plane3 = builder.CreateAnd(
-                    source.logic9_plane3, source_mask);
-                if (offset != 0) {
-                  auto* shift = constant_i64(context, offset);
-                  source_aval =
-                      builder.CreateShl(source_aval, shift);
-                  source_bval =
-                      builder.CreateShl(source_bval, shift);
-                  source_plane2 =
-                      builder.CreateShl(source_plane2, shift);
-                  source_plane3 =
-                      builder.CreateShl(source_plane3, shift);
-                }
-                aval = builder.CreateOr(aval, source_aval);
-                bval = builder.CreateOr(bval, source_bval);
-                plane2 = builder.CreateOr(plane2, source_plane2);
-                plane3 = builder.CreateOr(plane3, source_plane3);
-                offset += source.width;
-              }
-              auto* mask =
-                  constant_i64(context, width_mask(operation.width));
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(aval, mask),
-                      builder.CreateAnd(bval, mask),
-                      operation.width,
-                      builder.CreateAnd(plane2, mask),
-                      builder.CreateAnd(plane3, mask),
-                      destination_kind});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
-            [&](const Binary &operation) {
-              auto lhs =
-                  load_register(builder, registers, operation.lhs);
-              auto rhs =
-                  load_register(builder, registers, operation.rhs);
-              EncodedValue value{};
-              if (lhs.kind == ValueKind::logic9
-                  || rhs.kind == ValueKind::logic9) {
-                lhs = coerce_value_kind(
-                    builder, lhs, ValueKind::logic9);
-                rhs = coerce_value_kind(
-                    builder, rhs, ValueKind::logic9);
-                if (operation.operation
-                        == BinaryOperator::bit_and
-                    || operation.operation
-                        == BinaryOperator::bit_or
-                    || operation.operation
-                        == BinaryOperator::bit_xor) {
-                  const auto make_table =
-                      [&](const BinaryOperator selected) {
-                        std::array<
-                            std::array<Logic9, 9>, 9> table{};
-                        for (std::size_t left = 0;
-                             left < table.size();
-                             ++left) {
-                          for (std::size_t right = 0;
-                               right < table[left].size();
-                               ++right) {
-                            const auto left_state =
-                                static_cast<Logic9>(left);
-                            const auto right_state =
-                                static_cast<Logic9>(right);
-                            table[left][right] =
-                                selected
-                                        == BinaryOperator::bit_and
-                                    ? runtime::logic_and(
-                                          left_state,
-                                          right_state)
-                                    : selected
-                                              == BinaryOperator::bit_or
-                                          ? runtime::logic_or(
-                                                left_state,
-                                                right_state)
-                                          : runtime::logic_xor(
-                                                left_state,
-                                                right_state);
-                          }
-                        }
-                        return table;
-                      };
-                  value = map_logic9_binary(
-                      builder,
-                      lhs,
-                      rhs,
-                      make_table(operation.operation));
-                } else if (
-                    operation.operation
-                    == BinaryOperator::case_equal) {
-                  auto* mask = constant_i64(
-                      context, width_mask(lhs.width));
-                  auto* mismatch = builder.CreateAnd(
-                      builder.CreateOr(
-                          builder.CreateOr(
-                              builder.CreateXor(
-                                  lhs.aval, rhs.aval),
-                              builder.CreateXor(
-                                  lhs.bval, rhs.bval)),
-                          builder.CreateOr(
-                              builder.CreateXor(
-                                  lhs.logic9_plane2,
-                                  rhs.logic9_plane2),
-                              builder.CreateXor(
-                                  lhs.logic9_plane3,
-                                  rhs.logic9_plane3))),
-                      mask);
-                  auto* equal = builder.CreateICmpEQ(
-                      mismatch, constant_i64(context, 0));
-                  value = {
-                      builder.CreateZExt(equal, i64),
-                      constant_i64(context, 0),
-                      1};
-                } else {
-                  value = lower_binary(
-                      builder,
-                      operation.operation,
-                      coerce_value_kind(
-                          builder, lhs, ValueKind::logic4),
-                      coerce_value_kind(
-                          builder, rhs, ValueKind::logic4));
-                }
-              } else {
-                value = lower_binary(
-                    builder, operation.operation, lhs, rhs);
-              }
-              store_register(
-                  builder, registers, operation.destination, value);
-              branch_to_next();
+            [&](const Binary& operation) {
+              value_lowerer.lower(operation);
             },
             [&](const IntegerUnary& operation) {
-              const auto source =
-                  load_register(
-                      builder, registers, operation.source);
-              runtime_error_if(
-                  builder.CreateICmpNE(
-                      builder.CreateAnd(
-                          source.bval,
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
-                      constant_i64(context, 0)),
-                  JitGeneratedRuntimeErrorReason::
-                      integer_operand_unknown,
-                  "integer.unary.unknown");
-              auto* signed_source = builder.CreateSExt(
-                  builder.CreateTrunc(source.aval, i32),
-                  llvm::Type::getInt64Ty(context));
-              auto* minimum = llvm::ConstantInt::getSigned(
-                  llvm::Type::getInt64Ty(context),
-                  std::numeric_limits<std::int32_t>::min());
-              runtime_error_if(
-                  builder.CreateICmpEQ(signed_source, minimum),
-                  JitGeneratedRuntimeErrorReason::integer_overflow,
-                  "integer.unary.overflow");
-              llvm::Value* result = nullptr;
-              if (operation.operation
-                  == IntegerUnaryOperator::negate) {
-                result = builder.CreateNeg(signed_source);
-              } else {
-                result = builder.CreateSelect(
-                    builder.CreateICmpSLT(
-                        signed_source,
-                        constant_i64(context, 0)),
-                    builder.CreateNeg(signed_source),
-                    signed_source);
-              }
-              store_register(
-                  builder,
-                  registers,
-                  operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(
-                          result,
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
-                      constant_i64(context, 0),
-                      32});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const IntegerBinary& operation) {
-              const auto lhs = load_register(
-                  builder, registers, operation.lhs);
-              const auto rhs = load_register(
-                  builder, registers, operation.rhs);
-              runtime_error_if(
-                  builder.CreateICmpNE(
-                      builder.CreateAnd(
-                          builder.CreateOr(lhs.bval, rhs.bval),
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
-                      constant_i64(context, 0)),
-                  JitGeneratedRuntimeErrorReason::
-                      integer_operand_unknown,
-                  "integer.binary.unknown");
-              auto* left = builder.CreateSExt(
-                  builder.CreateTrunc(lhs.aval, i32), i64);
-              auto* right = builder.CreateSExt(
-                  builder.CreateTrunc(rhs.aval, i32), i64);
-              auto* minimum = llvm::ConstantInt::getSigned(
-                  i64, std::numeric_limits<std::int32_t>::min());
-              auto* maximum = llvm::ConstantInt::getSigned(
-                  i64, std::numeric_limits<std::int32_t>::max());
-              const auto overflow_if =
-                  [&](llvm::Value* value,
-                      const std::string_view label) {
-                    runtime_error_if(
-                        builder.CreateOr(
-                            builder.CreateICmpSLT(value, minimum),
-                            builder.CreateICmpSGT(value, maximum)),
-                        JitGeneratedRuntimeErrorReason::
-                            integer_overflow,
-                        label);
-                  };
-              llvm::Value* result = nullptr;
-              switch (operation.operation) {
-              case IntegerBinaryOperator::add:
-                result = builder.CreateAdd(left, right);
-                overflow_if(result, "integer.add.overflow");
-                break;
-              case IntegerBinaryOperator::subtract:
-                result = builder.CreateSub(left, right);
-                overflow_if(result, "integer.subtract.overflow");
-                break;
-              case IntegerBinaryOperator::multiply:
-                result = builder.CreateMul(left, right);
-                overflow_if(result, "integer.multiply.overflow");
-                break;
-              case IntegerBinaryOperator::power: {
-                runtime_error_if(
-                    builder.CreateICmpSLT(
-                        right, constant_i64(context, 0)),
-                    JitGeneratedRuntimeErrorReason::
-                        integer_negative_exponent,
-                    "integer.power.exponent");
-                llvm::Value* powered = constant_i64(context, 1);
-                llvm::Value* factor = left;
-                for (std::uint32_t bit = 0; bit < 31; ++bit) {
-                  auto* selected = builder.CreateICmpNE(
-                      builder.CreateAnd(
-                          builder.CreateLShr(
-                              right, constant_i64(context, bit)),
-                          constant_i64(context, 1)),
-                      constant_i64(context, 0));
-                  auto* product =
-                      builder.CreateMul(powered, factor);
-                  runtime_error_if(
-                      builder.CreateAnd(
-                          selected,
-                          builder.CreateOr(
-                              builder.CreateICmpSLT(
-                                  product, minimum),
-                              builder.CreateICmpSGT(
-                                  product, maximum))),
-                      JitGeneratedRuntimeErrorReason::
-                          integer_overflow,
-                      "integer.power.product");
-                  powered = builder.CreateSelect(
-                      selected, product, powered);
-                  if (bit + 1U < 31U) {
-                    auto* remaining = builder.CreateLShr(
-                        right, constant_i64(context, bit + 1U));
-                    auto* needed = builder.CreateICmpNE(
-                        remaining, constant_i64(context, 0));
-                    auto* squared =
-                        builder.CreateMul(factor, factor);
-                    runtime_error_if(
-                        builder.CreateAnd(
-                            needed,
-                            builder.CreateOr(
-                                builder.CreateICmpSLT(
-                                    squared, minimum),
-                                builder.CreateICmpSGT(
-                                    squared, maximum))),
-                        JitGeneratedRuntimeErrorReason::
-                            integer_overflow,
-                        "integer.power.factor");
-                    factor = builder.CreateSelect(
-                        needed, squared, factor);
-                  }
-                }
-                result = powered;
-                break;
-              }
-              case IntegerBinaryOperator::divide:
-              case IntegerBinaryOperator::remainder:
-              case IntegerBinaryOperator::modulo: {
-                runtime_error_if(
-                    builder.CreateICmpEQ(
-                        right, constant_i64(context, 0)),
-                    JitGeneratedRuntimeErrorReason::
-                        integer_division_by_zero,
-                    "integer.division.zero");
-                runtime_error_if(
-                    builder.CreateAnd(
-                        builder.CreateICmpEQ(left, minimum),
-                        builder.CreateICmpEQ(
-                            right,
-                            llvm::ConstantInt::getSigned(i64, -1))),
-                    JitGeneratedRuntimeErrorReason::
-                        integer_overflow,
-                    "integer.division.overflow");
-                if (operation.operation
-                    == IntegerBinaryOperator::divide) {
-                  result = builder.CreateSDiv(left, right);
-                } else {
-                  result = builder.CreateSRem(left, right);
-                  if (operation.operation
-                      == IntegerBinaryOperator::modulo) {
-                    auto* nonzero = builder.CreateICmpNE(
-                        result, constant_i64(context, 0));
-                    auto* signs_differ = builder.CreateICmpNE(
-                        builder.CreateICmpSLT(
-                            result, constant_i64(context, 0)),
-                        builder.CreateICmpSLT(
-                            right, constant_i64(context, 0)));
-                    result = builder.CreateSelect(
-                        builder.CreateAnd(nonzero, signs_differ),
-                        builder.CreateAdd(result, right),
-                        result);
-                  }
-                }
-                break;
-              }
-              }
-              store_register(
-                  builder,
-                  registers,
-                  operation.destination,
-                  EncodedValue{
-                      builder.CreateAnd(
-                          result,
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
-                      constant_i64(context, 0),
-                      32});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const IntegerCheck& operation) {
-              const auto source = load_register(
-                  builder, registers, operation.source);
-              runtime_error_if(
-                  builder.CreateICmpNE(
-                      builder.CreateAnd(
-                          source.bval,
-                          constant_i64(
-                              context,
-                              std::numeric_limits<std::uint32_t>::max())),
-                      constant_i64(context, 0)),
-                  JitGeneratedRuntimeErrorReason::
-                      integer_operand_unknown,
-                  "integer.check.unknown");
-              auto* value = builder.CreateSExt(
-                  builder.CreateTrunc(
-                      source.aval,
-                      llvm::Type::getInt32Ty(context)),
-                  llvm::Type::getInt64Ty(context));
-              auto* lower = llvm::ConstantInt::getSigned(
-                  llvm::Type::getInt64Ty(context),
-                  operation.lower);
-              auto* upper = llvm::ConstantInt::getSigned(
-                  llvm::Type::getInt64Ty(context),
-                  operation.upper);
-              runtime_error_if(
-                  builder.CreateOr(
-                      builder.CreateICmpSLT(value, lower),
-                      builder.CreateICmpSGT(value, upper)),
-                  JitGeneratedRuntimeErrorReason::
-                      integer_subtype_range,
-                  "integer.check.range");
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const ConditionalSelect& operation) {
-              const auto condition = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.condition),
-                  ValueKind::logic4);
-              const auto destination_kind =
-                  registers[operation.destination].kind;
-              const auto when_true = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.when_true),
-                  destination_kind);
-              const auto when_false = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.when_false),
-                  destination_kind);
-              auto *mask =
-                  constant_i64(context, width_mask(when_true.width));
-              auto *different = builder.CreateAnd(
-                  builder.CreateOr(
-                      builder.CreateOr(
-                          builder.CreateXor(
-                              when_true.aval, when_false.aval),
-                          builder.CreateXor(
-                              when_true.bval,
-                              when_false.bval)),
-                      builder.CreateOr(
-                          builder.CreateXor(
-                              when_true.logic9_plane2,
-                              when_false.logic9_plane2),
-                          builder.CreateXor(
-                              when_true.logic9_plane3,
-                              when_false.logic9_plane3))),
-                  mask);
-              auto *same = builder.CreateXor(different, mask);
-              auto *merged_aval = builder.CreateOr(
-                  builder.CreateAnd(when_true.aval, same),
-                  different);
-              auto *merged_bval = builder.CreateOr(
-                  builder.CreateAnd(when_true.bval, same),
-                  destination_kind == ValueKind::logic9
-                      ? constant_i64(context, 0)
-                      : different);
-              auto* merged_plane2 = builder.CreateAnd(
-                  when_true.logic9_plane2, same);
-              auto* merged_plane3 = builder.CreateAnd(
-                  when_true.logic9_plane3, same);
-              auto *unknown = builder.CreateICmpNE(
-                  builder.CreateAnd(
-                      condition.bval, constant_i64(context, 1)),
-                  constant_i64(context, 0));
-              auto *select_true = builder.CreateICmpNE(
-                  builder.CreateAnd(
-                      condition.aval, constant_i64(context, 1)),
-                  constant_i64(context, 0));
-              auto *known_aval = builder.CreateSelect(
-                  select_true, when_true.aval, when_false.aval);
-              auto *known_bval = builder.CreateSelect(
-                  select_true, when_true.bval, when_false.bval);
-              auto* known_plane2 = builder.CreateSelect(
-                  select_true,
-                  when_true.logic9_plane2,
-                  when_false.logic9_plane2);
-              auto* known_plane3 = builder.CreateSelect(
-                  select_true,
-                  when_true.logic9_plane3,
-                  when_false.logic9_plane3);
-              store_register(
-                  builder, registers, operation.destination,
-                  EncodedValue{
-                      builder.CreateSelect(
-                          unknown, merged_aval, known_aval),
-                      builder.CreateSelect(
-                          unknown, merged_bval, known_bval),
-                      when_true.width,
-                      builder.CreateSelect(
-                          unknown, merged_plane2, known_plane2),
-                      builder.CreateSelect(
-                          unknown, merged_plane3, known_plane3),
-                      destination_kind});
-              branch_to_next();
+              value_lowerer.lower(operation);
             },
             [&](const WriteBlocking &operation) {
               const auto signal_kind =
@@ -3266,23 +1829,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               }
             },
             [&](const Display& operation) {
-              auto* text = builder.CreateGlobalString(
-                  operation.text,
-                  symbol + ".display." + std::to_string(index));
-              builder.CreateCall(
-                  output_type,
-                  operation.postponed
-                      ? postponed_output_callback
-                      : output_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, process.id),
-                      text,
-                      constant_i64(context, operation.text.size()),
-                      llvm::ConstantInt::get(
-                          i32, operation.newline ? 1U : 0U),
-                  });
-              branch_to_next();
+              output_lowerer.lower(operation);
             },
             [&](const FormatDisplay& operation) {
               const auto value =
@@ -3314,38 +1861,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   });
               branch_to_next();
             },
-            [&](const TimeDisplay&) {
-              builder.CreateCall(
-                  time_output_type,
-                  time_output_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, process.id),
-                      llvm::ConstantInt::get(i32, instruction),
-                  });
-              branch_to_next();
+            [&](const TimeDisplay& operation) {
+              output_lowerer.lower(operation);
             },
-            [&](const MonitorInstall&) {
-              builder.CreateCall(
-                  time_output_type,
-                  monitor_install_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, process.id),
-                      llvm::ConstantInt::get(i32, instruction),
-                  });
-              branch_to_next();
+            [&](const MonitorInstall& operation) {
+              output_lowerer.lower(operation);
             },
-            [&](const MonitorControl&) {
-              builder.CreateCall(
-                  time_output_type,
-                  monitor_control_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, process.id),
-                      llvm::ConstantInt::get(i32, instruction),
-                  });
-              branch_to_next();
+            [&](const MonitorControl& operation) {
+              output_lowerer.lower(operation);
             },
             [&](const RandomValue& operation) {
               const auto zero = constant_i64(context, 0);
@@ -3383,25 +1906,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const Report& operation) {
-              builder.CreateCall(
-                  report_type,
-                  report_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, process.id),
-                      llvm::ConstantInt::get(i32, instruction),
-                  });
-              if (operation.severity
-                  == runtime::simir::AssertionSeverity::failure) {
-                return_result(
-                    FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED,
-                    instruction,
-                    0,
-                    FSIM_JIT_FRAME_STATE_ASSERTION_FAILED,
-                    instruction);
-              } else {
-                branch_to_next();
-              }
+              output_lowerer.lower(operation);
             },
             [&](const Jump &operation) {
               builder.CreateBr(instruction_blocks[operation.target]);
@@ -3446,17 +1951,10 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   static_cast<std::uint32_t>(reason));
             },
             [&](const WaitFor &operation) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_WAIT_FOR, instruction,
-                  operation.delay, FSIM_JIT_FRAME_STATE_READY,
-                  next_instruction);
+              output_lowerer.lower(operation);
             },
             [&](const WaitOn &operation) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_WAIT_ON,
-                  instruction,
-                  operation.timeout.value_or(0),
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+              output_lowerer.lower(operation);
             },
             [&](const WaitSensitivity &) {
               return_result(

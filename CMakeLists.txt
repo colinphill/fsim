@@ -438,6 +438,10 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit_cache_key.cpp
       src/compiler/llvm_jit_lowering.cpp
       src/compiler/llvm_jit_module.cpp
+      src/compiler/llvm_jit_operations_logic.cpp
+      src/compiler/llvm_jit_operations_output.cpp
+      src/compiler/llvm_jit_operations_signal.cpp
+      src/compiler/llvm_jit_operations_value.cpp
       src/compiler/llvm_jit_validation.cpp
       src/compiler/llvm_jit_value_lowering.cpp
   )
