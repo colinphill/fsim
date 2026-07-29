@@ -2040,13 +2040,13 @@ The planned ten implementation features are:
     evidence; update the VHDL feature matrix; then run, record, and push the
     full local regression gate.
 
-All ten implementation features are complete. Typed HIR now distinguishes
-nominal VHDL arrays from anonymous packed vectors while retaining index and
-element subtype metadata, source spans, direction, bounds, and constraint
-state. The parser accepts bounded one-dimensional constrained and
-`integer`/`natural`/`positive range <>` declarations in package, entity, and
-architecture regions and emits targeted diagnostics for malformed or
-unsupported declarations.
+All ten implementation features are complete in feature commit `e0f6c48`.
+Typed HIR now distinguishes nominal VHDL arrays from anonymous packed vectors
+while retaining index and element subtype metadata, source spans, direction,
+bounds, and constraint state. The parser accepts bounded one-dimensional
+constrained and `integer`/`natural`/`positive range <>` declarations in
+package, entity, and architecture regions and emits targeted diagnostics for
+malformed or unsupported declarations.
 
 Elaboration resolves built-in, local, imported, and selected scalar element
 subtypes, chained array subtypes, package-constant and prior-generic bounds,
@@ -2070,6 +2070,14 @@ nominal-operator, and boundary diagnostic.
 The Node-runtime CI detour preceding this batch finished in commit `c6d4071`;
 run `30444076195` passed all twelve Linux/Windows jobs and every job reported
 zero annotations.
+
+The feature state recorded in commit `e0f6c48` passed the exact LLVM 22.1.8
+warnings-as-errors Release regression: all 41 tests completed successfully in
+52.48 seconds on 2026-07-29. The gate includes the new array parser,
+visibility, constraint, nominal-legality, hierarchy, interpreter/LLVM O0/O2,
+debugger, VCD, and cache evidence, fetched Boost.Context 1.91.0 and Tcl 9.0.4,
+SystemC, the strict native ABI, and every preceding feature batch. No CI state
+was inspected for this local gate.
 
 ## v1 release condition
 
