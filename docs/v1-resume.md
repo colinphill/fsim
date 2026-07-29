@@ -219,6 +219,21 @@ git status --short --branch
 git log -5 --oneline --decorate
 ```
 
+For a clean-context restart:
+
+1. Use `docs/v1-resume.md` as the entry point, `docs/feature-matrix.md` as the
+   release authority, and `docs/implementation-plan.md` only when historical
+   detail is needed.
+2. Confirm the branch is `codex/resumable-jit`, the worktree is clean, and
+   history contains implementation commit `9aee9e4`.
+3. Begin batch 54 at item 1 above. Batch 53 is complete; do not rerun its full
+   regression unless a later change can affect its function/runtime behavior.
+4. Keep batch-54 work within the nonsuspending automatic integral-task bound.
+   Record intentional scope changes in this handoff before implementation.
+5. Use targeted tests during the batch, run the full Debug and Release gates
+   after all ten features, then update the four documents named above, commit,
+   and push.
+
 The existing exact-LLVM build trees on the recorded development host are:
 
 ```sh
@@ -226,14 +241,14 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 50 is in progress, for example:
+Use a narrow test expression while batch 54 is in progress, for example:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
   -R 'fsim\.(frontend|elaboration|llvm|application|source-line-budget)'
 ```
 
-Both exact-LLVM build trees were rebuilt for feature batch 48. The configured
+Both exact-LLVM build trees were rebuilt for feature batch 53. The configured
 test counts differ because the Release tree includes the fetched-Tcl
 relocation test; both recorded inventories are clean.
 
