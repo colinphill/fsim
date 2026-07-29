@@ -11,8 +11,6 @@ set(
   "src/app/application.cpp"
   "src/compiler/llvm_jit.cpp"
   "src/elaboration/elaborator.cpp"
-  "src/frontend/verilog_parser.cpp"
-  "src/frontend/vhdl_parser.cpp"
   "src/runtime/simir.cpp"
   "src/systemc/hierarchy.cpp"
   "src/systemc/plugin_compiler.cpp"

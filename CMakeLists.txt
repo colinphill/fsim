@@ -294,7 +294,17 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_declarations.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_concurrent.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_core.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_declarations.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_expressions.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_statements.cpp"
 )
 add_library(fsim_frontend STATIC ${FSIM_FRONTEND_SOURCES})
 add_library(fsim::frontend ALIAS fsim_frontend)

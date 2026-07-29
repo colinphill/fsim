@@ -2341,6 +2341,27 @@ frontend, elaboration, LLVM, and runtime translation units, fetched
 Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, mixed-language execution, cache,
 debugger, VCD, and strict native ABI coverage. No CI state was inspected.
 
+Checkpoint 2 decomposes both handwritten HDL parsers without changing the
+installed parser interface. Private parser headers now contain parser state,
+nested working types, and method declarations only. VHDL parsing is compiled
+as core/design-unit, declaration, concurrent/generate, sequential-statement,
+and expression units. Verilog/SystemVerilog parsing is compiled as
+directive/core, design-unit/generate, declaration/instance, procedural/system
+task, and expression/delay units.
+
+The two former 3,325- and 5,271-line implementations have become twelve
+responsibility-oriented implementation files plus two private headers and two
+small public-entry facades. The largest parser unit is 1,378 lines. Both parser
+entries have been removed from the temporary allowlist, which has fallen from
+ten entries to eight, and the permanent budget gate now checks 139 authored
+sources.
+
+Focused frontend, diagnostic-catalog, and source-budget tests pass. The exact
+LLVM 22.1.8 warnings-as-errors Release build passed all 42 tests in 95.85
+seconds on 2026-07-29, including the complete application integration,
+interpreter/JIT, SystemC, mixed-language, Tcl, C API, debugger, cache, and VCD
+coverage. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
