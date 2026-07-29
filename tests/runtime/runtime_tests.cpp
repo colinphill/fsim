@@ -5,6 +5,7 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <exception>
@@ -370,6 +371,146 @@ void test_simir_update_coalescing() {
   require(
       changes == std::vector<std::string>{"1"},
       "one update phase must publish only the final value per signal");
+
+  Interpreter ordered;
+  const auto cross_process = ordered.add_signal(
+      {"top.cross_process", PackedLogic4::from_msb_string("X")});
+  const auto zero_delay = ordered.add_signal(
+      {"top.zero_delay", PackedLogic4::from_msb_string("X")});
+  const auto equal_deadline = ordered.add_signal(
+      {"top.equal_deadline", PackedLogic4::from_msb_string("X")});
+  const auto whole_then_slice = ordered.add_signal(
+      {"top.whole_then_slice", PackedLogic4::from_msb_string("XXXX")});
+  const auto slice_then_whole = ordered.add_signal(
+      {"top.slice_then_whole", PackedLogic4::from_msb_string("XXXX")});
+
+  const auto add_writer =
+      [&](const ProcessId id,
+          const std::string_view name,
+          const PackedLogic4& value,
+          const Operation& write) {
+        Process writer;
+        writer.id = id;
+        writer.name = std::string{name};
+        writer.register_count = 1;
+        writer.operations = {
+            LoadConstant{0, value},
+            write,
+            Halt{}};
+        (void)ordered.add_process(std::move(writer));
+      };
+  add_writer(
+      0,
+      "cross_process_first",
+      PackedLogic4::from_msb_string("0"),
+      WriteUpdate{cross_process, 0});
+  add_writer(
+      1,
+      "cross_process_last",
+      PackedLogic4::from_msb_string("1"),
+      WriteUpdate{cross_process, 0});
+
+  Process zero_writer;
+  zero_writer.id = 2;
+  zero_writer.name = "zero_delay_order";
+  zero_writer.register_count = 2;
+  zero_writer.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("0")},
+      WriteUpdate{zero_delay, 0},
+      LoadConstant{1, PackedLogic4::from_msb_string("1")},
+      WriteAfter{zero_delay, 1, 0},
+      Halt{}};
+  (void)ordered.add_process(std::move(zero_writer));
+
+  add_writer(
+      3,
+      "equal_deadline_first",
+      PackedLogic4::from_msb_string("0"),
+      WriteAfter{equal_deadline, 0, 5});
+  add_writer(
+      4,
+      "equal_deadline_last",
+      PackedLogic4::from_msb_string("1"),
+      WriteAfter{equal_deadline, 0, 5});
+  add_writer(
+      5,
+      "whole_before_slice",
+      PackedLogic4::from_msb_string("1010"),
+      WriteUpdate{whole_then_slice, 0});
+  add_writer(
+      6,
+      "slice_after_whole",
+      PackedLogic4::from_msb_string("11"),
+      WriteUpdateSlice{whole_then_slice, 0, 1});
+  add_writer(
+      7,
+      "slice_before_whole",
+      PackedLogic4::from_msb_string("11"),
+      WriteUpdateSlice{slice_then_whole, 0, 1});
+  add_writer(
+      8,
+      "whole_after_slice",
+      PackedLogic4::from_msb_string("1010"),
+      WriteUpdate{slice_then_whole, 0});
+
+  struct OrderedChange {
+    SignalId signal{};
+    std::string value;
+    SimulationTick time{};
+  };
+  std::vector<OrderedChange> ordered_changes;
+  ordered.set_signal_change_hook(
+      [&](const SignalId changed,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        ordered_changes.push_back(
+            {changed, value.to_msb_string(), time});
+      });
+  const auto ordered_result = ordered.run();
+  require(
+      ordered_result.status == RunStatus::completed
+          && ordered_result.time == 5,
+      "ordered NBA scenarios complete through their last deadline");
+  require(
+      ordered.signal_value(cross_process).to_msb_string() == "1",
+      "stable process order gives the later same-slot NBA precedence");
+  require(
+      ordered.signal_value(zero_delay).to_msb_string() == "1",
+      "a zero-delay NBA joins the current update slot after an immediate "
+      "NBA from the same process");
+  require(
+      ordered.signal_value(equal_deadline).to_msb_string() == "1",
+      "equal future deadlines retain stable process ordering");
+  require(
+      ordered.signal_value(whole_then_slice).to_msb_string() == "1110",
+      "a later partial NBA overrides its overlapping whole-value bits");
+  require(
+      ordered.signal_value(slice_then_whole).to_msb_string() == "1010",
+      "a later whole-value NBA overrides an earlier partial assignment");
+  for (const auto target :
+       {cross_process,
+        zero_delay,
+        equal_deadline,
+        whole_then_slice,
+        slice_then_whole}) {
+    require(
+        std::ranges::count_if(
+            ordered_changes,
+            [&](const OrderedChange& change) {
+              return change.signal == target;
+            })
+            == 1,
+        "each coalesced target publishes exactly one committed change");
+  }
+  require(
+      std::ranges::any_of(
+          ordered_changes,
+          [&](const OrderedChange& change) {
+            return change.signal == equal_deadline
+                && change.time == 5
+                && change.value == "1";
+          }),
+      "the equal-deadline winner commits at the requested future time");
 }
 
 void test_simir_expressions_and_edges() {

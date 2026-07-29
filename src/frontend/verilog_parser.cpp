@@ -3351,7 +3351,10 @@ class VerilogParser final : private detail::ParserBase {
           has_timing =
               has_timing
               || statement.kind == StatementKind::Delay
-              || statement.kind == StatementKind::WaitOn;
+              || statement.kind == StatementKind::WaitOn
+              || (statement.kind == StatementKind::Assignment
+                  && statement.procedural_assignment_control
+                      != ProceduralAssignmentControl::None);
           has_nonblocking =
               has_nonblocking
               || (statement.kind == StatementKind::Assignment
@@ -3455,7 +3458,10 @@ class VerilogParser final : private detail::ParserBase {
             || statement.kind == StatementKind::WaitOn
             || statement.kind == StatementKind::WaitUntil
             || statement.kind == StatementKind::Pause
-            || statement.kind == StatementKind::Finish;
+            || statement.kind == StatementKind::Finish
+            || (statement.kind == StatementKind::Assignment
+                && statement.procedural_assignment_control
+                    != ProceduralAssignmentControl::None);
         has_nonblocking =
             has_nonblocking
             || (statement.kind == StatementKind::Assignment
@@ -3505,6 +3511,22 @@ class VerilogParser final : private detail::ParserBase {
           Sensitivity{EdgeKind::Any, "*", previous().span});
       return sensitivities;
     }
+    if (at(TokenKind::Identifier)) {
+      const auto signal = advance();
+      std::string signal_name = signal.text;
+      while (match(TokenKind::Dot)) {
+        signal_name += '.';
+        signal_name +=
+            expect_identifier("selected sensitivity signal").text;
+      }
+      if (signal_name.find('.') == std::string::npos) {
+        note_implicit_net_reference(signal);
+      }
+      sensitivities.push_back(
+          Sensitivity{
+              EdgeKind::Any, std::move(signal_name), signal.span});
+      return sensitivities;
+    }
     expect(TokenKind::LeftParen, "'(' after '@'", "FSIM-SV-PARSE-014");
     if (match(TokenKind::Star)) {
       sensitivities.push_back(
@@ -3538,6 +3560,12 @@ class VerilogParser final : private detail::ParserBase {
     }
     expect(TokenKind::RightParen, "')' after sensitivity list",
            "FSIM-SV-PARSE-016");
+    if (sensitivities.empty()) {
+      error(
+          previous(),
+          "FSIM-SV-PARSE-136",
+          "an event control requires at least one event expression");
+    }
     return sensitivities;
   }
 
@@ -3830,6 +3858,9 @@ class VerilogParser final : private detail::ParserBase {
       for (const auto& child : statements) {
         if (child.kind == StatementKind::Delay
             || child.kind == StatementKind::WaitOn
+            || (child.kind == StatementKind::Assignment
+                && child.procedural_assignment_control
+                    != ProceduralAssignmentControl::None)
             || self(self, child.statements)
             || self(self, child.else_statements)) {
           return true;
@@ -4043,10 +4074,10 @@ class VerilogParser final : private detail::ParserBase {
       Statement statement;
       statement.kind = StatementKind::Assert;
       expect(TokenKind::LeftParen, "'(' after assert",
-             "FSIM-SV-PARSE-039");
+             "FSIM-SV-PARSE-137");
       statement.condition = parse_expression();
       expect(TokenKind::RightParen, "')' after assertion condition",
-             "FSIM-SV-PARSE-040");
+             "FSIM-SV-PARSE-138");
       if (match_keyword("else")) {
         statement.assertion_has_failure_action = true;
         if (auto action = parse_statement()) {
@@ -4542,11 +4573,35 @@ class VerilogParser final : private detail::ParserBase {
       }
 
       std::optional<Delay> delay;
-      if (!prefix_update && !update_operation
-          && match(TokenKind::Hash)) {
-        delay = parse_verilog_delay(previous());
+      std::vector<Sensitivity> assignment_sensitivities;
+      ProceduralAssignmentControl assignment_control{
+          ProceduralAssignmentControl::None};
+      if (!prefix_update && !update_operation) {
+        if (match(TokenKind::Hash)) {
+          assignment_control =
+              ProceduralAssignmentControl::Delay;
+          delay = parse_verilog_delay(previous());
+        } else if (match(TokenKind::At)) {
+          assignment_control =
+              ProceduralAssignmentControl::Event;
+          assignment_sensitivities = parse_sensitivity();
+        }
+        while (at(TokenKind::Hash) || at(TokenKind::At)) {
+          const auto duplicate = advance();
+          error(
+              duplicate,
+              "FSIM-SV-SEM-054",
+              "a procedural assignment accepts only one delay or event "
+              "control");
+          if (duplicate.kind == TokenKind::Hash) {
+            (void)parse_verilog_delay(duplicate);
+          } else {
+            (void)parse_sensitivity();
+          }
+        }
       }
       Expression value;
+      bool recovered_through_semicolon = false;
       if (unit_update) {
         value = Expression{
             ExpressionKind::Binary,
@@ -4559,6 +4614,18 @@ class VerilogParser final : private detail::ParserBase {
                     {},
                     previous().span}},
             cover(target.span, previous().span)};
+      } else if (
+          keyword("repeat")
+          && assignment_kind == AssignmentKind::NonBlocking) {
+        error(
+            current(),
+            "FSIM-SV-UNSUPPORTED-032",
+            "repeat event controls on nonblocking assignments are not "
+            "implemented yet");
+        skip_to_semicolon();
+        recovered_through_semicolon = true;
+        value = Expression{
+            ExpressionKind::IntegerLiteral, "0", {}, current().span};
       } else {
         value = parse_expression();
         if (update_operation) {
@@ -4570,14 +4637,20 @@ class VerilogParser final : private detail::ParserBase {
               cover(target.span, value_span)};
         }
       }
-      expect(TokenKind::Semicolon, "';' after assignment",
-             "FSIM-SV-PARSE-022");
+      if (!recovered_through_semicolon) {
+        expect(TokenKind::Semicolon, "';' after assignment",
+               "FSIM-SV-PARSE-022");
+      }
       Statement statement;
       statement.kind = StatementKind::Assignment;
       statement.assignment_kind = assignment_kind;
       statement.target = std::move(target);
       statement.value = std::move(value);
       statement.delay = std::move(delay);
+      statement.sensitivities =
+          std::move(assignment_sensitivities);
+      statement.procedural_assignment_control =
+          assignment_control;
       statement.span = span_from(start, previous());
       return statement;
     }

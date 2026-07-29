@@ -223,6 +223,12 @@ enum class AssignmentKind {
   Continuous,
 };
 
+enum class ProceduralAssignmentControl {
+  None,
+  Delay,
+  Event,
+};
+
 struct DelayAlternative {
   std::uint64_t magnitude{};
   std::uint64_t divisor{1};
@@ -365,6 +371,10 @@ struct Statement {
   // True only for an If node synthesized from a VHDL conditional signal
   // assignment, preserving its distinct legality diagnostic.
   bool vhdl_conditional_assignment{};
+  // Verilog/SystemVerilog intra-assignment timing. The associated `delay` or
+  // `sensitivities` payload is distinct from statement-level timing controls.
+  ProceduralAssignmentControl procedural_assignment_control{
+      ProceduralAssignmentControl::None};
   std::optional<Delay> delay;
   // Present only on VHDL signal assignments. VHDL variable assignments and
   // assignments from the Verilog/SystemVerilog frontends leave this empty.

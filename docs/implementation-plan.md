@@ -1276,6 +1276,51 @@ including Boost.Context fibers, fetched Tcl 9.0.4, and the fetched-Tcl
 relocation test. The batch ends at feature commit `81191ab`; no CI state was
 inspected for this local gate.
 
+### Thirtieth feature batch — procedural assignment timing and NBA ordering
+
+The planned ten implementation features are:
+
+1. Retain a typed procedural assignment timing-control kind in HIR,
+   distinguishing no control, delay control, and event control from
+   continuous-assignment and VHDL delay metadata.
+2. Parse blocking and nonblocking intra-assignment `#delay` controls,
+   preserving min/typ/max selection and existing exact time normalization.
+3. Parse blocking and nonblocking intra-assignment `@event` controls with
+   any-change, scalar edge, comma/`or` lists, and wildcard RHS dependency
+   inference.
+4. Emit stable diagnostics for missing, repeated, incompatible, or currently
+   unsupported repeated-event assignment controls, and reject timing controls
+   where `always_comb`/`always_latch` or `final` forbids suspension.
+5. Lower blocking delay controls by evaluating and retaining the RHS before a
+   resumable `WaitFor`, then performing the whole, slice, or local write after
+   suspension.
+6. Lower delayed nonblocking assignments by capturing the RHS immediately and
+   scheduling whole or slice update-phase publication without suspending the
+   issuing process.
+7. Lower event-controlled blocking and nonblocking assignments as a
+   debugger-visible dynamic wait followed by RHS evaluation and the selected
+   blocking or update-phase write.
+8. Verify deterministic source/stable-process ordering and last-assignment
+   behavior for same-slot, cross-process, overlapping whole/slice, `#0`, and
+   equal-deadline future NBAs.
+9. Cover the composed wait/write state machines in LLVM O0/O2, resumable
+   frames, native-object identity, and the existing append-only C callbacks
+   without changing the runtime ABI.
+10. Require focused parser/diagnostic, SimIR scheduling, elaboration, and
+    interpreter/LLVM O0/O2/VCD/cold-warm source evidence before the full local
+    regression and push gate.
+
+All ten implementation features are complete. Focused frontend, unique
+diagnostic-catalog, elaboration, runtime-ordering, and
+interpreter/LLVM-O0/LLVM-O2/VCD/cold-warm-cache tests pass. Blocking delay
+controls retain RHS registers across a debugger-visible resumable wait;
+event-controlled forms wait before reading their RHS; delayed NBAs use the
+existing transport update callbacks without an ABI change. Direct runtime
+coverage proves stable cross-process ordering independently of HDL
+multi-driver legality, while the source differential uses legal single-driver
+same-slot/equal-deadline cases. The full local regression and push gate remain
+pending.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

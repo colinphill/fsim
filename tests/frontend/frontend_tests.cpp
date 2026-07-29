@@ -2925,6 +2925,151 @@ endmodule
       "malformed triples and illegal transition-delay lists are targeted");
 }
 
+void test_systemverilog_procedural_assignment_controls() {
+  const auto parsed = parse_text(
+      "assignment-controls.sv",
+      R"(timeunit 1ns / 1ps;
+module assignment_controls;
+  logic clock;
+  logic enable;
+  logic source;
+  logic result;
+
+  initial begin
+    result = #3 source;
+    result <= #(1:2:3) source;
+    result = @(posedge clock) source;
+    result <= @(negedge clock or enable) source;
+    result = @clock source;
+    result <= @* source;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      parsed.ok(),
+      "blocking and nonblocking procedural assignment controls parse");
+  const auto& statements =
+      parsed.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 6,
+      "all procedural assignment control forms are retained");
+  require(
+      statements[0].procedural_assignment_control
+              == ProceduralAssignmentControl::Delay
+          && statements[0].assignment_kind
+              == AssignmentKind::Blocking
+          && statements[0].delay
+          && statements[0].delay->magnitude == 3,
+      "blocking intra-assignment delay has typed HIR");
+  require(
+      statements[1].procedural_assignment_control
+              == ProceduralAssignmentControl::Delay
+          && statements[1].assignment_kind
+              == AssignmentKind::NonBlocking
+          && statements[1].delay
+          && statements[1].delay->minimum
+          && statements[1].delay->typical
+          && statements[1].delay->maximum,
+      "nonblocking min/typ/max assignment delay is retained");
+  require(
+      statements[2].procedural_assignment_control
+              == ProceduralAssignmentControl::Event
+          && statements[2].sensitivities.size() == 1
+          && statements[2].sensitivities.front().edge
+              == EdgeKind::Positive
+          && statements[2].sensitivities.front().signal
+              == "clock",
+      "blocking edge event control has typed sensitivity HIR");
+  require(
+      statements[3].procedural_assignment_control
+              == ProceduralAssignmentControl::Event
+          && statements[3].assignment_kind
+              == AssignmentKind::NonBlocking
+          && statements[3].sensitivities.size() == 2
+          && statements[3].sensitivities[0].edge
+              == EdgeKind::Negative
+          && statements[3].sensitivities[1].edge
+              == EdgeKind::Any,
+      "nonblocking event lists preserve source order and edge kinds");
+  require(
+      statements[4].sensitivities.size() == 1
+          && statements[4].sensitivities.front().signal == "clock",
+      "an unparenthesized scalar event expression is accepted");
+  require(
+      statements[5].sensitivities.size() == 1
+          && statements[5].sensitivities.front().signal == "*",
+      "wildcard assignment event control is retained for RHS inference");
+
+  const auto has_code =
+      [](const ParseResult& result, const std::string_view code) {
+        return std::ranges::any_of(
+            result.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  const auto empty = parse_text(
+      "empty-assignment-event.sv",
+      R"(module empty_assignment_event;
+  logic source;
+  logic result;
+  initial result = @() source;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !empty.ok() && has_code(empty, "FSIM-SV-PARSE-136"),
+      "an empty assignment event list has a stable diagnostic");
+
+  const auto repeated = parse_text(
+      "repeated-assignment-control.sv",
+      R"(module repeated_assignment_control;
+  logic clock;
+  logic source;
+  logic result;
+  initial result <= #1 @(posedge clock) source;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !repeated.ok()
+          && has_code(repeated, "FSIM-SV-SEM-054"),
+      "a repeated assignment control has a stable diagnostic");
+
+  const auto repeat_event = parse_text(
+      "repeat-assignment-event.sv",
+      R"(module repeat_assignment_event;
+  logic clock;
+  logic source;
+  logic result;
+  initial result <= repeat (2) @(posedge clock) source;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !repeat_event.ok()
+          && has_code(repeat_event, "FSIM-SV-UNSUPPORTED-032"),
+      "unsupported repeated NBA event control is diagnosed explicitly");
+
+  const auto restricted = parse_text(
+      "restricted-assignment-controls.sv",
+      R"(module restricted_assignment_controls;
+  logic clock;
+  logic source;
+  logic result;
+  always_comb result = #1 source;
+  final result = @(posedge clock) source;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !restricted.ok()
+          && has_code(restricted, "FSIM-SV-SEM-012")
+          && has_code(restricted, "FSIM-SV-SEM-032"),
+      "assignment controls participate in procedural restriction checks");
+}
+
 void test_systemverilog_compiler_directives() {
   const auto directives = parse_text(
       "directives.sv",
@@ -6848,6 +6993,7 @@ int main() {
     test_systemverilog_timescale_context();
     test_systemverilog_time_declarations();
     test_systemverilog_delay_triples();
+    test_systemverilog_procedural_assignment_controls();
     test_systemverilog_compiler_directives();
     test_systemverilog_parameters();
     test_systemverilog_packages();

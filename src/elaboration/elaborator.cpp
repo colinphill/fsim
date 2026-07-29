@@ -3324,6 +3324,10 @@ private:
                 std::set<std::string> dependencies;
                 collect_statement_identifiers(
                     statement.statements, dependencies);
+                if (statement.kind == StatementKind::Assignment) {
+                    collect_identifiers(
+                        statement.value, dependencies);
+                }
                 for (const auto& dependency : dependencies) {
                     if (locals_.contains(dependency)) {
                         continue;
@@ -3934,13 +3938,73 @@ private:
 
         const auto target_width =
             selected_width.value_or(whole_width);
+        const auto assignment_control =
+            statement.procedural_assignment_control;
+        const bool procedural_delay =
+            assignment_control
+            == frontend::ProceduralAssignmentControl::Delay;
+        const bool procedural_event =
+            assignment_control
+            == frontend::ProceduralAssignmentControl::Event;
+        if (assignment_control
+                != frontend::ProceduralAssignmentControl::None
+            && statement.assignment_kind != AssignmentKind::Blocking
+            && statement.assignment_kind
+                != AssignmentKind::NonBlocking) {
+            report(
+                "FSIM-ELAB-105",
+                "procedural assignment control is attached to a "
+                "nonprocedural assignment kind",
+                statement.span);
+            return;
+        }
+        if (assignment_control
+                == frontend::ProceduralAssignmentControl::None
+            && !statement.sensitivities.empty()) {
+            report(
+                "FSIM-ELAB-105",
+                "procedural assignment event metadata has no event-control "
+                "kind",
+                statement.span);
+            return;
+        }
+        if (procedural_delay
+            && (!statement.delay
+                || !statement.sensitivities.empty())) {
+            report(
+                "FSIM-ELAB-105",
+                "procedural assignment delay control has invalid delay or "
+                "sensitivity metadata",
+                statement.span);
+            return;
+        }
+        if (procedural_event
+            && (statement.delay
+                || statement.sensitivities.empty())) {
+            report(
+                "FSIM-ELAB-105",
+                "procedural assignment event control has invalid delay or "
+                "sensitivity metadata",
+                statement.span);
+            return;
+        }
+        if (procedural_event) {
+            auto [signals, edges] =
+                resolve_wait_sensitivities(statement);
+            if (signals.empty()) {
+                return;
+            }
+            emit_debug_point(
+                DebugPointKind::wait, statement.span);
+            process_.operations.emplace_back(
+                WaitOn{std::move(signals), std::move(edges)});
+        }
         if (local != locals_.end()) {
-            if (statement.assignment_kind != AssignmentKind::Blocking
-                || statement.delay) {
+            if (statement.assignment_kind != AssignmentKind::Blocking) {
                 report(
                     "FSIM-ELAB-056",
-                    "local variable assignments require an undelayed "
-                    "blocking/variable assignment",
+                    "local variable assignments require a blocking/variable "
+                    "assignment",
                     statement.span);
                 return;
             }
@@ -3973,6 +4037,12 @@ private:
                         + "' requires an explicit conversion",
                     statement.span);
                 return;
+            }
+            if (procedural_delay) {
+                emit_debug_point(
+                    DebugPointKind::wait, statement.span);
+                process_.operations.emplace_back(
+                    WaitFor{statement.delay->magnitude});
             }
             if (selected_offset) {
                 process_.operations.emplace_back(Insert{
@@ -4109,14 +4179,20 @@ private:
                 statement.span);
             return;
         }
-        if (statement.delay
+        if (procedural_delay
             && statement.assignment_kind == AssignmentKind::Blocking) {
-            report(
-                "FSIM-ELAB-046",
-                "a procedural blocking intra-assignment delay is parsed but "
-                "not executable until SimIR can suspend between RHS "
-                "evaluation and the write",
-                statement.span);
+            emit_debug_point(
+                DebugPointKind::wait, statement.span);
+            process_.operations.emplace_back(
+                WaitFor{statement.delay->magnitude});
+            if (selected_offset) {
+                process_.operations.emplace_back(
+                    WriteBlockingSlice{
+                        signal->second, *value, *selected_offset});
+            } else {
+                process_.operations.emplace_back(
+                    WriteBlocking{signal->second, *value});
+            }
             return;
         }
         if (statement.vhdl_delay_mechanism) {

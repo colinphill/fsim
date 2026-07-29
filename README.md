@@ -477,6 +477,11 @@ two, or three delay values for rise, fall, and turnoff; each may be a triplet.
 Supported gates accept one or two. Selection precedes precision rounding and
 automatic resolution, and delayed continuous writes reject superseded pulses
 inertially while procedural delayed NBA remains transport.
+Blocking and nonblocking procedural assignments also accept bounded
+intra-assignment delay or event controls. Blocking delays capture before
+suspending, event controls evaluate after waking, and NBAs publish in
+deterministic source/stable-process order with last-assignment behavior for
+overlapping whole and packed-slice targets.
 One-element VHDL signal waveforms accept implicit or explicit inertial,
 transport, and optional `reject TIME inertial`. Rejection limits and waveform
 delays normalize exactly to project ticks; the runtime edits projected

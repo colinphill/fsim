@@ -44,6 +44,20 @@ expressions remain incomplete. This update supersedes the compact table's
 older fractional-delay, delay-triplet, transition-delay, and
 declaration-based time limitations.
 
+Procedural assignment status update: blocking and nonblocking
+intra-assignment controls accept exact constant `#delay`, selected
+`min:typ:max`, unparenthesized any-change events, scalar
+`posedge`/`negedge` events, comma/`or` event lists, and wildcard RHS
+dependencies. Blocking delay controls capture the RHS before suspending and
+write after the delay; delayed NBAs capture immediately, do not suspend, and
+publish with transport semantics in the destination update phase. Event
+controls suspend before evaluating the RHS. Whole, constant packed-slice, and
+blocking local targets use the same rules. Same-slot, stable cross-process,
+overlapping whole/slice, `#0`, and equal-deadline NBA ordering is
+deterministic, with the last staged assignment winning. Repeated
+`repeat (N) @event` NBA controls, general event expressions, and
+parameterized/nonconstant controls remain deferred.
+
 Named-event status update: Verilog-2005/SystemVerilog module-level `event`
 declarations, comma groups, immediate `->` triggers, static `@event`, dynamic
 `@(event)`, and repeated wakeups now execute. SystemVerilog `->>` publishes

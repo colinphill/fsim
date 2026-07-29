@@ -344,6 +344,24 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_procedural_assignment_application_tests
+    app/procedural_assignment_application_test.cpp
+  )
+  fsim_configure_test(fsim_procedural_assignment_application_tests)
+  target_link_libraries(
+    fsim_procedural_assignment_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.procedural_assignments
+    COMMAND fsim_procedural_assignment_application_tests
+  )
+  set_tests_properties(
+    fsim.application.procedural_assignments
+    PROPERTIES LABELS "fast;procedural-assignments"
+  )
+
+  add_executable(
     fsim_vhdl_projected_application_tests
     app/vhdl_projected_application_test.cpp
   )

@@ -344,11 +344,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-036` | error | Expected `)` after a named port connection. |
 | `FSIM-SV-PARSE-037` | error | Expected `)` after instance connections. |
 | `FSIM-SV-PARSE-038` | error | Expected `;` after a module instance. |
-| `FSIM-SV-PARSE-039` | error | Expected `(` after `assert`. |
-| `FSIM-SV-PARSE-040` | error | Expected `)` after an assertion condition. |
-| `FSIM-SV-PARSE-041` | error | Legacy assertion-action recovery expected `$error` after `else`. |
-| `FSIM-SV-PARSE-042` | error | Legacy assertion-action recovery expected a literal `$error` message. |
-| `FSIM-SV-PARSE-043` | error | Legacy assertion-action recovery expected `)` after a `$error` message. |
+| `FSIM-SV-PARSE-137` | error | Expected `(` after `assert`. |
+| `FSIM-SV-PARSE-138` | error | Expected `)` after an assertion condition. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -441,6 +438,7 @@ therefore excluded.
 | `FSIM-SV-PARSE-133` | error | Expected `;` after a SystemVerilog time declaration. |
 | `FSIM-SV-PARSE-134` | error | Expected the second `:` and maximum value in a `min:typ:max` delay triple. |
 | `FSIM-SV-PARSE-135` | error | Expected another delay value after a comma in a parenthesized transition-delay list. |
+| `FSIM-SV-PARSE-136` | error | An event control has an empty event-expression list. |
 | `FSIM-SV-PARSE-039` | error | Expected a time-unit magnitude after `` `timescale``. |
 | `FSIM-SV-PARSE-040` | error | Expected a time-unit name after the `` `timescale`` magnitude. |
 | `FSIM-SV-PARSE-041` | error | Expected `/` between `` `timescale`` unit and precision. |
@@ -512,6 +510,7 @@ therefore excluded.
 | `FSIM-SV-SEM-051` | error | A Verilog-2005 delay uses a SystemVerilog explicit physical-unit suffix. |
 | `FSIM-SV-SEM-052` | error | A Verilog/SystemVerilog `min:typ:max` delay triple is not parenthesized. |
 | `FSIM-SV-SEM-053` | error | A Verilog/SystemVerilog delay list supplies more transition values than the containing assignment or gate form permits. |
+| `FSIM-SV-SEM-054` | error | A procedural assignment contains more than one delay or event control. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -539,6 +538,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-029` | error | A packed-struct member has an unpacked dimension or initializer. |
 | `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
 | `FSIM-SV-UNSUPPORTED-031` | error | A procedural `for` loop does not declare an inline `int` or `integer` index. |
+| `FSIM-SV-UNSUPPORTED-032` | error | A nonblocking assignment uses a repeated event control, which is not executable yet. |
 
 ## Elaboration and SimIR lowering
 
@@ -563,7 +563,6 @@ therefore excluded.
 | `FSIM-ELAB-042` | error | An operator was parsed but has no executable SimIR lowering. |
 | `FSIM-ELAB-043` | error | An expression form was parsed but has no executable SimIR lowering. |
 | `FSIM-ELAB-045` | error | A VHDL edge predicate appears outside the one supported process-guard form. |
-| `FSIM-ELAB-046` | error | A procedural blocking intra-assignment delay cannot yet suspend after RHS evaluation. |
 | `FSIM-ELAB-047` | error | Assignment target and expression widths differ. |
 | `FSIM-ELAB-048` | error | A VHDL `if` condition does not have scalar Boolean type. |
 | `FSIM-ELAB-049` | error | Binary operands have different widths and would require implicit sizing. |
@@ -573,7 +572,7 @@ therefore excluded.
 | `FSIM-ELAB-053` | error | A local-variable declaration duplicates another declaration in the same lexical scope. |
 | `FSIM-ELAB-054` | error | A local variable initializer has the wrong packed width. |
 | `FSIM-ELAB-055` | error | A VHDL rejection limit exceeds its first waveform-element delay during executable lowering. |
-| `FSIM-ELAB-056` | error | A local variable assignment is delayed or nonblocking. |
+| `FSIM-ELAB-056` | error | A local variable assignment is nonblocking. |
 | `FSIM-ELAB-057` | error | A local variable assignment has the wrong packed width. |
 | `FSIM-ELAB-058` | error | A local variable initializer or assignment would implicitly lose four- or nine-state values. |
 | `FSIM-ELAB-059` | error | A dynamic wait names an unknown signal. |
@@ -622,6 +621,7 @@ therefore excluded.
 | `FSIM-ELAB-102` | error | A formatted-output value expression could not be lowered into SimIR. |
 | `FSIM-ELAB-103` | error | A value-sensitive `$monitor` operand is not yet a direct packed-signal reference. |
 | `FSIM-ELAB-104` | error | A random system function is used in an unsupported language or with an invalid argument count. |
+| `FSIM-ELAB-105` | error | Procedural assignment timing-control HIR has an inconsistent control kind, delay, or event payload. |
 | `FSIM-ELAB-DRV-001` | error | A signal has multiple process drivers, but driver-slot resolution is not executable. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |

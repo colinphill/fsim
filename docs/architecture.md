@@ -359,6 +359,26 @@ pending transaction and timestamp, including a short pulse that returns to
 the current driven value. Procedural delayed nonblocking assignments retain
 `WriteAfter` transport behavior.
 
+Verilog/SystemVerilog intra-assignment controls retain a distinct typed HIR
+kind. For a blocking `target = #delay expression`, lowering evaluates the
+expression into the persistent process frame before a debugger-visible
+`WaitFor`, then publishes the retained value in the resumed active phase. A
+nonblocking `target <= #delay expression` instead evaluates immediately,
+schedules `WriteAfter`/`WriteAfterSlice` into the destination timestamp's
+common update phase, and continues without suspending. An intra-assignment
+event control emits `WaitOn` first, so both blocking and nonblocking forms
+evaluate the RHS only after the selected any-change or scalar edge event.
+Wildcard assignment controls infer their dynamic sensitivity from readable
+RHS signals.
+
+Update staging is append ordered. Initial processes run in stable process-ID
+order, and same-timestamp delayed callbacks use that same stable order.
+Whole and slice updates are then folded from the current driven value in
+staging order, making the last overlapping assignment win while committing
+only one effective value per signal. This rule applies uniformly to multiple
+assignments in one process, assignments from different processes, `#0`
+delayed NBAs, and equal future deadlines.
+
 VHDL signal assignments lower to `WriteProjected` or
 `WriteProjectedSlice`. The kernel owns an ordered cancelable transaction list
 for every process, signal, and scalar target subelement. Transport deletes

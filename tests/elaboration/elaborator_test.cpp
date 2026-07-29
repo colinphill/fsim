@@ -3760,26 +3760,236 @@ endmodule
             == expected);
     }
 
-    const auto blocking_delay = fsim::frontend::parse_text(
-        "blocking_delay.sv",
+    const auto assignment_timing = fsim::frontend::parse_text(
+        "assignment_timing.sv",
         R"(
-module blocking_delay;
-  logic a;
-  logic b;
+module assignment_timing;
+  logic clock;
+  logic source;
+  logic delayed_blocking;
+  logic [3:0] delayed_slice;
+  logic event_blocking;
+  logic event_nba;
+  logic wildcard_nba;
+  logic local_result;
+
+  initial delayed_blocking = #5 source;
+  initial delayed_slice[2:1] <= #2 2'b10;
+  initial event_blocking = @(posedge clock) source;
+  initial event_nba <= @(negedge clock or source) source;
+  initial wildcard_nba <= @* source;
   initial begin
-    a = #5 1'b1;
-    b = 1'b1;
+    logic local_value;
+    local_value = #4 source;
+    local_result = local_value;
   end
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(blocking_delay.ok());
-    const auto rejected_blocking_delay =
+    assert(assignment_timing.ok());
+    const auto elaborated_assignment_timing =
         fsim::elaboration::elaborate(
-            blocking_delay.design, "blocking_delay");
-    assert(!rejected_blocking_delay.ok());
+            assignment_timing.design, "assignment_timing");
+    if (!elaborated_assignment_timing.ok()) {
+        for (const auto& diagnostic :
+             elaborated_assignment_timing.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated_assignment_timing.ok());
+    assert(
+        elaborated_assignment_timing.design->processes().size()
+        == 6);
+    const auto operation_index =
+        []<typename OperationType>(const auto& operations) {
+            const auto found = std::find_if(
+                operations.begin(),
+                operations.end(),
+                [](const auto& operation) {
+                    return std::holds_alternative<OperationType>(
+                        operation);
+                });
+            assert(found != operations.end());
+            return static_cast<std::size_t>(
+                std::distance(operations.begin(), found));
+        };
+    const auto wait_debug_index =
+        [](const auto& operations) {
+            const auto found = std::find_if(
+                operations.begin(),
+                operations.end(),
+                [](const auto& operation) {
+                    const auto* point = std::get_if<
+                        fsim::runtime::simir::DebugPoint>(
+                        &operation);
+                    return point != nullptr
+                        && point->kind
+                            == fsim::runtime::simir::
+                                DebugPointKind::wait;
+                });
+            assert(found != operations.end());
+            return static_cast<std::size_t>(
+                std::distance(operations.begin(), found));
+        };
+    const auto& delayed_blocking_operations =
+        elaborated_assignment_timing.design
+            ->processes()[0]
+            .operations;
+    assert(
+        operation_index
+            .operator()<fsim::runtime::simir::ReadSignal>(
+                delayed_blocking_operations)
+        < wait_debug_index(delayed_blocking_operations));
+    assert(
+        wait_debug_index(delayed_blocking_operations)
+        < operation_index
+              .operator()<fsim::runtime::simir::WaitFor>(
+                  delayed_blocking_operations));
+    assert(
+        operation_index
+            .operator()<fsim::runtime::simir::WaitFor>(
+                delayed_blocking_operations)
+        < operation_index
+              .operator()<fsim::runtime::simir::WriteBlocking>(
+                  delayed_blocking_operations));
+    const auto* blocking_wait =
+        std::get_if<fsim::runtime::simir::WaitFor>(
+            &delayed_blocking_operations[
+                operation_index
+                    .operator()<fsim::runtime::simir::WaitFor>(
+                        delayed_blocking_operations)]);
+    assert(blocking_wait && blocking_wait->delay == 5);
+
+    const auto& delayed_slice_operations =
+        elaborated_assignment_timing.design
+            ->processes()[1]
+            .operations;
+    const auto delayed_slice = std::find_if(
+        delayed_slice_operations.begin(),
+        delayed_slice_operations.end(),
+        [](const auto& operation) {
+            return std::holds_alternative<
+                fsim::runtime::simir::WriteAfterSlice>(
+                    operation);
+        });
+    assert(delayed_slice != delayed_slice_operations.end());
+    const auto& delayed_slice_write =
+        std::get<fsim::runtime::simir::WriteAfterSlice>(
+            *delayed_slice);
+    assert(
+        delayed_slice_write.delay == 2
+        && delayed_slice_write.offset == 1);
+    assert(
+        std::ranges::none_of(
+            delayed_slice_operations,
+            [](const auto& operation) {
+                return std::holds_alternative<
+                    fsim::runtime::simir::WaitFor>(operation);
+            }));
+
+    const auto verify_event_assignment =
+        [&](const std::size_t process_index,
+            const bool nonblocking,
+            const std::size_t sensitivity_count) {
+            const auto& operations =
+                elaborated_assignment_timing.design
+                    ->processes()[process_index]
+                    .operations;
+            const auto wait_index =
+                operation_index
+                    .operator()<fsim::runtime::simir::WaitOn>(
+                        operations);
+            assert(wait_debug_index(operations) < wait_index);
+            assert(
+                wait_index
+                < operation_index
+                      .operator()<fsim::runtime::simir::ReadSignal>(
+                          operations));
+            if (nonblocking) {
+                assert(
+                    wait_index
+                    < operation_index
+                          .operator()<
+                              fsim::runtime::simir::WriteUpdate>(
+                              operations));
+            } else {
+                assert(
+                    wait_index
+                    < operation_index
+                          .operator()<
+                              fsim::runtime::simir::WriteBlocking>(
+                              operations));
+            }
+            const auto& wait =
+                std::get<fsim::runtime::simir::WaitOn>(
+                    operations[wait_index]);
+            assert(wait.signals.size() == sensitivity_count);
+        };
+    verify_event_assignment(2, false, 1);
+    verify_event_assignment(3, true, 2);
+    verify_event_assignment(4, true, 1);
+    const auto& wildcard_wait =
+        std::get<fsim::runtime::simir::WaitOn>(
+            elaborated_assignment_timing.design
+                ->processes()[4]
+                .operations[
+                    operation_index
+                        .operator()<fsim::runtime::simir::WaitOn>(
+                            elaborated_assignment_timing.design
+                                ->processes()[4]
+                                .operations)]);
+    const auto source_signal =
+        elaborated_assignment_timing.design->find_signal("source");
+    assert(
+        source_signal
+        && wildcard_wait.signals
+               == std::vector<fsim::runtime::simir::SignalId>{
+                   *source_signal});
+
+    const auto& local_operations =
+        elaborated_assignment_timing.design
+            ->processes()[5]
+            .operations;
+    assert(
+        operation_index
+            .operator()<fsim::runtime::simir::ReadSignal>(
+                local_operations)
+        < operation_index
+              .operator()<fsim::runtime::simir::WaitFor>(
+                  local_operations));
+    assert(
+        operation_index
+            .operator()<fsim::runtime::simir::WaitFor>(
+                local_operations)
+        < operation_index
+              .operator()<fsim::runtime::simir::CopyRegister>(
+                  local_operations));
+
+    auto inconsistent_assignment_control =
+        fsim::frontend::parse_text(
+            "inconsistent_assignment_control.sv",
+            R"(
+module inconsistent_assignment_control;
+  logic source;
+  logic result;
+  initial result = source;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(inconsistent_assignment_control.ok());
+    inconsistent_assignment_control.design.units.front()
+        .processes.front()
+        .statements.front()
+        .procedural_assignment_control =
+        fsim::frontend::ProceduralAssignmentControl::Event;
+    const auto rejected_assignment_control =
+        fsim::elaboration::elaborate(
+            inconsistent_assignment_control.design,
+            "inconsistent_assignment_control");
+    assert(!rejected_assignment_control.ok());
     assert(has_diagnostic(
-        rejected_blocking_delay, "FSIM-ELAB-046"));
+        rejected_assignment_control, "FSIM-ELAB-105"));
 
     const auto width_mismatch = fsim::frontend::parse_text(
         "width_mismatch.sv",
