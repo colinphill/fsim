@@ -567,9 +567,10 @@ Remaining before the architecture gate passes:
 - extend the bounded mixed-language differential to O0 and mixed-language
   assertion failures, broaden normalized trace coverage across semantic
   fixtures, and validate it on LLVM 22.1.8 Windows; and
-- complete VHDL generic types and the remaining SystemVerilog type/string,
-  wider-than-64-bit, and full expression-typing rules; bounded scalar VHDL and
-  typed integral SystemVerilog values already participate in
+- complete VHDL generic types and the remaining SystemVerilog string,
+  wider-than-64-bit, non-packed type-actual, and full expression-typing rules;
+  bounded scalar VHDL plus typed integral SystemVerilog values and type
+  parameters already participate in
   per-specialization native-cache identity and cross explicit
   VHDL/SystemVerilog bindings. Conditional, bounded iterative, and bounded
   selection generate plus local signals, assignments, processes, and
@@ -2686,6 +2687,73 @@ completed cleanly and all 44 configured tests passed in 111.55 seconds.
 Focused LLVM Debug, LLVM Release, and LLVM-disabled gates passed all four
 affected tests. The application differential demonstrated exact cold/warm
 reuse and two-hit/two-miss selective invalidation. No CI state was inspected.
+
+### Fifty-first feature batch — SystemVerilog type parameters
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent value and type parameters as distinct HIR formal kinds while
+   retaining declaration order, locality, source spans, and separately typed
+   defaults.
+2. Parse bounded `parameter type` and `localparam type` declarations in module
+   parameter-port lists plus module and package bodies.
+3. Retain unambiguous builtin type actuals separately while leaving identifier
+   and scoped actuals tentative until formal-aware elaboration.
+4. Resolve bounded integral builtins, local typedefs, wildcard imports, and
+   directly package-selected typedef/type-parameter marks at the association
+   site.
+5. Preserve unresolved formal type references through independent frontend
+   analysis, then replace them with specialization-local aliases without
+   mutating shared declarations.
+6. Specialize dependent packed ports, signals, typedefs, value parameters,
+   localparams, and value-dependent default ranges.
+7. Forward type formals through nested same-language hierarchy with checked
+   named/positional matching and retained declaration order.
+8. Diagnose missing, value/type-mismatched, invisible/unsupported,
+   namespace-conflicting, and mixed-language type associations with stable
+   codes.
+9. Serialize resolved type metadata into versioned `sv-type-v1`
+   specialization/native-cache identities.
+10. Add frontend, elaboration, source-provenance, interpreter/LLVM O0/O2,
+    cold/warm, and changed-type selective-invalidation evidence.
+
+The frontend stores a data-type default or an unambiguous type actual in a
+dedicated optional `Type`; it does not manufacture a value expression.
+Identifier and `package::name` actuals retain ordinary expression HIR until a
+matched formal establishes the type context. A new separately compiled
+specialization service resolves those marks against the parent type
+environment, installs per-occurrence aliases, and removes type formals before
+the integral value-specialization pass.
+
+Formal aliases may initially retain a value-dependent packed range. Named-type
+resolution first propagates that alias into dependent declarations, the
+ordinary value-specialization pass folds all ranges, and only then does the
+builder validate the final 1–64-bit type and construct its canonical identity.
+This ordering supports a prior value parameter controlling a default type and
+a later value parameter/localparam declared in that type. Public
+specialization values and identities are merged back in original formal
+declaration order.
+
+The standalone application fixture compiles a top, two differently typed
+child specializations, and an unrelated child from file-scoped compilation
+units. It compares exact final values through the interpreter and LLVM O0/O2,
+requires four cold stores and four warm hits, then edits one packed type from
+eight to six bits. Only the top and affected child miss; the default typed
+child and unrelated child produce two cache hits.
+
+This slice remains same-language and bounded to existing integral packed type
+representations. String parameters, unpacked/interface/class/anonymous
+composite actuals, widths above 64 bits, generated type declarations, and
+mixed-language type transfer remain release-gate work.
+
+The implementation is recorded in feature commit `a47d924`. The exact LLVM
+22.1.8 warnings-as-errors Debug build completed cleanly and all 44 configured
+tests passed in 301.82 seconds. The exact Release build completed cleanly and
+all 45 configured tests passed in 114.06 seconds. Focused LLVM Debug and
+LLVM-disabled gates passed frontend, diagnostics-catalog, source-budget,
+elaboration, and standalone type-parameter application tests. The final
+tracked-source gate covers 224 authored files with an empty allowlist. No CI
+state was inspected.
 
 ## v1 release condition
 
