@@ -82,6 +82,18 @@ struct InertialWrite {
   friend bool operator==(InertialWrite, InertialWrite) = default;
 };
 
+struct ProjectedWrite {
+  std::uint32_t signal{};
+  EncodedSignal value;
+  std::uint32_t offset{};
+  std::uint32_t width{};
+  std::uint64_t delay{};
+  std::uint64_t rejection{};
+  std::uint32_t mode{};
+
+  friend bool operator==(ProjectedWrite, ProjectedWrite) = default;
+};
+
 struct TestRuntime {
   std::array<EncodedSignal, 16> signals{};
   std::uint32_t assertion_count{};
@@ -104,6 +116,7 @@ struct TestRuntime {
   std::vector<std::uint32_t> monitor_control_instructions;
   std::vector<std::uint32_t> random_instructions;
   std::vector<InertialWrite> inertial_writes;
+  std::vector<ProjectedWrite> projected_writes;
 };
 
 extern "C" std::uint64_t read_signal(void *opaque,
@@ -382,6 +395,36 @@ extern "C" void write_inertial_slice(
       {signal, {aval, bval}, offset, width, rise, fall, turnoff});
 }
 
+extern "C" void write_projected(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint64_t aval,
+    const std::uint64_t bval,
+    const std::uint64_t delay,
+    const std::uint64_t rejection,
+    const std::uint32_t mode) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  runtime.projected_writes.push_back(
+      {signal, {aval, bval}, 0, 0, delay, rejection, mode});
+}
+
+extern "C" void write_projected_slice(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const std::uint64_t aval,
+    const std::uint64_t bval,
+    const std::uint64_t delay,
+    const std::uint64_t rejection,
+    const std::uint32_t mode) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  runtime.projected_writes.push_back(
+      {signal, {aval, bval}, offset, width, delay, rejection, mode});
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -411,6 +454,8 @@ extern "C" void write_inertial_slice(
       &random_value,
       &write_inertial,
       &write_inertial_slice,
+      &write_projected,
+      &write_projected_slice,
   };
 }
 
@@ -799,6 +844,95 @@ void test_inertial_callbacks_at_level(
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing); },
         "requires write_inertial_slice");
+  }
+}
+
+void test_projected_callbacks_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol_prefix) {
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  Process process;
+  process.id = 7;
+  process.name = "projected_callbacks";
+  process.register_count = 2;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10XZ0101")},
+      WriteProjected{
+          0,
+          0,
+          11,
+          3,
+          ProjectedDelayMode::inertial},
+      LoadConstant{1, PackedLogic4::from_msb_string("XZ")},
+      WriteProjectedSlice{
+          1,
+          1,
+          3,
+          13,
+          0,
+          ProjectedDelayMode::transport},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 2> widths{8, 8};
+  const auto symbol =
+      std::string{symbol_prefix} + "_projected_callbacks";
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(handle, descriptor)
+      == JitExecutionStatus::completed);
+  const std::vector<ProjectedWrite> expected{
+      {
+          0,
+          encode(PackedLogic4::from_msb_string("10XZ0101")),
+          0,
+          0,
+          11,
+          3,
+          FSIM_JIT_PROJECTED_INERTIAL},
+      {
+          1,
+          encode(PackedLogic4::from_msb_string("XZ")),
+          3,
+          2,
+          13,
+          0,
+          FSIM_JIT_PROJECTED_TRANSPORT},
+  };
+  assert(runtime.projected_writes == expected);
+
+  {
+    auto too_short = descriptor;
+    too_short.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_projected));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, too_short); },
+        "does not include write_projected");
+  }
+  {
+    auto missing = descriptor;
+    missing.write_projected = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing); },
+        "requires write_projected");
+  }
+  {
+    auto too_short = descriptor;
+    too_short.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_projected_slice));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, too_short); },
+        "does not include write_projected_slice");
+  }
+  {
+    auto missing = descriptor;
+    missing.write_projected_slice = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing); },
+        "requires write_projected_slice");
   }
 }
 
@@ -2482,6 +2616,22 @@ make_cached_scheduled_process(const bool delayed,
   return process;
 }
 
+[[nodiscard]] Process make_cached_projected_process(
+    const std::uint64_t delay,
+    const std::uint64_t rejection,
+    const ProjectedDelayMode mode) {
+  Process process;
+  process.id = 17;
+  process.name = "cached_projected_process";
+  process.register_count = 1;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10100101")},
+      WriteProjected{0, 0, delay, rejection, mode},
+      Halt{},
+  };
+  return process;
+}
+
 [[nodiscard]] Process
 make_cached_wait_process(const bool static_wait,
                          std::vector<SignalId> signals,
@@ -3365,6 +3515,49 @@ void test_inertial_cache_identity(
   run({2, 3, 7}, 0, 1);
 }
 
+void test_projected_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol{"cached_projected"};
+  const std::array<std::uint32_t, 1> widths{8};
+  const auto run =
+      [&](const std::uint64_t delay,
+          const std::uint64_t rejection,
+          const ProjectedDelayMode mode,
+          const std::size_t hits,
+          const std::size_t misses) {
+        LlvmJit jit{
+            LlvmJitOptions{
+                JitOptimizationLevel::o2, cache_directory}};
+        jit.add_process(
+            symbol,
+            make_cached_projected_process(
+                delay, rejection, mode),
+            widths);
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        assert(
+            jit.execute(jit.lookup(symbol), descriptor)
+            == JitExecutionStatus::completed);
+        assert((
+            runtime.projected_writes
+            == std::vector<ProjectedWrite>{
+                {
+                    0,
+                    encode(PackedLogic4::from_msb_string("10100101")),
+                    0,
+                    0,
+                    delay,
+                    rejection,
+                    static_cast<std::uint32_t>(mode)}}));
+        expect_cache_statistics(jit, hits, misses, misses);
+      };
+  run(5, 2, ProjectedDelayMode::inertial, 0, 1);
+  run(5, 2, ProjectedDelayMode::inertial, 1, 0);
+  run(6, 2, ProjectedDelayMode::inertial, 0, 1);
+  run(5, 1, ProjectedDelayMode::inertial, 0, 1);
+  run(5, 0, ProjectedDelayMode::transport, 0, 1);
+}
+
 void test_persistent_object_cache() {
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -3383,6 +3576,7 @@ void test_persistent_object_cache() {
       JitOptimizationLevel::o2, root / "group-o2");
   test_cache_pruning_integration(root / "pruning");
   test_inertial_cache_identity(root / "inertial");
+  test_projected_cache_identity(root / "projected");
 
   std::filesystem::remove_all(root, error);
   assert(!error);
@@ -3392,6 +3586,50 @@ void test_rejections() {
   LlvmJit jit;
   const std::array<std::uint32_t, 1> one_signal{1};
   const std::array<std::uint32_t, 0> no_signals{};
+
+  const auto projected_process =
+      [](const ProjectedDelayMode mode,
+         const std::uint64_t delay,
+         const std::uint64_t rejection) {
+        Process process;
+        process.name = "invalid_projected";
+        process.register_count = 1;
+        process.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("1")},
+            WriteProjected{
+                0, 0, delay, rejection, mode},
+            Halt{},
+        };
+        return process;
+      };
+  expect_error(
+      [&] {
+        jit.add_process(
+            "projected_rejection_too_large",
+            projected_process(
+                ProjectedDelayMode::inertial, 2, 3),
+            one_signal);
+      },
+      "rejection exceeds");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "transport_with_rejection",
+            projected_process(
+                ProjectedDelayMode::transport, 2, 1),
+            one_signal);
+      },
+      "transport projected write");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_projected_mode",
+            projected_process(
+                static_cast<ProjectedDelayMode>(99), 2, 0),
+            one_signal);
+      },
+      "invalid delay mode");
 
   Process empty_wait_on;
   empty_wait_on.id = 0;
@@ -4109,6 +4347,10 @@ int main() {
       JitOptimizationLevel::o0, "inertial_o0");
   test_inertial_callbacks_at_level(
       JitOptimizationLevel::o2, "inertial_o2");
+  test_projected_callbacks_at_level(
+      JitOptimizationLevel::o0, "projected_o0");
+  test_projected_callbacks_at_level(
+      JitOptimizationLevel::o2, "projected_o2");
   test_scheduling_differential_at_level(
       JitOptimizationLevel::o0, "scheduled_diff_o0");
   test_scheduling_differential_at_level(

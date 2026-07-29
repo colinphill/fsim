@@ -216,6 +216,12 @@ std::optional<fsim::runtime::simir::SignalId> output_signal(
   if (const auto* value = std::get_if<WriteAfter>(&operation)) {
     return value->signal;
   }
+  if (const auto* value = std::get_if<WriteInertial>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = std::get_if<WriteProjected>(&operation)) {
+    return value->signal;
+  }
   if (const auto* value = std::get_if<WriteBlockingSlice>(&operation)) {
     return value->signal;
   }
@@ -223,6 +229,12 @@ std::optional<fsim::runtime::simir::SignalId> output_signal(
     return value->signal;
   }
   if (const auto* value = std::get_if<WriteAfterSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = std::get_if<WriteInertialSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = std::get_if<WriteProjectedSlice>(&operation)) {
     return value->signal;
   }
   return std::nullopt;

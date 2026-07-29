@@ -252,6 +252,22 @@ struct WriteInertial {
   TransitionDelays delays;
 };
 
+enum class ProjectedDelayMode : std::uint8_t {
+  transport,
+  inertial,
+};
+
+/// Edit a VHDL driver's projected output waveform and queue the resulting
+/// scalar transactions. For inertial mode, rejection is the explicit or
+/// default rejection limit already normalized to simulation ticks.
+struct WriteProjected {
+  SignalId signal{};
+  RegisterId source{};
+  SimulationTick delay{};
+  SimulationTick rejection{};
+  ProjectedDelayMode mode{ProjectedDelayMode::inertial};
+};
+
 /// Replace a contiguous packed range immediately in the active phase.
 struct WriteBlockingSlice {
   SignalId signal{};
@@ -279,6 +295,15 @@ struct WriteInertialSlice {
   RegisterId source{};
   std::uint32_t offset{};
   TransitionDelays delays;
+};
+
+struct WriteProjectedSlice {
+  SignalId signal{};
+  RegisterId source{};
+  std::uint32_t offset{};
+  SimulationTick delay{};
+  SimulationTick rejection{};
+  ProjectedDelayMode mode{ProjectedDelayMode::inertial};
 };
 
 /// Return the shortest delay required by the bits that actually change.
@@ -499,8 +524,10 @@ using Operation =
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
                  Shift, Extract, Concatenate, Binary, Insert,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
-                 WriteInertial, WriteBlockingSlice, WriteUpdateSlice,
+                 WriteInertial, WriteProjected, WriteBlockingSlice,
+                 WriteUpdateSlice,
                  WriteAfterSlice, WriteInertialSlice,
+                 WriteProjectedSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
                  Branch, DebugPoint, Assert, Display, FormatDisplay,
                  TimeDisplay, MonitorInstall, MonitorControl, RandomValue,
@@ -672,6 +699,66 @@ public:
             value.width, value.aval, value.bval),
         offset,
         delays);
+  }
+  virtual void write_projected(
+      SignalId signal,
+      PackedLogic4 value,
+      SimulationTick delay,
+      SimulationTick rejection,
+      ProjectedDelayMode mode) {
+    (void)signal;
+    (void)value;
+    (void)delay;
+    (void)rejection;
+    (void)mode;
+    throw std::logic_error{
+        "alternate process executor does not support projected writes"};
+  }
+  virtual void write_projected_word(
+      SignalId signal,
+      const Logic4Word value,
+      SimulationTick delay,
+      SimulationTick rejection,
+      ProjectedDelayMode mode) {
+    write_projected(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        delay,
+        rejection,
+        mode);
+  }
+  virtual void write_projected_slice(
+      SignalId signal,
+      PackedLogic4 value,
+      std::size_t offset,
+      SimulationTick delay,
+      SimulationTick rejection,
+      ProjectedDelayMode mode) {
+    (void)signal;
+    (void)value;
+    (void)offset;
+    (void)delay;
+    (void)rejection;
+    (void)mode;
+    throw std::logic_error{
+        "alternate process executor does not support projected slice writes"};
+  }
+  virtual void write_projected_slice_word(
+      SignalId signal,
+      const Logic4Word value,
+      std::uint32_t offset,
+      SimulationTick delay,
+      SimulationTick rejection,
+      ProjectedDelayMode mode) {
+    write_projected_slice(
+        signal,
+        PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset,
+        delay,
+        rejection,
+        mode);
   }
 
   /// Notify a kernel-owned event identity from an alternate language

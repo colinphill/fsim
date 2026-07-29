@@ -1178,6 +1178,42 @@ fetched Tcl 9.0.4, and the fetched-Tcl relocation test. The batch ends at
 feature commit `4813460`; GitHub Actions state was not queried for this local
 gate.
 
+### Twenty-eighth feature batch — VHDL projected output waveforms
+
+The planned ten implementation features are:
+
+1. Preserve a typed VHDL signal-assignment delay mechanism: implicit
+   inertial, explicit `inertial`, explicit `transport`, and an optional
+   `reject` time.
+2. Parse the common delay mechanism on sequential, concurrent conditional,
+   and selected VHDL signal assignments without affecting variable
+   assignments.
+3. Diagnose malformed mechanisms, a `reject` clause without `inertial`, and
+   delay-mechanism keywords in unsupported positions with stable diagnostic
+   codes.
+4. Normalize rejection limits at the same exact project resolution as
+   waveform delays and reject negative, unrepresentable, or greater-than-
+   first-delay limits.
+5. Add typed whole-signal and packed-slice projected-write operations to
+   SimIR, retaining transport/inertial mode, waveform delay, and rejection
+   limit.
+6. Maintain a projected output waveform per process, signal, and scalar
+   subelement, including cancelable scheduled transactions and exact packed
+   reconstruction through update-phase slice coalescing.
+7. Implement transport deletion/appending and the VHDL inertial
+   mark-and-delete algorithm, with the default rejection limit equal to the
+   first waveform delay.
+8. Preserve a pending SystemVerilog continuous-assignment transaction when a
+   sensitivity re-evaluation produces the same source value, while retaining
+   cancellation for a changed source value.
+9. Append projected-write callbacks to the versioned plain-C JIT runtime
+   table and cover validation, serialization/cache identity, LLVM O0, and
+   LLVM O2 lowering.
+10. Require focused parser/diagnostic, scalar/vector/slice,
+    sequential/concurrent/selected, pulse-boundary, transport, interpreter/
+    LLVM O0/O2, VCD, and cold/warm-cache evidence before the full local
+    regression gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

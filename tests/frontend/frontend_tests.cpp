@@ -1741,6 +1741,115 @@ end architecture;
       "must be diagnosed");
 }
 
+void test_vhdl_delay_mechanisms() {
+  const auto parsed = parse_text(
+      "delay_mechanisms.vhd",
+      R"(
+entity delay_mechanisms is
+end entity;
+
+architecture rtl of delay_mechanisms is
+  signal selector : std_logic;
+  signal source : std_logic;
+  signal implicit_value : std_logic;
+  signal inertial_value : std_logic;
+  signal transport_value : std_logic;
+  signal rejected_value : std_logic;
+  signal selected_value : std_logic;
+begin
+  implicit_value <= source after 5 ns;
+  inertial_value <= inertial source after 5 ns;
+  transport_value <= transport source after 5 ns;
+  rejected_value <= reject 2 ns inertial source after 5 ns;
+  with selector select
+    selected_value <= reject 1 ns inertial
+      source after 3 ns when '1',
+      '0' after 3 ns when others;
+
+  sequential: process(source)
+    variable local_value : std_logic;
+  begin
+    local_value := source;
+    transport_value <= transport source after 4 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "VHDL delay mechanisms must parse");
+  const auto* architecture =
+      parsed.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture
+          && architecture->concurrent_statements.size() == 5
+          && architecture->processes.size() == 1,
+      "VHDL delay mechanism statement contexts");
+  const auto& implicit_value =
+      architecture->concurrent_statements[0];
+  const auto& inertial_value =
+      architecture->concurrent_statements[1];
+  const auto& transport_value =
+      architecture->concurrent_statements[2];
+  const auto& rejected_value =
+      architecture->concurrent_statements[3];
+  require(
+      implicit_value.vhdl_delay_mechanism
+              == VhdlDelayMechanism::ImplicitInertial
+          && inertial_value.vhdl_delay_mechanism
+              == VhdlDelayMechanism::Inertial
+          && transport_value.vhdl_delay_mechanism
+              == VhdlDelayMechanism::Transport
+          && rejected_value.vhdl_rejection_limit
+          && rejected_value.vhdl_rejection_limit->magnitude == 2
+          && rejected_value.vhdl_rejection_limit->unit == "ns",
+      "simple VHDL delay mechanism HIR");
+  const auto& alternatives =
+      architecture->concurrent_statements[4].case_alternatives;
+  require(
+      alternatives.size() == 2
+          && alternatives[0].statements[0].vhdl_delay_mechanism
+              == VhdlDelayMechanism::Inertial
+          && alternatives[1].statements[0].vhdl_rejection_limit
+          && alternatives[1]
+                 .statements[0]
+                 .vhdl_rejection_limit->magnitude
+              == 1,
+      "a selected assignment propagates its common delay mechanism");
+  const auto& sequential =
+      architecture->processes.front().statements;
+  require(
+      sequential.size() == 2
+          && !sequential[0].vhdl_delay_mechanism
+          && sequential[1].vhdl_delay_mechanism
+              == VhdlDelayMechanism::Transport,
+      "VHDL variable assignments stay distinct from signal mechanisms");
+
+  const auto malformed = parse_text(
+      "bad_delay_mechanisms.vhd",
+      R"(
+architecture rtl of bad_delay_mechanisms is
+  signal source : std_logic;
+  signal result : std_logic;
+begin
+  result <= reject -1 ns transport source after 5 ns;
+  result <= source transport after 5 ns;
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        malformed.diagnostics,
+        [code](const auto& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !malformed.ok()
+          && has_code("FSIM-VHDL-SEM-031")
+          && has_code("FSIM-VHDL-PARSE-123")
+          && has_code("FSIM-VHDL-PARSE-124"),
+      "malformed and misplaced VHDL delay mechanisms are targeted");
+}
+
 void test_vhdl_case_statements() {
   const auto result = parse_text(
       "case_statement.vhd",
@@ -6617,6 +6726,7 @@ int main() {
     test_vhdl_conditional_assignments();
     test_vhdl_array_attributes();
     test_vhdl_selected_assignments();
+    test_vhdl_delay_mechanisms();
     test_vhdl_case_statements();
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();

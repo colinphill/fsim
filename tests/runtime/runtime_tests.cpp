@@ -3547,6 +3547,228 @@ void test_simir_inertial_transition_writes() {
       "packed whole/slice writes use the shortest changed transition");
 }
 
+void test_simir_projected_writes() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter stable_rhs{{1000, 32}};
+  const auto stable_output = stable_rhs.add_signal(
+      {"stable-rhs", PackedLogic4::from_msb_string("0")});
+  Process stable;
+  stable.name = "stable-rhs";
+  stable.register_count = 1;
+  stable.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteInertial{stable_output, 0, {5, 5, 5}},
+      WaitFor{2},
+      WriteInertial{stable_output, 0, {5, 5, 5}},
+      WaitFor{4},
+      Halt{},
+  };
+  static_cast<void>(stable_rhs.add_process(std::move(stable)));
+  std::vector<SimulationTick> stable_changes;
+  stable_rhs.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4&,
+          const SimulationTick time) {
+        if (signal == stable_output) {
+          stable_changes.push_back(time);
+        }
+      });
+  stable_rhs.start();
+  static_cast<void>(stable_rhs.run());
+  require(
+      stable_changes == std::vector<SimulationTick>{5},
+      "an unchanged continuous RHS preserves its pending inertial time");
+
+  Interpreter default_inertial{{1000, 32}};
+  const auto default_output = default_inertial.add_signal(
+      {"default-inertial", PackedLogic4::from_msb_string("0")});
+  Process rejected;
+  rejected.name = "default-inertial";
+  rejected.register_count = 2;
+  rejected.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteProjected{
+          default_output,
+          0,
+          5,
+          5,
+          ProjectedDelayMode::inertial},
+      WaitFor{2},
+      LoadConstant{1, PackedLogic4::from_msb_string("0")},
+      WriteProjected{
+          default_output,
+          1,
+          5,
+          5,
+          ProjectedDelayMode::inertial},
+      Halt{},
+  };
+  static_cast<void>(
+      default_inertial.add_process(std::move(rejected)));
+  default_inertial.start();
+  const auto default_result = default_inertial.run();
+  require(
+      default_result.time == 7
+          && default_inertial.signal_value(default_output)
+              == PackedLogic4::from_msb_string("0")
+          && !default_inertial.scheduler().has_pending(),
+      "default VHDL inertial rejection removes a short pulse");
+
+  const auto run_explicit_rejection =
+      [](const SimulationTick second_write_time) {
+        Interpreter interpreter{{1000, 32}};
+        const auto output = interpreter.add_signal(
+            {"explicit-rejection",
+             PackedLogic4::from_msb_string("0")});
+        Process process;
+        process.name = "explicit-rejection";
+        process.register_count = 2;
+        process.operations = {
+            LoadConstant{0, PackedLogic4::from_msb_string("1")},
+            WriteProjected{
+                output,
+                0,
+                5,
+                2,
+                ProjectedDelayMode::inertial},
+            WaitFor{second_write_time},
+            LoadConstant{1, PackedLogic4::from_msb_string("0")},
+            WriteProjected{
+                output,
+                1,
+                5,
+                2,
+                ProjectedDelayMode::inertial},
+            Halt{},
+        };
+        static_cast<void>(
+            interpreter.add_process(std::move(process)));
+        std::vector<SimulationTick> changes;
+        interpreter.set_signal_change_hook(
+            [&](const SignalId changed,
+                const PackedLogic4&,
+                const SimulationTick time) {
+              if (changed == output) {
+                changes.push_back(time);
+              }
+            });
+        interpreter.start();
+        static_cast<void>(interpreter.run());
+        return changes;
+      };
+  require(
+      run_explicit_rejection(2).empty(),
+      "a pulse exactly equal to the VHDL rejection limit is rejected");
+  require(
+      run_explicit_rejection(3)
+          == std::vector<SimulationTick>{5, 8},
+      "a pulse longer than an explicit VHDL rejection limit is retained");
+
+  Interpreter transport{{1000, 32}};
+  const auto transport_output = transport.add_signal(
+      {"transport", PackedLogic4::from_msb_string("0")});
+  Process transported;
+  transported.name = "transport";
+  transported.register_count = 2;
+  transported.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteProjected{
+          transport_output,
+          0,
+          5,
+          0,
+          ProjectedDelayMode::transport},
+      WaitFor{2},
+      LoadConstant{1, PackedLogic4::from_msb_string("0")},
+      WriteProjected{
+          transport_output,
+          1,
+          5,
+          0,
+          ProjectedDelayMode::transport},
+      Halt{},
+  };
+  static_cast<void>(transport.add_process(std::move(transported)));
+  std::vector<SimulationTick> transport_changes;
+  transport.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4&,
+          const SimulationTick time) {
+        if (signal == transport_output) {
+          transport_changes.push_back(time);
+        }
+      });
+  transport.start();
+  static_cast<void>(transport.run());
+  require(
+      transport_changes == std::vector<SimulationTick>{5, 7},
+      "transport projected writes preserve a short pulse");
+
+  Interpreter packed{{1000, 32}};
+  const auto packed_output = packed.add_signal(
+      {"packed-projected", PackedLogic4::from_msb_string("0000")});
+  Process vector;
+  vector.name = "packed-projected";
+  vector.register_count = 4;
+  vector.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10")},
+      WriteProjectedSlice{
+          packed_output,
+          0,
+          0,
+          5,
+          0,
+          ProjectedDelayMode::transport},
+      LoadConstant{1, PackedLogic4::from_msb_string("01")},
+      WriteProjectedSlice{
+          packed_output,
+          1,
+          0,
+          7,
+          0,
+          ProjectedDelayMode::transport},
+      LoadConstant{2, PackedLogic4::from_msb_string("00")},
+      WriteProjectedSlice{
+          packed_output,
+          2,
+          0,
+          10,
+          4,
+          ProjectedDelayMode::inertial},
+      LoadConstant{3, PackedLogic4::from_msb_string("11")},
+      WriteProjectedSlice{
+          packed_output,
+          3,
+          2,
+          3,
+          0,
+          ProjectedDelayMode::transport},
+      Halt{},
+  };
+  static_cast<void>(packed.add_process(std::move(vector)));
+  std::vector<std::pair<
+      SimulationTick, std::string>> packed_changes;
+  packed.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        if (signal == packed_output) {
+          packed_changes.emplace_back(
+              time, value.to_msb_string());
+        }
+      });
+  packed.start();
+  static_cast<void>(packed.run());
+  require(
+      packed_changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {3, "1100"}, {5, "1110"}, {7, "1100"}},
+      "projected vector and slice transactions are edited per scalar "
+      "subelement");
+}
+
 void test_vcd() {
   using namespace fsim::runtime;
 
@@ -3620,6 +3842,7 @@ int main() {
     test_deterministic_random_values();
     test_transition_delay_selection();
     test_simir_inertial_transition_writes();
+    test_simir_projected_writes();
     test_vcd();
   } catch (const std::exception &error) {
     std::cerr << "runtime test failure: " << error.what() << '\n';

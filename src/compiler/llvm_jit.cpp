@@ -98,6 +98,8 @@ using runtime::simir::WriteBlocking;
 using runtime::simir::WriteBlockingSlice;
 using runtime::simir::WriteInertial;
 using runtime::simir::WriteInertialSlice;
+using runtime::simir::WriteProjected;
+using runtime::simir::WriteProjectedSlice;
 using runtime::simir::WriteUpdate;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
@@ -105,7 +107,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v13";
+    "fsim-llvm-native-object-v14";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -140,7 +142,10 @@ static_assert(offsetof(fsim_jit_runtime_v1, random_value) == 176);
 static_assert(offsetof(fsim_jit_runtime_v1, write_inertial) == 184);
 static_assert(
     offsetof(fsim_jit_runtime_v1, write_inertial_slice) == 192);
-static_assert(sizeof(fsim_jit_runtime_v1) == 200);
+static_assert(offsetof(fsim_jit_runtime_v1, write_projected) == 200);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_slice) == 208);
+static_assert(sizeof(fsim_jit_runtime_v1) == 216);
 static_assert(sizeof(fsim_jit_frame_v1) == 64);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -364,10 +369,12 @@ struct ValidatedProcess {
   bool uses_write_update{};
   bool uses_write_after{};
   bool uses_write_inertial{};
+  bool uses_write_projected{};
   bool uses_write_blocking_slice{};
   bool uses_write_update_slice{};
   bool uses_write_after_slice{};
   bool uses_write_inertial_slice{};
+  bool uses_write_projected_slice{};
   bool uses_debug_points{};
   bool uses_signal_event{};
   bool uses_signal_last_value{};
@@ -917,6 +924,40 @@ validate_process(const Process &process,
                   index);
               result.uses_write_inertial = true;
             },
+            [&](const WriteProjected& operation) {
+              record_use(operation.source, index);
+              constrain_width(
+                  operation.source,
+                  signal_width(operation.signal, index),
+                  index);
+              switch (operation.mode) {
+                case runtime::simir::ProjectedDelayMode::transport:
+                case runtime::simir::ProjectedDelayMode::inertial:
+                  break;
+                default:
+                  reject(
+                      process,
+                      index,
+                      "projected write has an invalid delay mode");
+              }
+              if (operation.mode
+                      == runtime::simir::ProjectedDelayMode::inertial
+                  && operation.rejection > operation.delay) {
+                reject(
+                    process,
+                    index,
+                    "projected-write rejection exceeds its delay");
+              }
+              if (operation.mode
+                      == runtime::simir::ProjectedDelayMode::transport
+                  && operation.rejection != 0) {
+                reject(
+                    process,
+                    index,
+                    "transport projected write has a rejection limit");
+              }
+              result.uses_write_projected = true;
+            },
             [&](const WriteBlockingSlice& operation) {
               record_use(operation.source, index);
               (void)signal_width(operation.signal, index);
@@ -936,6 +977,37 @@ validate_process(const Process &process,
               record_use(operation.source, index);
               (void)signal_width(operation.signal, index);
               result.uses_write_inertial_slice = true;
+            },
+            [&](const WriteProjectedSlice& operation) {
+              record_use(operation.source, index);
+              (void)signal_width(operation.signal, index);
+              switch (operation.mode) {
+                case runtime::simir::ProjectedDelayMode::transport:
+                case runtime::simir::ProjectedDelayMode::inertial:
+                  break;
+                default:
+                  reject(
+                      process,
+                      index,
+                      "projected slice has an invalid delay mode");
+              }
+              if (operation.mode
+                      == runtime::simir::ProjectedDelayMode::inertial
+                  && operation.rejection > operation.delay) {
+                reject(
+                    process,
+                    index,
+                    "projected slice rejection exceeds its delay");
+              }
+              if (operation.mode
+                      == runtime::simir::ProjectedDelayMode::transport
+                  && operation.rejection != 0) {
+                reject(
+                    process,
+                    index,
+                    "transport projected slice has a rejection limit");
+              }
+              result.uses_write_projected_slice = true;
             },
             [&](const WaitFor &) {},
             [&](const WaitOn &operation) {
@@ -1127,6 +1199,10 @@ validate_process(const Process &process,
                    std::get_if<WriteInertialSlice>(
                        &process.operations[index])) {
       validate_slice_write(*inertial_write);
+    } else if (const auto* projected_write =
+                   std::get_if<WriteProjectedSlice>(
+                       &process.operations[index])) {
+      validate_slice_write(*projected_write);
     }
   }
 
@@ -1545,6 +1621,19 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(
                   builder, "turnoff-delay", value.delays.turnoff);
             },
+            [&](const WriteProjected& value) {
+              builder.add("operation", "WriteProjected");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "delay", value.delay);
+              add_key_u64(builder, "rejection", value.rejection);
+              add_key_u64(
+                  builder,
+                  "mode",
+                  static_cast<std::uint8_t>(value.mode));
+            },
             [&](const WriteBlockingSlice& value) {
               builder.add("operation", "WriteBlockingSlice");
               add_key_u64(builder, "signal", value.signal);
@@ -1581,6 +1670,20 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "fall-delay", value.delays.fall);
               add_key_u64(
                   builder, "turnoff-delay", value.delays.turnoff);
+            },
+            [&](const WriteProjectedSlice& value) {
+              builder.add("operation", "WriteProjectedSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "offset", value.offset);
+              add_key_u64(builder, "delay", value.delay);
+              add_key_u64(builder, "rejection", value.rejection);
+              add_key_u64(
+                  builder,
+                  "mode",
+                  static_cast<std::uint8_t>(value.mode));
             },
             [&](const Assert &value) {
               builder.add("operation", "Assert");
@@ -2493,7 +2596,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -2683,6 +2786,22 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 26),
         "write_inertial_slice");
   }
+  llvm::Value* write_projected_callback = nullptr;
+  if (validated.uses_write_projected) {
+    write_projected_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 27),
+        "write_projected");
+  }
+  llvm::Value* write_projected_slice_callback = nullptr;
+  if (validated.uses_write_projected_slice) {
+    write_projected_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 28),
+        "write_projected_slice");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -2714,6 +2833,16 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
           {pointer, i32, i32, i32, i64, i64, i64, i64, i64},
+          false);
+  auto* write_projected_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i64, i64, i64, i64, i32},
+          false);
+  auto* write_projected_slice_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, i64, i64, i64, i64, i32},
           false);
   auto* signal_event_type =
       llvm::FunctionType::get(i32, {pointer, i32}, false);
@@ -2849,6 +2978,25 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       constant_i64(context, aval),
                       constant_i64(context, bval),
                       validated.register_widths[operation.destination]});
+              branch_to_next();
+            },
+            [&](const WriteProjected& operation) {
+              const auto source =
+                  load_register(builder, registers, operation.source);
+              builder.CreateCall(
+                  write_projected_type,
+                  write_projected_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, operation.signal),
+                      source.aval,
+                      source.bval,
+                      constant_i64(context, operation.delay),
+                      constant_i64(context, operation.rejection),
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.mode))});
               branch_to_next();
             },
             [&](const WriteInertial& operation) {
@@ -3613,6 +3761,31 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                           context, operation.delays.turnoff)});
               branch_to_next();
             },
+            [&](const WriteProjectedSlice& operation) {
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              builder.CreateCall(
+                  write_projected_slice_type,
+                  write_projected_slice_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(
+                          i32, operation.signal),
+                      llvm::ConstantInt::get(
+                          i32, operation.offset),
+                      llvm::ConstantInt::get(
+                          i32, source.width),
+                      source.aval,
+                      source.bval,
+                      constant_i64(context, operation.delay),
+                      constant_i64(context, operation.rejection),
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.mode))});
+              branch_to_next();
+            },
             [&](const Assert &operation) {
               const auto condition =
                   load_register(builder, registers, operation.condition);
@@ -3939,10 +4112,12 @@ struct LlvmJit::Impl {
     bool uses_write_update{};
     bool uses_write_after{};
     bool uses_write_inertial{};
+    bool uses_write_projected{};
     bool uses_write_blocking_slice{};
     bool uses_write_update_slice{};
     bool uses_write_after_slice{};
     bool uses_write_inertial_slice{};
+    bool uses_write_projected_slice{};
     bool uses_debug_points{};
     bool uses_signal_event{};
     bool uses_signal_last_value{};
@@ -4091,10 +4266,12 @@ void LlvmJit::add_process_module(
         validated.uses_write_update,
         validated.uses_write_after,
         validated.uses_write_inertial,
+        validated.uses_write_projected,
         validated.uses_write_blocking_slice,
         validated.uses_write_update_slice,
         validated.uses_write_after_slice,
         validated.uses_write_inertial_slice,
+        validated.uses_write_projected_slice,
         validated.uses_debug_points,
         validated.uses_signal_event,
         validated.uses_signal_last_value,
@@ -4359,7 +4536,8 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_write_inertial_slice) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, write_projected)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include "
           "write_inertial_slice");
@@ -4367,6 +4545,30 @@ LlvmJit::resume(const JitProcessHandle process,
     if (runtime.write_inertial_slice == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires write_inertial_slice for this "
+          "process");
+    }
+  }
+  if (entry.info.uses_write_projected) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, write_projected_slice)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include "
+          "write_projected");
+    }
+    if (runtime.write_projected == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_projected for this process");
+    }
+  }
+  if (entry.info.uses_write_projected_slice) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include "
+          "write_projected_slice");
+    }
+    if (runtime.write_projected_slice == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_projected_slice for this "
           "process");
     }
   }

@@ -326,7 +326,8 @@ SimIR processes are explicit state machines. The current operation set includes:
 - unary/logical/reduction operations plus typed bitwise, fixed-width
   arithmetic, shift, conditional-select, and comparison operations;
 - whole and normalized partial blocking writes, update-phase and transport
-  delayed writes, plus whole/slice transition-aware inertial writes;
+  delayed writes, whole/slice transition-aware inertial writes, and
+  whole/slice VHDL projected-waveform writes;
 - timed, dynamic-signal, static-sensitivity, and combined event-or-timeout
   waits;
 - next-delta yields;
@@ -357,6 +358,17 @@ an independent cancelable scheduler handle so a later evaluation removes its
 pending transaction and timestamp, including a short pulse that returns to
 the current driven value. Procedural delayed nonblocking assignments retain
 `WriteAfter` transport behavior.
+
+VHDL signal assignments lower to `WriteProjected` or
+`WriteProjectedSlice`. The kernel owns an ordered cancelable transaction list
+for every process, signal, and scalar target subelement. Transport deletes
+transactions at or after the first new transaction and appends the new
+transaction. Inertial mode then applies the projected-output marking algorithm
+using the explicit rejection limit, or the first waveform delay by default:
+new transactions, sufficiently old transactions, same-valued predecessors,
+and the current transaction are retained while other old transactions are
+cancelled. Packed writes apply this independently to each scalar and reconstruct
+the committed vector through update-phase slice coalescing.
 
 The initial output slices lower literal or empty Verilog/SystemVerilog
 `$display`, `$write`, and `$strobe` calls to a typed `Display` operation
@@ -472,7 +484,8 @@ the standards' complete expression sizing rules remain pending.
 VHDL selected concurrent assignments normalize to one exact-case process.
 Each source alternative owns a normal continuous assignment, so whole and
 constant-selected targets, update-phase writes, and optional single-waveform
-delays reuse the ordinary assignment path. The generated process is sensitive
+delays plus the selected assignment's common inertial/transport/reject
+mechanism reuse the ordinary assignment path. The generated process is sensitive
 to the selector and every alternative value dependency; choice expressions
 also participate defensively, although the supported source form expects
 locally static exact choices. A final `others` is required by the bounded form
@@ -669,9 +682,11 @@ Supported compiled builds use LLVM 22.1.8, ORC, and LLJIT. The adapter public
 header exposes no LLVM class. Generated functions receive a versioned C table
 containing opaque context plus signal-read, blocking-write, assertion,
 update-write, delayed-write, transition-aware whole/slice inertial-write, and
-signal-event callbacks. The `write_update`, `write_after`, `signal_event`,
+projected whole/slice write and signal-event callbacks. The `write_update`,
+`write_after`, `signal_event`,
 `signal_last_value`, `signal_last_event`, `signal_active`, `write_inertial`,
-and `write_inertial_slice` callbacks are append-only extensions of the v1
+`write_inertial_slice`, `write_projected`, and `write_projected_slice`
+callbacks are append-only extensions of the v1
 table: original field offsets remain fixed, and each compiled process checks
 `struct_size` only for the callback tail it actually uses. A process using
 only an earlier operation set therefore remains valid with the corresponding
@@ -693,6 +708,7 @@ The current adapter compiles control-flow graphs containing loads, reads,
 common operations, blocking writes, assertions, jumps, branches, timed waits,
 dynamic-signal waits, static-sensitivity and permanent waits, next-delta yields,
 update-phase writes, transport delayed writes, whole/slice inertial writes,
+whole/slice projected-waveform writes,
 signal-event, transaction-activity,
 previous-value, and elapsed-event-time queries, design stop, and halt.
 A versioned caller-owned plain-C frame holds the process PC plus separate
@@ -753,6 +769,8 @@ to an update write or changing its delay cannot reuse the object.
 `WriteInertial` and `WriteInertialSlice` additionally key their target slice
 and exact rise, fall, and turnoff delays, so changing any transition timing
 invalidates the native object.
+`WriteProjected` and `WriteProjectedSlice` key the target slice, transport or
+inertial mode, waveform delay, and rejection limit.
 Wait identity includes `WaitOn`, `WaitSensitivity`, or `WaitForever`, the
 ordered dynamic signal operands, widths, and edge kinds, plus every static
 sensitivity signal, width, and edge kind.
@@ -764,7 +782,8 @@ and O2 verify two functions per object, warm reuse, whole-module invalidation
 when one member changes, and stable frame identity for an unchanged member.
 Cold, warm, corruption-recovery, SimIR/referenced-width invalidation,
 scheduled-write kind/delay invalidation, three-component inertial-delay
-invalidation, wait-kind/operand invalidation, and optimization-mode
+invalidation, projected mode/delay/rejection invalidation,
+wait-kind/operand invalidation, and optimization-mode
 invalidation are also tested at O0 and O2.
 
 LLVM-enabled `fsim build` and `fsim run` select this cache beneath the

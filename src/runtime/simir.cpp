@@ -1166,6 +1166,46 @@ struct Interpreter::Impl {
     }
   };
 
+  struct PendingInertialWrite {
+    ScheduledTaskHandle handle;
+    PackedLogic4 source_value;
+  };
+
+  struct ProjectedDriverKey {
+    ProcessId process{};
+    SignalId signal{};
+    std::uint32_t offset{};
+
+    friend bool operator==(
+        const ProjectedDriverKey&,
+        const ProjectedDriverKey&) = default;
+  };
+
+  struct ProjectedDriverKeyHash {
+    [[nodiscard]] std::size_t operator()(
+        const ProjectedDriverKey& key) const noexcept {
+      auto result = static_cast<std::size_t>(key.process);
+      result ^= static_cast<std::size_t>(key.signal)
+          + UINT64_C(0x9e3779b97f4a7c15)
+          + (result << 6U) + (result >> 2U);
+      result ^= static_cast<std::size_t>(key.offset)
+          + UINT64_C(0x9e3779b97f4a7c15)
+          + (result << 6U) + (result >> 2U);
+      return result;
+    }
+  };
+
+  struct ProjectedTransaction {
+    std::uint64_t id{};
+    SimulationTick time{};
+    Logic4 value{Logic4::x};
+    ScheduledTaskHandle handle;
+  };
+
+  struct ProjectedDriverState {
+    std::vector<ProjectedTransaction> transactions;
+  };
+
   explicit Impl(
       SchedulerOptions options,
       const std::uint64_t seed)
@@ -1189,8 +1229,13 @@ struct Interpreter::Impl {
   std::unordered_set<std::uint64_t> pending_channel_updates;
   std::unordered_map<
       InertialDriverKey,
-      ScheduledTaskHandle,
+      PendingInertialWrite,
       InertialDriverKeyHash> pending_inertial_writes;
+  std::unordered_map<
+      ProjectedDriverKey,
+      ProjectedDriverState,
+      ProjectedDriverKeyHash> projected_drivers;
+  std::uint64_t next_projected_transaction_id{1};
   SignalChangeHook signal_change_hook;
   ExecutionPointHook execution_point_hook;
   OutputHook output_hook;
@@ -1995,10 +2040,13 @@ struct Interpreter::Impl {
         signal,
         static_cast<std::uint32_t>(offset.value_or(0)),
         static_cast<std::uint32_t>(value.width())};
-    auto [pending, inserted] =
-        pending_inertial_writes.try_emplace(key);
-    if (!inserted) {
-      scheduler.cancel(pending->second);
+    if (const auto pending = pending_inertial_writes.find(key);
+        pending != pending_inertial_writes.end()) {
+      if (pending->second.source_value == value) {
+        return;
+      }
+      scheduler.cancel(pending->second.handle);
+      pending_inertial_writes.erase(pending);
     }
     const auto current =
         offset
@@ -2007,11 +2055,16 @@ struct Interpreter::Impl {
             : driven_values[signal];
     const auto delay = transition_delay(current, value, delays);
     if (!delay) {
-      pending_inertial_writes.erase(pending);
       return;
     }
+    auto [pending, inserted] =
+        pending_inertial_writes.try_emplace(
+            key,
+            PendingInertialWrite{
+                ScheduledTaskHandle{}, value});
+    (void)inserted;
     try {
-      pending->second = scheduler.schedule_after_cancelable(
+      pending->second.handle = scheduler.schedule_after_cancelable(
           *delay,
           SchedulerPhase::update,
           process,
@@ -2031,6 +2084,156 @@ struct Interpreter::Impl {
     } catch (...) {
       pending_inertial_writes.erase(pending);
       throw;
+    }
+  }
+
+  void schedule_projected_scalar(
+      const ProcessId process,
+      const SignalId signal,
+      const std::uint32_t offset,
+      const Logic4 value,
+      const SimulationTick delay,
+      const SimulationTick rejection,
+      const ProjectedDelayMode mode) {
+    if (mode == ProjectedDelayMode::inertial
+        && rejection > delay) {
+      throw std::invalid_argument(
+          "projected-write rejection limit exceeds its delay");
+    }
+    if (delay
+        > std::numeric_limits<SimulationTick>::max()
+            - scheduler.now()) {
+      throw std::overflow_error(
+          "simulation time overflow while scheduling projected write");
+    }
+    const auto time = scheduler.now() + delay;
+    const ProjectedDriverKey key{process, signal, offset};
+    auto [driver, inserted] =
+        projected_drivers.try_emplace(key);
+    (void)inserted;
+    auto& transactions = driver->second.transactions;
+
+    const auto first_deleted = std::lower_bound(
+        transactions.begin(),
+        transactions.end(),
+        time,
+        [](const ProjectedTransaction& transaction,
+           const SimulationTick candidate) {
+          return transaction.time < candidate;
+        });
+    for (auto transaction = first_deleted;
+         transaction != transactions.end();
+         ++transaction) {
+      scheduler.cancel(transaction->handle);
+    }
+    transactions.erase(first_deleted, transactions.end());
+
+    const auto id = next_projected_transaction_id++;
+    transactions.push_back(
+        ProjectedTransaction{id, time, value, {}});
+    if (mode == ProjectedDelayMode::inertial
+        && transactions.size() > 1) {
+      std::vector<bool> marked(transactions.size(), false);
+      marked.back() = true;
+      const auto threshold = time - rejection;
+      for (std::size_t index = 0;
+           index + 1 < transactions.size();
+           ++index) {
+        marked[index] =
+            transactions[index].time < threshold;
+      }
+      for (std::size_t index = transactions.size() - 1;
+           index-- > 0;) {
+        if (!marked[index] && marked[index + 1]
+            && transactions[index].value
+                == transactions[index + 1].value) {
+          marked[index] = true;
+        }
+      }
+
+      for (std::size_t index = transactions.size() - 1;
+           index-- > 0;) {
+        if (!marked[index]) {
+          scheduler.cancel(transactions[index].handle);
+          transactions.erase(
+              transactions.begin()
+              + static_cast<std::ptrdiff_t>(index));
+        }
+      }
+    }
+
+    const auto pending = std::ranges::find(
+        transactions, id, &ProjectedTransaction::id);
+    if (pending == transactions.end()) {
+      throw std::logic_error(
+          "new projected transaction was not retained");
+    }
+    try {
+      pending->handle = scheduler.schedule_after_cancelable(
+          delay,
+          SchedulerPhase::update,
+          process,
+          [this, key, id, signal, offset](Scheduler&) {
+            const auto found_driver =
+                projected_drivers.find(key);
+            if (found_driver == projected_drivers.end()) {
+              return;
+            }
+            auto& state = found_driver->second;
+            const auto found_transaction = std::ranges::find(
+                state.transactions,
+                id,
+                &ProjectedTransaction::id);
+            if (found_transaction == state.transactions.end()) {
+              return;
+            }
+            const auto committed_value =
+                found_transaction->value;
+            state.transactions.erase(found_transaction);
+            stage_update_slice(
+                signal,
+                PackedLogic4{1, committed_value},
+                offset);
+          });
+    } catch (...) {
+      transactions.erase(pending);
+      throw;
+    }
+  }
+
+  void schedule_projected(
+      const ProcessId process,
+      const SignalId signal,
+      const PackedLogic4& value,
+      const std::optional<std::size_t> offset,
+      const SimulationTick delay,
+      const SimulationTick rejection,
+      const ProjectedDelayMode mode) {
+    (void)get_signal(signal);
+    const auto target_width = driven_values[signal].width();
+    const auto first = offset.value_or(0);
+    if (value.width() == 0
+        || first > target_width
+        || value.width() > target_width - first
+        || (!offset && value.width() != target_width)
+        || first > std::numeric_limits<std::uint32_t>::max()
+        || value.width()
+            > std::numeric_limits<std::uint32_t>::max()
+        || first + value.width()
+            > static_cast<std::size_t>(
+                std::numeric_limits<std::uint32_t>::max())) {
+      throw std::invalid_argument(
+          "projected write range is outside its target signal");
+    }
+    for (std::size_t bit = 0; bit < value.width(); ++bit) {
+      schedule_projected_scalar(
+          process,
+          signal,
+          static_cast<std::uint32_t>(first + bit),
+          value.get(bit),
+          delay,
+          rejection,
+          mode);
     }
   }
 
@@ -2207,6 +2410,39 @@ struct Interpreter::Impl::ExecutionContext final
         std::move(value),
         offset,
         delays);
+  }
+
+  void write_projected(
+      const SignalId signal,
+      PackedLogic4 value,
+      const SimulationTick delay,
+      const SimulationTick rejection,
+      const ProjectedDelayMode mode) override {
+    owner.schedule_projected(
+        process,
+        signal,
+        value,
+        std::nullopt,
+        delay,
+        rejection,
+        mode);
+  }
+
+  void write_projected_slice(
+      const SignalId signal,
+      PackedLogic4 value,
+      const std::size_t offset,
+      const SimulationTick delay,
+      const SimulationTick rejection,
+      const ProjectedDelayMode mode) override {
+    owner.schedule_projected(
+        process,
+        signal,
+        value,
+        offset,
+        delay,
+        rejection,
+        mode);
   }
 
   void notify_event(
@@ -3023,6 +3259,18 @@ void Interpreter::Impl::execute(ProcessId id) {
                   std::nullopt,
                   op.delays);
             },
+            [&](const WriteProjected& op) {
+              auto value = get_register(process, op.source);
+              ++process.pc;
+              schedule_projected(
+                  process.program.id,
+                  op.signal,
+                  value,
+                  std::nullopt,
+                  op.delay,
+                  op.rejection,
+                  op.mode);
+            },
             [&](const WriteBlockingSlice& op) {
               auto value = get_register(process, op.source);
               ++process.pc;
@@ -3060,6 +3308,18 @@ void Interpreter::Impl::execute(ProcessId id) {
                   std::move(value),
                   op.offset,
                   op.delays);
+            },
+            [&](const WriteProjectedSlice& op) {
+              auto value = get_register(process, op.source);
+              ++process.pc;
+              schedule_projected(
+                  process.program.id,
+                  op.signal,
+                  value,
+                  op.offset,
+                  op.delay,
+                  op.rejection,
+                  op.mode);
             },
             [&](const WaitFor &op) {
               (void)op;

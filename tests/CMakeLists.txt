@@ -343,6 +343,24 @@ if(TARGET fsim_application)
     PROPERTIES LABELS "fast;transition-delays"
   )
 
+  add_executable(
+    fsim_vhdl_projected_application_tests
+    app/vhdl_projected_application_test.cpp
+  )
+  fsim_configure_test(fsim_vhdl_projected_application_tests)
+  target_link_libraries(
+    fsim_vhdl_projected_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.vhdl_projected
+    COMMAND fsim_vhdl_projected_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vhdl_projected
+    PROPERTIES LABELS "fast;vhdl;projected-waveforms"
+  )
+
   add_executable(fsim_application_tests app/application_test.cpp)
   fsim_configure_test(fsim_application_tests)
   target_compile_definitions(

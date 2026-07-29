@@ -248,6 +248,12 @@ struct Delay {
   SourceSpan span;
 };
 
+enum class VhdlDelayMechanism {
+  ImplicitInertial,
+  Inertial,
+  Transport,
+};
+
 enum class StatementKind {
   Assignment,
   If,
@@ -351,6 +357,10 @@ struct Statement {
   // runtime loops use the default pre-test form.
   bool loop_post_test{};
   std::optional<Delay> delay;
+  // Present only on VHDL signal assignments. VHDL variable assignments and
+  // assignments from the Verilog/SystemVerilog frontends leave this empty.
+  std::optional<VhdlDelayMechanism> vhdl_delay_mechanism;
+  std::optional<Delay> vhdl_rejection_limit;
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;
   AssertionSeverity assertion_severity{AssertionSeverity::Error};

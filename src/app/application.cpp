@@ -203,6 +203,8 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.random_value = random_value;
     runtime.write_inertial = write_inertial;
     runtime.write_inertial_slice = write_inertial_slice;
+    runtime.write_projected = write_projected;
+    runtime.write_projected_slice = write_projected_slice;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -510,6 +512,32 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_projected(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint64_t aval,
+      const std::uint64_t bval,
+      const std::uint64_t delay,
+      const std::uint64_t rejection,
+      const std::uint32_t mode) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value =
+          checked_write_word(state, signal, aval, bval);
+      state.context->write_projected_word(
+          signal,
+          value,
+          delay,
+          rejection,
+          projected_delay_mode(mode));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   static void write_signal_slice(
       void* context,
       const std::uint32_t signal,
@@ -599,6 +627,47 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     } catch (...) {
       capture_failure(state);
     }
+  }
+
+  static void write_projected_slice(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const std::uint64_t aval,
+      const std::uint64_t bval,
+      const std::uint64_t delay,
+      const std::uint64_t rejection,
+      const std::uint32_t mode) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      const auto value = checked_slice_word(
+          state, signal, offset, width, aval, bval);
+      state.context->write_projected_slice_word(
+          signal,
+          value,
+          offset,
+          delay,
+          rejection,
+          projected_delay_mode(mode));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  [[nodiscard]] static runtime::simir::ProjectedDelayMode
+  projected_delay_mode(const std::uint32_t mode) {
+    if (mode == FSIM_JIT_PROJECTED_TRANSPORT) {
+      return runtime::simir::ProjectedDelayMode::transport;
+    }
+    if (mode == FSIM_JIT_PROJECTED_INERTIAL) {
+      return runtime::simir::ProjectedDelayMode::inertial;
+    }
+    throw compiler::LlvmJitError(
+        "generated process requested an invalid projected delay mode");
   }
 
   [[nodiscard]] static runtime::Logic4Word checked_write_word(
@@ -3722,8 +3791,52 @@ void visit_delays(
     if (statement.delay) {
       visit_delay(*statement.delay, function);
     }
+    if (statement.vhdl_rejection_limit) {
+      visit_delay(*statement.vhdl_rejection_limit, function);
+    }
     visit_delays(statement.statements, function);
     visit_delays(statement.else_statements, function);
+    for (auto& alternative : statement.case_alternatives) {
+      visit_delays(alternative.statements, function);
+    }
+  }
+}
+
+void validate_vhdl_rejection_limits(
+    const std::vector<frontend::Statement>& statements,
+    diagnostic::Engine& diagnostics,
+    bool& valid) {
+  for (const auto& statement : statements) {
+    if (statement.vhdl_rejection_limit) {
+      const auto mechanism =
+          statement.vhdl_delay_mechanism.value_or(
+              frontend::VhdlDelayMechanism::ImplicitInertial);
+      if (mechanism == frontend::VhdlDelayMechanism::Transport) {
+        diagnostics.error(
+            "FSIM-VHDL-SEM-033",
+            "a VHDL reject clause requires the inertial delay mechanism",
+            span(statement.vhdl_rejection_limit->span));
+        valid = false;
+      }
+      const auto first_delay =
+          statement.delay ? statement.delay->magnitude : 0;
+      if (statement.vhdl_rejection_limit->magnitude > first_delay) {
+        diagnostics.error(
+            "FSIM-VHDL-SEM-032",
+            "a VHDL rejection limit cannot exceed the first waveform "
+            "element delay",
+            span(statement.vhdl_rejection_limit->span));
+        valid = false;
+      }
+    }
+    validate_vhdl_rejection_limits(
+        statement.statements, diagnostics, valid);
+    validate_vhdl_rejection_limits(
+        statement.else_statements, diagnostics, valid);
+    for (const auto& alternative : statement.case_alternatives) {
+      validate_vhdl_rejection_limits(
+          alternative.statements, diagnostics, valid);
+    }
   }
 }
 
@@ -3941,6 +4054,12 @@ bool normalize_delays(
     visit_delays(unit.concurrent_statements, normalize);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, normalize);
+    }
+    validate_vhdl_rejection_limits(
+        unit.concurrent_statements, diagnostics, valid);
+    for (const auto& process : unit.processes) {
+      validate_vhdl_rejection_limits(
+          process.statements, diagnostics, valid);
     }
   }
   return valid;

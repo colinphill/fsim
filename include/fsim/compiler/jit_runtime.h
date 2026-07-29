@@ -32,6 +32,8 @@ extern "C" {
 
 #define FSIM_JIT_INVALID_INSTRUCTION UINT32_MAX
 #define FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS UINT32_C(1)
+#define FSIM_JIT_PROJECTED_TRANSPORT UINT32_C(0)
+#define FSIM_JIT_PROJECTED_INERTIAL UINT32_C(1)
 
 /*
  * Versioned plain-C boundary used by generated process functions.
@@ -227,6 +229,29 @@ typedef struct fsim_jit_runtime_v1 {
       uint64_t rise_delay,
       uint64_t fall_delay,
       uint64_t turnoff_delay);
+
+  /*
+   * Append-only VHDL projected-output-waveform writes. mode is one of the
+   * FSIM_JIT_PROJECTED_* constants; rejection is ignored in transport mode.
+   */
+  void (*write_projected)(
+      void* context,
+      uint32_t signal,
+      uint64_t aval,
+      uint64_t bval,
+      uint64_t delay,
+      uint64_t rejection,
+      uint32_t mode);
+  void (*write_projected_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      uint64_t aval,
+      uint64_t bval,
+      uint64_t delay,
+      uint64_t rejection,
+      uint32_t mode);
 } fsim_jit_runtime_v1;
 
 /*

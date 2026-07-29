@@ -139,6 +139,10 @@ The current tree contains:
   Boolean `when`/`else` alternatives;
 - VHDL `with`/`select` concurrent signal assignments with grouped exact
   choices, a final `others`, inferred sensitivity, and optional waveform delay;
+- one-element VHDL sequential, conditional-concurrent, and selected signal
+  waveforms with exact integer time, implicit/explicit inertial, transport,
+  optional rejection limits, and per-scalar projected transactions for whole
+  or constant-slice targets;
 - VHDL packed-object `'left`, `'right`, `'low`, `'high`, `'length`, and
   `'ascending` attributes with declared-direction preservation;
 - VHDL signal `'event` with delta-scoped effective-value-change semantics and
@@ -472,6 +476,10 @@ two, or three delay values for rise, fall, and turnoff; each may be a triplet.
 Supported gates accept one or two. Selection precedes precision rounding and
 automatic resolution, and delayed continuous writes reject superseded pulses
 inertially while procedural delayed NBA remains transport.
+One-element VHDL signal waveforms accept implicit or explicit inertial,
+transport, and optional `reject TIME inertial`. Rejection limits and waveform
+delays normalize exactly to project ticks; the runtime edits projected
+transactions independently for every packed scalar subelement.
 
 Random facilities use deterministic per-process streams and default to project
 seed `1`. A numeric `seed`/`--seed` value reproduces a run. Explicit
@@ -515,8 +523,9 @@ evaluator under the same deterministic kernel. Generated callbacks and the
 reference kernel share a checked
 allocation-free single-word `Logic4` representation for values up to 64 bits,
 including blocking, update-phase, and delayed writes. The plain-C runtime-table
-ABI retains its v1 prefix and appends `write_update` and `write_after` fields;
-generated code size-gates those fields per process before use. The configured
+ABI retains its v1 prefix and append-only scheduled, transition-inertial, and
+VHDL projected whole/slice callbacks; generated code size-gates those fields
+per process before use. The configured
 cache stores one native object per compiled specialization module under
 `llvm-native`; `fsim build` reports compiled process/module counts and native
 cache hits, misses, stores, rejected entries, and maintenance failures. The

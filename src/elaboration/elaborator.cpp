@@ -4029,7 +4029,47 @@ private:
                 statement.span);
             return;
         }
-        if (statement.delay) {
+        if (statement.vhdl_delay_mechanism) {
+            const auto delay =
+                statement.delay ? statement.delay->magnitude : 0;
+            const auto mode =
+                *statement.vhdl_delay_mechanism
+                        == frontend::VhdlDelayMechanism::Transport
+                    ? ProjectedDelayMode::transport
+                    : ProjectedDelayMode::inertial;
+            const auto rejection =
+                statement.vhdl_rejection_limit
+                    ? statement.vhdl_rejection_limit->magnitude
+                    : (mode == ProjectedDelayMode::inertial
+                           ? delay
+                           : 0);
+            if (rejection > delay) {
+                report(
+                    "FSIM-ELAB-055",
+                    "a VHDL rejection limit cannot exceed the first "
+                    "waveform element delay",
+                    statement.span);
+                return;
+            }
+            if (selected_offset) {
+                process_.operations.emplace_back(
+                    WriteProjectedSlice{
+                        signal->second,
+                        *value,
+                        *selected_offset,
+                        delay,
+                        rejection,
+                        mode});
+            } else {
+                process_.operations.emplace_back(
+                    WriteProjected{
+                        signal->second,
+                        *value,
+                        delay,
+                        rejection,
+                        mode});
+            }
+        } else if (statement.delay) {
             if (statement.assignment_kind
                 == AssignmentKind::Continuous) {
                 const auto rise = statement.delay->magnitude;
@@ -8275,6 +8315,12 @@ private:
                 } else if (const auto* delayed =
                                std::get_if<WriteAfter>(&operation)) {
                     process_outputs.insert(delayed->signal);
+                } else if (const auto* inertial =
+                               std::get_if<WriteInertial>(&operation)) {
+                    process_outputs.insert(inertial->signal);
+                } else if (const auto* projected =
+                               std::get_if<WriteProjected>(&operation)) {
+                    process_outputs.insert(projected->signal);
                 } else if (const auto* blocking_slice =
                                std::get_if<WriteBlockingSlice>(
                                    &operation)) {
@@ -8287,6 +8333,14 @@ private:
                                std::get_if<WriteAfterSlice>(
                                    &operation)) {
                     process_outputs.insert(delayed_slice->signal);
+                } else if (const auto* inertial_slice =
+                               std::get_if<WriteInertialSlice>(
+                                   &operation)) {
+                    process_outputs.insert(inertial_slice->signal);
+                } else if (const auto* projected_slice =
+                               std::get_if<WriteProjectedSlice>(
+                                   &operation)) {
+                    process_outputs.insert(projected_slice->signal);
                 }
             }
             for (const auto signal : process_outputs) {

@@ -2017,7 +2017,11 @@ class VhdlParser final : private detail::ParserBase {
     statement.kind = StatementKind::Assignment;
     statement.assignment_kind = kind;
     statement.target = std::move(target);
+    if (kind != AssignmentKind::Blocking) {
+      parse_vhdl_delay_mechanism(statement);
+    }
     statement.value = parse_conditional_assignment_value();
+    diagnose_misplaced_vhdl_delay_mechanism();
     if (match_keyword("after", true)) {
       statement.delay = parse_vhdl_delay(previous());
     }
@@ -2037,6 +2041,10 @@ class VhdlParser final : private detail::ParserBase {
         TokenKind::LessEqual,
         "'<=' in selected signal assignment",
         "FSIM-VHDL-PARSE-117");
+    Statement common_assignment;
+    common_assignment.vhdl_delay_mechanism =
+        VhdlDelayMechanism::ImplicitInertial;
+    parse_vhdl_delay_mechanism(common_assignment);
 
     bool saw_others = false;
     do {
@@ -2046,7 +2054,12 @@ class VhdlParser final : private detail::ParserBase {
       assignment.kind = StatementKind::Assignment;
       assignment.assignment_kind = AssignmentKind::Continuous;
       assignment.target = target;
+      assignment.vhdl_delay_mechanism =
+          common_assignment.vhdl_delay_mechanism;
+      assignment.vhdl_rejection_limit =
+          common_assignment.vhdl_rejection_limit;
       assignment.value = parse_expression();
+      diagnose_misplaced_vhdl_delay_mechanism();
       if (match_keyword("after", true)) {
         assignment.delay = parse_vhdl_delay(previous());
       }
@@ -2094,6 +2107,59 @@ class VhdlParser final : private detail::ParserBase {
         "FSIM-VHDL-PARSE-119");
     statement.span = span_from(start, previous());
     return statement;
+  }
+
+  void parse_vhdl_delay_mechanism(Statement& statement) {
+    statement.vhdl_delay_mechanism =
+        VhdlDelayMechanism::ImplicitInertial;
+    if (match_keyword("transport", true)) {
+      statement.vhdl_delay_mechanism =
+          VhdlDelayMechanism::Transport;
+      return;
+    }
+    if (match_keyword("inertial", true)) {
+      statement.vhdl_delay_mechanism =
+          VhdlDelayMechanism::Inertial;
+      return;
+    }
+    if (!match_keyword("reject", true)) {
+      return;
+    }
+
+    const auto reject = previous();
+    statement.vhdl_delay_mechanism =
+        VhdlDelayMechanism::Inertial;
+    if (match(TokenKind::Minus)) {
+      error(
+          previous(),
+          "FSIM-VHDL-SEM-031",
+          "a VHDL rejection limit must be nonnegative");
+    }
+    statement.vhdl_rejection_limit =
+        parse_vhdl_delay(reject);
+    if (!match_keyword("inertial", true)) {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-123",
+          "expected 'inertial' after a VHDL reject time");
+      if (keyword("transport", 0, true)) {
+        advance();
+      }
+    }
+  }
+
+  void diagnose_misplaced_vhdl_delay_mechanism() {
+    if (!keyword("transport", 0, true)
+        && !keyword("inertial", 0, true)
+        && !keyword("reject", 0, true)) {
+      return;
+    }
+    error(
+        current(),
+        "FSIM-VHDL-PARSE-124",
+        "a VHDL delay mechanism must immediately follow '<='");
+    Statement ignored;
+    parse_vhdl_delay_mechanism(ignored);
   }
 
   Expression parse_conditional_assignment_value() {

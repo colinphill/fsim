@@ -194,6 +194,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-120` | error | Expected `)` after a VHDL array-attribute dimension. |
 | `FSIM-VHDL-PARSE-121` | error | Expected a literal string after a bounded VHDL `report`. |
 | `FSIM-VHDL-PARSE-122` | error | Expected `;` after a VHDL `report` statement. |
+| `FSIM-VHDL-PARSE-123` | error | Expected `inertial` after a VHDL `reject` time. |
+| `FSIM-VHDL-PARSE-124` | error | A VHDL delay mechanism appears anywhere other than immediately after `<=`. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -222,6 +224,9 @@ therefore excluded.
 | `FSIM-VHDL-SEM-028` | error | A selected-assignment alternative follows `others`. |
 | `FSIM-VHDL-SEM-029` | error | The bounded selected-assignment form has no final `others` alternative. |
 | `FSIM-VHDL-SEM-030` | error | The selected VHDL attribute is outside the bounded supported array-attribute set. |
+| `FSIM-VHDL-SEM-031` | error | A VHDL rejection limit is negative. |
+| `FSIM-VHDL-SEM-032` | error | A VHDL rejection limit exceeds the first waveform-element delay. |
+| `FSIM-VHDL-SEM-033` | error | A VHDL `reject` clause is paired with the transport delay mechanism. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -563,6 +568,7 @@ therefore excluded.
 | `FSIM-ELAB-052` | error | A local variable has no executable packed width. |
 | `FSIM-ELAB-053` | error | A local-variable declaration duplicates another declaration in the same lexical scope. |
 | `FSIM-ELAB-054` | error | A local variable initializer has the wrong packed width. |
+| `FSIM-ELAB-055` | error | A VHDL rejection limit exceeds its first waveform-element delay during executable lowering. |
 | `FSIM-ELAB-056` | error | A local variable assignment is delayed or nonblocking. |
 | `FSIM-ELAB-057` | error | A local variable assignment has the wrong packed width. |
 | `FSIM-ELAB-058` | error | A local variable initializer or assignment would implicitly lose four- or nine-state values. |

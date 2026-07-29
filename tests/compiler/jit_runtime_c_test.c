@@ -82,8 +82,17 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, write_inertial) == 184,
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, write_inertial_slice) == 192,
     "runtime partial inertial-write callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 200,
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_projected) == 200,
+               "runtime projected-write callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_slice) == 208,
+    "runtime partial projected-write callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 216,
                "unexpected extended runtime ABI size");
+_Static_assert(FSIM_JIT_PROJECTED_TRANSPORT == UINT32_C(0),
+               "projected transport mode changed");
+_Static_assert(FSIM_JIT_PROJECTED_INERTIAL == UINT32_C(1),
+               "projected inertial mode changed");
 
 typedef struct callback_state {
   uint32_t update_count;
@@ -121,6 +130,10 @@ typedef struct callback_state {
   uint64_t inertial_rise;
   uint64_t inertial_fall;
   uint64_t inertial_turnoff;
+  uint32_t projected_count;
+  uint64_t projected_delay;
+  uint64_t projected_rejection;
+  uint32_t projected_mode;
 } callback_state;
 
 static uint64_t read_signal(
@@ -378,6 +391,46 @@ static void write_inertial_slice(
       turnoff_delay);
 }
 
+static void write_projected(
+    void* context,
+    uint32_t signal,
+    uint64_t aval,
+    uint64_t bval,
+    uint64_t delay,
+    uint64_t rejection,
+    uint32_t mode) {
+  callback_state* state = (callback_state*)context;
+  ++state->projected_count;
+  (void)signal;
+  (void)aval;
+  (void)bval;
+  state->projected_delay = delay;
+  state->projected_rejection = rejection;
+  state->projected_mode = mode;
+}
+
+static void write_projected_slice(
+    void* context,
+    uint32_t signal,
+    uint32_t offset,
+    uint32_t width,
+    uint64_t aval,
+    uint64_t bval,
+    uint64_t delay,
+    uint64_t rejection,
+    uint32_t mode) {
+  (void)offset;
+  (void)width;
+  write_projected(
+      context,
+      signal,
+      aval,
+      bval,
+      delay,
+      rejection,
+      mode);
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -407,7 +460,9 @@ int main(void) {
       control_monitor,
       random_value,
       write_inertial,
-      write_inertial_slice};
+      write_inertial_slice,
+      write_projected,
+      write_projected_slice};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -482,6 +537,24 @@ int main(void) {
       UINT64_C(5),
       UINT64_C(6),
       UINT64_C(7));
+  runtime.write_projected(
+      runtime.context,
+      UINT32_C(15),
+      UINT64_C(1),
+      UINT64_C(0),
+      UINT64_C(11),
+      UINT64_C(3),
+      FSIM_JIT_PROJECTED_INERTIAL);
+  runtime.write_projected_slice(
+      runtime.context,
+      UINT32_C(15),
+      UINT32_C(2),
+      UINT32_C(1),
+      UINT64_C(0),
+      UINT64_C(0),
+      UINT64_C(13),
+      UINT64_C(0),
+      FSIM_JIT_PROJECTED_TRANSPORT);
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -534,6 +607,10 @@ int main(void) {
       state.inertial_rise != UINT64_C(5) ||
       state.inertial_fall != UINT64_C(6) ||
       state.inertial_turnoff != UINT64_C(7) ||
+      state.projected_count != UINT32_C(2) ||
+      state.projected_delay != UINT64_C(13) ||
+      state.projected_rejection != UINT64_C(0) ||
+      state.projected_mode != FSIM_JIT_PROJECTED_TRANSPORT ||
       state.report_instruction != UINT32_C(24) ||
       random_aval != UINT64_C(0x12345678) ||
       random_bval != UINT64_C(0) ||
