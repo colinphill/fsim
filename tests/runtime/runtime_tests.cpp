@@ -7,9 +7,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -1378,6 +1380,119 @@ void test_simir_wide_signed_arithmetic() {
       interpreter.signal_value(outputs[9]).to_msb_string()
           == std::string(65, 'X'),
       "unknown signed arithmetic produces an all-X result");
+}
+
+void test_checked_vhdl_integer_operations() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto integer = [](const std::int32_t value) {
+    return PackedLogic4::from_aval_bval(
+        32,
+        static_cast<std::uint32_t>(value),
+        0);
+  };
+
+  Interpreter interpreter;
+  std::array<SignalId, 4> outputs{};
+  for (std::size_t index = 0; index < outputs.size(); ++index) {
+    outputs[index] = interpreter.add_signal(
+        {"top.integer_" + std::to_string(index), integer(0)});
+  }
+  Process process;
+  process.id = 0;
+  process.name = "checked_integer_success";
+  process.register_count = 7;
+  process.operations = {
+      LoadConstant{0, integer(-5)},
+      LoadConstant{1, integer(3)},
+      IntegerBinary{IntegerBinaryOperator::add, 2, 0, 1},
+      IntegerBinary{IntegerBinaryOperator::modulo, 3, 0, 1},
+      IntegerBinary{IntegerBinaryOperator::remainder, 4, 0, 1},
+      IntegerUnary{IntegerUnaryOperator::absolute, 5, 0},
+      IntegerBinary{IntegerBinaryOperator::power, 6, 1, 1},
+      IntegerCheck{2, -2, 2},
+      WriteBlocking{outputs[0], 2},
+      WriteBlocking{outputs[1], 3},
+      WriteBlocking{outputs[2], 4},
+      WriteBlocking{outputs[3], 5},
+      Halt{}};
+  (void)interpreter.add_process(std::move(process));
+  require(
+      interpreter.run().status == RunStatus::completed,
+      "checked integer success process completes");
+  const std::array expected{-2, 1, -2, 5};
+  for (std::size_t index = 0; index < outputs.size(); ++index) {
+    require(
+        interpreter.signal_value(outputs[index])
+            == integer(expected[index]),
+        "checked integer arithmetic follows VHDL signed semantics");
+  }
+
+  const auto expect_failure =
+      [&](std::vector<Operation> operations,
+          const std::string_view expected_message) {
+        Interpreter failing;
+        Process candidate;
+        candidate.id = 0;
+        candidate.name = "checked_integer_failure";
+        candidate.register_count = 4;
+        candidate.operations = std::move(operations);
+        (void)failing.add_process(std::move(candidate));
+        try {
+          (void)failing.run();
+          throw std::runtime_error(
+              "checked VHDL integer failure was not reported");
+        } catch (const InterpreterError& error) {
+          require(
+              std::string_view{error.what()}.find(expected_message)
+                  != std::string_view::npos,
+              "checked VHDL integer failure message");
+        }
+      };
+  expect_failure(
+      {
+          LoadConstant{
+              0, integer(std::numeric_limits<std::int32_t>::max())},
+          LoadConstant{1, integer(1)},
+          IntegerBinary{IntegerBinaryOperator::add, 2, 0, 1},
+          Halt{}},
+      "VHDL integer arithmetic overflow");
+  expect_failure(
+      {
+          LoadConstant{0, integer(7)},
+          LoadConstant{1, integer(0)},
+          IntegerBinary{IntegerBinaryOperator::divide, 2, 0, 1},
+          Halt{}},
+      "VHDL integer division by zero");
+  expect_failure(
+      {
+          LoadConstant{
+              0, integer(std::numeric_limits<std::int32_t>::min())},
+          IntegerUnary{IntegerUnaryOperator::negate, 1, 0},
+          Halt{}},
+      "VHDL integer arithmetic overflow");
+  expect_failure(
+      {
+          LoadConstant{0, integer(2)},
+          LoadConstant{1, integer(-1)},
+          IntegerBinary{IntegerBinaryOperator::power, 2, 0, 1},
+          Halt{}},
+      "VHDL integer exponent must be nonnegative");
+  expect_failure(
+      {
+          LoadConstant{0, integer(8)},
+          IntegerCheck{0, -5, 7},
+          Halt{}},
+      "VHDL integer subtype range check failed");
+  auto unknown = integer(0);
+  unknown.set(4, Logic4::x);
+  expect_failure(
+      {
+          LoadConstant{0, std::move(unknown)},
+          IntegerUnary{IntegerUnaryOperator::absolute, 1, 0},
+          Halt{}},
+      "VHDL integer operand contains an unknown or high-impedance value");
 }
 
 void test_simir_wide_extract_and_concatenate() {
@@ -4279,6 +4394,7 @@ int main() {
     test_simir_signed_shift_counts();
     test_simir_wide_unsigned_arithmetic();
     test_simir_wide_signed_arithmetic();
+    test_checked_vhdl_integer_operations();
     test_simir_wide_extract_and_concatenate();
     test_simir_insert_and_partial_writes();
     test_simir_force_release();

@@ -97,7 +97,7 @@ Capture run_once(
   capture.native_cache =
       simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 8> names{
+  constexpr std::array<std::string_view, 12> names{
       "vhdl_integer_shift.count",
       "vhdl_integer_shift.logical_left",
       "vhdl_integer_shift.logical_right",
@@ -105,9 +105,13 @@ Capture run_once(
       "vhdl_integer_shift.arithmetic_right",
       "vhdl_integer_shift.rotate_left",
       "vhdl_integer_shift.rotate_right",
-      "vhdl_integer_shift.integer_result"};
+      "vhdl_integer_shift.integer_result",
+      "vhdl_integer_shift.bounded_result",
+      "vhdl_integer_shift.natural_result",
+      "vhdl_integer_shift.positive_result",
+      "vhdl_integer_shift.minimum_result"};
   constexpr std::array<std::uint32_t, names.size()> widths{
-      32, 8, 8, 8, 8, 8, 8, 32};
+      32, 8, 8, 8, 8, 8, 8, 32, 32, 32, 32, 32};
   std::array<
       fsim::runtime::simir::SignalId,
       names.size()> signals{};
@@ -203,7 +207,11 @@ void verify_capture(const Capture& capture) {
           "ZZZZZZZZ",
           "Z10X0000",
           "0X0000Z1",
-          "00000000000000000000000000001000"}));
+          "00000000000000000000000000001000",
+          "00000000000000000000000000000001",
+          "00000000000000000000000000001000",
+          "00000000000000000000000000001001",
+          "10000000000000000000000000000000"}));
   assert(
       capture.vcd.find("$timescale 1ns $end")
       != std::string::npos);
@@ -217,6 +225,27 @@ void verify_capture(const Capture& capture) {
       capture.vcd.find(
           "b00000000000000000000000000001000")
       != std::string::npos);
+}
+
+std::string run_expected_failure(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  try {
+    (void)simulation.run();
+    assert(false && "checked VHDL integer overflow was not reported");
+  } catch (const fsim::runtime::simir::InterpreterError& error) {
+    const auto message = std::string{error.what()};
+    assert(
+        message.find("VHDL integer arithmetic overflow")
+        != std::string::npos);
+    return message;
+  }
+  return {};
 }
 
 } // namespace
@@ -246,6 +275,10 @@ architecture rtl of vhdl_integer_shift is
   signal rotate_left : std_logic_vector(7 downto 0);
   signal rotate_right : std_logic_vector(7 downto 0);
   signal integer_result : integer;
+  signal bounded_result : integer range -3 to 4;
+  signal natural_result : natural;
+  signal positive_result : positive;
+  signal minimum_result : integer;
 begin
   value <= "10X0000Z";
 
@@ -264,6 +297,10 @@ begin
   begin
     adjusted := count + 1;
     integer_result <= abs adjusted;
+    bounded_result <= adjusted mod 3;
+    natural_result <= abs adjusted;
+    positive_result <= (abs adjusted mod 100) + 1;
+    minimum_result <= -2147483648;
     logical_left <= value sll count;
     logical_right <= value srl count;
     arithmetic_left <= value sla count;
@@ -317,6 +354,41 @@ end architecture;
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
 #endif
+  }
+
+  const auto failure_source =
+      directory.path / "integer_overflow.vhd";
+  {
+    std::ofstream output(failure_source, std::ios::binary);
+    output << R"(
+entity vhdl_integer_shift is
+end entity;
+
+architecture rtl of vhdl_integer_shift is
+  signal sink : integer;
+begin
+  overflow: process
+    variable maximum : integer := 2147483647;
+  begin
+    maximum := maximum + 1;
+    sink <= maximum;
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    const auto config =
+        make_config(
+            directory.path, failure_source, optimization);
+    const auto interpreter_error = run_expected_failure(
+        config, fsim::app::SimulationEngine::interpreter);
+    const auto compiled_error = run_expected_failure(
+        config, fsim::app::SimulationEngine::compiled);
+    assert(interpreter_error == compiled_error);
   }
   std::cout
       << "VHDL integer shift application tests passed\n";

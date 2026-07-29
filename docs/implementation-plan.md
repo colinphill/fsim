@@ -1468,6 +1468,35 @@ interpreter/LLVM differentials, VCD, cache, debugger-facing application tests,
 the new VHDL integer-shift target, and all preceding feature batches. No CI
 state was inspected for this local gate.
 
+### Thirty-fourth feature batch — checked VHDL integer subtypes
+
+The planned ten implementation features are:
+
+1. Retain independent scalar constraints for the bounded base `integer`,
+   `natural`, and `positive` subtypes without treating value bounds as packed
+   vector widths.
+2. Parse explicit `integer range ... to|downto ...` subtype indications and
+   preserve specialization-dependent bound expressions and source spans.
+3. Evaluate scalar constraints per generic-specialized unit, rejecting
+   out-of-representation, null, or otherwise invalid bounds with stable
+   diagnostics.
+4. Default-initialize integer-family signals and process variables from the
+   concrete subtype's left bound, including descending constraints.
+5. Add typed SimIR operations for checked unary negate/absolute and binary
+   add, subtract, multiply, power, divide, remainder, and modulo.
+6. Diagnose unknown operands, signed 32-bit overflow, invalid exponents, and
+   division by zero identically in the interpreter and generated code.
+7. Insert scalar range checks before integer-family local, signal, waveform,
+   and mixed-boundary stores while preserving ordinary 32-bit transport.
+8. Carry integer operations and concrete constraints through SimIR
+   validation, native-object identity, and LLVM O0/O2 lowering without
+   changing the plain-C runtime ABI layout.
+9. Expose concrete integer constraints through DesignIR/debug metadata and
+   retain width-, signedness-, and range-safe hierarchy aliases.
+10. Require focused parser, diagnostic, elaboration, interpreter, LLVM
+    O0/O2/cache, and VHDL application differential evidence before the full
+    local regression and push gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

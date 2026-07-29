@@ -132,6 +132,12 @@ PackedLogic4 unsigned_value(const std::uint64_t value, const std::size_t width) 
     return result;
 }
 
+PackedLogic4 integer_value(const std::int64_t value) {
+    const auto bits = static_cast<std::uint32_t>(
+        static_cast<std::int32_t>(value));
+    return unsigned_value(bits, 32);
+}
+
 std::optional<LoweredLiteral> literal_value(
     const Expression& expression,
     const std::size_t expected_width,
@@ -806,6 +812,77 @@ void substitute_parameters(
     const ConstantEnvironment& environment,
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
+    auto integer_range_span = frontend::SourceSpan{};
+    if (type.integer_range_expression) {
+        integer_range_span = type.integer_range_expression->span;
+        std::string error;
+        const auto left = evaluate_constant_expression(
+            type.integer_range_expression->left, environment, error);
+        const auto right = left
+            ? evaluate_constant_expression(
+                  type.integer_range_expression->right,
+                  environment,
+                  error)
+            : std::nullopt;
+        if (!left || !right) {
+            diagnostics.push_back({
+                "FSIM-ELAB-INTEGER-001",
+                "cannot evaluate VHDL integer subtype constraint: "
+                    + error,
+                type.integer_range_expression->span});
+            type.integer_range.reset();
+        } else {
+            type.integer_range = frontend::IntegerRange{
+                *left,
+                *right,
+                type.integer_range_expression->descending};
+        }
+        type.integer_range_expression.reset();
+    }
+    if (type.domain == frontend::ValueDomain::Integer
+        && type.integer_range) {
+        constexpr auto minimum =
+            std::int64_t{std::numeric_limits<std::int32_t>::min()};
+        constexpr auto maximum =
+            std::int64_t{std::numeric_limits<std::int32_t>::max()};
+        const auto& range = *type.integer_range;
+        const bool null =
+            range.descending ? range.left < range.right
+                             : range.left > range.right;
+        if (range.left < minimum || range.left > maximum
+            || range.right < minimum || range.right > maximum
+            || null) {
+            diagnostics.push_back({
+                "FSIM-ELAB-INTEGER-002",
+                null
+                    ? "null VHDL integer subtype constraints are not "
+                      "executable in this bounded runtime"
+                    : "VHDL integer subtype constraint lies outside the "
+                      "portable signed 32-bit representation",
+                integer_range_span});
+            type.integer_range.reset();
+        } else {
+            const auto separator = type.spelling.find_last_of('.');
+            const auto simple_name = type.spelling.substr(
+                separator == std::string::npos ? 0 : separator + 1);
+            const auto base_lower =
+                simple_name == "positive"
+                    ? std::int64_t{1}
+                    : simple_name == "natural"
+                        ? std::int64_t{0}
+                        : minimum;
+            const auto lower =
+                std::min(range.left, range.right);
+            if (lower < base_lower) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-INTEGER-002",
+                    "VHDL integer subtype constraint is outside the "
+                    "range of base subtype '" + simple_name + "'",
+                    integer_range_span});
+                type.integer_range.reset();
+            }
+        }
+    }
     if (!type.packed_members.empty()) {
         const bool is_union =
             type.packed_aggregate
@@ -1209,6 +1286,12 @@ void collect_qualified_identifiers(
         collect_qualified_identifiers(
             member.packed_range_expression->right,
             identifiers);
+    }
+    if (type.integer_range_expression) {
+        collect_qualified_identifiers(
+            type.integer_range_expression->left, identifiers);
+        collect_qualified_identifiers(
+            type.integer_range_expression->right, identifiers);
     }
     if (!type.packed_range_expression) {
         return;
@@ -2517,6 +2600,7 @@ public:
         locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
+        local_integer_ranges_.clear();
         local_members_.clear();
         declaration_registers_.clear();
         debug_local_names_.clear();
@@ -2640,6 +2724,7 @@ public:
         locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
+        local_integer_ranges_.clear();
         local_members_.clear();
         declaration_registers_.clear();
         debug_local_names_.clear();
@@ -2661,6 +2746,7 @@ public:
         locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
+        local_integer_ranges_.clear();
         local_members_.clear();
         declaration_registers_.clear();
         debug_local_names_.clear();
@@ -2695,6 +2781,7 @@ public:
         locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
+        local_integer_ranges_.clear();
         local_members_.clear();
         declaration_registers_.clear();
         debug_local_names_.clear();
@@ -2704,6 +2791,54 @@ public:
     }
 
 private:
+    [[nodiscard]] static std::pair<std::int32_t, std::int32_t>
+    integer_bounds(
+        const std::optional<frontend::IntegerRange>& range) {
+        if (!range) {
+            return {
+                std::numeric_limits<std::int32_t>::min(),
+                std::numeric_limits<std::int32_t>::max()};
+        }
+        return {
+            static_cast<std::int32_t>(
+                std::min(range->left, range->right)),
+            static_cast<std::int32_t>(
+                std::max(range->left, range->right))};
+    }
+
+    void emit_integer_check(
+        const RegisterId source,
+        const std::optional<frontend::IntegerRange>& range) {
+        const auto [lower, upper] = integer_bounds(range);
+        process_.operations.emplace_back(
+            IntegerCheck{source, lower, upper});
+    }
+
+    [[nodiscard]] bool validate_static_integer_assignment(
+        const Expression& expression,
+        const std::optional<frontend::IntegerRange>& range,
+        const frontend::SourceSpan& span) {
+        std::string error;
+        const auto value =
+            evaluate_constant_expression(expression, {}, error);
+        if (!value) {
+            return true;
+        }
+        const auto [lower, upper] = integer_bounds(range);
+        if (*value < lower || *value > upper) {
+            report(
+                "FSIM-ELAB-INTEGER-003",
+                "locally static VHDL integer value "
+                    + std::to_string(*value)
+                    + " is outside subtype range "
+                    + std::to_string(lower) + " to "
+                    + std::to_string(upper),
+                span);
+            return false;
+        }
+        return true;
+    }
+
     static bool contains_explicit_wait(
         const std::vector<Statement>& statements) {
         return std::any_of(
@@ -2779,7 +2914,17 @@ private:
                         static_cast<std::uint32_t>(
                             variable.span.begin.line),
                         static_cast<std::uint32_t>(
-                            variable.span.begin.column)}});
+                            variable.span.begin.column)},
+                    {},
+                    {}});
+                if (variable.type.integer_range) {
+                    const auto [lower, upper] =
+                        integer_bounds(variable.type.integer_range);
+                    process_.debug_locals.back().integer_lower =
+                        lower;
+                    process_.debug_locals.back().integer_upper =
+                        upper;
+                }
             } else {
                 register_id = register_found->second;
             }
@@ -2788,6 +2933,8 @@ private:
                 variable.name, variable.type.is_signed);
             local_ranges_.insert_or_assign(
                 variable.name, variable.type.packed_range);
+            local_integer_ranges_.insert_or_assign(
+                variable.name, variable.type.integer_range);
             local_members_.insert_or_assign(
                 variable.name, variable.type.packed_members);
             pending.push_back(Pending{&variable, register_id, *width});
@@ -2795,6 +2942,25 @@ private:
         for (const auto& local : pending) {
             const auto& variable = *local.declaration;
             if (variable.initializer) {
+                if (variable.type.domain
+                        == frontend::ValueDomain::Integer
+                    && !is_integer_expression(
+                        *variable.initializer)) {
+                    report(
+                        "FSIM-ELAB-INTEGER-004",
+                        "VHDL integer local initializer requires an "
+                        "integer-family expression",
+                        variable.span);
+                    continue;
+                }
+                if (variable.type.domain
+                        == frontend::ValueDomain::Integer
+                    && !validate_static_integer_assignment(
+                        *variable.initializer,
+                        variable.type.integer_range,
+                        variable.span)) {
+                    continue;
+                }
                 const auto value =
                     lower_expression(*variable.initializer, local.width);
                 if (!value) {
@@ -2819,6 +2985,11 @@ private:
                         variable.span);
                     continue;
                 }
+                if (variable.type.domain
+                        == frontend::ValueDomain::Integer) {
+                    emit_integer_check(
+                        *value, variable.type.integer_range);
+                }
                 process_.operations.emplace_back(
                     CopyRegister{local.register_id, *value});
                 continue;
@@ -2831,10 +3002,10 @@ private:
             if (variable.type.domain
                     == frontend::ValueDomain::Integer
                 && local.width != 0) {
-                // The bounded base integer range is the portable
-                // two's-complement interval [-2^31, 2^31-1]. VHDL default
-                // initialization selects the subtype's left bound.
-                initial_value.set(local.width - 1U, Logic4::one);
+                initial_value = integer_value(
+                    variable.type.integer_range
+                        ? variable.type.integer_range->left
+                        : std::numeric_limits<std::int32_t>::min());
             }
             process_.operations.emplace_back(
                 LoadConstant{
@@ -2881,6 +3052,7 @@ private:
         auto outer_locals = locals_;
         auto outer_signed = local_signed_;
         auto outer_ranges = local_ranges_;
+        auto outer_integer_ranges = local_integer_ranges_;
         auto outer_members = local_members_;
         local_scope_.push_back(block_scope_name(statement));
         initialize_variables(statement.declarations);
@@ -2889,6 +3061,8 @@ private:
         locals_ = std::move(outer_locals);
         local_signed_ = std::move(outer_signed);
         local_ranges_ = std::move(outer_ranges);
+        local_integer_ranges_ =
+            std::move(outer_integer_ranges);
         local_members_ = std::move(outer_members);
     }
 
@@ -4044,6 +4218,27 @@ private:
                     statement.span);
                 return;
             }
+            if (target_domain == frontend::ValueDomain::Integer
+                && !selected_offset) {
+                if (!is_integer_expression(statement.value)) {
+                    report(
+                        "FSIM-ELAB-INTEGER-004",
+                        "assignment to VHDL integer local '"
+                            + target_name
+                            + "' requires an integer-family expression",
+                        statement.span);
+                    return;
+                }
+                const auto range =
+                    local_integer_ranges_.contains(target_name)
+                        ? local_integer_ranges_.at(target_name)
+                        : std::optional<frontend::IntegerRange>{};
+                if (!validate_static_integer_assignment(
+                        statement.value, range, statement.span)) {
+                    return;
+                }
+                emit_integer_check(*value, range);
+            }
             if (procedural_delay) {
                 emit_debug_point(
                     DebugPointKind::wait, statement.span);
@@ -4098,6 +4293,27 @@ private:
                               "four-/nine-state expression",
                         element.span);
                     return;
+                }
+                if (target_domain
+                        == frontend::ValueDomain::Integer
+                    && !selected_offset) {
+                    if (!is_integer_expression(element.value)) {
+                        report(
+                            "FSIM-ELAB-INTEGER-004",
+                            "VHDL integer waveform for '"
+                                + target_name
+                                + "' requires integer-family expressions",
+                            element.span);
+                        return;
+                    }
+                    const auto& range =
+                        design_.signal_info_[signal->second]
+                            .integer_range;
+                    if (!validate_static_integer_assignment(
+                            element.value, range, element.span)) {
+                        return;
+                    }
+                    emit_integer_check(*value, range);
                 }
                 const auto delay =
                     element.delay ? element.delay->magnitude : 0;
@@ -4178,6 +4394,25 @@ private:
                       "four-/nine-state expression",
                 statement.span);
             return;
+        }
+        if (target_domain == frontend::ValueDomain::Integer
+            && !selected_offset) {
+            if (!is_integer_expression(statement.value)) {
+                report(
+                    "FSIM-ELAB-INTEGER-004",
+                    "assignment to VHDL integer signal '"
+                        + target_name
+                        + "' requires an integer-family expression",
+                    statement.span);
+                return;
+            }
+            const auto& range =
+                design_.signal_info_[signal->second].integer_range;
+            if (!validate_static_integer_assignment(
+                    statement.value, range, statement.span)) {
+                return;
+            }
+            emit_integer_check(*value, range);
         }
         if (procedural_delay
             && statement.assignment_kind == AssignmentKind::Blocking) {
@@ -5317,6 +5552,26 @@ private:
             && expression.operands.size() == 1
             && (expression.text == "+"
                 || expression.text == "-")) {
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.operands[0].kind
+                    == ExpressionKind::IntegerLiteral) {
+                std::string error;
+                const auto value =
+                    evaluate_constant_expression(
+                        expression, {}, error);
+                if (value
+                    && *value
+                        >= std::numeric_limits<std::int32_t>::min()
+                    && *value
+                        <= std::numeric_limits<std::int32_t>::max()) {
+                    const auto destination = allocate_register(
+                        32, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(
+                        LoadConstant{
+                            destination, integer_value(*value)});
+                    return destination;
+                }
+            }
             const auto source_width =
                 infer_width(expression.operands[0])
                     .value_or(expected_width);
@@ -5325,6 +5580,17 @@ private:
                     expression.operands[0], source_width);
             if (!source || expression.text == "+") {
                 return source;
+            }
+            if (language_ == frontend::Language::Vhdl2008
+                && register_domain(*source)
+                    == frontend::ValueDomain::Integer) {
+                const auto destination = allocate_register(
+                    32, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(IntegerUnary{
+                    IntegerUnaryOperator::negate,
+                    destination,
+                    *source});
+                return destination;
             }
             const auto zero = allocate_register(
                 register_width(*source), register_domain(*source));
@@ -5362,6 +5628,16 @@ private:
                 expression.operands[0], source_width);
             if (!source) {
                 return std::nullopt;
+            }
+            if (register_domain(*source)
+                    == frontend::ValueDomain::Integer) {
+                const auto destination = allocate_register(
+                    32, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(IntegerUnary{
+                    IntegerUnaryOperator::absolute,
+                    destination,
+                    *source});
+                return destination;
             }
             const auto zero = allocate_register(
                 register_width(*source), register_domain(*source));
@@ -6109,7 +6385,13 @@ private:
                 return std::nullopt;
             }
             const auto result_domain =
-                is_two_state_domain(register_domain(*when_true))
+                language_ == frontend::Language::Vhdl2008
+                        && is_integer_expression(
+                            expression.operands[1])
+                        && is_integer_expression(
+                            expression.operands[2])
+                    ? frontend::ValueDomain::Integer
+                : is_two_state_domain(register_domain(*when_true))
                         && is_two_state_domain(
                             register_domain(*when_false))
                     ? frontend::ValueDomain::Bit2
@@ -6515,7 +6797,63 @@ private:
             }
             const auto destination =
                 allocate_register(result_width, result_domain);
-            process_.operations.emplace_back(Binary{*operation, destination, *lhs, *rhs});
+            if (result_domain == frontend::ValueDomain::Integer
+                && arithmetic) {
+                if (!validate_static_integer_assignment(
+                        expression.operands[0],
+                        std::nullopt,
+                        expression.operands[0].span)
+                    || !validate_static_integer_assignment(
+                        expression.operands[1],
+                        std::nullopt,
+                        expression.operands[1].span)) {
+                    return std::nullopt;
+                }
+                auto integer_operation =
+                    IntegerBinaryOperator::add;
+                switch (*operation) {
+                case BinaryOperator::add_signed:
+                case BinaryOperator::add_unsigned:
+                    integer_operation = IntegerBinaryOperator::add;
+                    break;
+                case BinaryOperator::subtract_signed:
+                case BinaryOperator::subtract_unsigned:
+                    integer_operation = IntegerBinaryOperator::subtract;
+                    break;
+                case BinaryOperator::multiply_signed:
+                case BinaryOperator::multiply_unsigned:
+                    integer_operation = IntegerBinaryOperator::multiply;
+                    break;
+                case BinaryOperator::power_signed:
+                case BinaryOperator::power_unsigned:
+                    integer_operation = IntegerBinaryOperator::power;
+                    break;
+                case BinaryOperator::divide_signed:
+                case BinaryOperator::divide_unsigned:
+                    integer_operation = IntegerBinaryOperator::divide;
+                    break;
+                case BinaryOperator::remainder_signed:
+                    integer_operation = IntegerBinaryOperator::remainder;
+                    break;
+                case BinaryOperator::modulo_signed:
+                case BinaryOperator::modulo_unsigned:
+                    integer_operation =
+                        expression.text == "rem"
+                            ? IntegerBinaryOperator::remainder
+                            : IntegerBinaryOperator::modulo;
+                    break;
+                default:
+                    break;
+                }
+                process_.operations.emplace_back(IntegerBinary{
+                    integer_operation,
+                    destination,
+                    *lhs,
+                    *rhs});
+            } else {
+                process_.operations.emplace_back(
+                    Binary{*operation, destination, *lhs, *rhs});
+            }
             if (invert_result) {
                 const auto inverted =
                     allocate_register(result_width, result_domain);
@@ -7005,6 +7343,70 @@ private:
         return false;
     }
 
+    [[nodiscard]] bool is_integer_expression(
+        const Expression& expression) const {
+        if (language_ != frontend::Language::Vhdl2008) {
+            return false;
+        }
+        switch (expression.kind) {
+        case ExpressionKind::IntegerLiteral:
+            return true;
+        case ExpressionKind::Identifier:
+            if (const auto local = locals_.find(expression.text);
+                local != locals_.end()) {
+                return register_domain(local->second)
+                    == frontend::ValueDomain::Integer;
+            }
+            if (const auto signal = signals_.find(expression.text);
+                signal != signals_.end()) {
+                return design_.signal_info_[signal->second]
+                           .source_domain
+                    == frontend::ValueDomain::Integer;
+            }
+            return false;
+        case ExpressionKind::Unary:
+            return expression.operands.size() == 1
+                && (expression.text == "+"
+                    || expression.text == "-"
+                    || expression.text == "abs")
+                && is_integer_expression(
+                    expression.operands.front());
+        case ExpressionKind::Binary:
+            return expression.operands.size() == 2
+                && (expression.text == "+"
+                    || expression.text == "-"
+                    || expression.text == "*"
+                    || expression.text == "/"
+                    || expression.text == "mod"
+                    || expression.text == "rem"
+                    || expression.text == "**")
+                && is_integer_expression(expression.operands[0])
+                && is_integer_expression(expression.operands[1]);
+        case ExpressionKind::Call:
+            if (expression.text == "?:"
+                && expression.operands.size() == 3) {
+                return is_integer_expression(expression.operands[1])
+                    && is_integer_expression(expression.operands[2]);
+            }
+            return expression.text == "'left"
+                || expression.text == "'right"
+                || expression.text == "'low"
+                || expression.text == "'high"
+                || expression.text == "'length"
+                || expression.text == "'last_event";
+        case ExpressionKind::BooleanLiteral:
+        case ExpressionKind::LogicLiteral:
+        case ExpressionKind::StringLiteral:
+        case ExpressionKind::Index:
+        case ExpressionKind::Slice:
+        case ExpressionKind::Concatenation:
+        case ExpressionKind::Replication:
+        case ExpressionKind::Invalid:
+            return false;
+        }
+        return false;
+    }
+
     void collect_identifiers(
         const Expression& expression,
         std::set<std::string>& output) const {
@@ -7136,6 +7538,9 @@ private:
     std::unordered_map<
         std::string, std::optional<frontend::PackedRange>>
         local_ranges_;
+    std::unordered_map<
+        std::string, std::optional<frontend::IntegerRange>>
+        local_integer_ranges_;
     std::unordered_map<
         std::string, std::vector<frontend::PackedMember>>
         local_members_;
@@ -8658,6 +9063,7 @@ private:
             declaration.type.is_signed,
             declaration.type.packed_range,
             declaration.type.packed_members,
+            declaration.type.integer_range,
             declaration.is_port,
             declaration.direction,
             declaration.span});
@@ -8687,9 +9093,10 @@ private:
         if (declaration.type.domain
                 == frontend::ValueDomain::Integer
             && width != 0) {
-            initial_value.set(
-                static_cast<std::size_t>(width - 1U),
-                Logic4::one);
+            initial_value = integer_value(
+                declaration.type.integer_range
+                    ? declaration.type.integer_range->left
+                    : std::numeric_limits<std::int32_t>::min());
         }
         design_.signals_.push_back(
             {full_name, std::move(initial_value)});
@@ -8801,6 +9208,47 @@ private:
                 "FSIM-ELAB-BIND-021",
                 "signedness mismatch on '" + path + "." + port.name + "'",
                 source);
+        }
+        if (port.type.domain == frontend::ValueDomain::Integer
+            || actual.source_domain
+                == frontend::ValueDomain::Integer) {
+            const auto bounds =
+                [](const std::optional<frontend::IntegerRange>& range) {
+                    if (!range) {
+                        return std::pair{
+                            std::numeric_limits<std::int32_t>::min(),
+                            std::numeric_limits<std::int32_t>::max()};
+                    }
+                    return std::pair{
+                        static_cast<std::int32_t>(
+                            std::min(range->left, range->right)),
+                        static_cast<std::int32_t>(
+                            std::max(range->left, range->right))};
+                };
+            const auto port_bounds =
+                bounds(port.type.integer_range);
+            const auto actual_bounds =
+                bounds(actual.integer_range);
+            const auto contains =
+                [](const auto& outer, const auto& inner) {
+                    return outer.first <= inner.first
+                        && outer.second >= inner.second;
+                };
+            const bool compatible =
+                port.direction == frontend::PortDirection::Input
+                    ? contains(port_bounds, actual_bounds)
+                    : port.direction
+                              == frontend::PortDirection::Output
+                        ? contains(actual_bounds, port_bounds)
+                        : port_bounds == actual_bounds;
+            if (!compatible) {
+                report(
+                    "FSIM-ELAB-BIND-051",
+                    "integer subtype ranges on boundary '" + path + "."
+                        + port.name
+                        + "' cannot guarantee a range-safe alias",
+                    source);
+            }
         }
         const auto lossy_into_two_state =
             [](const frontend::ValueDomain destination,

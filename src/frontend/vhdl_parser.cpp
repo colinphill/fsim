@@ -578,7 +578,7 @@ class VhdlParser final : private detail::ParserBase {
 
   Type parse_vhdl_type(
       const bool allow_integer = false,
-      const bool runtime_base_integer_only = false) {
+      const bool /*runtime_base_integer_only*/ = false) {
     const auto first = expect_identifier("subtype indication");
     std::string spelling = vhdl_name(first.text);
     while (match(TokenKind::Dot)) {
@@ -607,7 +607,17 @@ class VhdlParser final : private detail::ParserBase {
     } else if (simple_name == "integer" || simple_name == "natural" ||
                simple_name == "positive") {
       type.domain = ValueDomain::Integer;
-      type.is_signed = simple_name == "integer";
+      type.is_signed = true;
+      constexpr auto integer_first =
+          std::int64_t{std::numeric_limits<std::int32_t>::min()};
+      constexpr auto integer_last =
+          std::int64_t{std::numeric_limits<std::int32_t>::max()};
+      type.integer_range = IntegerRange{
+          simple_name == "integer"
+              ? integer_first
+              : simple_name == "natural" ? 0 : 1,
+          integer_last,
+          false};
     }
     if (type.domain == ValueDomain::Unknown) {
       error(
@@ -617,23 +627,50 @@ class VhdlParser final : private detail::ParserBase {
               + "' requires semantic type resolution that is not "
                 "implemented in this frontend slice");
     } else if (
-        type.domain == ValueDomain::Integer
-        && (!allow_integer
-            || (runtime_base_integer_only
-                && simple_name != "integer"))) {
+        type.domain == ValueDomain::Integer && !allow_integer) {
       error(
           first,
           "FSIM-VHDL-UNSUPPORTED-014",
-          !allow_integer
-              ? "VHDL integer-family objects are parsed but not executable "
-                "in this frontend slice"
-              : "only the base VHDL integer subtype is executable for "
-                "runtime objects; natural/positive range enforcement is "
-                "not implemented");
+          "VHDL integer-family objects are parsed but not executable "
+          "in this frontend slice");
     }
 
-    if (match(TokenKind::LeftParen)) {
+    if (type.domain == ValueDomain::Integer
+        && match_keyword("range", true)) {
       const auto range_start = previous();
+      auto left_expression = parse_expression();
+      bool descending = false;
+      if (match_keyword("downto", true)) {
+        descending = true;
+      } else if (!match_keyword("to", true)) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-009",
+            "expected 'to' or 'downto' in integer subtype constraint");
+      }
+      auto right_expression = parse_expression();
+      const auto left = simple_integer_constant(left_expression);
+      const auto right = simple_integer_constant(right_expression);
+      if (left && right) {
+        type.integer_range =
+            IntegerRange{*left, *right, descending};
+      } else {
+        type.integer_range.reset();
+      }
+      type.integer_range_expression = IntegerRangeExpression{
+          std::move(left_expression),
+          std::move(right_expression),
+          cover(range_start.span, previous().span),
+          descending};
+    } else if (match(TokenKind::LeftParen)) {
+      const auto range_start = previous();
+      if (type.domain == ValueDomain::Integer) {
+        error(
+            range_start,
+            "FSIM-VHDL-PARSE-009",
+            "an integer subtype constraint uses 'range', not a packed "
+            "parenthesized range");
+      }
       auto left_expression = parse_expression();
       bool descending = true;
       if (match_keyword("downto", true)) {

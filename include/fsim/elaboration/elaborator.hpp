@@ -170,6 +170,7 @@ struct SignalInfo {
     bool is_signed{};
     std::optional<frontend::PackedRange> packed_range;
     std::vector<frontend::PackedMember> packed_members;
+    std::optional<frontend::IntegerRange> integer_range;
     bool is_port{};
     frontend::PortDirection direction{frontend::PortDirection::Unknown};
     frontend::SourceSpan declaration_span;

@@ -241,7 +241,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-011` | error | Port default expressions are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-013` | error | A subtype requires semantic type resolution not implemented in this slice. |
-| `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family runtime object is outside the executable base-`integer` slice; `natural`/`positive` range enforcement remains unsupported. |
+| `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family subtype appears in a declaration context that does not yet admit scalar integer objects. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
@@ -626,6 +626,10 @@ therefore excluded.
 | `FSIM-ELAB-DRV-002` | error | A wired-AND or wired-OR net requires an unsupported resolution policy. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
+| `FSIM-ELAB-INTEGER-001` | error | A specialization-dependent VHDL integer subtype constraint cannot be evaluated. |
+| `FSIM-ELAB-INTEGER-002` | error | A VHDL integer subtype constraint is null, outside its named base subtype, or outside fsim's portable signed 32-bit representation. |
+| `FSIM-ELAB-INTEGER-003` | error | A locally static VHDL integer value lies outside its assignment target's concrete subtype range. |
+| `FSIM-ELAB-INTEGER-004` | error | A VHDL integer-family target is assigned a packed or otherwise noninteger expression without explicit conversion. |
 | `FSIM-ELAB-GEN-001` | error | A conditional-generate expression cannot be evaluated for its specialization. |
 | `FSIM-ELAB-GEN-002` | error | A loop-generate initial value cannot be evaluated for its specialization. |
 | `FSIM-ELAB-GEN-003` | error | A loop-generate continuation condition cannot be evaluated. |
@@ -738,6 +742,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-048` | error | A typed SystemC export is unbound, cyclic, references an unknown object, or conflicts with another hierarchy alias. |
 | `FSIM-ELAB-BIND-049` | error | A packed aggregate crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-050` | error | An elaboration binding names a resolver other than `std_logic` or `sv_wire`. |
+| `FSIM-ELAB-BIND-051` | error | Integer subtype ranges on a hierarchy boundary cannot guarantee a range-safe alias in the port's data-flow direction. |
 
 ## Time, runtime, trace, and design cache
 

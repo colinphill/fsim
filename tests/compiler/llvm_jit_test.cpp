@@ -1282,6 +1282,175 @@ void test_control_flow_at_level(const JitOptimizationLevel optimization,
   }
 }
 
+void test_checked_integer_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol_prefix) {
+  const auto integer = [](const std::int32_t value) {
+    return PackedLogic4::from_aval_bval(
+        32,
+        static_cast<std::uint32_t>(value),
+        0);
+  };
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+
+  Process success;
+  success.id = 31;
+  success.name = "checked_integer_success";
+  success.register_count = 7;
+  success.operations = {
+      LoadConstant{0, integer(-5)},
+      LoadConstant{1, integer(3)},
+      IntegerBinary{IntegerBinaryOperator::add, 2, 0, 1},
+      IntegerBinary{IntegerBinaryOperator::modulo, 3, 0, 1},
+      IntegerBinary{IntegerBinaryOperator::remainder, 4, 0, 1},
+      IntegerUnary{IntegerUnaryOperator::absolute, 5, 0},
+      IntegerBinary{IntegerBinaryOperator::power, 6, 1, 1},
+      IntegerCheck{2, -2, 2},
+      WriteBlocking{0, 2},
+      WriteBlocking{1, 3},
+      WriteBlocking{2, 4},
+      WriteBlocking{3, 5},
+      WriteBlocking{4, 6},
+      Halt{}};
+  const auto success_symbol =
+      std::string{symbol_prefix} + "_success";
+  const std::array<std::uint32_t, 5> output_widths{
+      32, 32, 32, 32, 32};
+  jit.add_process(success_symbol, success, output_widths);
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(jit.lookup(success_symbol), descriptor)
+      == JitExecutionStatus::completed);
+  const std::array<std::int32_t, 5> expected{
+      -2, 1, -2, 5, 27};
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    assert((
+        runtime.signals[index]
+        == EncodedSignal{
+            static_cast<std::uint32_t>(expected[index]), 0}));
+  }
+
+  const auto add_failure =
+      [&](const std::string_view suffix,
+          std::vector<Operation> operations,
+          const std::uint32_t instruction,
+          const JitGeneratedRuntimeErrorReason reason,
+          const std::string_view message) {
+        Process process;
+        process.id = 32;
+        process.name = "checked_integer_failure";
+        process.register_count = 4;
+        process.operations = std::move(operations);
+        const auto symbol =
+            std::string{symbol_prefix} + "_" + std::string{suffix};
+        jit.add_process(symbol, process, {});
+        TestRuntime failed_runtime;
+        auto failed_descriptor = abi(failed_runtime);
+        const auto handle = jit.lookup(symbol);
+        expect_generated_runtime_error(
+            [&] {
+              (void)jit.execute(
+                  handle, failed_descriptor);
+            },
+            instruction,
+            reason,
+            message);
+        const auto layout = jit.frame_layout(handle);
+        std::vector<std::uint64_t> aval(layout.register_count);
+        std::vector<std::uint64_t> bval(layout.register_count);
+        std::vector<std::uint8_t> initialized(
+            layout.register_count);
+        fsim_jit_frame_v1 frame{};
+        jit.initialize_frame(
+            handle, frame, aval, bval, initialized);
+        auto resume_result = new_resume_result();
+        expect_generated_runtime_error(
+            [&] {
+              (void)jit.resume(
+                  handle,
+                  failed_descriptor,
+                  frame,
+                  resume_result);
+            },
+            instruction,
+            reason,
+            message);
+        assert(
+            resume_result.status
+            == FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR);
+        assert(
+            resume_result.delay
+            == static_cast<std::uint64_t>(reason));
+        assert(
+            frame.state
+            == FSIM_JIT_FRAME_STATE_RUNTIME_ERROR);
+        expect_generated_runtime_error(
+            [&] {
+              (void)jit.resume(
+                  handle,
+                  failed_descriptor,
+                  frame,
+                  resume_result);
+            },
+            instruction,
+            reason,
+            message);
+      };
+  add_failure(
+      "overflow",
+      {
+          LoadConstant{
+              0, integer(std::numeric_limits<std::int32_t>::max())},
+          LoadConstant{1, integer(1)},
+          IntegerBinary{IntegerBinaryOperator::add, 2, 0, 1},
+          Halt{}},
+      2,
+      JitGeneratedRuntimeErrorReason::integer_overflow,
+      "instruction 2: VHDL integer arithmetic overflow");
+  add_failure(
+      "division_zero",
+      {
+          LoadConstant{0, integer(7)},
+          LoadConstant{1, integer(0)},
+          IntegerBinary{IntegerBinaryOperator::divide, 2, 0, 1},
+          Halt{}},
+      2,
+      JitGeneratedRuntimeErrorReason::integer_division_by_zero,
+      "instruction 2: VHDL integer division by zero");
+  add_failure(
+      "negative_exponent",
+      {
+          LoadConstant{0, integer(2)},
+          LoadConstant{1, integer(-1)},
+          IntegerBinary{IntegerBinaryOperator::power, 2, 0, 1},
+          Halt{}},
+      2,
+      JitGeneratedRuntimeErrorReason::integer_negative_exponent,
+      "instruction 2: VHDL integer exponent must be nonnegative");
+  add_failure(
+      "range",
+      {
+          LoadConstant{0, integer(8)},
+          IntegerCheck{0, -5, 7},
+          Halt{}},
+      1,
+      JitGeneratedRuntimeErrorReason::integer_subtype_range,
+      "instruction 1: VHDL integer subtype range check failed");
+  auto unknown = integer(0);
+  unknown.set(7, Logic4::x);
+  add_failure(
+      "unknown",
+      {
+          LoadConstant{0, std::move(unknown)},
+          IntegerUnary{IntegerUnaryOperator::absolute, 1, 0},
+          Halt{}},
+      1,
+      JitGeneratedRuntimeErrorReason::integer_operand_unknown,
+      "instruction 1: VHDL integer operand contains an unknown or "
+      "high-impedance value");
+}
+
 [[nodiscard]] Process make_resumable_process() {
   Process process;
   process.id = 0;
@@ -3874,6 +4043,54 @@ void test_signed_shift_cache_identity(
   assert(cached_object_paths(cache_directory).size() == 2);
 }
 
+void test_integer_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol{"cached_integer"};
+  const std::array<std::uint32_t, 1> widths{32};
+  const auto integer = [](const std::int32_t value) {
+    return PackedLogic4::from_aval_bval(
+        32, static_cast<std::uint32_t>(value), 0);
+  };
+  const auto run =
+      [&](const IntegerBinaryOperator operation,
+          const std::int32_t lower,
+          const std::int32_t upper,
+          const std::int32_t expected,
+          const std::size_t hits,
+          const std::size_t misses) {
+        Process process;
+        process.id = 33;
+        process.name = "cached_integer";
+        process.register_count = 3;
+        process.operations = {
+            LoadConstant{0, integer(3)},
+            LoadConstant{1, integer(2)},
+            IntegerBinary{operation, 2, 0, 1},
+            IntegerCheck{2, lower, upper},
+            WriteBlocking{0, 2},
+            Halt{}};
+        LlvmJit jit{
+            LlvmJitOptions{
+                JitOptimizationLevel::o2, cache_directory}};
+        jit.add_process(symbol, process, widths);
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        assert(
+            jit.execute(jit.lookup(symbol), descriptor)
+            == JitExecutionStatus::completed);
+        assert((
+            runtime.signals[0]
+            == EncodedSignal{
+                static_cast<std::uint32_t>(expected), 0}));
+        expect_cache_statistics(jit, hits, misses, misses);
+      };
+  run(IntegerBinaryOperator::add, -5, 7, 5, 0, 1);
+  run(IntegerBinaryOperator::add, -5, 7, 5, 1, 0);
+  run(IntegerBinaryOperator::subtract, -5, 7, 1, 0, 1);
+  run(IntegerBinaryOperator::add, -5, 8, 5, 0, 1);
+  assert(cached_object_paths(cache_directory).size() == 3);
+}
+
 void test_persistent_object_cache() {
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -3896,6 +4113,7 @@ void test_persistent_object_cache() {
   test_projected_waveform_cache_identity(
       root / "projected-waveform");
   test_signed_shift_cache_identity(root / "signed-shift");
+  test_integer_cache_identity(root / "integer");
 
   std::filesystem::remove_all(root, error);
   assert(!error);
@@ -3905,6 +4123,41 @@ void test_rejections() {
   LlvmJit jit;
   const std::array<std::uint32_t, 1> one_signal{1};
   const std::array<std::uint32_t, 0> no_signals{};
+
+  Process inverted_integer_check;
+  inverted_integer_check.name = "inverted_integer_check";
+  inverted_integer_check.register_count = 1;
+  inverted_integer_check.operations = {
+      LoadConstant{
+          0,
+          PackedLogic4::from_aval_bval(32, 0, 0)},
+      IntegerCheck{0, 2, -2},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "inverted_integer_check",
+            inverted_integer_check,
+            no_signals);
+      },
+      "IntegerCheck has an inverted range");
+
+  Process narrow_integer_operation;
+  narrow_integer_operation.name = "narrow_integer_operation";
+  narrow_integer_operation.register_count = 3;
+  narrow_integer_operation.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("00000001")},
+      LoadConstant{1, PackedLogic4::from_msb_string("00000010")},
+      IntegerBinary{IntegerBinaryOperator::add, 2, 0, 1},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "narrow_integer_operation",
+            narrow_integer_operation,
+            no_signals);
+      },
+      "width constraints are inconsistent");
 
   const auto projected_process =
       [](const ProjectedDelayMode mode,
@@ -4683,6 +4936,10 @@ int main() {
   test_debug_point_instrumentation();
   test_control_flow_at_level(JitOptimizationLevel::o0, "control_flow_o0");
   test_control_flow_at_level(JitOptimizationLevel::o2, "control_flow_o2");
+  test_checked_integer_at_level(
+      JitOptimizationLevel::o0, "checked_integer_o0");
+  test_checked_integer_at_level(
+      JitOptimizationLevel::o2, "checked_integer_o2");
   test_scheduled_callbacks_at_level(
       JitOptimizationLevel::o0, "scheduled_o0");
   test_scheduled_callbacks_at_level(

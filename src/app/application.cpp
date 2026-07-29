@@ -226,6 +226,37 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
                 process_.id,
                 error.instruction(),
                 "branch condition is unknown or high impedance");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              integer_operand_unknown:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "VHDL integer operand contains an unknown or "
+                "high-impedance value");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              integer_overflow:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "VHDL integer arithmetic overflow");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              integer_division_by_zero:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "VHDL integer division by zero");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              integer_negative_exponent:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "VHDL integer exponent must be nonnegative");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              integer_subtype_range:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "VHDL integer subtype range check failed");
         }
         throw;
       } catch (...) {

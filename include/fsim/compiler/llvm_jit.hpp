@@ -112,6 +112,11 @@ public:
 
 enum class JitGeneratedRuntimeErrorReason : std::uint8_t {
   unknown_branch_condition,
+  integer_operand_unknown,
+  integer_overflow,
+  integer_division_by_zero,
+  integer_negative_exponent,
+  integer_subtype_range,
 };
 
 /// A failure deliberately reported by generated SimIR code.

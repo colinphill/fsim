@@ -184,10 +184,11 @@ The current tree contains:
 - VHDL packed `sll`/`srl`/`sla`/`sra` shifts and `rol`/`ror` rotates for
   locally static or dynamic base-`integer` counts, including standard
   negative-count direction reversal and four-state arithmetic fill;
-- bounded signed 32-bit two-state VHDL base-`integer` ports, signals, and
-  process variables with compatible hierarchy aliases and in-range
-  arithmetic; checked overflow and constrained integer subtypes remain
-  pending;
+- bounded signed 32-bit two-state VHDL `integer`, `natural`, `positive`, and
+  explicit `integer range ... to|downto ...` ports, signals, and process
+  variables, with subtype-left initialization, range-safe hierarchy aliases,
+  and checked unary/arithmetic/division/power/subtype-store failures shared by
+  the interpreter and LLVM O0/O2;
 - declared-range-aware SystemVerilog constant bit/part selects and packed
   concatenations, including ascending and non-zero-based source ranges;
 - declared-range-aware VHDL indexed names/slices and correct width-summing

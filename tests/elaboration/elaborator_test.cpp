@@ -3122,6 +3122,36 @@ endmodule
         rejected_lossy_integer_boundary,
         "FSIM-ELAB-BIND-022"));
 
+    const auto unsafe_integer_alias =
+        fsim::frontend::parse_text(
+            "unsafe_integer_alias.vhd",
+            R"(
+entity positive_child is
+  port (value : in positive);
+end entity;
+architecture rtl of positive_child is
+begin
+end architecture;
+
+entity unsafe_integer_alias is
+end entity;
+architecture rtl of unsafe_integer_alias is
+  signal source : integer;
+begin
+  child: positive_child port map (value => source);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(unsafe_integer_alias.ok());
+    const auto rejected_integer_alias =
+        fsim::elaboration::elaborate(
+            unsafe_integer_alias.design,
+            "vhdl:work.unsafe_integer_alias(rtl)");
+    assert(!rejected_integer_alias.ok());
+    assert(has_diagnostic(
+        rejected_integer_alias,
+        "FSIM-ELAB-BIND-051"));
+
     const auto struct_boundary_sv =
         fsim::frontend::parse_text(
             "struct_boundary.sv",
@@ -7074,11 +7104,17 @@ entity dynamic_vhdl_shift is
 end entity;
 
 architecture rtl of dynamic_vhdl_shift is
+  signal natural_value : natural;
+  signal positive_value : positive;
+  signal constrained_value : integer range -3 to 4;
+  signal reverse_value : integer range 3 downto -2;
 begin
   calculate: process(value, count)
     variable adjusted : integer := -1;
+    variable bounded : integer range -2 to 2 := -2;
   begin
     adjusted := count + 1;
+    bounded := adjusted mod 3;
     integer_result <= abs adjusted;
     logical_left <= value sll count;
     logical_right <= value srl count;
@@ -7109,6 +7145,14 @@ end architecture;
         dynamic_design.find_signal("count");
     const auto dynamic_value =
         dynamic_design.find_signal("value");
+    const auto natural_value =
+        dynamic_design.find_signal("natural_value");
+    const auto positive_value =
+        dynamic_design.find_signal("positive_value");
+    const auto constrained_value =
+        dynamic_design.find_signal("constrained_value");
+    const auto reverse_value =
+        dynamic_design.find_signal("reverse_value");
     const std::array dynamic_outputs{
         dynamic_design.find_signal("logical_left"),
         dynamic_design.find_signal("logical_right"),
@@ -7117,7 +7161,9 @@ end architecture;
         dynamic_design.find_signal("rotate_left"),
         dynamic_design.find_signal("rotate_right"),
         dynamic_design.find_signal("integer_result")};
-    assert(dynamic_count && dynamic_value);
+    assert(
+        dynamic_count && dynamic_value && natural_value
+        && positive_value && constrained_value && reverse_value);
     assert(std::ranges::all_of(
         dynamic_outputs,
         [](const auto& signal) {
@@ -7130,6 +7176,26 @@ end architecture;
         count_info.source_domain
         == fsim::frontend::ValueDomain::Integer);
     assert(count_info.is_signed);
+    const auto& natural_info =
+        dynamic_design.signals().at(*natural_value);
+    const auto& positive_info =
+        dynamic_design.signals().at(*positive_value);
+    const auto& constrained_info =
+        dynamic_design.signals().at(*constrained_value);
+    const auto& reverse_info =
+        dynamic_design.signals().at(*reverse_value);
+    assert(
+        natural_info.integer_range
+        && natural_info.integer_range->left == 0
+        && positive_info.integer_range
+        && positive_info.integer_range->left == 1
+        && constrained_info.integer_range
+        && constrained_info.integer_range->left == -3
+        && constrained_info.integer_range->right == 4
+        && reverse_info.integer_range
+        && reverse_info.integer_range->left == 3
+        && reverse_info.integer_range->right == -2
+        && reverse_info.integer_range->descending);
     assert(dynamic_design.processes().size() == 1);
     const auto signed_shift_count = std::ranges::count_if(
         dynamic_design.processes().front().operations,
@@ -7140,9 +7206,69 @@ end architecture;
           return shift != nullptr && shift->signed_amount;
         });
     assert(signed_shift_count == 6);
+    assert(
+        std::ranges::count_if(
+            dynamic_design.processes().front().operations,
+            [](const auto& operation) {
+              return std::holds_alternative<
+                  fsim::runtime::simir::IntegerCheck>(
+                  operation);
+            })
+        >= 4);
+    assert(std::ranges::any_of(
+        dynamic_design.processes().front().operations,
+        [](const auto& operation) {
+          const auto* binary =
+              std::get_if<
+                  fsim::runtime::simir::IntegerBinary>(
+                  &operation);
+          return binary != nullptr
+              && binary->operation
+                  == fsim::runtime::simir::
+                      IntegerBinaryOperator::add;
+        }));
+    assert(std::ranges::any_of(
+        dynamic_design.processes().front().operations,
+        [](const auto& operation) {
+          return std::holds_alternative<
+              fsim::runtime::simir::IntegerUnary>(
+              operation);
+        }));
+    assert(
+        dynamic_design.processes().front().debug_locals.size() == 2
+        && dynamic_design.processes().front()
+               .debug_locals[1].integer_lower
+        && *dynamic_design.processes().front()
+                .debug_locals[1].integer_lower
+            == -2
+        && dynamic_design.processes().front()
+               .debug_locals[1].integer_upper
+        && *dynamic_design.processes().front()
+                .debug_locals[1].integer_upper
+            == 2);
 
     auto dynamic_interpreter =
         dynamic_design.create_interpreter();
+    assert(
+        dynamic_interpreter
+            ->signal_value(*natural_value)
+            .to_msb_string()
+        == "00000000000000000000000000000000");
+    assert(
+        dynamic_interpreter
+            ->signal_value(*positive_value)
+            .to_msb_string()
+        == "00000000000000000000000000000001");
+    assert(
+        dynamic_interpreter
+            ->signal_value(*constrained_value)
+            .to_msb_string()
+        == "11111111111111111111111111111101");
+    assert(
+        dynamic_interpreter
+            ->signal_value(*reverse_value)
+            .to_msb_string()
+        == "00000000000000000000000000000011");
     assert(
         dynamic_interpreter
             ->signal_value(*dynamic_count)
@@ -7226,6 +7352,71 @@ end architecture;
     assert(!rejected_vhdl_abs.ok());
     assert(has_diagnostic(
         rejected_vhdl_abs, "FSIM-ELAB-082"));
+
+    const auto generic_integer_constraint =
+        fsim::frontend::parse_text(
+            "generic_integer_constraint.vhd",
+            R"(
+entity generic_integer_constraint is
+  generic (limit : natural := 4);
+  port (value : out integer range -limit to limit);
+end entity;
+architecture rtl of generic_integer_constraint is
+begin
+  value <= limit;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(generic_integer_constraint.ok());
+    const auto elaborated_integer_constraint =
+        fsim::elaboration::elaborate(
+            generic_integer_constraint.design,
+            "vhdl:work.generic_integer_constraint(rtl)");
+    assert(elaborated_integer_constraint.ok());
+    const auto generic_value =
+        elaborated_integer_constraint.design->find_signal("value");
+    assert(generic_value);
+    const auto& generic_value_info =
+        elaborated_integer_constraint.design
+            ->signals().at(*generic_value);
+    assert(
+        generic_value_info.integer_range
+        && generic_value_info.integer_range->left == -4
+        && generic_value_info.integer_range->right == 4);
+
+    const auto invalid_integer_constraints =
+        fsim::frontend::parse_text(
+            "invalid_integer_constraints.vhd",
+            R"(
+entity invalid_integer_constraints is
+end entity;
+architecture rtl of invalid_integer_constraints is
+  signal outside_base : natural range -1 to 2;
+  signal null_range : integer range 3 to -2;
+  signal assigned : positive;
+  signal bits : bit_vector(31 downto 0);
+  signal integer_target : integer;
+begin
+  assigned <= 0;
+  integer_target <= bits;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_integer_constraints.ok());
+    const auto rejected_integer_constraints =
+        fsim::elaboration::elaborate(
+            invalid_integer_constraints.design,
+            "vhdl:work.invalid_integer_constraints(rtl)");
+    assert(!rejected_integer_constraints.ok());
+    assert(has_diagnostic(
+        rejected_integer_constraints,
+        "FSIM-ELAB-INTEGER-002"));
+    assert(has_diagnostic(
+        rejected_integer_constraints,
+        "FSIM-ELAB-INTEGER-003"));
+    assert(has_diagnostic(
+        rejected_integer_constraints,
+        "FSIM-ELAB-INTEGER-004"));
 
     const auto mixed_vhdl_arithmetic =
         fsim::frontend::parse_text(

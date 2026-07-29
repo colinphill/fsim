@@ -61,6 +61,11 @@ using runtime::simir::FormatDisplay;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
 using runtime::simir::Insert;
+using runtime::simir::IntegerBinary;
+using runtime::simir::IntegerBinaryOperator;
+using runtime::simir::IntegerCheck;
+using runtime::simir::IntegerUnary;
+using runtime::simir::IntegerUnaryOperator;
 using runtime::simir::Jump;
 using runtime::simir::LoadConstant;
 using runtime::simir::LogicalBinary;
@@ -128,7 +133,7 @@ using NativeProcess = fsim_jit_process_v1;
 }
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v16";
+    "fsim-llvm-native-object-v17";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -365,6 +370,16 @@ template <typename T>
   switch (reason) {
   case JitGeneratedRuntimeErrorReason::unknown_branch_condition:
     return "branch condition is unknown or high impedance";
+  case JitGeneratedRuntimeErrorReason::integer_operand_unknown:
+    return "VHDL integer operand contains an unknown or high-impedance value";
+  case JitGeneratedRuntimeErrorReason::integer_overflow:
+    return "VHDL integer arithmetic overflow";
+  case JitGeneratedRuntimeErrorReason::integer_division_by_zero:
+    return "VHDL integer division by zero";
+  case JitGeneratedRuntimeErrorReason::integer_negative_exponent:
+    return "VHDL integer exponent must be nonnegative";
+  case JitGeneratedRuntimeErrorReason::integer_subtype_range:
+    return "VHDL integer subtype range check failed";
   }
   return "unknown generated runtime error";
 }
@@ -375,6 +390,22 @@ template <typename T>
   return "generated SimIR process, instruction " +
          std::to_string(instruction) + ": " +
          std::string{generated_runtime_error_reason(reason)};
+}
+
+[[nodiscard]] std::optional<JitGeneratedRuntimeErrorReason>
+decode_generated_runtime_error(const std::uint64_t value) noexcept {
+  const auto reason =
+      static_cast<JitGeneratedRuntimeErrorReason>(value);
+  switch (reason) {
+  case JitGeneratedRuntimeErrorReason::unknown_branch_condition:
+  case JitGeneratedRuntimeErrorReason::integer_operand_unknown:
+  case JitGeneratedRuntimeErrorReason::integer_overflow:
+  case JitGeneratedRuntimeErrorReason::integer_division_by_zero:
+  case JitGeneratedRuntimeErrorReason::integer_negative_exponent:
+  case JitGeneratedRuntimeErrorReason::integer_subtype_range:
+    return reason;
+  }
+  return std::nullopt;
 }
 
 [[noreturn]] void reject(const Process &process, const std::size_t instruction,
@@ -842,6 +873,52 @@ validate_process(const Process &process,
               } else {
                 unify_registers(operation.destination, operation.lhs, index);
               }
+            },
+            [&](const IntegerUnary& operation) {
+              switch (operation.operation) {
+              case IntegerUnaryOperator::negate:
+              case IntegerUnaryOperator::absolute:
+                break;
+              default:
+                reject(
+                    process, index,
+                    "IntegerUnary has an invalid operator");
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              constrain_width(operation.destination, 32U, index);
+              constrain_width(operation.source, 32U, index);
+            },
+            [&](const IntegerBinary& operation) {
+              switch (operation.operation) {
+              case IntegerBinaryOperator::add:
+              case IntegerBinaryOperator::subtract:
+              case IntegerBinaryOperator::multiply:
+              case IntegerBinaryOperator::power:
+              case IntegerBinaryOperator::divide:
+              case IntegerBinaryOperator::remainder:
+              case IntegerBinaryOperator::modulo:
+                break;
+              default:
+                reject(
+                    process, index,
+                    "IntegerBinary has an invalid operator");
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.lhs, index);
+              record_use(operation.rhs, index);
+              constrain_width(operation.destination, 32U, index);
+              constrain_width(operation.lhs, 32U, index);
+              constrain_width(operation.rhs, 32U, index);
+            },
+            [&](const IntegerCheck& operation) {
+              if (operation.lower > operation.upper) {
+                reject(
+                    process, index,
+                    "IntegerCheck has an inverted range");
+              }
+              record_use(operation.source, index);
+              constrain_width(operation.source, 32U, index);
             },
             [&](const ConditionalSelect& operation) {
               record_definition(operation.destination, index);
@@ -1751,6 +1828,37 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "lhs", value.lhs);
               add_key_u64(builder, "rhs", value.rhs);
+            },
+            [&](const IntegerUnary& value) {
+              builder.add("operation", "IntegerUnary");
+              add_key_u64(
+                  builder, "integer-unary-operator",
+                  static_cast<
+                      std::underlying_type_t<IntegerUnaryOperator>>(
+                      value.operation));
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const IntegerBinary& value) {
+              builder.add("operation", "IntegerBinary");
+              add_key_u64(
+                  builder, "integer-binary-operator",
+                  static_cast<
+                      std::underlying_type_t<IntegerBinaryOperator>>(
+                      value.operation));
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "lhs", value.lhs);
+              add_key_u64(builder, "rhs", value.rhs);
+            },
+            [&](const IntegerCheck& value) {
+              builder.add("operation", "IntegerCheck");
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder, "lower",
+                  static_cast<std::uint32_t>(value.lower));
+              add_key_u64(
+                  builder, "upper",
+                  static_cast<std::uint32_t>(value.upper));
             },
             [&](const ConditionalSelect& value) {
               builder.add("operation", "ConditionalSelect");
@@ -3202,6 +3310,31 @@ void lower_process(llvm::Module &module, const std::string &symbol,
     const auto branch_to_next = [&] {
       builder.CreateBr(instruction_blocks[index + 1]);
     };
+    const auto runtime_error_if =
+        [&](llvm::Value* condition,
+            const JitGeneratedRuntimeErrorReason reason,
+            const std::string_view label) {
+          auto* error_block = llvm::BasicBlock::Create(
+              context,
+              std::string{label} + ".error."
+                  + std::to_string(index),
+              function);
+          auto* continue_block = llvm::BasicBlock::Create(
+              context,
+              std::string{label} + ".continue."
+                  + std::to_string(index),
+              function);
+          builder.CreateCondBr(
+              condition, error_block, continue_block);
+          builder.SetInsertPoint(error_block);
+          return_result(
+              FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR,
+              instruction,
+              static_cast<std::uint64_t>(reason),
+              FSIM_JIT_FRAME_STATE_RUNTIME_ERROR,
+              static_cast<std::uint32_t>(reason));
+          builder.SetInsertPoint(continue_block);
+        };
     std::visit(
         Overloaded{
             [&](const LoadConstant &operation) {
@@ -3936,6 +4069,251 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   builder, registers, operation.destination, value);
               branch_to_next();
             },
+            [&](const IntegerUnary& operation) {
+              const auto source =
+                  load_register(
+                      builder, registers, operation.source);
+              runtime_error_if(
+                  builder.CreateICmpNE(
+                      builder.CreateAnd(
+                          source.bval,
+                          constant_i64(
+                              context,
+                              std::numeric_limits<std::uint32_t>::max())),
+                      constant_i64(context, 0)),
+                  JitGeneratedRuntimeErrorReason::
+                      integer_operand_unknown,
+                  "integer.unary.unknown");
+              auto* signed_source = builder.CreateSExt(
+                  builder.CreateTrunc(source.aval, i32),
+                  llvm::Type::getInt64Ty(context));
+              auto* minimum = llvm::ConstantInt::getSigned(
+                  llvm::Type::getInt64Ty(context),
+                  std::numeric_limits<std::int32_t>::min());
+              runtime_error_if(
+                  builder.CreateICmpEQ(signed_source, minimum),
+                  JitGeneratedRuntimeErrorReason::integer_overflow,
+                  "integer.unary.overflow");
+              llvm::Value* result = nullptr;
+              if (operation.operation
+                  == IntegerUnaryOperator::negate) {
+                result = builder.CreateNeg(signed_source);
+              } else {
+                result = builder.CreateSelect(
+                    builder.CreateICmpSLT(
+                        signed_source,
+                        constant_i64(context, 0)),
+                    builder.CreateNeg(signed_source),
+                    signed_source);
+              }
+              store_register(
+                  builder,
+                  registers,
+                  operation.destination,
+                  EncodedValue{
+                      builder.CreateAnd(
+                          result,
+                          constant_i64(
+                              context,
+                              std::numeric_limits<std::uint32_t>::max())),
+                      constant_i64(context, 0),
+                      32});
+              branch_to_next();
+            },
+            [&](const IntegerBinary& operation) {
+              const auto lhs = load_register(
+                  builder, registers, operation.lhs);
+              const auto rhs = load_register(
+                  builder, registers, operation.rhs);
+              runtime_error_if(
+                  builder.CreateICmpNE(
+                      builder.CreateAnd(
+                          builder.CreateOr(lhs.bval, rhs.bval),
+                          constant_i64(
+                              context,
+                              std::numeric_limits<std::uint32_t>::max())),
+                      constant_i64(context, 0)),
+                  JitGeneratedRuntimeErrorReason::
+                      integer_operand_unknown,
+                  "integer.binary.unknown");
+              auto* left = builder.CreateSExt(
+                  builder.CreateTrunc(lhs.aval, i32), i64);
+              auto* right = builder.CreateSExt(
+                  builder.CreateTrunc(rhs.aval, i32), i64);
+              auto* minimum = llvm::ConstantInt::getSigned(
+                  i64, std::numeric_limits<std::int32_t>::min());
+              auto* maximum = llvm::ConstantInt::getSigned(
+                  i64, std::numeric_limits<std::int32_t>::max());
+              const auto overflow_if =
+                  [&](llvm::Value* value,
+                      const std::string_view label) {
+                    runtime_error_if(
+                        builder.CreateOr(
+                            builder.CreateICmpSLT(value, minimum),
+                            builder.CreateICmpSGT(value, maximum)),
+                        JitGeneratedRuntimeErrorReason::
+                            integer_overflow,
+                        label);
+                  };
+              llvm::Value* result = nullptr;
+              switch (operation.operation) {
+              case IntegerBinaryOperator::add:
+                result = builder.CreateAdd(left, right);
+                overflow_if(result, "integer.add.overflow");
+                break;
+              case IntegerBinaryOperator::subtract:
+                result = builder.CreateSub(left, right);
+                overflow_if(result, "integer.subtract.overflow");
+                break;
+              case IntegerBinaryOperator::multiply:
+                result = builder.CreateMul(left, right);
+                overflow_if(result, "integer.multiply.overflow");
+                break;
+              case IntegerBinaryOperator::power: {
+                runtime_error_if(
+                    builder.CreateICmpSLT(
+                        right, constant_i64(context, 0)),
+                    JitGeneratedRuntimeErrorReason::
+                        integer_negative_exponent,
+                    "integer.power.exponent");
+                llvm::Value* powered = constant_i64(context, 1);
+                llvm::Value* factor = left;
+                for (std::uint32_t bit = 0; bit < 31; ++bit) {
+                  auto* selected = builder.CreateICmpNE(
+                      builder.CreateAnd(
+                          builder.CreateLShr(
+                              right, constant_i64(context, bit)),
+                          constant_i64(context, 1)),
+                      constant_i64(context, 0));
+                  auto* product =
+                      builder.CreateMul(powered, factor);
+                  runtime_error_if(
+                      builder.CreateAnd(
+                          selected,
+                          builder.CreateOr(
+                              builder.CreateICmpSLT(
+                                  product, minimum),
+                              builder.CreateICmpSGT(
+                                  product, maximum))),
+                      JitGeneratedRuntimeErrorReason::
+                          integer_overflow,
+                      "integer.power.product");
+                  powered = builder.CreateSelect(
+                      selected, product, powered);
+                  if (bit + 1U < 31U) {
+                    auto* remaining = builder.CreateLShr(
+                        right, constant_i64(context, bit + 1U));
+                    auto* needed = builder.CreateICmpNE(
+                        remaining, constant_i64(context, 0));
+                    auto* squared =
+                        builder.CreateMul(factor, factor);
+                    runtime_error_if(
+                        builder.CreateAnd(
+                            needed,
+                            builder.CreateOr(
+                                builder.CreateICmpSLT(
+                                    squared, minimum),
+                                builder.CreateICmpSGT(
+                                    squared, maximum))),
+                        JitGeneratedRuntimeErrorReason::
+                            integer_overflow,
+                        "integer.power.factor");
+                    factor = builder.CreateSelect(
+                        needed, squared, factor);
+                  }
+                }
+                result = powered;
+                break;
+              }
+              case IntegerBinaryOperator::divide:
+              case IntegerBinaryOperator::remainder:
+              case IntegerBinaryOperator::modulo: {
+                runtime_error_if(
+                    builder.CreateICmpEQ(
+                        right, constant_i64(context, 0)),
+                    JitGeneratedRuntimeErrorReason::
+                        integer_division_by_zero,
+                    "integer.division.zero");
+                runtime_error_if(
+                    builder.CreateAnd(
+                        builder.CreateICmpEQ(left, minimum),
+                        builder.CreateICmpEQ(
+                            right,
+                            llvm::ConstantInt::getSigned(i64, -1))),
+                    JitGeneratedRuntimeErrorReason::
+                        integer_overflow,
+                    "integer.division.overflow");
+                if (operation.operation
+                    == IntegerBinaryOperator::divide) {
+                  result = builder.CreateSDiv(left, right);
+                } else {
+                  result = builder.CreateSRem(left, right);
+                  if (operation.operation
+                      == IntegerBinaryOperator::modulo) {
+                    auto* nonzero = builder.CreateICmpNE(
+                        result, constant_i64(context, 0));
+                    auto* signs_differ = builder.CreateICmpNE(
+                        builder.CreateICmpSLT(
+                            result, constant_i64(context, 0)),
+                        builder.CreateICmpSLT(
+                            right, constant_i64(context, 0)));
+                    result = builder.CreateSelect(
+                        builder.CreateAnd(nonzero, signs_differ),
+                        builder.CreateAdd(result, right),
+                        result);
+                  }
+                }
+                break;
+              }
+              }
+              store_register(
+                  builder,
+                  registers,
+                  operation.destination,
+                  EncodedValue{
+                      builder.CreateAnd(
+                          result,
+                          constant_i64(
+                              context,
+                              std::numeric_limits<std::uint32_t>::max())),
+                      constant_i64(context, 0),
+                      32});
+              branch_to_next();
+            },
+            [&](const IntegerCheck& operation) {
+              const auto source = load_register(
+                  builder, registers, operation.source);
+              runtime_error_if(
+                  builder.CreateICmpNE(
+                      builder.CreateAnd(
+                          source.bval,
+                          constant_i64(
+                              context,
+                              std::numeric_limits<std::uint32_t>::max())),
+                      constant_i64(context, 0)),
+                  JitGeneratedRuntimeErrorReason::
+                      integer_operand_unknown,
+                  "integer.check.unknown");
+              auto* value = builder.CreateSExt(
+                  builder.CreateTrunc(
+                      source.aval,
+                      llvm::Type::getInt32Ty(context)),
+                  llvm::Type::getInt64Ty(context));
+              auto* lower = llvm::ConstantInt::getSigned(
+                  llvm::Type::getInt64Ty(context),
+                  operation.lower);
+              auto* upper = llvm::ConstantInt::getSigned(
+                  llvm::Type::getInt64Ty(context),
+                  operation.upper);
+              runtime_error_if(
+                  builder.CreateOr(
+                      builder.CreateICmpSLT(value, lower),
+                      builder.CreateICmpSGT(value, upper)),
+                  JitGeneratedRuntimeErrorReason::
+                      integer_subtype_range,
+                  "integer.check.range");
+              branch_to_next();
+            },
             [&](const ConditionalSelect& operation) {
               const auto condition =
                   load_register(
@@ -4410,9 +4788,15 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   instruction_blocks[operation.when_false]);
 
               builder.SetInsertPoint(unknown_block);
+              constexpr auto reason =
+                  JitGeneratedRuntimeErrorReason::
+                      unknown_branch_condition;
               return_result(
-                  FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_RUNTIME_ERROR, instruction);
+                  FSIM_JIT_RESUME_STATUS_RUNTIME_ERROR,
+                  instruction,
+                  static_cast<std::uint64_t>(reason),
+                  FSIM_JIT_FRAME_STATE_RUNTIME_ERROR,
+                  static_cast<std::uint32_t>(reason));
             },
             [&](const WaitFor &operation) {
               return_result(
@@ -5174,9 +5558,13 @@ LlvmJit::resume(const JitProcessHandle process,
   case FSIM_JIT_FRAME_STATE_ASSERTION_FAILED:
     return terminal_result(FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED);
   case FSIM_JIT_FRAME_STATE_RUNTIME_ERROR:
-    throw LlvmJitGeneratedRuntimeError(
-        frame.last_instruction,
-        JitGeneratedRuntimeErrorReason::unknown_branch_condition);
+    if (const auto reason =
+            decode_generated_runtime_error(frame.program_counter)) {
+      throw LlvmJitGeneratedRuntimeError(
+          frame.last_instruction, *reason);
+    }
+    throw LlvmJitError(
+        "JIT frame contains an invalid generated runtime error reason");
   default:
     throw LlvmJitError("JIT frame state is invalid");
   }
@@ -5242,9 +5630,13 @@ LlvmJit::resume(const JitProcessHandle process,
     if (frame.state != FSIM_JIT_FRAME_STATE_RUNTIME_ERROR) {
       throw LlvmJitError("generated process returned an invalid frame state");
     }
-    throw LlvmJitGeneratedRuntimeError(
-        result.instruction,
-        JitGeneratedRuntimeErrorReason::unknown_branch_condition);
+    if (const auto reason =
+            decode_generated_runtime_error(result.delay)) {
+      throw LlvmJitGeneratedRuntimeError(
+          result.instruction, *reason);
+    }
+    throw LlvmJitError(
+        "generated process returned an invalid runtime error reason");
   default:
     throw LlvmJitError("generated process returned an unknown resume status");
   }

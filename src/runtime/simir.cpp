@@ -1097,6 +1097,125 @@ struct SignedDivision {
   return result;
 }
 
+[[nodiscard]] std::int32_t checked_integer_operand(
+    const PackedLogic4& value) {
+  if (value.width() != 32 || has_unknown(value)) {
+    throw std::invalid_argument(
+        "VHDL integer operand contains an unknown or "
+        "high-impedance value");
+  }
+  std::uint32_t bits = 0;
+  for (std::size_t bit = 0; bit < 32; ++bit) {
+    if (value.get(bit) == Logic4::one) {
+      bits |= std::uint32_t{1} << bit;
+    }
+  }
+  const auto signed_value =
+      (bits & UINT32_C(0x80000000)) != 0
+          ? static_cast<std::int64_t>(bits)
+                - (INT64_C(1) << 32)
+          : static_cast<std::int64_t>(bits);
+  return static_cast<std::int32_t>(signed_value);
+}
+
+[[nodiscard]] PackedLogic4 packed_integer(const std::int64_t value) {
+  if (value < std::numeric_limits<std::int32_t>::min()
+      || value > std::numeric_limits<std::int32_t>::max()) {
+    throw std::invalid_argument("VHDL integer arithmetic overflow");
+  }
+  return PackedLogic4::from_aval_bval(
+      32,
+      static_cast<std::uint32_t>(
+          static_cast<std::int32_t>(value)),
+      0);
+}
+
+[[nodiscard]] PackedLogic4 integer_unary_value(
+    const IntegerUnaryOperator operation,
+    const PackedLogic4& source) {
+  const auto value =
+      static_cast<std::int64_t>(checked_integer_operand(source));
+  switch (operation) {
+  case IntegerUnaryOperator::negate:
+    return packed_integer(-value);
+  case IntegerUnaryOperator::absolute:
+    return packed_integer(value < 0 ? -value : value);
+  }
+  throw std::invalid_argument("unknown VHDL integer unary operation");
+}
+
+[[nodiscard]] PackedLogic4 integer_binary_value(
+    const IntegerBinaryOperator operation,
+    const PackedLogic4& lhs_value,
+    const PackedLogic4& rhs_value) {
+  const auto lhs =
+      static_cast<std::int64_t>(checked_integer_operand(lhs_value));
+  const auto rhs =
+      static_cast<std::int64_t>(checked_integer_operand(rhs_value));
+  switch (operation) {
+  case IntegerBinaryOperator::add:
+    return packed_integer(lhs + rhs);
+  case IntegerBinaryOperator::subtract:
+    return packed_integer(lhs - rhs);
+  case IntegerBinaryOperator::multiply:
+    return packed_integer(lhs * rhs);
+  case IntegerBinaryOperator::power: {
+    if (rhs < 0) {
+      throw std::invalid_argument(
+          "VHDL integer exponent must be nonnegative");
+    }
+    auto result = std::int64_t{1};
+    auto factor = lhs;
+    auto exponent = static_cast<std::uint32_t>(rhs);
+    while (exponent != 0) {
+      if ((exponent & 1U) != 0) {
+        result = checked_integer_operand(
+            packed_integer(result * factor));
+      }
+      exponent >>= 1U;
+      if (exponent != 0) {
+        factor = checked_integer_operand(
+            packed_integer(factor * factor));
+      }
+    }
+    return packed_integer(result);
+  }
+  case IntegerBinaryOperator::divide:
+  case IntegerBinaryOperator::remainder:
+  case IntegerBinaryOperator::modulo:
+    if (rhs == 0) {
+      throw std::invalid_argument("VHDL integer division by zero");
+    }
+    if (lhs == std::numeric_limits<std::int32_t>::min()
+        && rhs == -1) {
+      throw std::invalid_argument("VHDL integer arithmetic overflow");
+    }
+    if (operation == IntegerBinaryOperator::divide) {
+      return packed_integer(lhs / rhs);
+    }
+    {
+      auto result = lhs % rhs;
+      if (operation == IntegerBinaryOperator::modulo
+          && result != 0 && ((result < 0) != (rhs < 0))) {
+        result += rhs;
+      }
+      return packed_integer(result);
+    }
+  }
+  throw std::invalid_argument("unknown VHDL integer binary operation");
+}
+
+void check_integer_range(
+    const PackedLogic4& source,
+    const std::int32_t lower,
+    const std::int32_t upper) {
+  const auto value = checked_integer_operand(source);
+  if (value < lower || value > upper) {
+    throw std::invalid_argument(
+        "VHDL integer subtype range check failed");
+  }
+}
+
 [[nodiscard]] PackedLogic4 conditional_value(
     const PackedLogic4& condition,
     const PackedLogic4& when_true,
@@ -3651,6 +3770,40 @@ void Interpreter::Impl::execute(ProcessId id) {
                     binary_value(op.operation, get_register(process, op.lhs),
                                  get_register(process, op.rhs));
               } catch (const std::invalid_argument &error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
+            [&](const IntegerUnary& op) {
+              try {
+                get_register(process, op.destination) =
+                    integer_unary_value(
+                        op.operation,
+                        get_register(process, op.source));
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
+            [&](const IntegerBinary& op) {
+              try {
+                get_register(process, op.destination) =
+                    integer_binary_value(
+                        op.operation,
+                        get_register(process, op.lhs),
+                        get_register(process, op.rhs));
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
+            [&](const IntegerCheck& op) {
+              try {
+                check_integer_range(
+                    get_register(process, op.source),
+                    op.lower,
+                    op.upper);
+              } catch (const std::invalid_argument& error) {
                 fail(process, error.what());
               }
               ++process.pc;

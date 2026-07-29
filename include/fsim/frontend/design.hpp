@@ -86,6 +86,30 @@ struct PackedRangeExpression {
   std::optional<bool> descending;
 };
 
+/// A concrete scalar constraint for VHDL's bounded integer family.
+///
+/// This is deliberately separate from PackedRange: an integer always occupies
+/// the runtime's signed 32-bit representation, regardless of the number of
+/// values admitted by its subtype.
+struct IntegerRange {
+  std::int64_t left{};
+  std::int64_t right{};
+  bool descending{};
+
+  [[nodiscard]] bool contains(const std::int64_t value) const noexcept {
+    const auto lower = descending ? right : left;
+    const auto upper = descending ? left : right;
+    return value >= lower && value <= upper;
+  }
+};
+
+struct IntegerRangeExpression {
+  Expression left;
+  Expression right;
+  SourceSpan span;
+  bool descending{};
+};
+
 struct PackedMember {
   std::string name;
   ValueDomain domain{ValueDomain::Unknown};
@@ -124,6 +148,10 @@ struct Type {
   // aggregates are intentionally excluded from the current representation.
   std::vector<PackedMember> packed_members;
   PackedAggregateKind packed_aggregate{PackedAggregateKind::None};
+  // Concrete or specialization-dependent VHDL scalar constraint. This never
+  // changes the fixed 32-bit runtime representation returned by width().
+  std::optional<IntegerRange> integer_range;
+  std::optional<IntegerRangeExpression> integer_range_expression;
 
   Type() = default;
   Type(

@@ -209,6 +209,44 @@ struct Binary {
   RegisterId rhs{};
 };
 
+enum class IntegerUnaryOperator : std::uint8_t {
+  negate,
+  absolute,
+};
+
+/// A checked operation on the portable signed 32-bit VHDL integer
+/// representation. Unknown operands and overflow are language errors.
+struct IntegerUnary {
+  IntegerUnaryOperator operation{IntegerUnaryOperator::negate};
+  RegisterId destination{};
+  RegisterId source{};
+};
+
+enum class IntegerBinaryOperator : std::uint8_t {
+  add,
+  subtract,
+  multiply,
+  power,
+  divide,
+  remainder,
+  modulo,
+};
+
+struct IntegerBinary {
+  IntegerBinaryOperator operation{IntegerBinaryOperator::add};
+  RegisterId destination{};
+  RegisterId lhs{};
+  RegisterId rhs{};
+};
+
+/// Require a known signed 32-bit value to belong to an elaborated VHDL
+/// scalar subtype before it is stored.
+struct IntegerCheck {
+  RegisterId source{};
+  std::int32_t lower{};
+  std::int32_t upper{};
+};
+
 /// Select between equal-width values using SystemVerilog conditional
 /// semantics. An X/Z condition merges matching bits and produces X for
 /// differing bits.
@@ -558,6 +596,7 @@ using Operation =
                  SignalLastEvent, SignalActive, CopyRegister, UnaryNot,
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
                  Shift, Extract, Concatenate, Binary, Insert,
+                 IntegerUnary, IntegerBinary, IntegerCheck,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteInertial, WriteProjected, WriteProjectedWaveform,
                  WriteBlockingSlice,
@@ -594,6 +633,8 @@ struct DebugLocal {
   RegisterId register_id{};
   std::size_t width{};
   SourceLocation source;
+  std::optional<std::int32_t> integer_lower;
+  std::optional<std::int32_t> integer_upper;
 };
 
 struct Process {

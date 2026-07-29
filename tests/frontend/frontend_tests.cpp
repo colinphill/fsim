@@ -1202,27 +1202,51 @@ end architecture;
               == ValueDomain::Integer,
       "runtime integer objects and dynamic-count HIR");
 
-  const auto unsupported_subtype = parse_text(
-      "natural_object.vhd",
+  const auto constrained_subtypes = parse_text(
+      "integer_subtypes.vhd",
       R"(
-entity natural_object is
-  port (count : in natural);
+entity integer_subtypes is
+  port (
+    count : in natural;
+    index : in positive;
+    bounded : out integer range -5 to 7;
+    reverse : out integer range 3 downto -2
+  );
 end entity;
-architecture rtl of natural_object is
+architecture rtl of integer_subtypes is
 begin
 end architecture;
 )",
       Language::Vhdl2008);
   require(
-      !unsupported_subtype.ok()
-          && std::ranges::any_of(
-              unsupported_subtype.diagnostics,
-              [](const auto& diagnostic) {
-                return diagnostic.code
-                    == "FSIM-VHDL-UNSUPPORTED-014";
-              }),
-      "runtime natural/positive objects need a targeted range-enforcement "
-      "diagnostic");
+      constrained_subtypes.ok(),
+      "runtime natural, positive, and explicit integer constraints parse");
+  const auto* constrained_entity =
+      constrained_subtypes.design.find(
+          UnitKind::VhdlEntity, "integer_subtypes");
+  require(
+      constrained_entity != nullptr
+          && constrained_entity->ports.size() == 4
+          && constrained_entity->ports[0].type.integer_range
+          && constrained_entity->ports[0].type.integer_range->left == 0
+          && constrained_entity->ports[0].type.integer_range->right
+              == std::numeric_limits<std::int32_t>::max()
+          && constrained_entity->ports[1].type.integer_range
+          && constrained_entity->ports[1].type.integer_range->left == 1
+          && constrained_entity->ports[2].type.integer_range
+          && constrained_entity->ports[2].type.integer_range->left == -5
+          && constrained_entity->ports[2].type.integer_range->right == 7
+          && !constrained_entity->ports[2]
+                  .type.integer_range->descending
+          && constrained_entity->ports[2]
+                 .type.integer_range_expression
+          && constrained_entity->ports[3].type.integer_range
+          && constrained_entity->ports[3].type.integer_range->left == 3
+          && constrained_entity->ports[3].type.integer_range->right == -2
+          && constrained_entity->ports[3]
+                 .type.integer_range->descending
+          && constrained_entity->ports[3].type.width() == 32,
+      "integer subtype HIR retains fixed width, bounds, and direction");
 }
 
 void test_exponentiation_expression_nodes() {

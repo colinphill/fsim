@@ -327,6 +327,9 @@ SimIR processes are explicit state machines. The current operation set includes:
   elapsed-since-event queries;
 - unary/logical/reduction operations plus typed bitwise, fixed-width
   arithmetic, shift, conditional-select, and comparison operations;
+- checked signed 32-bit VHDL integer unary/binary operations plus explicit
+  elaborated subtype-range checks, with typed unknown, overflow,
+  negative-exponent, divide-by-zero, and range failures;
 - whole and normalized partial blocking writes, update-phase and transport
   delayed writes, whole/slice transition-aware inertial writes, and
   whole/slice VHDL projected-waveform writes;
