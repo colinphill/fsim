@@ -2584,8 +2584,13 @@ public:
     Lowerer(
         ElaboratedDesign& design,
         const std::unordered_map<std::string, SignalId>& signals,
+        const std::unordered_map<
+            std::string, const frontend::Type*>& visible_types,
         std::vector<Diagnostic>& diagnostics)
-        : design_(design), signals_(signals), diagnostics_(diagnostics) {}
+        : design_(design),
+          signals_(signals),
+          visible_types_(visible_types),
+          diagnostics_(diagnostics) {}
 
     Process lower_process(
         const frontend::Process& source,
@@ -2791,6 +2796,14 @@ public:
     }
 
 private:
+    [[nodiscard]] const frontend::Type* visible_type(
+        const std::string_view name) const {
+        const auto found = visible_types_.find(std::string{name});
+        return found == visible_types_.end()
+            ? nullptr
+            : found->second;
+    }
+
     [[nodiscard]] static std::pair<std::int32_t, std::int32_t>
     integer_bounds(
         const std::optional<frontend::IntegerRange>& range) {
@@ -4218,7 +4231,9 @@ private:
                     statement.span);
                 return;
             }
-            if (target_domain == frontend::ValueDomain::Integer
+            if (language_ == frontend::Language::Vhdl2008
+                && target_domain
+                    == frontend::ValueDomain::Integer
                 && !selected_offset) {
                 if (!is_integer_expression(statement.value)) {
                     report(
@@ -4264,9 +4279,14 @@ private:
             && statement.vhdl_waveform.size() > 1) {
             std::vector<ProjectedWaveformElement> waveform;
             waveform.reserve(statement.vhdl_waveform.size());
+            const auto* target_type =
+                visible_type(target_name);
             const auto target_domain =
                 selected_domain.value_or(
-                    design_.signal_info_[signal->second].source_domain);
+                    target_type != nullptr
+                        ? target_type->domain
+                        : design_.signal_info_[signal->second]
+                              .source_domain);
             std::optional<runtime::SimulationTick> previous_delay;
             for (const auto& element : statement.vhdl_waveform) {
                 const auto value =
@@ -4294,7 +4314,8 @@ private:
                         element.span);
                     return;
                 }
-                if (target_domain
+                if (language_ == frontend::Language::Vhdl2008
+                    && target_domain
                         == frontend::ValueDomain::Integer
                     && !selected_offset) {
                     if (!is_integer_expression(element.value)) {
@@ -4307,8 +4328,10 @@ private:
                         return;
                     }
                     const auto& range =
-                        design_.signal_info_[signal->second]
-                            .integer_range;
+                        target_type != nullptr
+                            ? target_type->integer_range
+                            : design_.signal_info_[signal->second]
+                                  .integer_range;
                     if (!validate_static_integer_assignment(
                             element.value, range, element.span)) {
                         return;
@@ -4381,9 +4404,14 @@ private:
                 statement.span);
             return;
         }
+        const auto* target_type =
+            visible_type(target_name);
         const auto target_domain =
             selected_domain.value_or(
-                design_.signal_info_[signal->second].source_domain);
+                target_type != nullptr
+                    ? target_type->domain
+                    : design_.signal_info_[signal->second]
+                          .source_domain);
         if (is_two_state_domain(target_domain)
             && !is_two_state_domain(register_domain(*value))) {
             report(
@@ -4395,7 +4423,8 @@ private:
                 statement.span);
             return;
         }
-        if (target_domain == frontend::ValueDomain::Integer
+        if (language_ == frontend::Language::Vhdl2008
+            && target_domain == frontend::ValueDomain::Integer
             && !selected_offset) {
             if (!is_integer_expression(statement.value)) {
                 report(
@@ -4407,7 +4436,10 @@ private:
                 return;
             }
             const auto& range =
-                design_.signal_info_[signal->second].integer_range;
+                target_type != nullptr
+                    ? target_type->integer_range
+                    : design_.signal_info_[signal->second]
+                          .integer_range;
             if (!validate_static_integer_assignment(
                     statement.value, range, statement.span)) {
                 return;
@@ -5042,8 +5074,13 @@ private:
             if (found != signals_.end()) {
                 const auto& signal =
                     design_.signal_info_[found->second];
+                const auto* type =
+                    visible_type(expression.text);
                 const auto destination = allocate_register(
-                    signal.width, signal.source_domain);
+                    signal.width,
+                    type != nullptr
+                        ? type->domain
+                        : signal.source_domain);
                 process_.operations.emplace_back(
                     ReadSignal{destination, found->second});
                 return destination;
@@ -7119,11 +7156,18 @@ private:
             }
             if (const auto signal =
                     signals_.find(expression.text);
-                signal != signals_.end()
-                && design_.signal_info_[signal->second].packed_range) {
-                return *design_
-                            .signal_info_[signal->second]
-                            .packed_range;
+                signal != signals_.end()) {
+                if (const auto* type =
+                        visible_type(expression.text);
+                    type != nullptr && type->packed_range) {
+                    return *type->packed_range;
+                }
+                if (design_.signal_info_[signal->second]
+                        .packed_range) {
+                    return *design_
+                                .signal_info_[signal->second]
+                                .packed_range;
+                }
             }
             if (const auto selected =
                     packed_member_reference(expression.text);
@@ -7175,7 +7219,11 @@ private:
             }
             if (const auto signal = signals_.find(expression.text);
                     signal != signals_.end()) {
-                return design_.signal_info_[signal->second].is_signed;
+                const auto* type =
+                    visible_type(expression.text);
+                return type != nullptr
+                    ? type->is_signed
+                    : design_.signal_info_[signal->second].is_signed;
             }
             if (const auto selected =
                     packed_member_reference(expression.text)) {
@@ -7359,8 +7407,12 @@ private:
             }
             if (const auto signal = signals_.find(expression.text);
                 signal != signals_.end()) {
-                return design_.signal_info_[signal->second]
-                           .source_domain
+                const auto* type =
+                    visible_type(expression.text);
+                return (type != nullptr
+                            ? type->domain
+                            : design_.signal_info_[signal->second]
+                                  .source_domain)
                     == frontend::ValueDomain::Integer;
             }
             return false;
@@ -7528,6 +7580,8 @@ private:
 
     ElaboratedDesign& design_;
     const std::unordered_map<std::string, SignalId>& signals_;
+    const std::unordered_map<
+        std::string, const frontend::Type*>& visible_types_;
     std::vector<Diagnostic>& diagnostics_;
     Process process_;
     RegisterId next_register_{};
@@ -10212,6 +10266,8 @@ private:
         stack_.push_back(identity);
 
         SignalMap local = std::move(aliases);
+        std::unordered_map<
+            std::string, const frontend::Type*> visible_types;
         const auto* ports = unit_ports(parsed_, unit);
         if (ports == nullptr) {
             report(
@@ -10222,11 +10278,17 @@ private:
             return;
         }
         for (const auto& port : *ports) {
+            visible_types.emplace(port.name, &port.type);
+            visible_types.emplace(
+                path + "." + port.name, &port.type);
             if (!local.contains(port.name)) {
                 (void)add_owned_signal(port, path, local);
             }
         }
         for (const auto& signal : unit.signals) {
+            visible_types.emplace(signal.name, &signal.type);
+            visible_types.emplace(
+                path + "." + signal.name, &signal.type);
             (void)add_owned_signal(signal, path, local);
         }
 
@@ -10271,7 +10333,8 @@ private:
         specialization.is_cell = unit.is_cell;
         specialization.parameter_values = std::move(parameter_values);
 
-        Lowerer lowerer{design_, local, diagnostics_};
+        Lowerer lowerer{
+            design_, local, visible_types, diagnostics_};
         for (std::size_t index = 0;
              index < unit.concurrent_statements.size(); ++index) {
             auto process = lowerer.lower_concurrent(

@@ -3122,6 +3122,76 @@ endmodule
         rejected_lossy_integer_boundary,
         "FSIM-ELAB-BIND-022"));
 
+    const auto vhdl_integer_output =
+        fsim::frontend::parse_text(
+            "vhdl_integer_output.vhd",
+            R"(
+entity vhdl_integer_output is
+  port (result : out integer range 1 to 4);
+end entity;
+architecture rtl of vhdl_integer_output is
+begin
+  result <= 2;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    const auto sv_integer_parent =
+        fsim::frontend::parse_text(
+            "sv_integer_parent.sv",
+            R"(
+module sv_integer_parent;
+  bit signed [31:0] result;
+  vhdl_integer_output child(.result(result));
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(vhdl_integer_output.ok());
+    assert(sv_integer_parent.ok());
+    auto reverse_integer_design = sv_integer_parent.design;
+    reverse_integer_design.units.insert(
+        reverse_integer_design.units.end(),
+        vhdl_integer_output.design.units.begin(),
+        vhdl_integer_output.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        reverse_integer_binding{
+            {
+                "sv_integer_parent.child",
+                "vhdl:work.vhdl_integer_output(rtl)",
+                std::nullopt},
+        };
+    const auto elaborated_reverse_integer =
+        fsim::elaboration::elaborate(
+            reverse_integer_design,
+            "sv:work.sv_integer_parent",
+            reverse_integer_binding);
+    assert(elaborated_reverse_integer.ok());
+    assert(
+        std::ranges::any_of(
+            elaborated_reverse_integer.design
+                ->processes().front().operations,
+            [](const auto& operation) {
+              const auto* check =
+                  std::get_if<
+                      fsim::runtime::simir::IntegerCheck>(
+                      &operation);
+              return check != nullptr
+                  && check->lower == 1
+                  && check->upper == 4;
+            }));
+    const auto reverse_integer_result_signal =
+        elaborated_reverse_integer.design->find_signal("result");
+    assert(reverse_integer_result_signal);
+    auto reverse_integer_interpreter =
+        elaborated_reverse_integer.design->create_interpreter();
+    assert(
+        reverse_integer_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        reverse_integer_interpreter
+            ->signal_value(*reverse_integer_result_signal)
+            .to_msb_string()
+        == "00000000000000000000000000000010");
+
     const auto unsafe_integer_alias =
         fsim::frontend::parse_text(
             "unsafe_integer_alias.vhd",
