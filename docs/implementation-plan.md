@@ -1737,7 +1737,7 @@ The planned ten implementation features are:
     V1-VH-04/V1-VH-05 documentation, then run and push the full local
     regression gate.
 
-All ten implementation features are complete in the checkpoint 39 worktree.
+All ten implementation features are complete in feature commit `90a67df`.
 Typed HIR now distinguishes aggregates from grouping and retains a
 source-ordered choice alongside every operand. The VHDL parser accepts
 positional, case-insensitive named, and final `others` associations with
@@ -1750,6 +1750,15 @@ wrong-width, and lossy two-state associations are rejected. The focused
 application differential proves exact Logic9 values, persistent debugger
 locals, VCD mapping, LLVM O0/O2 behavior, cold/warm native cache reuse, and
 transitive package-edit invalidation against the interpreter.
+
+After feature commit `90a67df`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 38 tests in 88.09 seconds on 2026-07-29. The
+gate includes record-aggregate parser recovery and typed diagnostics,
+flattened SimIR composition, aggregate comparisons and conditional
+alternatives, interpreter/LLVM O0/O2 exact Logic9 execution, debugger-local
+reads, VCD, package-edit cache invalidation, fetched Boost.Context 1.91.0 and
+Tcl 9.0.4, SystemC, the strict native ABI, and every preceding feature batch.
+No CI state was inspected for this local gate.
 
 ## v1 release condition
 
