@@ -9,18 +9,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-29.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: `a47d924` (`feat: add SystemVerilog type
+- Implementation baseline: `cfc54fa` (`feat: add SystemVerilog string
   parameters`).
 - The feature baseline and batch documentation are synchronized with
   `origin/codex/resumable-jit`.
-- The source-size refactor is complete: all 224 authored C/C++ source, header,
+- The source-size refactor is complete: all 227 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 1,998 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 44
-  configured tests in 301.82 seconds, and Release passed all 45 configured
-  tests in 114.06 seconds on 2026-07-29. Focused LLVM Debug and LLVM-disabled
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 45
+  configured tests in 287.87 seconds, and Release passed all 46 configured
+  tests in 113.45 seconds on 2026-07-29. Focused LLVM Debug and LLVM-disabled
   gates passed all five affected tests.
-- No CI state was inspected during feature batch 51 or this handoff.
+- No CI state was inspected during feature batch 52 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -32,7 +32,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants and same-language type parameters, full unsigned-64 values, and entity-level VHDL-2008 interface type generics now have interpreter/O0/O2/cache evidence; wider/string/complete typing, remaining VHDL generic-type semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, full unsigned-64 values, and entity-level VHDL-2008 interface type generics now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL generic-type semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -80,9 +80,9 @@ document merely because the parser accepts a related form.
 - Complete VHDL generic-type semantics beyond the implemented entity-level
   VHDL-2008 unclassified `type T` slice, including remaining classified,
   package/subprogram, dependent element-type, and unconstrained-object cases.
-- Complete SystemVerilog string parameters, type actuals beyond the bounded
-  same-language packed subset, widths above 64 bits, genvar-dependent typed
-  constants, and remaining LRM expression typing.
+- Complete SystemVerilog runtime mutable strings, type actuals beyond the
+  bounded same-language packed subset, widths above 64 bits,
+  genvar-dependent typed constants, and remaining LRM expression typing.
 - Retain source/debug metadata for every remaining executable construct.
 - Make the semantic differential harness compare interpreter, O0, and O2
   final state, assertions, scheduling observations, failures, and normalized
@@ -125,7 +125,8 @@ document merely because the parser accepts a related form.
   tasks, all `always` forms, expressions, gates, and assignment semantics.
 - Complete general delays/events, fork/join, named events, and NBA/delta
   matrices.
-- Add strings, files, dynamic/associative arrays, queues, and `$readmem*`.
+- Complete mutable strings and add files, dynamic/associative arrays, queues,
+  and `$readmem*`.
 
 ### 5. Complete mixed-language and SystemC semantics
 
@@ -155,35 +156,34 @@ opaque native session/object model already used by Tcl.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 52: SystemVerilog string parameters and
-constants**:
+Resume with **feature batch 53: synthesizable SystemVerilog functions**:
 
-1. Represent string parameter/localparam values as typed byte strings with
-   source spans, without routing them through integral bits.
-2. Parse `parameter string` and `localparam string` defaults in module
-   parameter-port lists plus module/package bodies.
-3. Decode supported SystemVerilog string escapes once and retain embedded
-   bytes and exact diagnostic ancestry.
-4. Evaluate bounded string literals, identifiers, concatenation, equality,
-   inequality, and conditional constant expressions.
-5. Apply declared string conversion consistently to defaults, named and
-   positional overrides, localparams, and non-iterative generated constants.
-6. Forward string parameters through nested same-language hierarchy and allow
-   them in bounded generate equality choices.
-7. Substitute string constants into supported `$display`, `$write`,
-   `$strobe`, report, and immediate-assertion message positions.
-8. Diagnose integral/string mismatches, unsupported operations, invalid
-   escapes, cycles, mixed-language transfer, and nonconstant uses with stable
-   codes.
-9. Serialize exact bytes into a versioned specialization/native-cache identity
-   with source/include provenance and deterministic seed independence.
-10. Add frontend, elaboration, output ordering, interpreter/LLVM O0/O2,
-    cold/warm, and changed-string selective-invalidation evidence, then run and
-    push the scheduled regression gate.
+1. Represent function declarations, return types, formal arguments, local
+   declarations, bodies, and source spans explicitly in SystemVerilog HIR.
+2. Parse bounded module/package functions in ANSI and classic no-argument
+   forms, including function-name assignment and explicit `return`.
+3. Resolve lexical, imported, and directly package-selected function names
+   with stable duplicate, visibility, arity, and direction diagnostics.
+4. Specialize 1–64-bit integral return/formal types and parameter-dependent
+   packed ranges using existing typed constant/type environments.
+5. Give each runtime call an isolated automatic activation frame containing
+   value arguments, locals, and a deterministic return value.
+6. Execute the supported nonsuspending assignment, block, conditional, case,
+   bounded loop, and expression subset inside function bodies.
+7. Evaluate eligible constant functions in parameter/localparam defaults,
+   ranges, and generate conditions without routing them through runtime state.
+8. Lower runtime calls through explicit SimIR call/return control with a
+   debugger safe point and no C++ object or exception crossing the native ABI.
+9. Support bounded nested calls while diagnosing recursion/cycles and retain
+   transitive source provenance in specialization/native-cache identity.
+10. Add frontend, negative, elaboration, constant-call, runtime,
+    interpreter/LLVM O0/O2, debugger-safe-point, cold/warm, and edited-function
+    invalidation evidence, then run and push the scheduled regression gate.
 
-Keep this batch bounded to immutable elaboration-time strings. Runtime mutable
-strings, string methods, files, dynamic arrays, DPI, and arbitrary formatted
-argument lists remain separate release-gate work.
+Keep this batch bounded to nonsuspending integral functions. Tasks, timing or
+event controls in subprograms, ref/inout/output formals, recursion, DPI,
+runtime strings, unpacked arguments, and generated subprogram declarations
+remain separate release-gate work.
 
 ## Working cadence
 

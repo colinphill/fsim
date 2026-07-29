@@ -2755,6 +2755,68 @@ elaboration, and standalone type-parameter application tests. The final
 tracked-source gate covers 224 authored files with an empty allowlist. No CI
 state was inspected.
 
+### Fifty-second feature batch — SystemVerilog string parameters
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent immutable string values as decoded byte strings with source
+   spans, independently from integral constant bits.
+2. Parse `parameter string` and `localparam string` declarations in module
+   parameter-port lists plus module and package bodies.
+3. Decode supported source escapes exactly once and retain embedded zero
+   bytes, original spelling, and diagnostic ancestry.
+4. Fold bounded string literals, identifiers, concatenation,
+   equality/inequality, and integral-selected conditional expressions.
+5. Apply the same evaluator to defaults, named/positional overrides,
+   localparams, package constants, and non-iterative generated constants.
+6. Forward string values through nested same-language hierarchy and use them
+   for conditional and exact-case generate selection.
+7. Substitute constant strings into bounded `$display`, `$write`, `$strobe`,
+   severity-report, and immediate-assertion action messages.
+8. Diagnose integral/string mismatches, unsupported operators, invalid
+   escapes, cycles, nonconstant messages, and mixed-language transfer with
+   stable codes.
+9. Serialize exact byte length/content into versioned `svstring-v1`
+   specialization/native-cache identity while retaining source/include
+   provenance and seed-independent reuse.
+10. Require exact interpreter/LLVM O0/O2 output and report ordering, cold/warm
+    reuse, edited-string selective invalidation, and the scheduled full
+    regression.
+
+The handwritten parser retains original string-token text for diagnostics but
+also stores the decoded byte value in expression HIR. Elaboration never
+decodes that spelling again. A separately compiled string semantic service
+owns constant evaluation, substitution, source-safe display spelling, and
+canonical identity; its declarations and data remain in the internal header
+without moving executable implementation there.
+
+Declaration-order specialization permits a string parameter to feed later
+integral equality results and permits those results to select a later string
+conditional. Package constants and generated constants use the same value
+type. Cross-language string parameters are rejected explicitly because the v1
+boundary contract still requires scalar logic/Boolean/integer or packed-vector
+ports and same-language wrappers for richer values.
+
+The standalone source fixture compares exact active and postponed output
+ordering plus report ordering through the interpreter and LLVM at O0 and O2.
+Three specializations produce three cold stores and three warm hits. Changing
+only the project seed preserves all keys and warm hits; editing one top-level
+string changes the top and affected child while the default child reuses its
+native object.
+
+Runtime mutable strings, string methods, arbitrary formatted argument lists,
+files, dynamic containers, iterative-genvar-dependent string constants, and
+cross-language string transfer remain release-gate work. This batch does not
+claim the complete V1-SV-08 runtime string/file family.
+
+The implementation is recorded in feature commit `cfc54fa`. The exact LLVM
+22.1.8 warnings-as-errors Debug regression passed all 45 configured tests in
+287.87 seconds, and Release passed all 46 configured tests in 113.45 seconds
+on 2026-07-29. Focused LLVM Debug and LLVM-disabled frontend, elaboration,
+diagnostic-catalog, source-budget, and string-application gates also passed.
+The final tracked-source gate covers 227 authored files with an empty
+allowlist. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

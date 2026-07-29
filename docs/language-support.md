@@ -37,9 +37,9 @@ and conditional/case generate choices share this evaluator. Four-state
 values remain legal in four-state parameter types and are rejected when a
 two-state conversion would lose information. The canonical `svconst-v1`
 identity prevents equal display strings with different widths or signedness
-from sharing native objects. Widths above 64 bits, string parameters,
-complete LRM typing, and genvar-dependent typed constants inside iterative
-generate bodies remain unsupported.
+from sharing native objects. Widths above 64 bits, complete LRM typing, and
+genvar-dependent typed constants inside iterative generate bodies remain
+unsupported.
 
 SystemVerilog type-parameter status update: module and package parameter
 regions accept bounded `parameter type` and `localparam type` declarations.
@@ -50,10 +50,27 @@ unambiguous builtin data types retain explicit typed HIR. Per-specialization
 aliases flow into dependent packed ports, signals, typedefs, value parameters,
 localparams, and value-dependent default ranges; nested same-language
 forwarding preserves declaration order and source provenance. Versioned
-`sv-type-v1` identities participate in native-object cache keys. String
-parameters, unpacked/interface/class/anonymous composite actuals, widths above
-64 bits, generated type declarations, and mixed-language type-parameter
-transfer remain unsupported.
+`sv-type-v1` identities participate in native-object cache keys.
+Unpacked/interface/class/anonymous composite actuals, widths above 64 bits,
+generated type declarations, and mixed-language type-parameter transfer
+remain unsupported.
+
+SystemVerilog string-parameter status update: module and package parameter
+regions accept immutable `parameter string` and `localparam string` values.
+Source literals retain parser-decoded bytes, including embedded zero bytes;
+bounded identifiers, concatenation, equality/inequality, and
+integral-selected conditional expressions fold during specialization.
+Defaults, named/positional overrides, package constants, non-iterative
+generated constants, and nested same-language forwarding share the typed
+string evaluator. Constant strings may select conditional/exact-case
+generate alternatives and substitute into the supported `$display`, `$write`,
+`$strobe`, severity-report, and immediate-assertion message positions.
+Versioned `svstring-v1` identities retain exact byte length/content in
+specialization and native-cache keys. This status update supersedes the
+compact table's older blanket “no string parameters” and literal-only
+severity-message wording. Runtime mutable strings and methods, arbitrary
+formatted argument lists, files, dynamic containers, and cross-language
+string-parameter transfer remain unsupported.
 
 VHDL array-aggregate status update: constrained one-dimensional
 scalar-element user arrays now accept contextually typed positional,
