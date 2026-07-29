@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -26,7 +27,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 12> values;
+  std::array<std::string, 16> values;
   std::vector<std::string> specialization_keys;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
@@ -35,6 +36,7 @@ struct Capture {
 
 fsim::project::Config make_config(
     const std::filesystem::path& directory,
+    const std::filesystem::path& child_source,
     const std::filesystem::path& source,
     const fsim::project::Optimization optimization) {
   fsim::project::Config config;
@@ -55,6 +57,8 @@ fsim::project::Config make_config(
       fsim::project::Language::system_verilog;
   sources.standard = "2017";
   sources.library = "work";
+  sources.compilation_unit = "file";
+  sources.files.push_back(child_source);
   sources.files.push_back(source);
   config.source_sets.push_back(std::move(sources));
   return config;
@@ -72,7 +76,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 3);
+  assert(project->design.specializations().size() == 4);
 
   Capture capture;
   capture.specialization_keys =
@@ -85,7 +89,7 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 12> paths{
+  constexpr std::array<std::string_view, 16> paths{
       "sized_parameter_top.default_signed_byte",
       "sized_parameter_top.default_unsigned_byte",
       "sized_parameter_top.default_short",
@@ -97,7 +101,11 @@ Capture run_once(
       "sized_parameter_top.override_short",
       "sized_parameter_top.override_signed_vector",
       "sized_parameter_top.override_unsigned_vector",
-      "sized_parameter_top.override_unsigned_int"};
+      "sized_parameter_top.override_unsigned_int",
+      "sized_parameter_top.typed_max",
+      "sized_parameter_top.typed_minus_one",
+      "sized_parameter_top.typed_mixed_width",
+      "sized_parameter_top.typed_unknown"};
   std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
     const auto signal = simulation.find_signal(paths[index]);
@@ -120,7 +128,7 @@ void verify_capture(const Capture& capture) {
   assert(capture.result.time == 1);
   assert((
       capture.values
-      == std::array<std::string, 12>{
+      == std::array<std::string, 16>{
           "11111111111111111111111111111111",
           "00000000000000000000000011111111",
           "11111111111111111000000000000000",
@@ -132,7 +140,11 @@ void verify_capture(const Capture& capture) {
           "11111111111111111111111111111111",
           "11111111111111111111111111111111",
           "00000000000000000000000011111110",
-          "11111111111111111111111111111110"}));
+          "11111111111111111111111111111110",
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "1111111111111111111111111111111111111111111111111111111111111110",
+          "00010000",
+          "10X1"}));
 }
 
 } // namespace
@@ -145,9 +157,11 @@ int main() {
       / ("fsim-sv-parameter-sizing-"
          + std::to_string(serial))};
   std::filesystem::create_directories(directory.path);
+  const auto child_source =
+      directory.path / "parameter_children.sv";
   const auto source = directory.path / "parameter_sizing.sv";
   {
-    std::ofstream output(source, std::ios::binary);
+    std::ofstream output(child_source, std::ios::binary);
     output << R"(
 module sized_parameter_child #(
   parameter byte SIGNED_BYTE = 8'hff,
@@ -174,7 +188,33 @@ module sized_parameter_child #(
   end
 endmodule
 
-module sized_parameter_top;
+module typed_constant_child #(
+  parameter longint unsigned MAX_VALUE = 64'hffffffffffffffff,
+  parameter longint unsigned MINUS_ONE = MAX_VALUE - 1,
+  parameter logic [7:0] MIXED_WIDTH = 4'hf + 8'h01,
+  parameter logic [3:0] UNKNOWN_VALUE = 4'b10x1
+) (
+  output logic [63:0] max_value,
+  output logic [63:0] minus_one,
+  output logic [7:0] mixed_width,
+  output logic [3:0] unknown_value
+);
+  initial begin
+    max_value = MAX_VALUE;
+    minus_one = MINUS_ONE;
+    mixed_width = MIXED_WIDTH;
+    unknown_value = UNKNOWN_VALUE;
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(
+module sized_parameter_top #(
+  parameter longint unsigned TYPED_MAX = 64'hffffffffffffffff
+);
   logic [31:0] default_signed_byte;
   logic [31:0] default_unsigned_byte;
   logic [31:0] default_short;
@@ -187,6 +227,10 @@ module sized_parameter_top;
   logic [31:0] override_signed_vector;
   logic [31:0] override_unsigned_vector;
   logic [31:0] override_unsigned_int;
+  logic [63:0] typed_max;
+  logic [63:0] typed_minus_one;
+  logic [7:0] typed_mixed_width;
+  logic [3:0] typed_unknown;
 
   sized_parameter_child defaults(
     default_signed_byte,
@@ -211,6 +255,12 @@ module sized_parameter_top;
     override_unsigned_vector,
     override_unsigned_int
   );
+  typed_constant_child #(.MAX_VALUE(TYPED_MAX)) typed(
+    typed_max,
+    typed_minus_one,
+    typed_mixed_width,
+    typed_unknown
+  );
 
   initial begin
     #1;
@@ -221,11 +271,16 @@ endmodule
     assert(output.good());
   }
 
+  std::vector<std::string> baseline_o2_keys;
   for (const auto optimization :
        {fsim::project::Optimization::o0,
         fsim::project::Optimization::o2}) {
     const auto config =
-        make_config(directory.path, source, optimization);
+        make_config(
+            directory.path,
+            child_source,
+            source,
+            optimization);
     const auto reference =
         run_once(config, fsim::app::SimulationEngine::interpreter);
     const auto cold =
@@ -239,17 +294,79 @@ endmodule
     assert(reference.values == warm.values);
     assert(reference.specialization_keys == cold.specialization_keys);
     assert(cold.specialization_keys == warm.specialization_keys);
+    if (optimization == fsim::project::Optimization::o2) {
+      baseline_o2_keys = warm.specialization_keys;
+    }
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 3);
-    assert(cold.compiled_modules == 3);
+    assert(cold.compiled_processes == 4);
+    assert(cold.compiled_modules == 4);
     assert(cold.cache.hits == 0);
-    assert(cold.cache.misses == 3);
-    assert(cold.cache.stores == 3);
-    assert(warm.cache.hits == 3);
+    assert(cold.cache.misses == 4);
+    assert(cold.cache.stores == 4);
+    assert(warm.cache.hits == 4);
     assert(warm.cache.misses == 0);
 #else
     assert(cold.compiled_processes == 0);
     assert(cold.compiled_modules == 0);
 #endif
   }
+
+  std::ifstream input(source, std::ios::binary);
+  std::string changed_source{
+      std::istreambuf_iterator<char>{input},
+      std::istreambuf_iterator<char>{}};
+  assert(input.good() || input.eof());
+  constexpr std::string_view original_max{
+      "64'hffffffffffffffff"};
+  constexpr std::string_view changed_max{
+      "64'hfffffffffffffffe"};
+  const auto max_position = changed_source.find(original_max);
+  assert(max_position != std::string::npos);
+  changed_source.replace(
+      max_position, original_max.size(), changed_max);
+  {
+    std::ofstream output(
+        source, std::ios::binary | std::ios::trunc);
+    output << changed_source;
+    assert(output.good());
+  }
+
+  const auto changed_config = make_config(
+      directory.path,
+      child_source,
+      source,
+      fsim::project::Optimization::o2);
+  const auto changed =
+      run_once(changed_config, fsim::app::SimulationEngine::compiled);
+  assert(changed.result.status == fsim::runtime::RunStatus::stopped);
+  assert((
+      changed.values
+      == std::array<std::string, 16>{
+          "11111111111111111111111111111111",
+          "00000000000000000000000011111111",
+          "11111111111111111000000000000000",
+          "11111111111111111111111110000000",
+          "00000000000000000000000011111111",
+          "11111111111111111111111111111111",
+          "11111111111111111111111110000000",
+          "00000000000000000000000011111110",
+          "11111111111111111111111111111111",
+          "11111111111111111111111111111111",
+          "00000000000000000000000011111110",
+          "11111111111111111111111111111110",
+          "1111111111111111111111111111111111111111111111111111111111111110",
+          "1111111111111111111111111111111111111111111111111111111111111101",
+          "00010000",
+          "10X1"}));
+  assert(baseline_o2_keys.size() == 4);
+  assert(changed.specialization_keys.size() == 4);
+  assert(changed.specialization_keys[0] != baseline_o2_keys[0]);
+  assert(changed.specialization_keys[1] == baseline_o2_keys[1]);
+  assert(changed.specialization_keys[2] == baseline_o2_keys[2]);
+  assert(changed.specialization_keys[3] != baseline_o2_keys[3]);
+#if defined(FSIM_HAS_LLVM)
+  assert(changed.cache.hits == 2);
+  assert(changed.cache.misses == 2);
+  assert(changed.cache.stores == 2);
+#endif
 }

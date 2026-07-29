@@ -205,6 +205,11 @@ struct SpecializationInfo {
     // Canonical name/value pairs after frontend generic/parameter evaluation.
     // Empty for unparameterized units.
     std::vector<std::pair<std::string, std::string>> parameter_values;
+    // Versioned semantic identities used by the native-object cache when a
+    // display value alone would lose width, signedness, state, or type
+    // metadata. Empty entries fall back to parameter_values.
+    std::vector<std::pair<std::string, std::string>>
+        parameter_identity_values;
 };
 
 struct SystemCPortInfo {

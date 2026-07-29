@@ -72,6 +72,7 @@ add_executable(
   fsim_elaboration_tests
   elaboration/elaborator_test.cpp
   elaboration/elaborator_specialization_test.cpp
+  elaboration/elaborator_sv_constant_test.cpp
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_process_test.cpp

@@ -301,22 +301,30 @@ endmodule
     assert(has_diagnostic(
         rejected_assignment_control, "FSIM-ELAB-105"));
 
-    const auto width_mismatch = fsim::frontend::parse_text(
-        "width_mismatch.sv",
+    const auto width_conversion = fsim::frontend::parse_text(
+        "width_conversion.sv",
         R"(
-module width_mismatch;
+module width_conversion;
   logic [7:0] q;
   initial q = 4'b1010;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(width_mismatch.ok());
-    const auto rejected_width_mismatch =
+    assert(width_conversion.ok());
+    const auto converted_width =
         fsim::elaboration::elaborate(
-            width_mismatch.design, "width_mismatch");
-    assert(!rejected_width_mismatch.ok());
-    assert(has_diagnostic(
-        rejected_width_mismatch, "FSIM-ELAB-047"));
+            width_conversion.design, "width_conversion");
+    assert(converted_width.ok());
+    const auto converted_q =
+        converted_width.design->find_signal("width_conversion.q");
+    assert(converted_q);
+    auto converted_interpreter =
+        converted_width.design->create_interpreter();
+    converted_interpreter->start();
+    (void)converted_interpreter->run();
+    assert(
+        converted_interpreter->signal_value(*converted_q).to_msb_string()
+        == "00001010");
 
     auto unsupported_domain = fsim::frontend::parse_text(
         "unsupported_domain.sv",

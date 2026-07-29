@@ -667,13 +667,21 @@ using namespace elaboration_detail;
                     statement.span);
                 return;
             }
-            const auto value =
+            auto value =
                 lower_expression(
                     statement.value,
                     target_width,
                     contextual_target_type);
             if (!value) {
                 return;
+            }
+            if (register_width(*value) != target_width
+                && language_
+                    != frontend::Language::Vhdl2008) {
+                *value = resize_register(
+                    *value,
+                    target_width,
+                    is_signed_expression(statement.value));
             }
             if (register_width(*value) != target_width) {
                 report(
@@ -905,12 +913,19 @@ using namespace elaboration_detail;
             }
             return;
         }
-        const auto value = lower_expression(
+        auto value = lower_expression(
             statement.value,
             target_width,
             contextual_target_type);
         if (!value) {
             return;
+        }
+        if (register_width(*value) != target_width
+            && language_ != frontend::Language::Vhdl2008) {
+            *value = resize_register(
+                *value,
+                target_width,
+                is_signed_expression(statement.value));
         }
         if (register_width(*value) != target_width) {
             report(

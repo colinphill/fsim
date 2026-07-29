@@ -613,7 +613,8 @@ using namespace elaboration_detail;
                 child_path,
                 std::move(child_aliases),
                 std::move(specialized.environment),
-                std::move(specialized.values));
+                std::move(specialized.values),
+                std::move(specialized.identity_values));
         }
         stack_.pop_back();
     }
@@ -626,7 +627,9 @@ using namespace elaboration_detail;
         SignalMap aliases,
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
-            parameter_values) {
+            parameter_values,
+        std::vector<std::pair<std::string, std::string>>
+            parameter_identity_values) {
         const auto parent_types =
             unit.language == frontend::Language::Vhdl2008
                 ? local_vhdl_type_environment(unit)
@@ -736,6 +739,8 @@ using namespace elaboration_detail;
             unit.library.empty() ? "work" : unit.library;
         specialization.is_cell = unit.is_cell;
         specialization.parameter_values = std::move(parameter_values);
+        specialization.parameter_identity_values =
+            std::move(parameter_identity_values);
 
         Lowerer lowerer{
             design_,
@@ -816,7 +821,8 @@ using namespace elaboration_detail;
                 child_path,
                 std::move(child_aliases),
                 std::move(child_specialized.environment),
-                std::move(child_specialized.values));
+                std::move(child_specialized.values),
+                std::move(child_specialized.identity_values));
         }
         stack_.pop_back();
     }

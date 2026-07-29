@@ -584,13 +584,22 @@ Lowerer::Lowerer(
                         variable.span)) {
                     continue;
                 }
-                const auto value =
+                auto value =
                     lower_expression(
                         *variable.initializer,
                         local.width,
                         &variable.type);
                 if (!value) {
                     continue;
+                }
+                if (register_width(*value) != local.width
+                    && language_
+                        != frontend::Language::Vhdl2008) {
+                    *value = resize_register(
+                        *value,
+                        local.width,
+                        is_signed_expression(
+                            *variable.initializer));
                 }
                 if (register_width(*value) != local.width) {
                     report(

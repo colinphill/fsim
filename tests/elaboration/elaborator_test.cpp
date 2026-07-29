@@ -6,6 +6,7 @@
 int main() {
   using namespace fsim::tests::elaboration;
   test_specialization_and_packages();
+  test_systemverilog_typed_constants();
   test_generate_elaboration();
   test_mixed_language_and_systemc();
   test_process_and_wait_lowering();

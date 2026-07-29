@@ -11,8 +11,7 @@ using namespace elaboration_detail;
         if (expression.kind == ExpressionKind::BooleanLiteral) {
             return std::size_t{1};
         }
-        if (language_ == frontend::Language::Vhdl2008
-            && expression.kind == ExpressionKind::IntegerLiteral) {
+        if (expression.kind == ExpressionKind::IntegerLiteral) {
             return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Aggregate) {
@@ -763,6 +762,58 @@ using namespace elaboration_detail;
     [[nodiscard]] frontend::ValueDomain Lowerer::register_domain(
         const RegisterId id) const {
         return register_domains_.at(static_cast<std::size_t>(id));
+    }
+
+
+
+    [[nodiscard]] RegisterId Lowerer::resize_register(
+        const RegisterId source,
+        const std::size_t width,
+        const bool sign_extend) {
+        const auto source_width = register_width(source);
+        if (source_width == width) {
+            return source;
+        }
+        const auto domain = register_domain(source);
+        const auto destination =
+            allocate_register(width, domain);
+        if (width < source_width) {
+            process_.operations.emplace_back(Extract{
+                destination,
+                source,
+                0,
+                static_cast<std::uint32_t>(width)});
+            return destination;
+        }
+        const auto extension_width = width - source_width;
+        RegisterId extension{};
+        if (sign_extend) {
+            extension = allocate_register(1, domain);
+            process_.operations.emplace_back(Extract{
+                extension,
+                source,
+                static_cast<std::uint32_t>(source_width - 1U),
+                1});
+        } else {
+            extension = allocate_register(
+                extension_width,
+                frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant{
+                extension,
+                unsigned_value(0, extension_width)});
+        }
+        std::vector<RegisterId> operands;
+        if (sign_extend) {
+            operands.assign(extension_width, extension);
+        } else {
+            operands.push_back(extension);
+        }
+        operands.push_back(source);
+        process_.operations.emplace_back(Concatenate{
+            destination,
+            std::move(operands),
+            static_cast<std::uint32_t>(width)});
+        return destination;
     }
 
 

@@ -587,12 +587,21 @@ using namespace elaboration_detail;
             parent_environment,
             association_language,
             diagnostics_);
+        if (specialized.identity_values.empty()) {
+            specialized.identity_values = specialized.values;
+        }
         specialized.values.insert(
             specialized.values.begin(),
             std::make_move_iterator(
                 type_specialized.values.begin()),
             std::make_move_iterator(
                 type_specialized.values.end()));
+        specialized.identity_values.insert(
+            specialized.identity_values.begin(),
+            specialized.values.begin(),
+            specialized.values.begin()
+                + static_cast<std::ptrdiff_t>(
+                    type_specialized.values.size()));
         return specialized;
     }
 

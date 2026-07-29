@@ -280,11 +280,22 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 binary_context_type != nullptr
                     ? binary_context_type->width()
                     : std::nullopt;
+            const auto inferred_lhs_width =
+                infer_width(expression.operands[0])
+                    .value_or(expected_width);
+            const auto inferred_rhs_width =
+                infer_width(expression.operands[1])
+                    .value_or(expected_width);
             const auto width =
                 contextual_width
                     ? static_cast<std::size_t>(*contextual_width)
-                    : infer_width(expression)
-                          .value_or(expected_width);
+                    : language_
+                            == frontend::Language::Vhdl2008
+                        ? infer_width(expression)
+                              .value_or(expected_width)
+                        : std::max(
+                              inferred_lhs_width,
+                              inferred_rhs_width);
             if (language_ == frontend::Language::Vhdl2008
                 && expression.text == "**") {
                 const auto exponent =
@@ -298,16 +309,31 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     return std::nullopt;
                 }
             }
-            const auto lhs = lower_expression(
+            auto lhs = lower_expression(
                 expression.operands[0],
-                width,
+                language_
+                        == frontend::Language::Vhdl2008
+                    ? width
+                    : inferred_lhs_width,
                 binary_context_type);
-            const auto rhs = lower_expression(
+            auto rhs = lower_expression(
                 expression.operands[1],
-                width,
+                language_
+                        == frontend::Language::Vhdl2008
+                    ? width
+                    : inferred_rhs_width,
                 binary_context_type);
             if (!lhs || !rhs) {
                 return std::nullopt;
+            }
+            if (language_ != frontend::Language::Vhdl2008) {
+                const bool common_signed =
+                    is_signed_expression(expression.operands[0])
+                    && is_signed_expression(expression.operands[1]);
+                *lhs = resize_register(
+                    *lhs, width, common_signed);
+                *rhs = resize_register(
+                    *rhs, width, common_signed);
             }
             if (register_width(*lhs) != register_width(*rhs)) {
                 report(

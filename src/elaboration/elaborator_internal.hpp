@@ -43,6 +43,60 @@ using namespace runtime::simir;
 using ConstantEnvironment =
     std::unordered_map<std::string, std::int64_t>;
 
+/// A bounded IEEE 1800 integral constant.
+///
+/// Values remain width-bearing bit patterns until an explicitly
+/// integer-only elaboration consumer requests a checked conversion. X and Z
+/// are retained independently so legal four-state parameters can be
+/// substituted without passing through a host integer.
+struct SystemVerilogConstantValue {
+    std::uint64_t bits{};
+    std::uint64_t unknown_bits{};
+    std::uint64_t high_impedance_bits{};
+    std::uint32_t width{32};
+    bool is_signed{true};
+    bool unsized{};
+    frontend::SourceSpan source;
+
+    [[nodiscard]] std::uint64_t mask() const noexcept;
+    [[nodiscard]] bool known() const noexcept;
+    [[nodiscard]] std::optional<bool> truth_value() const noexcept;
+    [[nodiscard]] std::optional<std::int64_t>
+    integer_value() const noexcept;
+    [[nodiscard]] std::string display() const;
+    [[nodiscard]] std::string canonical() const;
+    [[nodiscard]] Expression expression(
+        const frontend::SourceSpan& use_span) const;
+};
+
+using SystemVerilogConstantEnvironment =
+    std::unordered_map<std::string, SystemVerilogConstantValue>;
+
+std::optional<SystemVerilogConstantValue>
+evaluate_systemverilog_constant_expression(
+    const Expression& expression,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& fallback_environment,
+    std::string& error);
+
+std::optional<SystemVerilogConstantValue>
+convert_systemverilog_parameter_value(
+    const SystemVerilogConstantValue& value,
+    const frontend::Type& type,
+    std::string& error);
+
+void substitute_systemverilog_parameters(
+    Expression& expression,
+    const SystemVerilogConstantEnvironment& environment);
+
+void substitute_systemverilog_parameters(
+    DesignUnit& unit,
+    const SystemVerilogConstantEnvironment& environment);
+
+void substitute_systemverilog_parameters(
+    frontend::GenerateBody& body,
+    const SystemVerilogConstantEnvironment& environment);
+
 [[nodiscard]] bool is_two_state_domain(
     const frontend::ValueDomain domain) noexcept;
 
@@ -124,6 +178,13 @@ struct ConstantTypeInfo {
 
 using ConstantDomainEnvironment =
     std::unordered_map<std::string, ConstantTypeInfo>;
+
+void prepare_systemverilog_generate_regions(
+    std::vector<frontend::GenerateRegion>& regions,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& integer_environment,
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics);
 
 std::int64_t normalize_systemverilog_parameter_value(
     std::int64_t value,
@@ -430,6 +491,7 @@ struct SpecializedUnit {
     DesignUnit unit;
     ConstantEnvironment environment;
     std::vector<std::pair<std::string, std::string>> values;
+    std::vector<std::pair<std::string, std::string>> identity_values;
 };
 
 struct InterfaceTypeSpecialization {
@@ -788,6 +850,11 @@ private:
     [[nodiscard]] frontend::ValueDomain register_domain(
         const RegisterId id) const;
 
+    [[nodiscard]] RegisterId resize_register(
+        RegisterId source,
+        std::size_t width,
+        bool sign_extend);
+
     void report(std::string code, std::string message, frontend::SourceSpan span);
 
     ElaboratedDesign& design_;
@@ -1020,7 +1087,9 @@ private:
         SignalMap aliases,
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
-            parameter_values);
+            parameter_values,
+        std::vector<std::pair<std::string, std::string>>
+            parameter_identity_values);
 
     void report(
         std::string code,

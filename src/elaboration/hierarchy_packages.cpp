@@ -48,7 +48,8 @@ HierarchyBuilder::HierarchyBuilder(
             design_.top_,
             {},
             std::move(specialized.environment),
-            std::move(specialized.values));
+            std::move(specialized.values),
+            std::move(specialized.identity_values));
         finish();
     }
 

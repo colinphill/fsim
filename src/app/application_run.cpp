@@ -271,8 +271,11 @@ make_specialization_cache_keys(
          settings->source_set->include_directories) {
       key.add("include", include.lexically_normal().generic_string());
     }
-    for (const auto& [name, value] :
-         specialization.parameter_values) {
+    const auto& parameter_identity =
+        specialization.parameter_identity_values.empty()
+            ? specialization.parameter_values
+            : specialization.parameter_identity_values;
+    for (const auto& [name, value] : parameter_identity) {
       key.add("parameter-name", name);
       key.add("parameter-value", value);
     }
