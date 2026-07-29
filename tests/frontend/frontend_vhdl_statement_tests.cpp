@@ -1,0 +1,1595 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "fsim/frontend/frontend.hpp"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+namespace fsim::tests::frontend {
+
+using namespace fsim::frontend;
+
+namespace {
+
+void require(bool condition, std::string_view message) {
+  if (!condition) {
+    throw std::runtime_error(std::string(message));
+  }
+}
+
+[[maybe_unused]] std::filesystem::path make_test_directory(
+    std::string_view name) {
+  const auto suffix =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto directory =
+      std::filesystem::temp_directory_path()
+      / ("fsim-" + std::string{name} + "-"
+         + std::to_string(suffix));
+  std::filesystem::create_directories(directory);
+  return directory;
+}
+
+[[maybe_unused]] void write_text(
+    const std::filesystem::path& path,
+    const std::string_view text) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary);
+  output << text;
+  require(
+      output.good(),
+      "frontend test fixture must be writable");
+}
+
+} // namespace
+
+void test_vhdl_array_attributes() {
+  const auto result = parse_text(
+      "array_attributes.vhd",
+      R"(
+entity array_attributes is
+end entity;
+
+architecture rtl of array_attributes is
+  type User_Array_T is array (integer range <>) of bit;
+  subtype Desc_Array_T is User_Array_T(3 downto -2);
+  signal descending : std_logic_vector(7 downto 4);
+  signal user_array : Desc_Array_T;
+  signal result : signed(31 downto 0);
+  signal direction : boolean;
+begin
+  observe: process
+  begin
+    result <= descending'left;
+    result <= descending'right(1);
+    result <= descending'low;
+    result <= descending'high;
+    result <= descending'length;
+    direction <= descending'ascending;
+    direction <= descending'event;
+    result <= descending'last_value;
+    result <= descending'last_event;
+    direction <= descending'stable;
+    direction <= descending'active;
+    result <= Desc_Array_T'left;
+    direction <= Desc_Array_T'ascending(1);
+    for Index in user_array'range loop
+      null;
+    end loop;
+    for Index in Desc_Array_T'reverse_range(1) loop
+      null;
+    end loop;
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "bounded VHDL array attributes must parse");
+  const auto& statements =
+      result.design.units.back().processes.front().statements;
+  const std::array<std::string_view, 11> attributes{
+      "'left", "'right", "'low", "'high", "'length",
+      "'ascending", "'event", "'last_value", "'last_event",
+      "'stable", "'active"};
+  require(statements.size() == 16, "VHDL attribute statement count");
+  for (std::size_t index = 0; index < attributes.size(); ++index) {
+    require(
+        statements[index].value.kind == ExpressionKind::Call
+            && statements[index].value.text == attributes[index]
+            && statements[index].value.operands.front().text
+                == "descending",
+        "VHDL attribute call HIR");
+  }
+  require(
+      statements[1].value.operands.size() == 2
+          && statements[1].value.operands[1].text == "1",
+      "VHDL attribute optional dimension");
+  require(
+      statements[11].value.kind == ExpressionKind::Call
+          && statements[11].value.text == "'left"
+          && statements[11].value.operands.front().text
+              == "desc_array_t"
+          && statements[12].value.text == "'ascending"
+          && statements[12].value.operands.size() == 2,
+      "VHDL user-array subtype-mark scalar attributes retain HIR");
+  require(
+      statements[13].kind == StatementKind::Loop
+          && statements[13].loop_initial.kind
+              == ExpressionKind::Call
+          && statements[13].loop_initial.text == "'range"
+          && statements[13].loop_initial.operands.front().text
+              == "user_array"
+          && statements[13].loop_limit.kind
+              == ExpressionKind::Invalid
+          && statements[14].kind == StatementKind::Loop
+          && statements[14].loop_initial.text
+              == "'reverse_range"
+          && statements[14].loop_initial.operands.size() == 2,
+      "range attributes form complete sequential-loop discrete ranges");
+
+  const auto unsupported = parse_text(
+      "unsupported_attribute.vhd",
+      R"(
+architecture rtl of unsupported_attribute is
+  signal value : bit_vector(3 downto 0);
+  signal result : signed(31 downto 0);
+begin
+  result <= value'instance_name;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !unsupported.ok()
+          && std::ranges::any_of(
+              unsupported.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-030";
+              }),
+      "unsupported VHDL attributes must be targeted");
+}
+
+void test_vhdl_selected_assignments() {
+  const auto result = parse_text(
+      "selected_assignment.vhd",
+      R"(
+entity selected_assignment is
+end entity;
+
+architecture rtl of selected_assignment is
+  signal selector : std_logic_vector(1 downto 0);
+  signal a : std_logic_vector(3 downto 0);
+  signal b : std_logic_vector(3 downto 0);
+  signal result : std_logic_vector(3 downto 0);
+begin
+  choose: with selector select
+    result <=
+      a after 2 ns when "00" | "01",
+      b when others;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "VHDL selected signal assignments must parse");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture
+          && architecture->concurrent_statements.size() == 1,
+      "a selected signal assignment must be retained as one statement");
+  const auto& selected =
+      architecture->concurrent_statements.front();
+  require(
+      selected.kind == StatementKind::Case
+          && selected.label == "choose"
+          && selected.condition.text == "selector"
+          && selected.case_alternatives.size() == 2
+          && selected.case_alternatives[0].choices.size() == 2
+          && selected.case_alternatives[0].statements.size() == 1
+          && selected.case_alternatives[0]
+                 .statements.front().delay
+                 .has_value()
+          && selected.case_alternatives[0]
+                 .statements.front().delay->magnitude
+              == 2
+          && selected.case_alternatives[1].is_default,
+      "selected assignment choices, waveform delay, default, and label");
+
+  const auto missing_others = parse_text(
+      "selected_missing_others.vhd",
+      R"(
+entity selected_missing_others is
+end entity;
+architecture rtl of selected_missing_others is
+  signal selector : std_logic;
+  signal result : std_logic;
+begin
+  with selector select result <= '0' when '0';
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !missing_others.ok()
+          && std::ranges::any_of(
+              missing_others.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-029";
+              }),
+      "bounded selected assignments without others must be diagnosed");
+
+  const auto invalid_others = parse_text(
+      "selected_invalid_others.vhd",
+      R"(
+entity selected_invalid_others is
+end entity;
+architecture rtl of selected_invalid_others is
+  signal selector : std_logic;
+  signal result : std_logic;
+begin
+  with selector select
+    result <= '0' when others, '1' when '1', '0' when others;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_others.ok()
+          && std::ranges::any_of(
+              invalid_others.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-027";
+              })
+          && std::ranges::any_of(
+              invalid_others.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-028";
+              }),
+      "duplicate and nonfinal selected-assignment others alternatives "
+      "must be diagnosed");
+}
+
+void test_vhdl_delay_mechanisms() {
+  const auto parsed = parse_text(
+      "delay_mechanisms.vhd",
+      R"(
+entity delay_mechanisms is
+end entity;
+
+architecture rtl of delay_mechanisms is
+  signal selector : std_logic;
+  signal source : std_logic;
+  signal implicit_value : std_logic;
+  signal inertial_value : std_logic;
+  signal transport_value : std_logic;
+  signal rejected_value : std_logic;
+  signal selected_value : std_logic;
+begin
+  implicit_value <= source after 5 ns;
+  inertial_value <= inertial source after 5 ns;
+  transport_value <= transport source after 5 ns;
+  rejected_value <= reject 2 ns inertial source after 5 ns;
+  with selector select
+    selected_value <= reject 1 ns inertial
+      source after 3 ns when '1',
+      '0' after 3 ns when others;
+
+  sequential: process(source)
+    variable local_value : std_logic;
+  begin
+    local_value := source;
+    transport_value <= transport source after 4 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "VHDL delay mechanisms must parse");
+  const auto* architecture =
+      parsed.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture
+          && architecture->concurrent_statements.size() == 5
+          && architecture->processes.size() == 1,
+      "VHDL delay mechanism statement contexts");
+  const auto& implicit_value =
+      architecture->concurrent_statements[0];
+  const auto& inertial_value =
+      architecture->concurrent_statements[1];
+  const auto& transport_value =
+      architecture->concurrent_statements[2];
+  const auto& rejected_value =
+      architecture->concurrent_statements[3];
+  require(
+      implicit_value.vhdl_delay_mechanism
+              == VhdlDelayMechanism::ImplicitInertial
+          && inertial_value.vhdl_delay_mechanism
+              == VhdlDelayMechanism::Inertial
+          && transport_value.vhdl_delay_mechanism
+              == VhdlDelayMechanism::Transport
+          && rejected_value.vhdl_rejection_limit
+          && rejected_value.vhdl_rejection_limit->magnitude == 2
+          && rejected_value.vhdl_rejection_limit->unit == "ns",
+      "simple VHDL delay mechanism HIR");
+  const auto& alternatives =
+      architecture->concurrent_statements[4].case_alternatives;
+  require(
+      alternatives.size() == 2
+          && alternatives[0].statements[0].vhdl_delay_mechanism
+              == VhdlDelayMechanism::Inertial
+          && alternatives[1].statements[0].vhdl_rejection_limit
+          && alternatives[1]
+                 .statements[0]
+                 .vhdl_rejection_limit->magnitude
+              == 1,
+      "a selected assignment propagates its common delay mechanism");
+  const auto& sequential =
+      architecture->processes.front().statements;
+  require(
+      sequential.size() == 2
+          && !sequential[0].vhdl_delay_mechanism
+          && sequential[1].vhdl_delay_mechanism
+              == VhdlDelayMechanism::Transport,
+      "VHDL variable assignments stay distinct from signal mechanisms");
+
+  const auto malformed = parse_text(
+      "bad_delay_mechanisms.vhd",
+      R"(
+architecture rtl of bad_delay_mechanisms is
+  signal source : std_logic;
+  signal result : std_logic;
+begin
+  result <= reject -1 ns transport source after 5 ns;
+  result <= source transport after 5 ns;
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        malformed.diagnostics,
+        [code](const auto& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !malformed.ok()
+          && has_code("FSIM-VHDL-SEM-031")
+          && has_code("FSIM-VHDL-PARSE-123")
+          && has_code("FSIM-VHDL-PARSE-124"),
+      "malformed and misplaced VHDL delay mechanisms are targeted");
+}
+
+void test_vhdl_ordered_waveforms() {
+  const auto parsed = parse_text(
+      "ordered_waveforms.vhd",
+      R"(
+architecture rtl of ordered_waveforms is
+  signal choose : boolean;
+  signal selector : std_logic;
+  signal source : std_logic_vector(1 downto 0);
+  signal result : std_logic_vector(1 downto 0);
+begin
+  result <= transport "00" after 1 ns, "11" after 4 ns;
+  result <= "01" after 2 ns, "10" after 6 ns
+            when choose else unaffected;
+  with selector select
+    result <= "00" after 1 ns, "11" after 3 ns when '0',
+              unaffected when others;
+  process
+  begin
+    result(1 downto 0) <=
+        inertial "10" after 2 ns, "01" after 5 ns;
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "ordered VHDL waveforms must parse");
+  const auto& unit = parsed.design.units.front();
+  require(
+      unit.concurrent_statements.size() == 3
+          && unit.processes.size() == 1,
+      "ordered waveform statement contexts");
+  const auto& simple = unit.concurrent_statements[0];
+  require(
+      simple.kind == StatementKind::Assignment
+          && simple.vhdl_waveform.size() == 2
+          && simple.vhdl_waveform[0].delay
+          && simple.vhdl_waveform[0].delay->magnitude == 1
+          && simple.vhdl_waveform[1].delay
+          && simple.vhdl_waveform[1].delay->magnitude == 4,
+      "simple ordered waveform HIR");
+  const auto& conditional = unit.concurrent_statements[1];
+  require(
+      conditional.kind == StatementKind::If
+          && conditional.statements[0].vhdl_waveform.size() == 2
+          && conditional.else_statements[0].vhdl_unaffected,
+      "conditional alternatives retain independent waveform state");
+  const auto& selected = unit.concurrent_statements[2];
+  require(
+      selected.kind == StatementKind::Case
+          && selected.case_alternatives.size() == 2
+          && selected.case_alternatives[0]
+                 .statements[0]
+                 .vhdl_waveform.size()
+              == 2
+          && selected.case_alternatives[1]
+                 .statements[0]
+                 .vhdl_unaffected,
+      "selected alternatives retain waveform or unaffected");
+  require(
+      unit.processes[0].statements[0].vhdl_waveform.size() == 2
+          && unit.processes[0]
+                 .statements[0]
+                 .target.kind
+              == ExpressionKind::Slice,
+      "sequential slice waveform HIR");
+
+  const auto malformed = parse_text(
+      "malformed_waveforms.vhd",
+      R"(
+architecture rtl of malformed_waveforms is
+  signal result : std_logic;
+begin
+  result <= unaffected, '1' after 1 ns;
+  result <= ;
+  result <= null after 1 ns;
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        malformed.diagnostics,
+        [code](const auto& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !malformed.ok()
+          && has_code("FSIM-VHDL-PARSE-125")
+          && has_code("FSIM-VHDL-PARSE-126")
+          && has_code("FSIM-VHDL-UNSUPPORTED-025"),
+      "malformed, empty, and null VHDL waveforms are targeted (mixed="
+          + std::to_string(has_code("FSIM-VHDL-PARSE-125"))
+          + ", empty="
+          + std::to_string(has_code("FSIM-VHDL-PARSE-126"))
+          + ", null="
+          + std::to_string(has_code("FSIM-VHDL-UNSUPPORTED-025"))
+          + ")");
+}
+
+void test_vhdl_case_statements() {
+  const auto result = parse_text(
+      "case_statement.vhd",
+      R"(
+entity case_statement is
+end entity;
+architecture rtl of case_statement is
+  signal selector : std_logic_vector(1 downto 0);
+  signal result : std_logic;
+begin
+  choose: process(selector)
+  begin
+    case selector is
+      when "00" | "01" =>
+        result <= '0';
+      when others =>
+        result <= '1';
+    end case;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "VHDL sequential case statement must parse");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->processes.front().statements.size() == 1
+          && architecture->processes.front().statements[0].kind
+              == StatementKind::Case
+          && architecture->processes.front()
+                 .statements[0]
+                 .case_alternatives.size()
+              == 2
+          && architecture->processes.front()
+                 .statements[0]
+                 .case_alternatives[0]
+                 .choices.size()
+              == 2
+          && architecture->processes.front()
+                 .statements[0]
+                 .case_alternatives[1]
+                 .is_default,
+      "VHDL case alternatives and choices are retained");
+
+  const auto duplicate_others = parse_text(
+      "duplicate_others.vhd",
+      R"(
+architecture rtl of duplicate_others is
+begin
+  choose: process
+  begin
+    case "00" is
+      when others => null;
+      when others => null;
+    end case;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !duplicate_others.ok()
+          && std::ranges::any_of(
+              duplicate_others.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-021";
+              })
+          && std::ranges::any_of(
+              duplicate_others.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-022";
+              }),
+      "duplicate and nonfinal VHDL case others alternatives are targeted");
+}
+
+void test_vhdl_sequential_for_loops() {
+  const auto result = parse_text(
+      "sequential_for.vhd",
+      R"(
+entity sequential_for is
+end entity;
+architecture rtl of sequential_for is
+  signal ascending : std_logic_vector(2 downto 0);
+  signal descending : std_logic_vector(3 downto 1);
+begin
+  populate: process
+  begin
+    for lane in 0 to 2 loop
+      ascending(lane) <= '1';
+    end loop;
+    for lane in 3 downto 1 loop
+      descending(lane) <= '0';
+    end loop;
+    while false loop
+      null;
+    end loop;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(result.ok(), "VHDL sequential for loops must parse");
+  const auto* architecture =
+      result.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->processes.front().statements.size() == 4,
+      "VHDL sequential for-loop process");
+  const auto& ascending =
+      architecture->processes.front().statements[0];
+  const auto& descending =
+      architecture->processes.front().statements[1];
+  require(
+      ascending.kind == StatementKind::Loop
+          && ascending.loop_variable == "lane"
+          && !ascending.loop_descending
+          && ascending.loop_initial.text == "0"
+          && ascending.loop_limit.text == "2"
+          && ascending.statements.size() == 1
+          && descending.kind == StatementKind::Loop
+          && descending.loop_descending
+          && descending.loop_initial.text == "3"
+          && descending.loop_limit.text == "1"
+          && architecture->processes.front()
+                 .statements[2]
+                 .kind == StatementKind::Loop
+          && architecture->processes.front()
+                 .statements[2]
+                 .loop_runtime
+          && architecture->processes.front()
+                 .statements[2]
+                 .condition.kind
+              == ExpressionKind::BooleanLiteral,
+      "VHDL sequential for-loop ranges and bodies are retained");
+
+  const auto labeled_end = parse_text(
+      "labeled_sequential_for.vhd",
+      R"(
+architecture rtl of labeled_sequential_for is
+begin
+  populate: process
+  begin
+    populate_loop: for lane in 0 to 1 loop
+      null;
+    end loop populate_loop;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      labeled_end.ok()
+          && labeled_end.design.units.back()
+                 .processes.front()
+                 .statements.front()
+                 .loop_label
+              == "populate_loop",
+      "matching opening and end labels are retained on VHDL loops");
+}
+
+void test_systemverilog_vertical_slice() {
+  constexpr std::string_view source = R"(
+module counter(
+  input logic clk,
+  output logic [7:0] q
+);
+  logic [7:0] next;
+  assign next = q + 1;
+  child u_child(.value(q), .result(next));
+
+  always_ff @(posedge clk) begin
+    q <= next;
+  end
+
+  initial begin
+    #10 $finish;
+  end
+endmodule
+)";
+
+  const auto result =
+      parse_text("counter.sv", source, Language::SystemVerilog2017);
+  require(result.ok(),
+          "SystemVerilog vertical slice must parse without errors");
+  require(result.design.units.size() == 1, "SV module count");
+  const auto& module = result.design.units.front();
+  require(module.kind == UnitKind::VerilogModule, "SV unit kind");
+  require(module.name == "counter", "SV module name");
+  require(module.ports.size() == 2, "SV ANSI port count");
+  require(module.ports[1].type.width() == 8, "SV vector width");
+  require(module.signals.size() == 1, "SV signal declaration");
+  require(module.concurrent_statements.size() == 1,
+          "SV continuous assignment");
+  require(module.instances.size() == 1, "SV module instance");
+  require(module.instances.front().unit_name == "child"
+              && module.instances.front().name == "u_child",
+          "SV instance unit and name");
+  require(module.instances.front().connections.size() == 2
+              && module.instances.front().connections.front().port
+                  == std::optional<std::string>{"value"},
+          "SV named port connection");
+  require(module.processes.size() == 2, "SV process count");
+
+  const auto& always = module.processes[0];
+  require(always.kind == ProcessKind::SystemVerilogAlwaysFF,
+          "always_ff process kind");
+  require(always.sensitivities.size() == 1 &&
+              always.sensitivities.front().edge == EdgeKind::Positive,
+          "SV posedge sensitivity");
+  require(always.statements.size() == 1 &&
+              always.statements.front().assignment_kind ==
+                  AssignmentKind::NonBlocking,
+          "SV nonblocking assignment");
+
+  const auto& initial = module.processes[1];
+  require(initial.kind == ProcessKind::Initial, "initial process kind");
+  require(initial.statements.size() == 1 &&
+              initial.statements.front().kind == StatementKind::Delay,
+          "initial delay statement");
+  require(initial.statements.front().delay->magnitude == 10,
+          "Verilog delay magnitude");
+  require(initial.statements.front().statements.size() == 1 &&
+              initial.statements.front().statements.front().kind ==
+                  StatementKind::Finish,
+          "delayed $finish");
+}
+
+void test_non_ansi_verilog_ports() {
+  constexpr std::string_view source = R"(
+module edge_reg(clk, d, q);
+  input clk, d;
+  output q;
+  reg q;
+  always @(posedge clk) q <= d;
+endmodule
+)";
+  const auto result =
+      parse_text("edge_reg.v", source, Language::Verilog2005);
+  require(result.ok(), "Verilog-2005 non-ANSI module must parse");
+  const auto& module = result.design.units.front();
+  require(module.ports.size() == 3,
+          "body port declarations must update header placeholders");
+  require(module.signals.empty(),
+          "a non-ANSI output reg must not become a duplicate signal");
+  require(module.ports[2].type.spelling == "reg",
+          "a non-ANSI reg redeclaration must refine the port type");
+  require(module.processes.front().kind == ProcessKind::VerilogAlways,
+          "Verilog always process kind");
+}
+
+void test_diagnostics_and_spans() {
+  const auto result = parse_text(
+      "broken.sv", "module broken(input logic a)\nassign = a;\nendmodule",
+      Language::SystemVerilog2017);
+  require(!result.ok(), "malformed source must fail");
+  require(!result.diagnostics.empty(), "malformed source diagnostic");
+  require(result.diagnostics.front().span.source_name == "broken.sv",
+          "diagnostic source name");
+  require(result.diagnostics.front().span.begin.line >= 1,
+          "diagnostic line is one-based");
+  require(result.diagnostics.front().code.starts_with("FSIM-"),
+          "diagnostics have stable codes");
+}
+
+void test_vhdl_context_diagnostics() {
+  const auto declaration = parse_text(
+      "context_declaration.vhd",
+      R"(
+context shared is
+  library ieee;
+  use ieee.std_logic_1164.all;
+  context work.base;
+end context shared;
+context work.shared;
+entity context_user is
+end entity;
+)",
+      Language::Vhdl2008);
+  require(
+      declaration.ok() && declaration.design.units.size() == 2,
+      "bounded context declaration and following unit must parse");
+  require(
+      declaration.design.units[0].kind == UnitKind::VhdlContext
+          && declaration.design.units[0].name == "shared"
+          && declaration.design.units[0].vhdl_context.size() == 3
+          && declaration.design.units[0]
+                 .vhdl_context.back()
+                 .kind
+              == VhdlContextItemKind::ContextReference,
+      "context declaration retains reusable context items");
+  require(
+      declaration.design.units[1].vhdl_context.size() == 1
+          && declaration.design.units[1]
+                 .vhdl_context.front()
+                 .selected_names.front()
+              == "work.shared",
+      "context reference remains attached to the following unit");
+
+  const auto malformed = parse_text(
+      "malformed_context.vhd",
+      "use ieee.; entity context_user is end entity;",
+      Language::Vhdl2008);
+  require(!malformed.ok(), "a malformed context clause must be rejected");
+  require(
+      std::any_of(
+          malformed.diagnostics.begin(),
+          malformed.diagnostics.end(),
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-VHDL-PARSE-044";
+          }),
+      "malformed context clause needs a targeted diagnostic");
+
+  const auto adjacent_identifiers = parse_text(
+      "adjacent_context_identifiers.vhd",
+      "library e is; entity recovered is end entity;",
+      Language::Vhdl2008);
+  require(
+      !adjacent_identifiers.ok()
+          && std::any_of(
+              adjacent_identifiers.diagnostics.begin(),
+              adjacent_identifiers.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-PARSE-044";
+              }),
+      "adjacent context identifiers must be consumed and diagnosed");
+
+  const auto invalid_declaration = parse_text(
+      "invalid_context_declaration.vhd",
+      R"(
+context invalid is
+  signal not_a_context_item : bit;
+end context mismatched;
+entity recovered is
+end entity recovered;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_declaration.ok()
+          && invalid_declaration.design.units.size() == 2
+          && std::any_of(
+              invalid_declaration.diagnostics.begin(),
+              invalid_declaration.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-024";
+              })
+          && std::any_of(
+              invalid_declaration.diagnostics.begin(),
+              invalid_declaration.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-092";
+              }),
+      "invalid context declaration items and end names are targeted");
+}
+
+void test_vhdl_package_constants() {
+  const auto parsed = parse_text(
+      "package_constants.vhd",
+      R"(
+library support;
+package constants is
+  constant width, lanes : natural := 4;
+  constant next_value : integer := width + 1;
+  constant enabled : boolean := true;
+  constant initial_bit : bit := '1';
+end package constants;
+
+use work.constants.all;
+entity package_user is
+end entity package_user;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "bounded VHDL package constants must parse");
+  require(
+      parsed.design.units.size() == 2,
+      "package and following entity are retained");
+  const auto& package = parsed.design.units[0];
+  require(
+      package.kind == UnitKind::VhdlPackage
+          && package.name == "constants"
+          && package.parameters.size() == 5,
+      "package declaration records each constant");
+  require(
+      package.parameters[0].name == "width"
+          && package.parameters[1].name == "lanes"
+          && package.parameters[2].default_value.kind
+              == ExpressionKind::Binary
+          && package.parameters[3].type.domain
+              == ValueDomain::Boolean
+          && package.parameters[4].type.domain
+              == ValueDomain::Bit2,
+      "package constant names, expressions, and scalar types survive");
+  require(
+      package.vhdl_context.size() == 1
+          && package.vhdl_context.front().kind
+              == VhdlContextItemKind::LibraryClause,
+      "package retains its own context");
+  require(
+      parsed.design.units[1].vhdl_context.size() == 1
+          && parsed.design.units[1]
+                 .vhdl_context.front()
+                 .selected_names.front()
+              == "work.constants.all",
+      "following unit retains package use visibility");
+
+  const auto selected_names = parse_text(
+      "selected_package_names.vhd",
+      R"(
+entity selected_package_names is
+  port (
+    observed : out unsigned(
+      work.constants.width - 1 downto 0)
+  );
+end entity selected_package_names;
+architecture rtl of selected_package_names is
+begin
+  observed <= constants.next_value;
+end architecture rtl;
+)",
+      Language::Vhdl2008);
+  require(
+      selected_names.ok()
+          && selected_names.design.units.size() == 2
+          && selected_names.design.units[0]
+                 .ports.front()
+                 .type.packed_range_expression
+          && selected_names.design.units[0]
+                 .ports.front()
+                 .type.packed_range_expression
+                 ->left.operands.front().text
+              == "work.constants.width"
+          && selected_names.design.units[1]
+                 .concurrent_statements.front()
+                 .value.text
+              == "constants.next_value",
+      "two- and three-part selected package names survive HIR parsing");
+
+  const auto invalid = parse_text(
+      "invalid_package_constants.vhd",
+      R"(
+package invalid_constants is
+  constant duplicate : natural := 1;
+  constant duplicate : natural := 2;
+  constant missing : natural;
+  constant vector_value : bit_vector(3 downto 0) := "0000";
+end package invalid_constants;
+)",
+      Language::Vhdl2008);
+  require(!invalid.ok(), "invalid package constants must fail");
+  const auto has_code = [&](const std::string_view code) {
+    return std::any_of(
+        invalid.diagnostics.begin(),
+        invalid.diagnostics.end(),
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      has_code("FSIM-VHDL-SEM-020")
+          && has_code("FSIM-VHDL-PARSE-088")
+          && has_code("FSIM-VHDL-UNSUPPORTED-023"),
+      "invalid package constants have targeted diagnostics");
+
+  const auto body = parse_text(
+      "package_body.vhd",
+      R"(
+package body unsupported is
+  function identity(value : integer) return integer is
+  begin
+    return value;
+  end function identity;
+end package body unsupported;
+entity recovered is
+end entity recovered;
+)",
+      Language::Vhdl2008);
+  require(
+      !body.ok()
+          && body.design.units.size() == 1
+          && body.design.units.front().name == "recovered"
+          && std::any_of(
+              body.diagnostics.begin(),
+              body.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-022";
+              }),
+      "package-body rejection recovers at the outer end clause");
+}
+
+void test_ignored_initializers_are_rejected() {
+  const auto vhdl = parse_text(
+      "initializers.vhd",
+      R"(
+entity initializers is
+  port (input : in std_logic := '0');
+end entity;
+architecture rtl of initializers is
+  signal state : std_logic := '1';
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(!vhdl.ok(), "VHDL defaults and initializers must be rejected");
+  bool port_default = false;
+  bool signal_initializer = false;
+  for (const auto& diagnostic : vhdl.diagnostics) {
+    port_default =
+        port_default
+        || diagnostic.code == "FSIM-VHDL-UNSUPPORTED-011";
+    signal_initializer =
+        signal_initializer
+        || diagnostic.code == "FSIM-VHDL-UNSUPPORTED-012";
+  }
+  require(port_default, "VHDL port default needs a targeted diagnostic");
+  require(
+      signal_initializer,
+      "VHDL signal initializer needs a targeted diagnostic");
+
+  const auto sv = parse_text(
+      "initializers.sv",
+      R"(
+module initializers(
+  input logic input_value = 1'b0
+);
+  logic state = 1'b1;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!sv.ok(), "SV defaults and initializers must be rejected");
+  bool port_default_sv = false;
+  bool declaration_initializer = false;
+  for (const auto& diagnostic : sv.diagnostics) {
+    port_default_sv =
+        port_default_sv
+        || diagnostic.code == "FSIM-SV-UNSUPPORTED-010";
+    declaration_initializer =
+        declaration_initializer
+        || diagnostic.code == "FSIM-SV-UNSUPPORTED-011";
+  }
+  require(port_default_sv, "SV port default needs a targeted diagnostic");
+  require(
+      declaration_initializer,
+      "SV declaration initializer needs a targeted diagnostic");
+}
+
+void test_duplicate_declarations_are_rejected() {
+  const auto vhdl = parse_text(
+      "duplicates.vhd",
+      R"(
+entity duplicates is
+  port (value : in std_logic; VALUE : out std_logic);
+end entity;
+architecture rtl of duplicates is
+  signal state : std_logic;
+  signal STATE : std_logic;
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(!vhdl.ok(), "VHDL duplicate declarations must be rejected");
+  bool duplicate_port = false;
+  bool duplicate_signal = false;
+  for (const auto& diagnostic : vhdl.diagnostics) {
+    duplicate_port =
+        duplicate_port || diagnostic.code == "FSIM-VHDL-SEM-002";
+    duplicate_signal =
+        duplicate_signal || diagnostic.code == "FSIM-VHDL-SEM-003";
+  }
+  require(duplicate_port, "VHDL duplicate port diagnostic");
+  require(duplicate_signal, "VHDL duplicate signal diagnostic");
+
+  const auto sv = parse_text(
+      "duplicates.sv",
+      R"(
+module duplicates(input logic value, input logic value);
+  logic state;
+  logic state;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!sv.ok(), "SV duplicate declarations must be rejected");
+  duplicate_port = false;
+  duplicate_signal = false;
+  for (const auto& diagnostic : sv.diagnostics) {
+    duplicate_port =
+        duplicate_port || diagnostic.code == "FSIM-SV-SEM-003";
+    duplicate_signal =
+        duplicate_signal || diagnostic.code == "FSIM-SV-SEM-006";
+  }
+  require(duplicate_port, "SV duplicate port diagnostic");
+  require(duplicate_signal, "SV duplicate signal diagnostic");
+}
+
+void test_systemverilog_timescale_context() {
+  const auto result = parse_text(
+      "timescale.sv",
+      R"(`timescale 10ns/100ps
+module timed;
+  initial #2 $finish;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(result.ok(), "a legal `timescale must be represented");
+  require(result.design.units.size() == 1, "timescale module count");
+  const auto& unit = result.design.units.front();
+  require(unit.time_unit == "10ns", "module time unit");
+  require(unit.time_precision == "100ps", "module time precision");
+  require(
+      unit.processes.size() == 1
+          && unit.processes.front().statements.size() == 1,
+      "timed initial process");
+  const auto& delay = *unit.processes.front().statements.front().delay;
+  require(delay.magnitude == 20 && delay.unit == "ns",
+          "integer delay must inherit and scale by `timescale");
+
+  const auto mid_module_directive = parse_text(
+      "mid_module_timescale.sv",
+      R"(`timescale 1ns/1ns
+module first;
+  `timescale 10ns/1ns
+  initial #2 $finish;
+endmodule
+module second;
+  initial #2 $finish;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      mid_module_directive.ok(),
+      "a directive inside a module must affect only following modules");
+  require(
+      mid_module_directive.design.units.size() == 2,
+      "mid-module timescale design unit count");
+  const auto& first = mid_module_directive.design.units[0];
+  const auto& second = mid_module_directive.design.units[1];
+  require(
+      first.time_unit == "1ns"
+          && first.processes.front().statements.front().delay->magnitude == 2,
+      "current module must retain the timescale active at its start");
+  require(
+      second.time_unit == "10ns"
+          && second.processes.front().statements.front().delay->magnitude == 20,
+      "mid-module directive must apply to a following module");
+
+  const auto invalid_precision = parse_text(
+      "bad_timescale.sv",
+      "`timescale 1ps/1ns\nmodule bad; endmodule\n",
+      Language::SystemVerilog2017);
+  require(!invalid_precision.ok(), "coarse precision must be rejected");
+  require(
+      std::any_of(
+          invalid_precision.diagnostics.begin(),
+          invalid_precision.diagnostics.end(),
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-009";
+          }),
+      "coarse precision diagnostic");
+
+}
+
+void test_systemverilog_time_declarations() {
+  const auto parsed = parse_text(
+      "time-declarations.sv",
+      R"(timeunit 10ns;
+timeprecision 1ps;
+module inherited_time;
+  logic marker;
+  initial begin
+    #1.25 marker = 1'b1;
+    #(2.5ps) marker = 1'b0;
+  end
+endmodule
+module local_time;
+  timeunit 1us / 10ns;
+  logic marker;
+  initial begin
+    #1.25e-1 marker = 1'b1;
+  end
+endmodule
+module local_precision;
+  timeprecision 100ps;
+  initial #1 $finish;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "SystemVerilog time declarations must parse");
+  require(
+      parsed.design.units.size() == 3,
+      "time declaration module count");
+  const auto& inherited = parsed.design.units[0];
+  require(
+      inherited.time_unit == "10ns"
+          && inherited.time_precision == "1ps",
+      "compilation-unit time declarations attach to a module");
+  const auto& inherited_delays =
+      inherited.processes.front().statements;
+  require(
+      inherited_delays.size() == 2
+          && inherited_delays[0].delay
+          && inherited_delays[0].delay->magnitude == 50
+          && inherited_delays[0].delay->divisor == 4
+          && inherited_delays[0].delay->unit == "ns",
+      "fractional delay retains an exact rational under inherited timeunit");
+  require(
+      inherited_delays[1].delay
+          && inherited_delays[1].delay->magnitude == 5
+          && inherited_delays[1].delay->divisor == 2
+          && inherited_delays[1].delay->unit == "ps",
+      "an explicit time-literal suffix overrides the module timeunit");
+
+  const auto& local = parsed.design.units[1];
+  require(
+      local.time_unit == "1us"
+          && local.time_precision == "10ns",
+      "combined module-local timeunit/timeprecision overrides inheritance");
+  const auto& local_delay =
+      *local.processes.front().statements.front().delay;
+  require(
+      local_delay.magnitude == 1
+          && local_delay.divisor == 8
+          && local_delay.unit == "us",
+      "scientific fractional delays remain exact in typed HIR");
+  const auto& local_precision = parsed.design.units[2];
+  require(
+      local_precision.time_unit == "10ns"
+          && local_precision.time_precision == "100ps",
+      "a module-local timeprecision overrides inherited precision only");
+
+  const auto directive_precedence = parse_text(
+      "time-directive-precedence.sv",
+      R"(`timescale 100ns/10ns
+timeunit 1ns / 1ps;
+`resetall
+module declared_time_wins;
+  initial #1 $finish;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      directive_precedence.ok()
+          && directive_precedence.design.units.front().time_unit == "1ns"
+          && directive_precedence.design.units.front().time_precision
+              == "1ps"
+          && directive_precedence.design.units.front()
+                 .processes.front().statements.front().delay->magnitude
+              == 1
+          && directive_precedence.design.units.front()
+                 .processes.front().statements.front().delay->unit
+              == "ns",
+      "declarations override directive context and survive `resetall");
+
+  const auto malformed = parse_text(
+      "bad-time-declarations.sv",
+      R"(timeunit 2ns;
+timeunit 1ns;
+timeunit 10ns;
+module bad;
+  timeprecision 100ns;
+  timeprecision 1ps;
+  logic marker;
+  timeunit 1ns;
+  initial #0.00000000000000000001 marker = 1'b1;
+endmodule
+timeprecision 1ps;
+)",
+      Language::SystemVerilog2017);
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            malformed.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !malformed.ok()
+          && has_code("FSIM-SV-SEM-045")
+          && has_code("FSIM-SV-SEM-046")
+          && has_code("FSIM-SV-SEM-047")
+          && has_code("FSIM-SV-SEM-048")
+          && has_code("FSIM-SV-SEM-049"),
+      "invalid, duplicate, late, coarse, and overflowing "
+      "fractional time forms receive targeted diagnostics");
+
+  const auto unitless = parse_text(
+      "unitless-fractional.sv",
+      "module bad; initial #1.5 $finish; endmodule\n",
+      Language::SystemVerilog2017);
+  require(
+      !unitless.ok()
+          && std::ranges::any_of(
+              unitless.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-050";
+              }),
+      "a unitless fractional delay without time context is rejected");
+
+  const auto verilog = parse_text(
+      "verilog-timeunit.v",
+      "timeunit 1ns; module bad; endmodule\n",
+      Language::Verilog2005);
+  require(
+      !verilog.ok()
+          && std::ranges::any_of(
+              verilog.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-044";
+              }),
+      "time declarations are rejected in Verilog-2005");
+
+  const auto verilog_suffix = parse_text(
+      "verilog-time-suffix.v",
+      "module bad; initial #1ns $finish; endmodule\n",
+      Language::Verilog2005);
+  require(
+      !verilog_suffix.ok()
+          && std::ranges::any_of(
+              verilog_suffix.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-051";
+              }),
+      "explicit delay-unit suffixes are rejected in Verilog-2005");
+
+  const auto verilog_identifier = parse_text(
+      "verilog-timeunit-identifier.v",
+      R"(module timeunit;
+endmodule
+module top;
+  timeunit child();
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      verilog_identifier.ok()
+          && verilog_identifier.design.units[1].instances.size() == 1,
+      "timeunit remains an ordinary Verilog-2005 identifier when its "
+      "syntax is not a declaration");
+}
+
+void test_systemverilog_delay_triples() {
+  const auto parsed = parse_text(
+      "delay-triples.sv",
+      R"(timeunit 1ns / 1ps;
+module delay_triples;
+  logic source;
+  logic continuous_result;
+  logic gate_result;
+  event fired;
+
+  assign #(
+      1e-3:2e-3:3e-3,
+      4ps:5ps:6ps,
+      7fs:8fs:9fs) continuous_result = source;
+  buf #(1ps:2ps:3ps, 4ps:5ps:6ps) (gate_result, source);
+
+  initial begin
+    #(0.1:0.2:0.3) source = 1'b1;
+    source = #(4ps:5ps:6ps) 1'b0;
+    source <= #(7ps:8ps:9ps) 1'b1;
+    ->> #(10ps:11ps:12ps) fired;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "SystemVerilog delay triples must parse");
+  const auto& unit = parsed.design.units.front();
+  require(
+      unit.concurrent_statements.size() == 2,
+      "continuous and gate delay triples are retained");
+  const auto& process = unit.processes.front().statements;
+  require(
+      process.size() == 4
+          && process[0].kind == StatementKind::Delay
+          && process[0].statements.size() == 1
+          && process[1].kind == StatementKind::Assignment
+          && process[1].assignment_kind == AssignmentKind::Blocking
+          && process[2].kind == StatementKind::Assignment
+          && process[2].assignment_kind == AssignmentKind::NonBlocking
+          && process[3].kind == StatementKind::EventTrigger
+          && process[3].assignment_kind == AssignmentKind::NonBlocking,
+      "procedural, assignment, and named-event triple forms");
+
+  const auto verify =
+      [](const Delay& delay,
+         const std::array<std::uint64_t, 3>& magnitudes,
+         const std::array<std::uint64_t, 3>& divisors,
+         const std::string_view unit_name) {
+        require(
+            delay.minimum && delay.typical && delay.maximum,
+            "all min:typ:max HIR branches are present");
+        require(
+            delay.minimum->magnitude == magnitudes[0]
+                && delay.typical->magnitude == magnitudes[1]
+                && delay.maximum->magnitude == magnitudes[2]
+                && delay.minimum->divisor == divisors[0]
+                && delay.typical->divisor == divisors[1]
+                && delay.maximum->divisor == divisors[2]
+                && delay.minimum->unit == unit_name
+                && delay.typical->unit == unit_name
+                && delay.maximum->unit == unit_name,
+            "delay triple values retain exact magnitudes, divisors, and units");
+        require(
+            delay.magnitude == magnitudes[1]
+                && delay.divisor == divisors[1]
+                && delay.unit == unit_name,
+            "typed HIR defaults a delay triple to its typical branch");
+      };
+
+  verify(
+      *unit.concurrent_statements[0].delay,
+      {1, 1, 3},
+      {1000, 500, 1000},
+      "ns");
+  verify(
+      *unit.concurrent_statements[1].delay,
+      {1, 2, 3},
+      {1, 1, 1},
+      "ps");
+  require(
+      unit.concurrent_statements[0].delay->additional_values.size() == 2
+          && unit.concurrent_statements[1].delay
+                 ->additional_values.size()
+              == 1,
+      "continuous and gate rise/fall/turnoff delay-list arity");
+  verify(
+      unit.concurrent_statements[0].delay->additional_values[0],
+      {4, 5, 6},
+      {1, 1, 1},
+      "ps");
+  verify(
+      unit.concurrent_statements[0].delay->additional_values[1],
+      {7, 8, 9},
+      {1, 1, 1},
+      "fs");
+  verify(
+      unit.concurrent_statements[1].delay->additional_values[0],
+      {4, 5, 6},
+      {1, 1, 1},
+      "ps");
+  verify(*process[0].delay, {1, 1, 3}, {10, 5, 10}, "ns");
+  verify(*process[1].delay, {4, 5, 6}, {1, 1, 1}, "ps");
+  verify(*process[2].delay, {7, 8, 9}, {1, 1, 1}, "ps");
+  verify(*process[3].delay, {10, 11, 12}, {1, 1, 1}, "ps");
+
+  const auto malformed = parse_text(
+      "bad-delay-triples.sv",
+      R"(module bad_delay_triples;
+  wire source;
+  wire result;
+  assign #(1, 2, 3, 4) result = source;
+  buf #(1, 2, 3) (result, source);
+  initial begin
+    #1:2:3;
+    #(1:2);
+    #(1::3);
+    #(1, 2);
+    #(1,);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            malformed.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !malformed.ok()
+          && has_code("FSIM-SV-SEM-052")
+          && has_code("FSIM-SV-SEM-053")
+          && has_code("FSIM-SV-PARSE-134")
+          && has_code("FSIM-SV-PARSE-135")
+          && has_code("FSIM-SV-PARSE-023"),
+      "malformed triples and illegal transition-delay lists are targeted");
+}
+
+void test_systemverilog_procedural_assignment_controls() {
+  const auto parsed = parse_text(
+      "assignment-controls.sv",
+      R"(timeunit 1ns / 1ps;
+module assignment_controls;
+  logic clock;
+  logic enable;
+  logic source;
+  logic result;
+
+  initial begin
+    result = #3 source;
+    result <= #(1:2:3) source;
+    result = @(posedge clock) source;
+    result <= @(negedge clock or enable) source;
+    result = @clock source;
+    result <= @* source;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      parsed.ok(),
+      "blocking and nonblocking procedural assignment controls parse");
+  const auto& statements =
+      parsed.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 6,
+      "all procedural assignment control forms are retained");
+  require(
+      statements[0].procedural_assignment_control
+              == ProceduralAssignmentControl::Delay
+          && statements[0].assignment_kind
+              == AssignmentKind::Blocking
+          && statements[0].delay
+          && statements[0].delay->magnitude == 3,
+      "blocking intra-assignment delay has typed HIR");
+  require(
+      statements[1].procedural_assignment_control
+              == ProceduralAssignmentControl::Delay
+          && statements[1].assignment_kind
+              == AssignmentKind::NonBlocking
+          && statements[1].delay
+          && statements[1].delay->minimum
+          && statements[1].delay->typical
+          && statements[1].delay->maximum,
+      "nonblocking min/typ/max assignment delay is retained");
+  require(
+      statements[2].procedural_assignment_control
+              == ProceduralAssignmentControl::Event
+          && statements[2].sensitivities.size() == 1
+          && statements[2].sensitivities.front().edge
+              == EdgeKind::Positive
+          && statements[2].sensitivities.front().signal
+              == "clock",
+      "blocking edge event control has typed sensitivity HIR");
+  require(
+      statements[3].procedural_assignment_control
+              == ProceduralAssignmentControl::Event
+          && statements[3].assignment_kind
+              == AssignmentKind::NonBlocking
+          && statements[3].sensitivities.size() == 2
+          && statements[3].sensitivities[0].edge
+              == EdgeKind::Negative
+          && statements[3].sensitivities[1].edge
+              == EdgeKind::Any,
+      "nonblocking event lists preserve source order and edge kinds");
+  require(
+      statements[4].sensitivities.size() == 1
+          && statements[4].sensitivities.front().signal == "clock",
+      "an unparenthesized scalar event expression is accepted");
+  require(
+      statements[5].sensitivities.size() == 1
+          && statements[5].sensitivities.front().signal == "*",
+      "wildcard assignment event control is retained for RHS inference");
+
+  const auto has_code =
+      [](const ParseResult& result, const std::string_view code) {
+        return std::ranges::any_of(
+            result.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  const auto empty = parse_text(
+      "empty-assignment-event.sv",
+      R"(module empty_assignment_event;
+  logic source;
+  logic result;
+  initial result = @() source;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !empty.ok() && has_code(empty, "FSIM-SV-PARSE-136"),
+      "an empty assignment event list has a stable diagnostic");
+
+  const auto repeated = parse_text(
+      "repeated-assignment-control.sv",
+      R"(module repeated_assignment_control;
+  logic clock;
+  logic source;
+  logic result;
+  initial result <= #1 @(posedge clock) source;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !repeated.ok()
+          && has_code(repeated, "FSIM-SV-SEM-054"),
+      "a repeated assignment control has a stable diagnostic");
+
+  const auto repeat_event = parse_text(
+      "repeat-assignment-event.sv",
+      R"(module repeat_assignment_event;
+  logic clock;
+  logic source;
+  logic result;
+  initial result <= repeat (2) @(posedge clock) source;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !repeat_event.ok()
+          && has_code(repeat_event, "FSIM-SV-UNSUPPORTED-032"),
+      "unsupported repeated NBA event control is diagnosed explicitly");
+
+  const auto restricted = parse_text(
+      "restricted-assignment-controls.sv",
+      R"(module restricted_assignment_controls;
+  logic clock;
+  logic source;
+  logic result;
+  always_comb result = #1 source;
+  final result = @(posedge clock) source;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !restricted.ok()
+          && has_code(restricted, "FSIM-SV-SEM-012")
+          && has_code(restricted, "FSIM-SV-SEM-032"),
+      "assignment controls participate in procedural restriction checks");
+}
+
+} // namespace fsim::tests::frontend

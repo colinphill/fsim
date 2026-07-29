@@ -2280,6 +2280,59 @@ lowering, debugger/VCD/cache behavior, runtime failure equivalence, fetched
 Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the strict native ABI, and every
 preceding feature batch. No CI state was inspected for this local gate.
 
+## Source-file size refactor program
+
+The repository now treats 2,000 lines as a hard maximum for every authored
+C/C++ source, header, and test file. New and extracted files should normally
+remain near or below 1,600 lines so ordinary feature growth does not
+immediately consume the hard limit. Generated, fetched, build-tree, and
+third-party sources are outside this policy.
+
+The initial inventory found fourteen oversized files containing approximately
+87,000 lines. The refactor is behavior-preserving: public C++, C, SystemC
+plug-in, and JIT callback ABIs remain stable; LLVM types remain private to the
+adapter; installed umbrella headers keep their existing include paths; and
+test assertions, cache sequencing, interpreter/JIT differentials, labels, and
+goldens are retained.
+
+The planned checkpoints are:
+
+1. Add a cross-platform CMake/CTest source-line guard with a temporary explicit
+   burn-down allowlist, then decompose the oversized test infrastructure.
+2. Split the VHDL and Verilog/SystemVerilog parsers by declarations,
+   expressions, statements, design units, and language-specific system forms.
+3. Split SimIR execution, SystemC hierarchy/plug-in compilation, the native C
+   API implementation, and Tcl command implementation by responsibility.
+4. Split application analysis/build/run/debug/simulation services and the LLVM
+   validation/cache/frame/IR-lowering/LLJIT adapter layers.
+5. Split constant evaluation, specialization, name resolution, generate
+   expansion, executable lowering, binding, and hierarchy construction out of
+   the monolithic elaborator.
+6. Remove the temporary allowlist, require every authored source to pass the
+   hard limit, run the full portability regression, and retain the line-budget
+   test as a permanent release gate.
+
+Each checkpoint uses focused builds and tests during extraction, followed by
+one exact LLVM 22.1.8 warnings-as-errors Release regression. Successful
+regression checkpoints are recorded, committed, and pushed. GitHub CI state is
+not inspected unless explicitly requested.
+
+Checkpoint 1 has established the permanent `fsim.source-line-budget` CTest.
+It scans tracked authored C/C++ sources and headers on every platform, rejects
+new files above 2,000 lines, rejects stale allowlist entries as soon as an
+oversized file is split, and currently checks 127 files. The explicit
+allowlist has fallen from fourteen files to ten.
+
+The runtime, frontend, LLVM, and elaboration monolithic tests have been
+replaced by 29 responsibility-oriented translation units plus small runners
+and private support headers. The largest extracted test unit is 1,643 lines.
+The existing four CTest entry points, assertion order, cache behavior, LLVM
+optimization matrix, and diagnostic fixtures remain unchanged. The
+application integration monolith retains a 2,200-line shared fixture setup and
+will be decomposed with the application implementation checkpoint so that the
+fixture becomes a proper reusable test component rather than duplicated
+source-writing code. The five focused checkpoint tests pass.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

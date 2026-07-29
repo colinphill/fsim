@@ -2,7 +2,16 @@
 
 add_subdirectory(runtime)
 
-add_executable(fsim_frontend_tests frontend/frontend_tests.cpp)
+add_executable(
+  fsim_frontend_tests
+  frontend/frontend_tests.cpp
+  frontend/frontend_preprocessing_tests.cpp
+  frontend/frontend_vhdl_type_tests.cpp
+  frontend/frontend_vhdl_statement_tests.cpp
+  frontend/frontend_declaration_tests.cpp
+  frontend/frontend_statement_tests.cpp
+  frontend/frontend_generate_output_tests.cpp
+)
 fsim_configure_test(fsim_frontend_tests)
 target_link_libraries(fsim_frontend_tests PRIVATE fsim_frontend)
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
@@ -23,6 +32,14 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckDiagnosticCatalog.cmake"
+)
+
+add_test(
+  NAME fsim.source-line-budget
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSourceLineBudget.cmake"
 )
 
 add_test(
@@ -51,7 +68,18 @@ target_include_directories(
 fsim_enable_warnings(fsim_jit_runtime_c_tests)
 add_test(NAME fsim.jit-runtime-c COMMAND fsim_jit_runtime_c_tests)
 
-add_executable(fsim_elaboration_tests elaboration/elaborator_test.cpp)
+add_executable(
+  fsim_elaboration_tests
+  elaboration/elaborator_test.cpp
+  elaboration/elaborator_specialization_test.cpp
+  elaboration/elaborator_generate_test.cpp
+  elaboration/elaborator_mixed_test.cpp
+  elaboration/elaborator_process_test.cpp
+  elaboration/elaborator_expression_test.cpp
+  elaboration/elaborator_numeric_test.cpp
+  elaboration/elaborator_selection_test.cpp
+  elaboration/elaborator_types_test.cpp
+)
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
 if(
@@ -147,6 +175,15 @@ add_test(NAME fsim.systemc.compiler COMMAND fsim_systemc_compiler_tests)
 
 if(FSIM_WITH_LLVM)
   add_executable(fsim_llvm_tests compiler/llvm_jit_test.cpp)
+  target_sources(
+    fsim_llvm_tests
+    PRIVATE
+      compiler/llvm_jit_scheduling_test.cpp
+      compiler/llvm_jit_value_test.cpp
+      compiler/llvm_jit_cache_test.cpp
+      compiler/llvm_jit_logic9_test.cpp
+      compiler/llvm_jit_display_test.cpp
+  )
   fsim_configure_test(fsim_llvm_tests)
   target_link_libraries(
     fsim_llvm_tests

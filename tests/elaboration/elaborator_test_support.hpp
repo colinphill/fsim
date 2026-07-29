@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/frontend.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <iostream>
+#include <iterator>
+#include <limits>
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <variant>
+#include <vector>
+
+
+namespace fsim::tests::elaboration {
+
+inline bool has_diagnostic(
+    const fsim::elaboration::ElaborationResult& result,
+    const std::string_view code) {
+    for (const auto& diagnostic : result.diagnostics) {
+        if (diagnostic.code == code) {
+            return true;
+        }
+    }
+    return false;
+}
+
+class TestSystemCFactoryProvider final
+    : public fsim::elaboration::SystemCFactoryProvider {
+public:
+    std::vector<fsim::elaboration::SystemCConstructionParameter>
+        parameters;
+    fsim::elaboration::SystemCInstanceDescription prototype;
+    std::vector<std::pair<std::string, std::int64_t>>
+        last_values;
+    std::uint64_t next_handle{10'000};
+    std::string schema_failure;
+    std::string construction_failure;
+
+    std::optional<std::vector<
+        fsim::elaboration::SystemCConstructionParameter>>
+    schema(
+        std::string_view,
+        std::string& error) override {
+        if (!schema_failure.empty()) {
+            error = schema_failure;
+            return std::nullopt;
+        }
+        error.clear();
+        return parameters;
+    }
+
+    std::optional<fsim::elaboration::SystemCInstanceDescription>
+    instantiate(
+        const std::string_view path,
+        const std::string_view target,
+        const std::span<
+            const std::pair<std::string, std::int64_t>> values,
+        std::string& error) override {
+        if (!construction_failure.empty()) {
+            error = construction_failure;
+            return std::nullopt;
+        }
+        error.clear();
+        auto result = prototype;
+        result.path = path;
+        result.target = target;
+        result.handle = next_handle++;
+        result.construction_values.assign(
+            values.begin(), values.end());
+        last_values = result.construction_values;
+        const auto width = std::find_if(
+            values.begin(),
+            values.end(),
+            [](const auto& value) {
+                return value.first == "WIDTH";
+            });
+        if (width != values.end() && width->second > 0) {
+            for (auto& port : result.ports) {
+                if (port.name == "value" && width->second > 1) {
+                    port.type.packed_range =
+                        fsim::frontend::PackedRange{
+                            width->second - 1, 0, true};
+                }
+            }
+        }
+        return result;
+    }
+};
+
+void test_specialization_and_packages();
+void test_generate_elaboration();
+void test_mixed_language_and_systemc();
+void test_process_and_wait_lowering();
+void test_case_and_expression_lowering();
+void test_numeric_and_system_function_lowering();
+void test_selection_and_assignment_lowering();
+void test_assertion_types_and_random_lowering();
+
+} // namespace fsim::tests::elaboration
+

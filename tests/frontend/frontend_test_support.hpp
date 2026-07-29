@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+namespace fsim::tests::frontend {
+
+void test_systemverilog_preprocessor();
+void test_systemverilog_line_directive();
+void test_vhdl_vertical_slice();
+void test_vhdl_falling_edge_guard();
+void test_vhdl_instance_diagnostics();
+void test_vhdl_generics();
+void test_vhdl_record_types();
+void test_vhdl_select_and_concatenation_expressions();
+void test_signed_type_and_expression_nodes();
+void test_vhdl_runtime_integer_nodes();
+void test_vhdl_subtype_declarations();
+void test_vhdl_array_type_declarations();
+void test_vhdl_enumeration_declarations();
+void test_vhdl_enumeration_attributes();
+void test_vhdl_enumeration_subtype_ranges();
+void test_exponentiation_expression_nodes();
+void test_systemverilog_procedural_updates();
+void test_systemverilog_final_procedures();
+void test_verilog_stop_task();
+void test_vhdl_conditional_assignments();
+void test_vhdl_array_attributes();
+void test_vhdl_selected_assignments();
+void test_vhdl_delay_mechanisms();
+void test_vhdl_ordered_waveforms();
+void test_vhdl_case_statements();
+void test_vhdl_sequential_for_loops();
+void test_systemverilog_vertical_slice();
+void test_non_ansi_verilog_ports();
+void test_diagnostics_and_spans();
+void test_vhdl_context_diagnostics();
+void test_vhdl_package_constants();
+void test_ignored_initializers_are_rejected();
+void test_duplicate_declarations_are_rejected();
+void test_systemverilog_timescale_context();
+void test_systemverilog_time_declarations();
+void test_systemverilog_delay_triples();
+void test_systemverilog_procedural_assignment_controls();
+void test_systemverilog_compiler_directives();
+void test_systemverilog_parameters();
+void test_systemverilog_packages();
+void test_immediate_assertions();
+void test_vhdl_literal_report();
+void test_process_variable_declarations();
+void test_systemverilog_procedural_block_scopes();
+void test_procedural_wait_statements();
+void test_wildcard_and_always_comb_processes();
+void test_systemverilog_case_statements();
+void test_systemverilog_procedural_for_loops();
+void test_verilog_repeat_statements();
+void test_runtime_loop_statements();
+void test_loop_control_statements();
+void test_systemverilog_do_while_statements();
+void test_systemverilog_conditional_expression();
+void test_systemverilog_comparison_expressions();
+void test_systemverilog_arithmetic_expressions();
+void test_gate_primitives();
+void test_systemverilog_select_and_concatenation_expressions();
+void test_conditional_statement_trees();
+void test_conditional_generate_hierarchy();
+void test_systemverilog_named_events();
+void test_verilog_literal_display();
+void test_systemverilog_random_functions();
+
+} // namespace fsim::tests::frontend
+

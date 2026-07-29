@@ -1,0 +1,1253 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "fsim/frontend/frontend.hpp"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+namespace fsim::tests::frontend {
+
+using namespace fsim::frontend;
+
+namespace {
+
+void require(bool condition, std::string_view message) {
+  if (!condition) {
+    throw std::runtime_error(std::string(message));
+  }
+}
+
+[[maybe_unused]] std::filesystem::path make_test_directory(
+    std::string_view name) {
+  const auto suffix =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto directory =
+      std::filesystem::temp_directory_path()
+      / ("fsim-" + std::string{name} + "-"
+         + std::to_string(suffix));
+  std::filesystem::create_directories(directory);
+  return directory;
+}
+
+[[maybe_unused]] void write_text(
+    const std::filesystem::path& path,
+    const std::string_view text) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary);
+  output << text;
+  require(
+      output.good(),
+      "frontend test fixture must be writable");
+}
+
+} // namespace
+
+void test_wildcard_and_always_comb_processes() {
+  const auto result = parse_text(
+      "combinational.sv",
+      R"(
+module combinational;
+  logic a;
+  logic q;
+  logic y;
+  logic latch_q;
+  always @* q = a;
+  always_comb y = ~q;
+  always_latch if (a) latch_q = q;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "wildcard always and bounded always_comb must parse");
+  const auto& processes = result.design.units.front().processes;
+  require(
+      processes.size() == 3
+          && processes[0].kind == ProcessKind::VerilogAlways
+          && processes[0].sensitivities.size() == 1
+          && processes[0].sensitivities.front().signal == "*"
+          && processes[1].kind
+              == ProcessKind::SystemVerilogAlwaysComb
+          && processes[1].sensitivities.size() == 1
+          && processes[1].sensitivities.front().signal == "*"
+          && processes[2].kind
+              == ProcessKind::SystemVerilogAlwaysLatch
+          && processes[2].sensitivities.size() == 1
+          && processes[2].sensitivities.front().signal == "*",
+      "wildcard process metadata");
+
+  const auto invalid_system_verilog = parse_text(
+      "bad_comb.sv",
+      R"(
+module bad_comb;
+  logic a;
+  logic q;
+  always_comb @(a) q = a;
+  always_comb #1 q = a;
+  always_comb q <= a;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid_system_verilog.ok(), "invalid always_comb forms");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-SEM-011"},
+           std::string_view{"FSIM-SV-SEM-012"},
+           std::string_view{"FSIM-SV-SEM-013"}}) {
+    require(
+        std::any_of(
+            invalid_system_verilog.diagnostics.begin(),
+            invalid_system_verilog.diagnostics.end(),
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted always_comb diagnostic");
+  }
+
+  const auto invalid_verilog = parse_text(
+      "bad_comb.v",
+      R"(
+module bad_comb;
+  reg q;
+  always_comb q = 1'b0;
+  always_latch q = 1'b0;
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      !invalid_verilog.ok()
+          && std::any_of(
+              invalid_verilog.diagnostics.begin(),
+              invalid_verilog.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-002";
+              })
+          && std::any_of(
+              invalid_verilog.diagnostics.begin(),
+              invalid_verilog.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-003";
+              }),
+      "always_comb/always_latch language-version diagnostics");
+}
+
+void test_systemverilog_case_statements() {
+  const auto result = parse_text(
+      "case_statement.sv",
+      R"(
+module case_statement;
+  logic [1:0] selector;
+  logic [1:0] result;
+  always_comb case (selector)
+    2'b00: result = 2'b01;
+    2'b01, 2'b10: begin
+      result = 2'b10;
+    end
+    default: result = 2'b11;
+  endcase
+  initial casez (selector)
+    2'b0?: result = 2'b01;
+    default: result = 2'b00;
+  endcase
+  initial casex (selector)
+    2'b0x: result = 2'b10;
+    default: result = 2'b00;
+  endcase
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(result.ok(), "exact SystemVerilog case statement must parse");
+  const auto& statement =
+      result.design.units.front().processes.front().statements.front();
+  require(
+      statement.kind == StatementKind::Case
+          && statement.condition.kind == ExpressionKind::Identifier
+          && statement.condition.text == "selector"
+          && statement.case_alternatives.size() == 3,
+      "case selector and ordered alternatives");
+  require(
+      statement.case_alternatives[0].choices.size() == 1
+          && statement.case_alternatives[1].choices.size() == 2
+          && statement.case_alternatives[1].statements.size() == 1
+          && statement.case_alternatives[1].statements.front().kind
+              == StatementKind::Block
+          && statement.case_alternatives[2].is_default
+          && statement.case_alternatives[2].choices.empty(),
+      "case choices, block body, and default metadata");
+  require(
+      statement.case_match_kind == CaseMatchKind::Exact
+          && result.design.units.front().processes[1]
+                     .statements.front().case_match_kind
+                 == CaseMatchKind::WildcardZ
+          && result.design.units.front().processes[2]
+                     .statements.front().case_match_kind
+                 == CaseMatchKind::WildcardXZ,
+      "exact, casez, and casex matching modes remain distinct in HIR");
+
+  const auto invalid = parse_text(
+      "bad_case.sv",
+      R"(
+module bad_case;
+  logic selector;
+  logic result;
+  always_comb case (selector)
+    default: result = 1'b0;
+    default: result = 1'b1;
+  endcase
+  initial casex (selector)
+    1'bx: result = 1'b0;
+  endcase
+  initial unique case (selector)
+    1'b0: result = 1'b0;
+  endcase
+  initial unique0 case (selector)
+    1'b0: result = 1'b0;
+  endcase
+  initial case (selector) inside
+    [1'b0:1'b1]: result = 1'b0;
+  endcase
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid.ok(), "unsupported and duplicate case forms must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-SEM-014"},
+           std::string_view{"FSIM-SV-UNSUPPORTED-017"},
+           std::string_view{"FSIM-SV-UNSUPPORTED-018"}}) {
+    require(
+        std::any_of(
+            invalid.diagnostics.begin(),
+            invalid.diagnostics.end(),
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted case diagnostic");
+  }
+  require(
+      invalid.design.units.front().processes.size() == 5,
+      "case diagnostics must recover to following processes");
+}
+
+void test_systemverilog_procedural_for_loops() {
+  const auto result = parse_text(
+      "procedural_for.sv",
+      R"(
+module procedural_for;
+  logic [3:0] result;
+  initial begin
+    result = 4'b0000;
+    for (int lane = 0; lane < 4; lane++)
+      result[lane] = 1'b1;
+    for (integer lane = 3; lane >= 2; --lane) begin
+      result[lane] = 1'b0;
+    end
+    for (int lane = 2; lane < 1; lane += 1)
+      result[0] = 1'b0;
+    for (int lane = 0; lane <= 0; lane = lane + 1)
+      result[0] = result[0];
+    for (int lane = 0; lane > 0; lane -= 1)
+      result[0] = 1'b0;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "bounded SystemVerilog procedural for loops must parse");
+  require(
+      result.design.units.front().signals.size() == 1
+          && result.design.units.front().signals.front().name
+              == "result",
+      "inline procedural loop indices must not become implicit nets");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 6
+          && statements[1].kind == StatementKind::Loop
+          && statements[1].loop_variable == "lane"
+          && statements[1].loop_initial.text == "0"
+          && statements[1].loop_limit.text == "4"
+          && !statements[1].loop_descending
+          && statements[1].loop_limit_exclusive
+          && statements[2].kind == StatementKind::Loop
+          && statements[2].loop_descending
+          && !statements[2].loop_limit_exclusive
+          && statements[2].statements.size() == 1
+          && statements[3].kind == StatementKind::Loop
+          && statements[4].kind == StatementKind::Loop
+          && !statements[4].loop_limit_exclusive
+          && statements[5].kind == StatementKind::Loop
+          && statements[5].loop_descending
+          && statements[5].loop_limit_exclusive,
+      "SystemVerilog loop range normalization and bodies");
+
+  const auto invalid = parse_text(
+      "bad_procedural_for.sv",
+      R"(
+module bad_procedural_for;
+  initial begin
+    for (lane = 0; lane < 4; lane++);
+    for (int lane = 0; other < 4; lane++);
+    for (int lane = 0; lane < 4; other++);
+    for (int lane = 0; lane < 4; lane--);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid.ok(), "noncanonical procedural loops must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-UNSUPPORTED-031"},
+           std::string_view{"FSIM-SV-SEM-027"},
+           std::string_view{"FSIM-SV-SEM-028"},
+           std::string_view{"FSIM-SV-SEM-029"}}) {
+    require(
+        std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted bounded procedural loop diagnostic");
+  }
+}
+
+void test_verilog_repeat_statements() {
+  const auto systemverilog = parse_text(
+      "repeat_statement.sv",
+      R"(
+module repeat_statement;
+  logic [1:0] result;
+  initial begin
+    result = 2'b00;
+    repeat (3) result = result + 1;
+    repeat (0) result = 2'b11;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "SystemVerilog repeat statements must parse");
+  const auto& statements =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements;
+  require(
+      statements.size() == 3
+          && statements[1].kind == StatementKind::Loop
+          && statements[1].loop_repeat
+          && statements[1].loop_limit_exclusive
+          && statements[1].loop_initial.text == "0"
+          && statements[1].loop_limit.text == "3"
+          && statements[1].loop_variable.empty()
+          && statements[1].statements.size() == 1
+          && statements[2].kind == StatementKind::Loop
+          && statements[2].loop_repeat
+          && statements[2].loop_limit.text == "0",
+      "repeat count and body HIR");
+
+  const auto verilog = parse_text(
+      "repeat_statement.v",
+      R"(
+module repeat_statement;
+  reg result;
+  initial begin
+    result = 1'b0;
+    repeat (2) result = ~result;
+  end
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      verilog.ok()
+          && verilog.design.units.front()
+                 .processes.front()
+                 .statements[1]
+                 .loop_repeat,
+      "Verilog-2005 repeat statements share the loop HIR");
+
+  const auto malformed = parse_text(
+      "bad_repeat.sv",
+      R"(
+module bad_repeat;
+  initial repeat 2;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !malformed.ok()
+          && std::ranges::any_of(
+              malformed.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-100";
+              })
+          && std::ranges::any_of(
+              malformed.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-SV-PARSE-101";
+              }),
+      "malformed repeat delimiters receive stable diagnostics");
+}
+
+void test_runtime_loop_statements() {
+  const auto systemverilog = parse_text(
+      "runtime_loops.sv",
+      R"(
+module runtime_loops;
+  logic flag;
+  logic [2:0] count;
+  initial begin
+    count = 3'b000;
+    while (count < 3) count = count + 1;
+    forever #1 flag = ~flag;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "SystemVerilog while and timed forever loops must parse");
+  const auto& statements =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements;
+  require(
+      statements.size() == 3
+          && statements[1].kind == StatementKind::Loop
+          && statements[1].loop_runtime
+          && statements[1].condition.kind
+              == ExpressionKind::Binary
+          && statements[1].condition.text == "<"
+          && statements[2].kind == StatementKind::Loop
+          && statements[2].loop_runtime
+          && statements[2].condition.kind
+              == ExpressionKind::LogicLiteral
+          && statements[2].statements.size() == 1
+          && statements[2].statements.front().kind
+              == StatementKind::Delay,
+      "runtime loop conditions and suspension body HIR");
+
+  const auto verilog = parse_text(
+      "runtime_loops.v",
+      R"(
+module runtime_loops;
+  reg flag;
+  initial begin
+    flag = 1'b1;
+    while (flag) flag = 1'b0;
+    forever #1 flag = ~flag;
+  end
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      verilog.ok()
+          && verilog.design.units.front()
+                 .processes.front()
+                 .statements[1]
+                 .loop_runtime
+          && verilog.design.units.front()
+                 .processes.front()
+                 .statements[2]
+                 .loop_runtime,
+      "Verilog-2005 runtime loops share the common HIR");
+
+  const auto invalid = parse_text(
+      "bad_runtime_loops.sv",
+      R"(
+module bad_runtime_loops;
+  logic flag;
+  initial while flag;
+  initial forever flag = ~flag;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid.ok(), "malformed or nonsuspending loops must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-PARSE-102"},
+           std::string_view{"FSIM-SV-PARSE-103"},
+           std::string_view{"FSIM-SV-SEM-030"}}) {
+    require(
+        std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted runtime-loop diagnostic");
+  }
+}
+
+void test_loop_control_statements() {
+  const auto systemverilog = parse_text(
+      "loop_control.sv",
+      R"(
+module loop_control;
+  logic flag;
+  initial begin
+    for (int outer = 0; outer < 2; outer++) begin
+      continue;
+      while (flag) begin
+        break;
+      end
+      break;
+    end
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "nested SystemVerilog break and continue statements must parse");
+  const auto& sv_loop =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements.front();
+  require(
+      sv_loop.kind == StatementKind::Loop
+          && sv_loop.statements.size() == 3
+          && sv_loop.statements[0].kind
+              == StatementKind::Continue
+          && sv_loop.statements[1].kind == StatementKind::Loop
+          && sv_loop.statements[1].statements.size() == 1
+          && sv_loop.statements[1].statements[0].kind
+              == StatementKind::Break
+          && sv_loop.statements[2].kind
+              == StatementKind::Break,
+      "SystemVerilog loop controls retain their nested HIR scopes");
+
+  const auto invalid_systemverilog = parse_text(
+      "invalid_loop_control.sv",
+      R"(
+module invalid_loop_control;
+  initial begin
+    break;
+    continue
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_systemverilog.ok()
+          && std::ranges::any_of(
+              invalid_systemverilog.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-031";
+              })
+          && std::ranges::any_of(
+              invalid_systemverilog.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-104";
+              }),
+      "out-of-loop and malformed SystemVerilog controls are diagnosed");
+
+  const auto vhdl = parse_text(
+      "loop_control.vhd",
+      R"(
+entity loop_control is
+end entity;
+architecture rtl of loop_control is
+begin
+  exercise: process
+  begin
+    outer_loop: for outer in 0 to 1 loop
+      next outer_loop when outer = 0;
+      inner_loop: while true loop
+        exit inner_loop;
+      end loop inner_loop;
+      exit outer_loop when outer = 1;
+    end loop outer_loop;
+    plain_loop: loop
+      next when false;
+      exit plain_loop;
+    end loop plain_loop;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      vhdl.ok(),
+      "nested VHDL exit and next statements must parse");
+  const auto* architecture =
+      vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
+  const auto& vhdl_loop =
+      architecture->processes.front().statements.front();
+  const auto& unconditional_vhdl_loop =
+      architecture->processes.front().statements[1];
+  require(
+      vhdl_loop.kind == StatementKind::Loop
+          && vhdl_loop.loop_label == "outer_loop"
+          && vhdl_loop.statements.size() == 3
+          && vhdl_loop.statements[0].kind == StatementKind::If
+          && vhdl_loop.statements[0].statements.front().kind
+              == StatementKind::Continue
+          && vhdl_loop.statements[0].statements.front()
+                 .loop_control_label
+              == "outer_loop"
+          && vhdl_loop.statements[1].kind == StatementKind::Loop
+          && vhdl_loop.statements[1].loop_label == "inner_loop"
+          && vhdl_loop.statements[1].statements.front().kind
+              == StatementKind::Break
+          && vhdl_loop.statements[1].statements.front()
+                 .loop_control_label
+              == "inner_loop"
+          && vhdl_loop.statements[2].kind == StatementKind::If
+          && vhdl_loop.statements[2].statements.front().kind
+              == StatementKind::Break
+          && unconditional_vhdl_loop.kind == StatementKind::Loop
+          && unconditional_vhdl_loop.loop_label == "plain_loop"
+          && unconditional_vhdl_loop.loop_runtime
+          && unconditional_vhdl_loop.condition.kind
+              == ExpressionKind::BooleanLiteral
+          && unconditional_vhdl_loop.condition.text == "true"
+          && unconditional_vhdl_loop.statements.size() == 2,
+      "conditional controls and unconditional VHDL loops retain HIR");
+
+  const auto invalid_vhdl = parse_text(
+      "invalid_loop_control.vhd",
+      R"(
+architecture rtl of invalid_loop_control is
+begin
+  exercise: process
+  begin
+    exit;
+    for lane in 0 to 1 loop
+      next missing_loop when lane = 0
+    end loop;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_vhdl.ok()
+          && std::ranges::any_of(
+              invalid_vhdl.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-023";
+              })
+          && std::ranges::any_of(
+              invalid_vhdl.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-024";
+              })
+          && std::ranges::any_of(
+              invalid_vhdl.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-110";
+              }),
+      "out-of-loop, unknown-target, and malformed controls are diagnosed");
+
+  const auto invalid_labels = parse_text(
+      "invalid_loop_labels.vhd",
+      R"(
+architecture rtl of invalid_loop_labels is
+begin
+  exercise: process
+  begin
+    outer_loop: loop
+      outer_loop: loop
+        exit;
+      end loop wrong_loop;
+    end loop outer_loop;
+    sibling_loop: loop
+      exit;
+    end loop sibling_loop;
+    sibling_loop: loop
+      exit;
+    end loop sibling_loop;
+    loop
+      exit;
+    end loop orphan_label;
+    wait for 1 ns;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_labels.ok()
+          && std::ranges::any_of(
+              invalid_labels.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-025";
+              })
+          && std::ranges::any_of(
+              invalid_labels.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-SEM-026";
+              }),
+      "mismatched, orphan, and duplicate VHDL loop labels are diagnosed");
+
+  const auto malformed_vhdl_loop = parse_text(
+      "malformed_unconditional_loop.vhd",
+      R"(
+architecture rtl of malformed_unconditional_loop is
+begin
+  exercise: process
+  begin
+    loop
+      exit;
+    end loop
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !malformed_vhdl_loop.ok()
+          && std::ranges::any_of(
+              malformed_vhdl_loop.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-113";
+              }),
+      "malformed unconditional VHDL loops receive a stable diagnostic");
+}
+
+void test_systemverilog_do_while_statements() {
+  const auto result = parse_text(
+      "do_while.sv",
+      R"(
+module do_while;
+  logic [2:0] count;
+  initial begin
+    do begin
+      count = count + 1;
+      if (count == 1) continue;
+      if (count == 2) break;
+    end while (count < 3);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "SystemVerilog do-while statements must parse");
+  const auto& statement =
+      result.design.units.front()
+          .processes.front()
+          .statements.front();
+  require(
+      statement.kind == StatementKind::Loop
+          && statement.loop_runtime
+          && statement.loop_post_test
+          && statement.condition.kind == ExpressionKind::Binary
+          && statement.condition.text == "<"
+          && statement.statements.size() == 3
+          && statement.statements[1].statements.front().kind
+              == StatementKind::Continue
+          && statement.statements[2].statements.front().kind
+              == StatementKind::Break,
+      "do-while retains its post-test condition and loop controls");
+
+  const auto malformed = parse_text(
+      "malformed_do_while.sv",
+      R"(
+module malformed_do_while;
+  initial do ; (1'b0)
+  initial do ; while 1'b0;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!malformed.ok(), "malformed do-while statements must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-PARSE-105"},
+           std::string_view{"FSIM-SV-PARSE-106"},
+           std::string_view{"FSIM-SV-PARSE-107"},
+           std::string_view{"FSIM-SV-PARSE-108"}}) {
+    require(
+        std::ranges::any_of(
+            malformed.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted SystemVerilog do-while diagnostic");
+  }
+}
+
+void test_systemverilog_conditional_expression() {
+  const auto result = parse_text(
+      "conditional.sv",
+      R"(
+module conditional;
+  logic select;
+  logic [3:0] lhs;
+  logic [3:0] rhs;
+  logic [3:0] result;
+  always_comb result = select ? lhs : rhs;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(), "SystemVerilog conditional expression must parse");
+  const auto& value =
+      result.design.units.front().processes.front()
+          .statements.front().value;
+  require(
+      value.kind == ExpressionKind::Call
+          && value.text == "?:"
+          && value.operands.size() == 3
+          && value.operands[0].text == "select"
+          && value.operands[1].text == "lhs"
+          && value.operands[2].text == "rhs",
+      "conditional-expression operand order");
+}
+
+void test_systemverilog_comparison_expressions() {
+  const auto result = parse_text(
+      "comparisons.sv",
+      R"(
+module comparisons;
+  logic [3:0] lhs;
+  logic [3:0] rhs;
+  logic [2:0] amount;
+  logic [3:0] shifted;
+  logic result;
+  always_comb begin
+    result = !lhs;
+    result = lhs != rhs;
+    result = lhs === rhs;
+    result = lhs !== rhs;
+    result = lhs ==? rhs;
+    result = lhs !=? rhs;
+    result = lhs < rhs;
+    result = lhs <= rhs;
+    result = lhs > rhs;
+    result = lhs >= rhs;
+    result = lhs && result;
+    result = result || rhs;
+    result = &lhs;
+    result = |lhs;
+    result = ^lhs;
+    result = ~&lhs;
+    result = ~|lhs;
+    result = ~^lhs;
+    result = ^~lhs;
+    shifted = lhs ~^ rhs;
+    shifted = lhs ^~ rhs;
+    shifted = lhs << amount;
+    shifted = lhs >> amount;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(), "SystemVerilog comparison expressions must parse");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 23
+          && statements[0].value.kind == ExpressionKind::Unary
+          && statements[0].value.text == "!",
+      "logical-negation expression node");
+  const std::array<std::string_view, 9> operators{
+      "!=", "===", "!==", "==?", "!=?", "<", "<=", ">", ">="};
+  for (std::size_t index = 0; index < operators.size(); ++index) {
+    require(
+        statements[index + 1].value.kind
+                == ExpressionKind::Binary
+            && statements[index + 1].value.text
+                == operators[index],
+        "comparison expression node");
+  }
+  require(
+      statements[10].value.kind == ExpressionKind::Binary
+          && statements[10].value.text == "&&"
+          && statements[11].value.kind == ExpressionKind::Binary
+          && statements[11].value.text == "||",
+      "logical binary expression nodes");
+  require(
+      statements[12].value.kind == ExpressionKind::Unary
+          && statements[12].value.text == "&"
+          && statements[13].value.kind == ExpressionKind::Unary
+          && statements[13].value.text == "|"
+          && statements[14].value.kind == ExpressionKind::Unary
+          && statements[14].value.text == "^",
+      "reduction expression nodes");
+  require(
+      statements[15].value.kind == ExpressionKind::Unary
+          && statements[15].value.text == "~&"
+          && statements[16].value.kind == ExpressionKind::Unary
+          && statements[16].value.text == "~|"
+          && statements[17].value.kind == ExpressionKind::Unary
+          && statements[17].value.text == "~^"
+          && statements[18].value.kind == ExpressionKind::Unary
+          && statements[18].value.text == "^~",
+      "complemented reduction expression nodes");
+  require(
+      statements[19].value.kind == ExpressionKind::Binary
+          && statements[19].value.text == "~^"
+          && statements[20].value.kind == ExpressionKind::Binary
+          && statements[20].value.text == "^~",
+      "binary XNOR expression nodes");
+  require(
+      statements[21].value.kind == ExpressionKind::Binary
+          && statements[21].value.text == "<<"
+          && statements[22].value.kind == ExpressionKind::Binary
+          && statements[22].value.text == ">>",
+      "logical-shift expression nodes");
+
+  const auto verilog = parse_text(
+      "wildcard_equality.v",
+      R"(
+module wildcard_equality;
+  reg [3:0] lhs;
+  reg [3:0] rhs;
+  reg result;
+  always @* result = lhs ==? rhs;
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      !verilog.ok()
+          && std::any_of(
+              verilog.diagnostics.begin(),
+              verilog.diagnostics.end(),
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VERILOG-SEM-004";
+              }),
+      "wildcard equality requires SystemVerilog");
+}
+
+void test_systemverilog_arithmetic_expressions() {
+  const auto result = parse_text(
+      "arithmetic.sv",
+      R"(
+module arithmetic;
+  logic [7:0] lhs;
+  logic [7:0] rhs;
+  logic [7:0] result;
+  always_comb begin
+    result = +lhs;
+    result = -lhs;
+    result = lhs - rhs;
+    result = lhs * rhs;
+    result = lhs / rhs;
+    result = lhs % rhs;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(), "SystemVerilog arithmetic expressions must parse");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 6
+          && statements[0].value.kind == ExpressionKind::Unary
+          && statements[0].value.text == "+"
+          && statements[1].value.kind == ExpressionKind::Unary
+          && statements[1].value.text == "-",
+      "unary arithmetic expression nodes");
+  const std::array<std::string_view, 4> operators{
+      "-", "*", "/", "%"};
+  for (std::size_t index = 0; index < operators.size(); ++index) {
+    require(
+        statements[index + 2].value.kind
+                == ExpressionKind::Binary
+            && statements[index + 2].value.text
+                == operators[index],
+        "binary arithmetic expression node");
+  }
+}
+
+void test_gate_primitives() {
+  const auto result = parse_text(
+      "gates.sv",
+      R"(
+module gates;
+  logic a;
+  logic b;
+  logic c;
+  logic y_buf;
+  logic y_buf_second;
+  logic y_not;
+  logic y_and;
+  logic y_nand;
+  logic y_or;
+  logic y_nor;
+  logic y_xor;
+  logic y_xnor;
+  buf #2 (y_buf, a), named_buf (y_buf_second, b);
+  not named_not (y_not, a);
+  and (y_and, a, b, c);
+  nand (y_nand, a, b, c);
+  or (y_or, a, b, c);
+  nor (y_nor, a, b, c);
+  xor (y_xor, a, b, c);
+  xnor (y_xnor, a, b, c);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(result.ok(), "built-in gate primitives must parse");
+  const auto& statements =
+      result.design.units.front().concurrent_statements;
+  require(
+      statements.size() == 9
+          && std::ranges::all_of(
+              statements,
+              [](const Statement& statement) {
+                return statement.kind == StatementKind::Assignment
+                    && statement.assignment_kind
+                        == AssignmentKind::Continuous;
+              })
+          && statements[0].delay
+          && statements[0].delay->magnitude == 2
+          && statements[1].delay
+          && statements[1].delay->magnitude == 2
+          && statements[0].value.kind == ExpressionKind::Identifier
+          && statements[2].value.kind == ExpressionKind::Unary
+          && statements[3].value.kind == ExpressionKind::Binary
+          && statements[4].value.kind == ExpressionKind::Unary,
+      "gate primitives lower into continuous expression HIR");
+
+  const auto invalid = parse_text(
+      "invalid_gate.sv",
+      R"(
+module invalid_gate;
+  logic a;
+  logic y;
+  and (y, a);
+  not (y, a, a);
+  and (strong1, pull0) (y, a, a);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid.ok()
+          && std::ranges::count_if(
+                 invalid.diagnostics,
+                 [](const Diagnostic& diagnostic) {
+                   return diagnostic.code == "FSIM-SV-SEM-026";
+                 })
+              == 2,
+      "invalid gate terminal counts are targeted");
+  require(
+      std::ranges::any_of(
+          invalid.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-UNSUPPORTED-030";
+          }),
+      "unsupported gate strengths are targeted");
+}
+
+void test_systemverilog_select_and_concatenation_expressions() {
+  const auto result = parse_text(
+      "select_concat.sv",
+      R"(
+module select_concat;
+  logic [15:8] descending;
+  logic [0:7] ascending;
+  logic selected;
+  logic [3:0] part;
+  logic [8:0] combined;
+  always_comb begin
+    selected = descending[10];
+    part = ascending[2:5];
+    combined = {
+      descending[15:12], descending[10], ascending[4:7]
+    };
+    descending[9] = selected;
+    ascending[4:5] = part;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      result.ok(),
+      "SystemVerilog select and concatenation expressions must parse");
+  const auto& signals = result.design.units.front().signals;
+  require(
+      signals[0].type.packed_range
+          && signals[0].type.packed_range->left == 15
+          && signals[0].type.packed_range->right == 8
+          && signals[0].type.packed_range->descending,
+      "descending packed range metadata");
+  require(
+      signals[1].type.packed_range
+          && signals[1].type.packed_range->left == 0
+          && signals[1].type.packed_range->right == 7
+          && !signals[1].type.packed_range->descending,
+      "ascending packed range metadata");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 5
+          && statements[0].value.kind == ExpressionKind::Index
+          && statements[0].value.operands.size() == 2
+          && statements[0].value.operands[1].text == "10",
+      "bit-select expression node");
+  require(
+      statements[1].value.kind == ExpressionKind::Slice
+          && statements[1].value.operands.size() == 3
+          && statements[1].value.operands[1].text == "2"
+          && statements[1].value.operands[2].text == "5",
+      "ascending part-select expression node");
+  require(
+      statements[2].value.kind == ExpressionKind::Concatenation
+          && statements[2].value.operands.size() == 3
+          && statements[2].value.operands[0].kind
+              == ExpressionKind::Slice
+          && statements[2].value.operands[1].kind
+              == ExpressionKind::Index
+          && statements[2].value.operands[2].kind
+              == ExpressionKind::Slice,
+      "concatenation expression node and operand order");
+  require(
+      statements[3].target.kind == ExpressionKind::Index
+          && statements[3].target.operands.size() == 2
+          && statements[3].target.operands[1].text == "9"
+          && statements[4].target.kind == ExpressionKind::Slice
+          && statements[4].target.operands.size() == 3,
+      "SystemVerilog selected assignment target nodes");
+}
+
+void test_conditional_statement_trees() {
+  const auto vhdl = parse_text(
+      "conditionals.vhd",
+      R"(
+entity conditionals is end entity;
+architecture rtl of conditionals is
+  signal result : boolean;
+begin
+  choose: process
+  begin
+    if true then
+      result <= false;
+    elsif false then
+      if true then
+        result <= true;
+      else
+        result <= false;
+      end if;
+    else
+      result <= true;
+    end if;
+    result <= (true nand false) and (false nor false)
+              and (true xnor true) and (true /= false);
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      vhdl.ok(),
+      "VHDL conditional parsing must retain a trailing bare wait");
+  const auto* architecture =
+      vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr
+          && architecture->processes.size() == 1
+          && architecture->processes.front().statements.size() == 3
+          && architecture->processes.front().statements.back().kind
+              == StatementKind::WaitUntil,
+      "VHDL conditional process representation");
+  const auto& outer =
+      architecture->processes.front().statements.front();
+  require(
+      outer.kind == StatementKind::If
+          && outer.condition.kind == ExpressionKind::BooleanLiteral
+          && outer.condition.text == "true"
+          && outer.statements.size() == 1
+          && outer.statements.front().value.kind
+              == ExpressionKind::BooleanLiteral
+          && outer.else_statements.size() == 1,
+      "VHDL true branch and boolean literal nodes");
+  const auto& elsif = outer.else_statements.front();
+  require(
+      elsif.kind == StatementKind::If
+          && elsif.condition.kind == ExpressionKind::BooleanLiteral
+          && elsif.condition.text == "false"
+          && elsif.statements.size() == 1
+          && elsif.statements.front().kind == StatementKind::If
+          && elsif.else_statements.size() == 1,
+      "VHDL elsif is retained as an ordered nested false branch");
+  require(
+      elsif.statements.front().else_statements.size() == 1,
+      "nested VHDL else branch representation");
+  const auto& boolean_assignment =
+      architecture->processes.front().statements[1];
+  require(
+      boolean_assignment.kind == StatementKind::Assignment
+          && boolean_assignment.value.kind == ExpressionKind::Binary
+          && boolean_assignment.value.text == "and",
+      "VHDL Boolean operator expression root");
+  const auto contains_operator =
+      [](const auto& self,
+         const Expression& expression,
+         const std::string_view operation) -> bool {
+        if (expression.kind == ExpressionKind::Binary
+            && expression.text == operation) {
+          return true;
+        }
+        return std::any_of(
+            expression.operands.begin(),
+            expression.operands.end(),
+            [&](const Expression& operand) {
+              return self(self, operand, operation);
+            });
+      };
+  for (const auto operation : {"nand", "nor", "xnor", "/="}) {
+    require(
+        contains_operator(
+            contains_operator,
+            boolean_assignment.value,
+            operation),
+        "VHDL Boolean operator node");
+  }
+
+  const auto systemverilog = parse_text(
+      "conditionals.sv",
+      R"(
+module conditionals;
+  logic [3:0] selector;
+  logic result;
+  initial begin
+    if (selector)
+      if (selector[3])
+        result = 1'b1;
+      else
+        result = 1'b0;
+    else begin
+      result = 1'bx;
+    end
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      systemverilog.ok(),
+      "nested SystemVerilog conditional statements must parse");
+  const auto& sv_outer =
+      systemverilog.design.units.front()
+          .processes.front()
+          .statements.front();
+  require(
+      sv_outer.kind == StatementKind::If
+          && sv_outer.condition.kind == ExpressionKind::Identifier
+          && sv_outer.statements.size() == 1
+          && sv_outer.statements.front().kind == StatementKind::If
+          && sv_outer.else_statements.size() == 1,
+      "SystemVerilog dangling else binds to the nested if");
+  require(
+      sv_outer.statements.front().else_statements.size() == 1
+          && sv_outer.else_statements.front().kind
+              == StatementKind::Assignment,
+      "SystemVerilog nested and outer false branches");
+}
+
+} // namespace fsim::tests::frontend
