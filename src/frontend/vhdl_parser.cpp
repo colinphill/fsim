@@ -2815,18 +2815,19 @@ class VhdlParser final : private detail::ParserBase {
         const auto attribute =
             expect_identifier("attribute designator");
         const auto designator = vhdl_name(attribute.text);
-        static constexpr std::array<std::string_view, 11>
+        static constexpr std::array<std::string_view, 17>
             supported_attributes{
                 "left", "right", "low", "high", "length",
                 "ascending", "event", "last_value", "last_event",
-                "stable", "active"};
+                "stable", "active", "pos", "val", "succ", "pred",
+                "leftof", "rightof"};
         if (std::ranges::find(
                 supported_attributes, designator)
             == supported_attributes.end()) {
           error(
               attribute,
               "FSIM-VHDL-SEM-030",
-              "unsupported bounded array attribute '"
+              "unsupported bounded VHDL attribute '"
                   + attribute.text + "'");
         }
         std::vector<Expression> operands{
@@ -2839,8 +2840,20 @@ class VhdlParser final : private detail::ParserBase {
           operands.push_back(parse_expression());
           expect(
               TokenKind::RightParen,
-              "')' after attribute dimension",
+              "')' after attribute argument",
               "FSIM-VHDL-PARSE-120");
+        }
+        const bool requires_argument =
+            designator == "pos" || designator == "val"
+            || designator == "succ" || designator == "pred"
+            || designator == "leftof"
+            || designator == "rightof";
+        if (requires_argument && operands.size() != 2) {
+          error(
+              attribute,
+              "FSIM-VHDL-PARSE-142",
+              "enumeration attribute '" + attribute.text
+                  + "' requires one parenthesized argument");
         }
         return Expression{
             ExpressionKind::Call,

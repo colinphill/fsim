@@ -1785,6 +1785,85 @@ end architecture;
       "diagnostics");
 }
 
+void test_vhdl_enumeration_attributes() {
+  const auto result = parse_text(
+      "enumeration_attributes.vhd",
+      R"(
+entity enumeration_attributes is
+end entity;
+architecture rtl of enumeration_attributes is
+  type State_T is (Idle, Load, Running, Done);
+  signal state_result : State_T;
+  signal integer_result : integer;
+  signal boolean_result : boolean;
+begin
+  observe : process
+  begin
+    state_result <= State_T'left;
+    state_result <= State_T'right;
+    state_result <= State_T'low;
+    state_result <= State_T'high;
+    integer_result <= State_T'length;
+    boolean_result <= State_T'ascending;
+    integer_result <= State_T'pos(Running);
+    state_result <= State_T'val(2);
+    state_result <= State_T'succ(Load);
+    state_result <= State_T'pred(Running);
+    state_result <= State_T'leftof(Running);
+    state_result <= State_T'rightof(Load);
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      result.ok(),
+      "VHDL enumeration scalar attributes must parse");
+  const auto& statements =
+      result.design.units.back().processes.front().statements;
+  constexpr std::array<std::string_view, 12> attributes{
+      "'left", "'right", "'low", "'high", "'length",
+      "'ascending", "'pos", "'val", "'succ", "'pred",
+      "'leftof", "'rightof"};
+  require(
+      statements.size() == attributes.size() + 1,
+      "enumeration attribute statement count");
+  for (std::size_t index = 0; index < attributes.size(); ++index) {
+    require(
+        statements[index].value.kind == ExpressionKind::Call
+            && statements[index].value.text == attributes[index]
+            && statements[index].value.operands.front().text
+                == "state_t"
+            && (index < 6
+                    ? statements[index].value.operands.size() == 1
+                    : statements[index].value.operands.size() == 2),
+        "enumeration attribute HIR retains type prefix and arity");
+  }
+
+  const auto invalid = parse_text(
+      "invalid_enumeration_attributes.vhd",
+      R"(
+entity invalid_enumeration_attributes is
+end entity;
+architecture rtl of invalid_enumeration_attributes is
+  type State_T is (Idle, Done);
+  signal result : integer;
+begin
+  result <= State_T'pos;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid.ok()
+          && std::ranges::any_of(
+              invalid.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-142";
+              }),
+      "missing enumeration attribute arguments have a stable diagnostic");
+}
+
 void test_exponentiation_expression_nodes() {
   const auto systemverilog = parse_text(
       "power.sv",
@@ -7621,6 +7700,7 @@ int main() {
     test_vhdl_runtime_integer_nodes();
     test_vhdl_subtype_declarations();
     test_vhdl_enumeration_declarations();
+    test_vhdl_enumeration_attributes();
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
     test_systemverilog_final_procedures();

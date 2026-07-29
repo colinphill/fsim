@@ -7639,6 +7639,8 @@ architecture rtl of enumeration_execution is
   signal symbol : Symbol_T;
   signal equal_result : boolean;
   signal ordered_result : boolean;
+  signal position_result : integer;
+  signal successor_result : State_T;
 begin
   drive : process
     variable local_state : State_T := Reset_State;
@@ -7659,6 +7661,8 @@ begin
 
   equal_result <= current /= Done;
   ordered_result <= current < Done;
+  position_result <= State_T'pos(current);
+  successor_result <= State_T'succ(current);
 end architecture;
 )",
             fsim::frontend::Language::Vhdl2008);
@@ -7689,9 +7693,16 @@ end architecture;
     const auto enum_ordered =
         vhdl_enumeration_design.design->find_signal(
             "ordered_result");
+    const auto enum_position =
+        vhdl_enumeration_design.design->find_signal(
+            "position_result");
+    const auto enum_successor =
+        vhdl_enumeration_design.design->find_signal(
+            "successor_result");
     assert(
         enum_current && enum_selected && enum_symbol
-        && enum_equal && enum_ordered);
+        && enum_equal && enum_ordered
+        && enum_position && enum_successor);
     const auto& enum_info =
         vhdl_enumeration_design.design->signals().at(
             *enum_current);
@@ -7743,7 +7754,28 @@ end architecture;
             == "1"
         && enum_interpreter->signal_value(*enum_ordered)
                 .to_msb_string()
-            == "1");
+            == "1"
+        && enum_interpreter->signal_value(*enum_position)
+                .to_msb_string()
+            == "00000000000000000000000000000001"
+        && enum_interpreter->signal_value(*enum_successor)
+                .to_msb_string()
+            == "10");
+    assert(
+        std::ranges::any_of(
+            vhdl_enumeration_design.design->processes(),
+            [](const auto& process) {
+                return std::ranges::any_of(
+                    process.operations,
+                    [](const auto& operation) {
+                        return std::holds_alternative<
+                                   fsim::runtime::simir::IntegerCheck>(
+                                   operation)
+                            || std::holds_alternative<
+                                   fsim::runtime::simir::IntegerBinary>(
+                                   operation);
+                    });
+            }));
 
     const auto invalid_vhdl_enumerations =
         fsim::frontend::parse_text(
@@ -7756,10 +7788,18 @@ architecture rtl of invalid_vhdl_enumerations is
   type Second_T is (Low, High);
   signal first : First_T;
   signal second : Second_T;
+  signal position : integer;
 begin
   first <= second;
   second <= Missing;
   first <= first + first;
+  first <= First_T'val(2);
+  position <= First_T'pos(1);
+  first <= First_T'val(A);
+  first <= First_T'left(A);
+  first <= first'right;
+  first <= Second_T'left;
+  position <= First_T'pos(first);
 end architecture;
 )",
             fsim::frontend::Language::Vhdl2008);
@@ -7778,7 +7818,43 @@ end architecture;
             "FSIM-ELAB-VHENUM-002")
         && has_diagnostic(
             rejected_vhdl_enumerations,
-            "FSIM-ELAB-VHENUM-003"));
+            "FSIM-ELAB-VHENUM-003")
+        && has_diagnostic(
+            rejected_vhdl_enumerations,
+            "FSIM-ELAB-VHENUMATTR-001")
+        && has_diagnostic(
+            rejected_vhdl_enumerations,
+            "FSIM-ELAB-VHENUMATTR-002"));
+    assert(std::ranges::any_of(
+        rejected_vhdl_enumerations.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code
+                    == "FSIM-ELAB-VHENUMATTR-001"
+                && diagnostic.message.find(
+                       "requires a value of enumeration type")
+                    != std::string::npos;
+        }));
+    assert(std::ranges::any_of(
+        rejected_vhdl_enumerations.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code
+                    == "FSIM-ELAB-VHENUMATTR-001"
+                && diagnostic.message.find(
+                       "'left on enumeration type")
+                    != std::string::npos
+                && diagnostic.message.find(
+                       "requires 0 arguments")
+                    != std::string::npos;
+        }));
+    assert(std::ranges::any_of(
+        rejected_vhdl_enumerations.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code
+                    == "FSIM-ELAB-VHENUMATTR-001"
+                && diagnostic.message.find(
+                       "requires an integer-family argument")
+                    != std::string::npos;
+        }));
 
     const auto enumeration_boundary_vhdl =
         fsim::frontend::parse_text(

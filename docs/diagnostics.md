@@ -213,6 +213,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-139` | error | A VHDL enumeration declaration contains no valid literals. |
 | `FSIM-VHDL-PARSE-140` | error | A VHDL enumeration declaration is missing its closing parenthesis. |
 | `FSIM-VHDL-PARSE-141` | error | A VHDL enumeration declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-142` | error | A one-argument VHDL enumeration scalar attribute is missing its parenthesized argument. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -703,6 +704,8 @@ therefore excluded.
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |
+| `FSIM-ELAB-VHENUMATTR-001` | error | A VHDL enumeration scalar attribute has an invalid prefix, arity, argument type, result context, or executable ordinal range. |
+| `FSIM-ELAB-VHENUMATTR-002` | error | A locally static or executable VHDL enumeration scalar attribute argument is outside the type's declaration range or has no predecessor/successor. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |

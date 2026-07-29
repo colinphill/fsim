@@ -1875,6 +1875,36 @@ VCD, package-edit cache invalidation, fetched Boost.Context 1.91.0 and Tcl
 9.0.4, SystemC, the strict native ABI, and every preceding feature batch. No
 CI state was inspected for this local gate.
 
+### Forty-second feature batch — VHDL enumeration scalar attributes
+
+The planned ten implementation features are:
+
+1. Retain a resolved VHDL type-mark catalog independently from executable
+   object names so local, imported, and subtype enumeration prefixes remain
+   available during lowering.
+2. Parse enumeration `left`, `right`, `low`, `high`, `length`, `ascending`,
+   `pos`, `val`, `succ`, `pred`, `leftof`, and `rightof` attribute forms with
+   retained prefix/argument spans.
+3. Enforce type-mark versus object-prefix rules and exact zero-/one-argument
+   arity with stable targeted diagnostics.
+4. Execute declaration-range `left`/`right`/`low`/`high`, `length`, and
+   `ascending` with exact enumeration, integer, or Boolean result types.
+5. Execute `pos` for literals, signals, locals, constants, and generics by
+   widening the checked nominal ordinal to the portable integer result.
+6. Execute `val` for static and dynamic integer arguments with range checks
+   before narrowing to the nominal enumeration result.
+7. Execute `succ`/`pred` and direction-aware `leftof`/`rightof` for static and
+   dynamic enumeration arguments without allowing ordinal wraparound.
+8. Fold enumeration attributes in package constants and generic defaults,
+   diagnose static out-of-range arguments before executable lowering, and
+   retain runtime failures at the originating attribute source point.
+9. Preserve interpreter/LLVM O0/O2 equivalence, hierarchy specialization,
+   debugger literal rendering, VCD ordinals, cold/warm cache reuse, and
+   package-edit invalidation.
+10. Add focused positive, negative, elaboration, and application evidence;
+    update the VHDL feature matrix; then run, record, and push the full local
+    regression gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

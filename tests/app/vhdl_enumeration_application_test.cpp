@@ -31,7 +31,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 7> values;
+  std::array<std::string, 19> values;
   std::string state_local;
   std::string symbol_local;
   std::string debugger_output;
@@ -133,18 +133,31 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 7> paths{
+  constexpr std::array<std::string_view, 19> paths{
       "enumeration_top.source",
       "enumeration_top.result",
       "enumeration_top.selected",
       "enumeration_top.symbol_source",
       "enumeration_top.symbol_result",
       "enumeration_top.equal_result",
-      "enumeration_top.ordered_result"};
-  constexpr std::array<std::size_t, 7> widths{
-      2, 2, 2, 2, 2, 1, 1};
-  std::array<fsim::runtime::simir::SignalId, 7> signals{};
-  std::array<fsim::runtime::VcdSignal, 7> traces{};
+      "enumeration_top.ordered_result",
+      "enumeration_top.left_result",
+      "enumeration_top.right_result",
+      "enumeration_top.low_result",
+      "enumeration_top.high_result",
+      "enumeration_top.length_result",
+      "enumeration_top.ascending_result",
+      "enumeration_top.position_result",
+      "enumeration_top.value_result",
+      "enumeration_top.successor_result",
+      "enumeration_top.predecessor_result",
+      "enumeration_top.leftof_result",
+      "enumeration_top.rightof_result"};
+  constexpr std::array<std::size_t, 19> widths{
+      2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2,
+      32, 1, 32, 2, 2, 2, 2, 2};
+  std::array<fsim::runtime::simir::SignalId, 19> signals{};
+  std::array<fsim::runtime::VcdSignal, 19> traces{};
   std::ostringstream vcd_output;
   fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 64};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -206,8 +219,13 @@ void verify_capture(const Capture& capture) {
       == fsim::runtime::RunStatus::completed);
   assert((
       capture.values
-      == std::array<std::string, 7>{
-          "01", "01", "11", "10", "10", "1", "1"}));
+      == std::array<std::string, 19>{
+          "01", "01", "11", "10", "10", "1", "1",
+          "00", "11", "00", "11",
+          "00000000000000000000000000000100",
+          "1",
+          "00000000000000000000000000000001",
+          "10", "10", "10", "10", "10"}));
   assert(capture.state_local == "10");
   assert(capture.symbol_local == "10");
   assert(
@@ -222,6 +240,29 @@ void verify_capture(const Capture& capture) {
   assert(capture.vcd.find("b01") != std::string::npos);
   assert(capture.vcd.find("b10") != std::string::npos);
   assert(capture.vcd.find("b11") != std::string::npos);
+}
+
+std::string run_out_of_range_successor(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  const auto source =
+      simulation.find_signal("enumeration_top.source");
+  assert(source);
+  simulation.deposit_signal(
+      *source,
+      fsim::runtime::PackedLogic4::from_msb_string("11"));
+  try {
+    (void)simulation.run();
+  } catch (const std::exception& error) {
+    return error.what();
+  }
+  assert(false);
+  return {};
 }
 
 } // namespace
@@ -248,6 +289,8 @@ package State_Types is
   type State_T is (Idle, Load, Running, Done);
   subtype State_Alias_T is State_T;
   constant Initial_State : State_T := Load;
+  constant Attribute_Default : State_T := State_T'val(1);
+  constant State_Count : integer := State_T'length;
   type Symbol_T is ('A', 'B', 'C');
 end package;
 )";
@@ -259,7 +302,9 @@ end package;
     output << R"(
 use work.state_types.all;
 entity Enumeration_Child is
-  generic (Reset_State : State_T := Running);
+  generic (
+    Reset_State : State_T := State_T'succ(Initial_State)
+  );
   port (
     Source : in State_T;
     Result : out State_T;
@@ -282,6 +327,9 @@ end architecture;
     output << R"(
 use work.state_types.all;
 entity Enumeration_Top is
+  generic (
+    Top_Default : State_T := State_T'succ(Attribute_Default)
+  );
 end entity;
 
 use work.state_types.all;
@@ -293,6 +341,18 @@ architecture rtl of enumeration_top is
   signal symbol_result : Symbol_T;
   signal equal_result : boolean;
   signal ordered_result : boolean;
+  signal left_result : State_T;
+  signal right_result : State_T;
+  signal low_result : State_T;
+  signal high_result : State_T;
+  signal length_result : integer;
+  signal ascending_result : boolean;
+  signal position_result : integer;
+  signal value_result : State_T;
+  signal successor_result : State_T;
+  signal predecessor_result : State_T;
+  signal leftof_result : State_T;
+  signal rightof_result : State_T;
 begin
   drive : process
     variable local_state : State_T := Initial_State;
@@ -312,7 +372,7 @@ begin
   end process;
 
   child : entity work.Enumeration_Child(rtl)
-    generic map (Reset_State => Running)
+    generic map (Reset_State => State_T'val(2))
     port map (
       Source => source,
       Result => result,
@@ -322,6 +382,20 @@ begin
 
   equal_result <= result = Load;
   ordered_result <= source < Done;
+  left_result <= State_T'left;
+  right_result <= State_T'right;
+  low_result <= State_T'low;
+  high_result <= State_T'high;
+  length_result <= State_T'length;
+  ascending_result <= State_T'ascending;
+  position_result <= State_Alias_T'pos(source);
+  value_result <= Top_Default
+    when State_T'val(State_Count - 2) = Top_Default
+    else State_T'left;
+  successor_result <= State_T'succ(source);
+  predecessor_result <= State_T'pred(State_T'high);
+  leftof_result <= State_T'leftof(State_T'high);
+  rightof_result <= State_T'rightof(source);
 end architecture;
 )";
     assert(output.good());
@@ -365,12 +439,12 @@ end architecture;
     assert(cold.debugger_output == warm.debugger_output);
     assert(cold.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 5);
+    assert(cold.compiled_processes == 17);
     assert(cold.compiled_modules == 2);
     assert(cold.cache.hits == 0);
     assert(cold.cache.misses == 2);
     assert(cold.cache.stores == 2);
-    assert(warm.compiled_processes == 5);
+    assert(warm.compiled_processes == 17);
     assert(warm.compiled_modules == 2);
     assert(warm.cache.hits == 2);
     assert(warm.cache.misses == 0);
@@ -387,12 +461,28 @@ end architecture;
         changed.specialization_keys
         != warm.specialization_keys);
 #if defined(FSIM_HAS_LLVM)
-    assert(changed.compiled_processes == 5);
+    assert(changed.compiled_processes == 17);
     assert(changed.compiled_modules == 2);
     assert(changed.cache.hits == 0);
     assert(changed.cache.misses == 2);
     assert(changed.cache.stores == 2);
 #endif
+    const auto reference_failure =
+        run_out_of_range_successor(
+            config,
+            fsim::app::SimulationEngine::interpreter);
+    const auto compiled_failure =
+        run_out_of_range_successor(
+            config,
+            fsim::app::SimulationEngine::compiled);
+    assert(
+        reference_failure.find(
+            "VHDL integer subtype range check failed")
+        != std::string::npos);
+    assert(
+        compiled_failure.find(
+            "VHDL integer subtype range check failed")
+        != std::string::npos);
     write_package("revision one");
   }
 

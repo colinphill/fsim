@@ -242,6 +242,242 @@ std::optional<std::int64_t> vhdl_enumeration_ordinal(
     return static_cast<std::int64_t>(ordinal);
 }
 
+const frontend::Type* vhdl_enumeration_type_mark(
+    const DesignUnit& unit,
+    const std::string_view name) {
+    const auto alias = std::find_if(
+        unit.type_aliases.begin(),
+        unit.type_aliases.end(),
+        [&](const auto& candidate) {
+            return candidate.name == name
+                && !candidate.type.enumeration_literals.empty();
+        });
+    if (alias != unit.type_aliases.end()) {
+        return &alias->type;
+    }
+    const frontend::Type* found = nullptr;
+    const auto consider =
+        [&](const frontend::Type& type) {
+          if (found == nullptr
+              && type.spelling == name
+              && !type.enumeration_literals.empty()) {
+              found = &type;
+          }
+        };
+    for (const auto& parameter : unit.parameters) {
+        consider(parameter.type);
+    }
+    for (const auto& port : unit.ports) {
+        consider(port.type);
+    }
+    for (const auto& signal : unit.signals) {
+        consider(signal.type);
+    }
+    return found;
+}
+
+const frontend::Type* vhdl_object_type(
+    const DesignUnit& unit,
+    const std::string_view name) {
+    const auto parameter = std::find_if(
+        unit.parameters.begin(),
+        unit.parameters.end(),
+        [&](const auto& candidate) {
+            return candidate.name == name;
+        });
+    if (parameter != unit.parameters.end()) {
+        return &parameter->type;
+    }
+    const auto port = std::find_if(
+        unit.ports.begin(),
+        unit.ports.end(),
+        [&](const auto& candidate) {
+            return candidate.name == name;
+        });
+    if (port != unit.ports.end()) {
+        return &port->type;
+    }
+    const auto signal = std::find_if(
+        unit.signals.begin(),
+        unit.signals.end(),
+        [&](const auto& candidate) {
+            return candidate.name == name;
+        });
+    return signal == unit.signals.end()
+        ? nullptr
+        : &signal->type;
+}
+
+struct FoldedEnumerationAttribute {
+    std::int64_t value{};
+    bool enumeration_result{};
+    bool boolean_result{};
+};
+
+std::optional<FoldedEnumerationAttribute>
+evaluate_vhdl_enumeration_attribute(
+    const Expression& expression,
+    const DesignUnit& unit,
+    const ConstantEnvironment& environment,
+    std::string& error,
+    bool& range_error) {
+    if (expression.kind != ExpressionKind::Call
+        || expression.operands.empty()
+        || expression.operands.front().kind
+            != ExpressionKind::Identifier) {
+        return std::nullopt;
+    }
+    const auto* type = vhdl_enumeration_type_mark(
+        unit, expression.operands.front().text);
+    if (type == nullptr) {
+        return std::nullopt;
+    }
+    const auto count = type->enumeration_literals.size();
+    if (count == 0
+        || count
+            > static_cast<std::size_t>(
+                std::numeric_limits<std::int64_t>::max())) {
+        error = "enumeration attribute prefix has no representable range";
+        return std::nullopt;
+    }
+    const auto require_arity =
+        [&](const std::size_t expected) {
+          if (expression.operands.size() != expected + 1U) {
+              error = expression.text + " requires "
+                  + std::to_string(expected)
+                  + (expected == 1 ? " argument" : " arguments");
+              return false;
+          }
+          return true;
+        };
+    if (expression.text == "'left"
+        || expression.text == "'low") {
+        if (!require_arity(0)) {
+            return std::nullopt;
+        }
+        return FoldedEnumerationAttribute{0, true, false};
+    }
+    if (expression.text == "'right"
+        || expression.text == "'high") {
+        if (!require_arity(0)) {
+            return std::nullopt;
+        }
+        return FoldedEnumerationAttribute{
+            static_cast<std::int64_t>(count - 1U), true, false};
+    }
+    if (expression.text == "'length") {
+        if (!require_arity(0)) {
+            return std::nullopt;
+        }
+        return FoldedEnumerationAttribute{
+            static_cast<std::int64_t>(count), false, false};
+    }
+    if (expression.text == "'ascending") {
+        if (!require_arity(0)) {
+            return std::nullopt;
+        }
+        return FoldedEnumerationAttribute{1, false, true};
+    }
+    const bool position = expression.text == "'pos";
+    const bool value = expression.text == "'val";
+    const bool successor =
+        expression.text == "'succ"
+        || expression.text == "'rightof";
+    const bool predecessor =
+        expression.text == "'pred"
+        || expression.text == "'leftof";
+    if (!position && !value && !successor && !predecessor) {
+        return std::nullopt;
+    }
+    if (!require_arity(1)) {
+        return std::nullopt;
+    }
+    const auto& argument_expression = expression.operands[1];
+    const auto* argument_object_type =
+        argument_expression.kind == ExpressionKind::Identifier
+            ? vhdl_object_type(unit, argument_expression.text)
+            : nullptr;
+    std::optional<std::int64_t> argument;
+    if (value) {
+        if (vhdl_enumeration_ordinal(
+                argument_expression, *type)
+            || (argument_object_type != nullptr
+                && !argument_object_type
+                        ->enumeration_literals.empty())) {
+            error = "'val requires an integer-family argument";
+            return std::nullopt;
+        }
+        argument = evaluate_constant_expression(
+            argument_expression, environment, error);
+    } else {
+        argument = vhdl_enumeration_ordinal(
+            argument_expression, *type);
+        if (!argument
+            && argument_expression.kind
+                == ExpressionKind::Identifier) {
+            if (argument_object_type != nullptr
+                && (argument_object_type
+                        ->enumeration_literals.empty()
+                    || argument_object_type->nominal_type
+                        != type->nominal_type)) {
+                error = expression.text
+                    + " requires a value of enumeration type '"
+                    + type->spelling + "'";
+                return std::nullopt;
+            }
+            argument = evaluate_constant_expression(
+                argument_expression, environment, error);
+        }
+    }
+    if (!argument) {
+        if (error.empty()) {
+            error = value
+                ? "'val argument is not a locally static integer"
+                : expression.text
+                    + " requires a locally static enumeration value";
+        }
+        return std::nullopt;
+    }
+    if (position) {
+        if (*argument < 0
+            || static_cast<std::uint64_t>(*argument) >= count) {
+            range_error = true;
+            error = "'pos argument is outside the enumeration range";
+            return std::nullopt;
+        }
+        return FoldedEnumerationAttribute{
+            *argument, false, false};
+    }
+    if (value) {
+        if (*argument < 0
+            || static_cast<std::uint64_t>(*argument) >= count) {
+            range_error = true;
+            error = "'val argument is outside the enumeration range";
+            return std::nullopt;
+        }
+        return FoldedEnumerationAttribute{
+            *argument, true, false};
+    }
+    if (*argument < 0
+        || static_cast<std::uint64_t>(*argument) >= count) {
+        range_error = true;
+        error = expression.text
+            + " argument is outside the enumeration range";
+        return std::nullopt;
+    }
+    const auto adjusted =
+        successor ? *argument + 1 : *argument - 1;
+    if (adjusted < 0
+        || static_cast<std::uint64_t>(adjusted) >= count) {
+        range_error = true;
+        error = expression.text
+            + " argument has no result inside the enumeration range";
+        return std::nullopt;
+    }
+    return FoldedEnumerationAttribute{
+        adjusted, true, false};
+}
+
 std::optional<LoweredLiteral> literal_value(
     const Expression& expression,
     const std::size_t expected_width,
@@ -915,6 +1151,58 @@ Expression constant_expression(
                 {},
                 span}},
         span};
+}
+
+bool fold_vhdl_enumeration_attributes(
+    Expression& expression,
+    const DesignUnit& unit,
+    const ConstantEnvironment& environment,
+    std::string& error,
+    bool& range_error) {
+    for (auto& operand : expression.operands) {
+        if (!fold_vhdl_enumeration_attributes(
+                operand,
+                unit,
+                environment,
+                error,
+                range_error)) {
+            return false;
+        }
+    }
+    if (expression.kind != ExpressionKind::Call) {
+        return true;
+    }
+    if (!expression.text.starts_with('\'')
+        || expression.operands.empty()
+        || expression.operands.front().kind
+            != ExpressionKind::Identifier
+        || vhdl_enumeration_type_mark(
+               unit, expression.operands.front().text)
+            == nullptr) {
+        return true;
+    }
+    const auto folded =
+        evaluate_vhdl_enumeration_attribute(
+            expression,
+            unit,
+            environment,
+            error,
+            range_error);
+    if (!folded) {
+        return false;
+    }
+    const auto span = expression.span;
+    expression = constant_expression(
+        folded->value,
+        span,
+        folded->boolean_result
+            ? frontend::ValueDomain::Boolean
+            : folded->enumeration_result
+                ? frontend::ValueDomain::Bit2
+                : frontend::ValueDomain::Integer,
+        frontend::Language::Vhdl2008,
+        folded->enumeration_result);
+    return true;
 }
 
 void substitute_parameters(
@@ -2479,15 +2767,34 @@ SpecializedUnit specialize_unit(
         }
         if (actual_index) {
             std::string error;
+            bool range_error = false;
+            auto actual_expression = override.value;
+            if (is_vhdl
+                && !fold_vhdl_enumeration_attributes(
+                    actual_expression,
+                    source,
+                    parent_environment,
+                    error,
+                    range_error)) {
+                diagnostics.push_back({
+                    range_error
+                        ? "FSIM-ELAB-VHENUMATTR-002"
+                        : "FSIM-ELAB-VHENUMATTR-001",
+                    "cannot evaluate enumeration attribute in "
+                    + std::string{object_kind}
+                    + " actual: " + error,
+                    override.span});
+                continue;
+            }
             auto value =
                 is_vhdl
                     ? vhdl_enumeration_ordinal(
-                          override.value,
+                          actual_expression,
                           overridable[*actual_index]->type)
                     : std::optional<std::int64_t>{};
             if (!value) {
                 value = evaluate_constant_expression(
-                    override.value, parent_environment, error);
+                    actual_expression, parent_environment, error);
             }
             if (!value) {
                 diagnostics.push_back({
@@ -2537,28 +2844,50 @@ SpecializedUnit specialize_unit(
                 value = 0;
             } else {
                 std::string error;
-                value =
-                    is_vhdl
-                        ? vhdl_enumeration_ordinal(
-                              parameter.default_value,
-                              parameter.type)
-                        : std::optional<std::int64_t>{};
-                if (!value) {
-                    value = evaluate_constant_expression(
-                        parameter.default_value,
+                bool range_error = false;
+                auto default_expression =
+                    parameter.default_value;
+                if (is_vhdl
+                    && !fold_vhdl_enumeration_attributes(
+                        default_expression,
+                        source,
                         result.environment,
-                        error);
-                }
-                if (!value) {
+                        error,
+                        range_error)) {
                     diagnostics.push_back({
-                        code(
-                            SpecializationDiagnostic::
-                                default_evaluation),
-                        "cannot evaluate default for "
-                            + std::string{object_kind} + " '"
-                            + parameter.name + "': " + error,
+                        range_error
+                            ? "FSIM-ELAB-VHENUMATTR-002"
+                            : "FSIM-ELAB-VHENUMATTR-001",
+                        "cannot evaluate enumeration attribute in "
+                        + std::string{object_kind} + " '"
+                        + parameter.name + "': " + error,
                         parameter.span});
                     value = 0;
+                }
+                if (!value) {
+                    value =
+                        is_vhdl
+                            ? vhdl_enumeration_ordinal(
+                                  default_expression,
+                                  parameter.type)
+                            : std::optional<std::int64_t>{};
+                    if (!value) {
+                        value = evaluate_constant_expression(
+                            default_expression,
+                            result.environment,
+                            error);
+                    }
+                    if (!value) {
+                        diagnostics.push_back({
+                            code(
+                                SpecializationDiagnostic::
+                                    default_evaluation),
+                            "cannot evaluate default for "
+                                + std::string{object_kind} + " '"
+                                + parameter.name + "': " + error,
+                            parameter.span});
+                        value = 0;
+                    }
                 }
             }
         }
@@ -2953,10 +3282,13 @@ public:
         const std::unordered_map<std::string, SignalId>& signals,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_types,
+        const std::unordered_map<
+            std::string, const frontend::Type*>& visible_type_marks,
         std::vector<Diagnostic>& diagnostics)
         : design_(design),
           signals_(signals),
           visible_types_(visible_types),
+          visible_type_marks_(visible_type_marks),
           diagnostics_(diagnostics) {}
 
     Process lower_process(
@@ -3193,6 +3525,52 @@ private:
             return local->second;
         }
         return visible_type(name);
+    }
+
+    [[nodiscard]] const frontend::Type* visible_type_mark(
+        const std::string_view name) const {
+        const auto found =
+            visible_type_marks_.find(std::string{name});
+        return found == visible_type_marks_.end()
+            ? nullptr
+            : found->second;
+    }
+
+    [[nodiscard]] const frontend::Type*
+    enumeration_expression_type(
+        const Expression& expression) const {
+        if (expression.kind == ExpressionKind::Identifier) {
+            const auto* type = object_type(expression.text);
+            return type != nullptr
+                    && !type->enumeration_literals.empty()
+                ? type
+                : nullptr;
+        }
+        if (expression.kind != ExpressionKind::Call
+            || expression.operands.empty()
+            || expression.operands.front().kind
+                != ExpressionKind::Identifier) {
+            return nullptr;
+        }
+        const bool enumeration_result =
+            expression.text == "'left"
+            || expression.text == "'right"
+            || expression.text == "'low"
+            || expression.text == "'high"
+            || expression.text == "'val"
+            || expression.text == "'succ"
+            || expression.text == "'pred"
+            || expression.text == "'leftof"
+            || expression.text == "'rightof";
+        if (!enumeration_result) {
+            return nullptr;
+        }
+        const auto* type = visible_type_mark(
+            expression.operands.front().text);
+        return type != nullptr
+                && !type->enumeration_literals.empty()
+            ? type
+            : nullptr;
     }
 
     [[nodiscard]] static std::pair<std::int32_t, std::int32_t>
@@ -5486,6 +5864,281 @@ private:
         return PackedMemberReference{base, &*member};
     }
 
+    [[nodiscard]] RegisterId widen_enumeration_ordinal(
+        const RegisterId source) {
+        const auto source_width = register_width(source);
+        const auto destination =
+            allocate_register(
+                32, frontend::ValueDomain::Integer);
+        if (source_width == 32) {
+            process_.operations.emplace_back(
+                CopyRegister{destination, source});
+            return destination;
+        }
+        const auto padding =
+            allocate_register(
+                32 - source_width,
+                frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant{
+            padding,
+            PackedLogic4(
+                32 - source_width, Logic4::zero)});
+        process_.operations.emplace_back(Concatenate{
+            destination,
+            {padding, source},
+            32});
+        return destination;
+    }
+
+    [[nodiscard]] RegisterId narrow_enumeration_ordinal(
+        const RegisterId source,
+        const frontend::Type& type) {
+        const auto width =
+            static_cast<std::size_t>(
+                type.width().value_or(1));
+        const auto destination =
+            allocate_register(width, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Extract{
+            destination,
+            source,
+            0,
+            static_cast<std::uint32_t>(width)});
+        return destination;
+    }
+
+    std::optional<RegisterId> lower_enumeration_attribute(
+        const Expression& expression,
+        const frontend::Type& type) {
+        const auto width_value = type.width();
+        if (!width_value || *width_value == 0
+            || *width_value > 32
+            || type.enumeration_literals.empty()
+            || type.enumeration_literals.size()
+                > static_cast<std::size_t>(
+                    std::numeric_limits<std::int32_t>::max())) {
+            report(
+                "FSIM-ELAB-VHENUMATTR-001",
+                "enumeration attribute prefix '"
+                    + type.spelling
+                    + "' has no executable ordinal range",
+                expression.span);
+            return std::nullopt;
+        }
+        const auto width =
+            static_cast<std::size_t>(*width_value);
+        const auto count = static_cast<std::int32_t>(
+            type.enumeration_literals.size());
+        const auto require_arity =
+            [&](const std::size_t expected) {
+              if (expression.operands.size() != expected + 1U) {
+                  report(
+                      "FSIM-ELAB-VHENUMATTR-001",
+                      expression.text + " on enumeration type '"
+                          + type.spelling + "' requires "
+                          + std::to_string(expected)
+                          + (expected == 1
+                                 ? " argument"
+                                 : " arguments"),
+                      expression.span);
+                  return false;
+              }
+              return true;
+            };
+        if (expression.text == "'left"
+            || expression.text == "'right"
+            || expression.text == "'low"
+            || expression.text == "'high") {
+            if (!require_arity(0)) {
+                return std::nullopt;
+            }
+            const auto upper =
+                expression.text == "'right"
+                    || expression.text == "'high";
+            const auto destination =
+                allocate_register(
+                    width, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant{
+                destination,
+                unsigned_value(
+                    upper
+                        ? static_cast<std::uint64_t>(count - 1)
+                        : 0,
+                    width)});
+            return destination;
+        }
+        if (expression.text == "'length") {
+            if (!require_arity(0)) {
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(
+                    32, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(LoadConstant{
+                destination,
+                integer_value(count)});
+            return destination;
+        }
+        if (expression.text == "'ascending") {
+            if (!require_arity(0)) {
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(
+                    1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(LoadConstant{
+                destination,
+                PackedLogic4(1, Logic4::one)});
+            return destination;
+        }
+
+        const bool position = expression.text == "'pos";
+        const bool value = expression.text == "'val";
+        const bool successor =
+            expression.text == "'succ"
+            || expression.text == "'rightof";
+        const bool predecessor =
+            expression.text == "'pred"
+            || expression.text == "'leftof";
+        if (!position && !value && !successor && !predecessor) {
+            report(
+                "FSIM-ELAB-VHENUMATTR-001",
+                "attribute '" + expression.text
+                    + "' is not defined for enumeration type '"
+                    + type.spelling + "'",
+                expression.span);
+            return std::nullopt;
+        }
+        if (!require_arity(1)) {
+            return std::nullopt;
+        }
+        if (value) {
+            if (const auto static_value =
+                    constant_index(expression.operands[1]);
+                static_value
+                && (*static_value < 0
+                    || *static_value >= count)) {
+                report(
+                    "FSIM-ELAB-VHENUMATTR-002",
+                    "'val argument "
+                        + std::to_string(*static_value)
+                        + " is outside enumeration type '"
+                        + type.spelling + "'",
+                    expression.operands[1].span);
+                return std::nullopt;
+            }
+            if (!is_integer_expression(
+                    expression.operands[1])) {
+                report(
+                    "FSIM-ELAB-VHENUMATTR-001",
+                    "'val requires an integer-family argument",
+                    expression.operands[1].span);
+                return std::nullopt;
+            }
+            const auto argument =
+                lower_expression(
+                    expression.operands[1], 32);
+            if (!argument || register_width(*argument) != 32) {
+                report(
+                    "FSIM-ELAB-VHENUMATTR-001",
+                    "'val argument does not have the portable "
+                    "32-bit integer representation",
+                    expression.operands[1].span);
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(IntegerCheck{
+                *argument, 0, count - 1});
+            return narrow_enumeration_ordinal(
+                *argument, type);
+        }
+
+        const auto argument =
+            [&]() -> std::optional<RegisterId> {
+              const auto& argument_expression =
+                  expression.operands[1];
+              if (argument_expression.kind
+                      == ExpressionKind::IntegerLiteral
+                  || argument_expression.kind
+                      == ExpressionKind::BooleanLiteral
+                  || argument_expression.kind
+                      == ExpressionKind::StringLiteral) {
+                  report(
+                      "FSIM-ELAB-VHENUMATTR-001",
+                      expression.text
+                          + " requires a value of enumeration type '"
+                          + type.spelling + "'",
+                      argument_expression.span);
+                  return std::nullopt;
+              }
+              if (argument_expression.kind
+                      == ExpressionKind::Identifier
+                  && !vhdl_enumeration_ordinal(
+                      argument_expression, type)) {
+                  const auto* argument_type =
+                      object_type(argument_expression.text);
+                  if (argument_type != nullptr
+                      && argument_type
+                          ->enumeration_literals.empty()) {
+                      report(
+                          "FSIM-ELAB-VHENUMATTR-001",
+                          expression.text
+                              + " requires a value of enumeration type '"
+                              + type.spelling + "'",
+                          argument_expression.span);
+                      return std::nullopt;
+                  }
+              }
+              return lower_expression(
+                  argument_expression, width, &type);
+            }();
+        if (!argument) {
+            return std::nullopt;
+        }
+        const auto ordinal =
+            widen_enumeration_ordinal(*argument);
+        if (position) {
+            process_.operations.emplace_back(IntegerCheck{
+                ordinal, 0, count - 1});
+            return ordinal;
+        }
+        const auto static_ordinal =
+            vhdl_enumeration_ordinal(
+                expression.operands[1], type);
+        const auto lower =
+            successor ? 0 : 1;
+        const auto upper =
+            successor ? count - 2 : count - 1;
+        if (lower > upper
+            || (static_ordinal
+                && (*static_ordinal < lower
+                    || *static_ordinal > upper))) {
+            report(
+                "FSIM-ELAB-VHENUMATTR-002",
+                expression.text + " argument has no result inside "
+                    "enumeration type '" + type.spelling + "'",
+                expression.operands[1].span);
+            return std::nullopt;
+        }
+        process_.operations.emplace_back(
+            IntegerCheck{ordinal, lower, upper});
+        const auto one =
+            allocate_register(
+                32, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(
+            LoadConstant{one, integer_value(1)});
+        const auto adjusted =
+            allocate_register(
+                32, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(IntegerBinary{
+            successor
+                ? IntegerBinaryOperator::add
+                : IntegerBinaryOperator::subtract,
+            adjusted,
+            ordinal,
+            one});
+        return narrow_enumeration_ordinal(
+            adjusted, type);
+    }
+
     std::optional<RegisterId> lower_expression(
         const Expression& expression,
         const std::size_t expected_width,
@@ -5519,6 +6172,54 @@ private:
                   expression.span);
               return false;
             };
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Call
+            && !expression.operands.empty()
+            && expression.operands.front().kind
+                == ExpressionKind::Identifier) {
+            const auto& prefix =
+                expression.operands.front().text;
+            if (const auto* type =
+                    visible_type_mark(prefix);
+                type != nullptr
+                && !type->enumeration_literals.empty()) {
+                const bool enumeration_result =
+                    expression.text == "'left"
+                    || expression.text == "'right"
+                    || expression.text == "'low"
+                    || expression.text == "'high"
+                    || expression.text == "'val"
+                    || expression.text == "'succ"
+                    || expression.text == "'pred"
+                    || expression.text == "'leftof"
+                    || expression.text == "'rightof";
+                if (enumeration_result
+                    && !enumeration_context_compatible(type)) {
+                    return std::nullopt;
+                }
+                return lower_enumeration_attribute(
+                    expression, *type);
+            }
+            const bool enumeration_attribute =
+                expression.text == "'pos"
+                || expression.text == "'val"
+                || expression.text == "'succ"
+                || expression.text == "'pred"
+                || expression.text == "'leftof"
+                || expression.text == "'rightof";
+            const auto* prefix_object = object_type(prefix);
+            if (enumeration_attribute
+                || (prefix_object != nullptr
+                    && !prefix_object
+                            ->enumeration_literals.empty())) {
+                report(
+                    "FSIM-ELAB-VHENUMATTR-001",
+                    "enumeration attribute '" + expression.text
+                        + "' requires a visible enumeration type mark",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+        }
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
                 local != locals_.end()) {
@@ -7321,6 +8022,12 @@ private:
                         == ExpressionKind::Identifier
                     ? object_type(expression.operands[1].text)
                     : nullptr;
+            const auto* lhs_enumeration_type =
+                enumeration_expression_type(
+                    expression.operands[0]);
+            const auto* rhs_enumeration_type =
+                enumeration_expression_type(
+                    expression.operands[1]);
             if (language_ == frontend::Language::Vhdl2008
                 && (expression.text == "="
                     || expression.text == "/="
@@ -7328,15 +8035,12 @@ private:
                     || expression.text == "<="
                     || expression.text == ">"
                     || expression.text == ">=")) {
-                if (lhs_object_type != nullptr
-                    && !lhs_object_type
-                            ->enumeration_literals.empty()) {
-                    binary_context_type = lhs_object_type;
-                } else if (
-                    rhs_object_type != nullptr
-                    && !rhs_object_type
-                            ->enumeration_literals.empty()) {
-                    binary_context_type = rhs_object_type;
+                if (lhs_enumeration_type != nullptr) {
+                    binary_context_type =
+                        lhs_enumeration_type;
+                } else if (rhs_enumeration_type != nullptr) {
+                    binary_context_type =
+                        rhs_enumeration_type;
                 } else if (
                     expression.text == "="
                     || expression.text == "/=") {
@@ -7356,13 +8060,9 @@ private:
                 }
             }
             const bool lhs_enumeration =
-                lhs_object_type != nullptr
-                && !lhs_object_type
-                        ->enumeration_literals.empty();
+                lhs_enumeration_type != nullptr;
             const bool rhs_enumeration =
-                rhs_object_type != nullptr
-                && !rhs_object_type
-                        ->enumeration_literals.empty();
+                rhs_enumeration_type != nullptr;
             const bool comparison =
                 expression.text == "="
                 || expression.text == "/="
@@ -7862,6 +8562,40 @@ private:
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
+            && !expression.operands.empty()
+            && expression.operands.front().kind
+                == ExpressionKind::Identifier) {
+            const auto* type = visible_type_mark(
+                expression.operands.front().text);
+            if (type != nullptr
+                && !type->enumeration_literals.empty()) {
+                if (expression.text == "'length"
+                    || expression.text == "'pos") {
+                    return std::size_t{32};
+                }
+                if (expression.text == "'ascending") {
+                    return std::size_t{1};
+                }
+                if (expression.text == "'left"
+                    || expression.text == "'right"
+                    || expression.text == "'low"
+                    || expression.text == "'high"
+                    || expression.text == "'val"
+                    || expression.text == "'succ"
+                    || expression.text == "'pred"
+                    || expression.text == "'leftof"
+                    || expression.text == "'rightof") {
+                    const auto width = type->width();
+                    if (width
+                        && *width
+                            <= std::numeric_limits<std::size_t>::max()) {
+                        return static_cast<std::size_t>(*width);
+                    }
+                }
+            }
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
             && (expression.text == "'left"
                 || expression.text == "'right"
                 || expression.text == "'low"
@@ -8080,6 +8814,18 @@ private:
                 return true;
             }
             if (language_ == frontend::Language::Vhdl2008
+                && !expression.operands.empty()
+                && expression.operands.front().kind
+                    == ExpressionKind::Identifier) {
+                const auto* type = visible_type_mark(
+                    expression.operands.front().text);
+                if (type != nullptr
+                    && !type->enumeration_literals.empty()) {
+                    return expression.text == "'pos"
+                        || expression.text == "'length";
+                }
+            }
+            if (language_ == frontend::Language::Vhdl2008
                 && (expression.text == "'left"
                     || expression.text == "'right"
                     || expression.text == "'low"
@@ -8254,6 +9000,17 @@ private:
                 return is_integer_expression(expression.operands[1])
                     && is_integer_expression(expression.operands[2]);
             }
+            if (!expression.operands.empty()
+                && expression.operands.front().kind
+                    == ExpressionKind::Identifier) {
+                const auto* type = visible_type_mark(
+                    expression.operands.front().text);
+                if (type != nullptr
+                    && !type->enumeration_literals.empty()) {
+                    return expression.text == "'pos"
+                        || expression.text == "'length";
+                }
+            }
             return expression.text == "'left"
                 || expression.text == "'right"
                 || expression.text == "'low"
@@ -8402,6 +9159,8 @@ private:
     const std::unordered_map<std::string, SignalId>& signals_;
     const std::unordered_map<
         std::string, const frontend::Type*>& visible_types_;
+    const std::unordered_map<
+        std::string, const frontend::Type*>& visible_type_marks_;
     std::vector<Diagnostic>& diagnostics_;
     Process process_;
     RegisterId next_register_{};
@@ -9071,6 +9830,24 @@ private:
             effective_package, import_stack);
         resolve_named_types(
             effective_package, type_environment, true);
+        for (const auto& [name, binding] : type_environment) {
+            if (binding.type.enumeration_literals.empty()
+                || std::any_of(
+                    effective_package.type_aliases.begin(),
+                    effective_package.type_aliases.end(),
+                    [&](const auto& alias) {
+                        return alias.name == name;
+                    })) {
+                continue;
+            }
+            effective_package.type_aliases.push_back(
+                frontend::TypeAliasDeclaration{
+                    name,
+                    binding.type,
+                    effective_package.span,
+                    {},
+                    frontend::TypeDeclarationKind::Alias});
+        }
         auto specialized = specialize_unit(
             effective_package,
             {},
@@ -10168,6 +10945,24 @@ private:
         }
         resolve_named_types(
             result, type_environment, true, false);
+        for (const auto& [name, binding] : type_environment) {
+            if (binding.type.enumeration_literals.empty()
+                || std::any_of(
+                    result.type_aliases.begin(),
+                    result.type_aliases.end(),
+                    [&](const auto& alias) {
+                        return alias.name == name;
+                    })) {
+                continue;
+            }
+            result.type_aliases.push_back(
+                frontend::TypeAliasDeclaration{
+                    name,
+                    binding.type,
+                    result.span,
+                    {},
+                    frontend::TypeDeclarationKind::Alias});
+        }
         return result;
     }
 
@@ -11574,6 +12369,23 @@ private:
         SignalMap local = std::move(aliases);
         std::unordered_map<
             std::string, const frontend::Type*> visible_types;
+        std::unordered_map<
+            std::string, const frontend::Type*> visible_type_marks;
+        const auto expose_type_mark =
+            [&](const std::string_view name,
+                const frontend::Type& type) {
+              if (!type.enumeration_literals.empty()) {
+                  visible_type_marks.try_emplace(
+                      std::string{name}, &type);
+              }
+            };
+        for (const auto& alias : unit.type_aliases) {
+            expose_type_mark(alias.name, alias.type);
+        }
+        for (const auto& parameter : unit.parameters) {
+            expose_type_mark(
+                parameter.type.spelling, parameter.type);
+        }
         const auto* ports = unit_ports(parsed_, unit);
         if (ports == nullptr) {
             report(
@@ -11584,6 +12396,7 @@ private:
             return;
         }
         for (const auto& port : *ports) {
+            expose_type_mark(port.type.spelling, port.type);
             visible_types.emplace(port.name, &port.type);
             visible_types.emplace(
                 path + "." + port.name, &port.type);
@@ -11592,6 +12405,7 @@ private:
             }
         }
         for (const auto& signal : unit.signals) {
+            expose_type_mark(signal.type.spelling, signal.type);
             visible_types.emplace(signal.name, &signal.type);
             visible_types.emplace(
                 path + "." + signal.name, &signal.type);
@@ -11640,7 +12454,11 @@ private:
         specialization.parameter_values = std::move(parameter_values);
 
         Lowerer lowerer{
-            design_, local, visible_types, diagnostics_};
+            design_,
+            local,
+            visible_types,
+            visible_type_marks,
+            diagnostics_};
         for (std::size_t index = 0;
              index < unit.concurrent_statements.size(); ++index) {
             auto process = lowerer.lower_concurrent(
