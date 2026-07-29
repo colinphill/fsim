@@ -5437,7 +5437,8 @@ private:
 
     void lower_assignment(const Statement& statement) {
         const Expression* base = &statement.target;
-        std::optional<std::uint32_t> selected_offset;
+        std::uint32_t selected_offset = 0;
+        bool has_selected_offset = false;
         std::optional<std::size_t> selected_width;
         std::optional<frontend::ValueDomain> selected_domain;
         std::optional<DynamicIndex> dynamic_selection;
@@ -5486,6 +5487,7 @@ private:
                 target_name = selected->base;
                 selected_offset = static_cast<std::uint32_t>(
                     selected->member->lsb_offset);
+                has_selected_offset = true;
                 selected_width = static_cast<std::size_t>(*width);
                 selected_domain = selected->member->domain;
             }
@@ -5512,7 +5514,7 @@ private:
                     statement.target.operands[1]);
             const auto base_offset =
                 static_cast<std::uint64_t>(
-                    selected_offset.value_or(0));
+                    selected_offset);
             if (index) {
                 const auto offset = select_offset(
                     *base, *index, selection_source_width);
@@ -5530,17 +5532,19 @@ private:
                 selected_offset =
                     static_cast<std::uint32_t>(
                         base_offset + *offset);
+                has_selected_offset = true;
             } else {
                 dynamic_selection = lower_dynamic_index(
                     *base,
                     statement.target.operands[1],
                     selection_source_width,
-                    selected_offset.value_or(0),
+                    selected_offset,
                     statement.target.span);
                 if (!dynamic_selection) {
                     return;
                 }
-                selected_offset.reset();
+                selected_offset = 0;
+                has_selected_offset = false;
             }
             selected_width = 1;
         } else if (statement.target.kind == ExpressionKind::Slice) {
@@ -5549,7 +5553,7 @@ private:
                     statement.target, selection_source_width);
             const auto base_offset =
                 static_cast<std::uint64_t>(
-                    selected_offset.value_or(0));
+                    selected_offset);
             if (!selection
                 || base_offset + selection->offset
                     > std::numeric_limits<std::uint32_t>::max()
@@ -5566,13 +5570,14 @@ private:
             selected_offset =
                 static_cast<std::uint32_t>(
                     base_offset + selection->offset);
+            has_selected_offset = true;
             selected_width = selection->width;
         }
 
         const auto target_width =
             selected_width.value_or(whole_width);
         const auto* contextual_target_type =
-            selected_offset || dynamic_selection
+            has_selected_offset || dynamic_selection
                 ? nullptr
                 : object_type(target_name);
         const auto assignment_control =
@@ -5678,7 +5683,7 @@ private:
             if (language_ == frontend::Language::Vhdl2008
                 && target_domain
                     == frontend::ValueDomain::Integer
-                && !selected_offset
+                && !has_selected_offset
                 && !dynamic_selection) {
                 if (!is_integer_expression(statement.value)) {
                     report(
@@ -5700,7 +5705,7 @@ private:
                 emit_integer_check(*value, range);
             }
             if (language_ == frontend::Language::Vhdl2008
-                && !selected_offset
+                && !has_selected_offset
                 && !dynamic_selection
                 && contextual_target_type != nullptr
                 && !contextual_target_type
@@ -5726,12 +5731,12 @@ private:
                     local->second,
                     *value,
                     *dynamic_selection});
-            } else if (selected_offset) {
+            } else if (has_selected_offset) {
                 process_.operations.emplace_back(Insert{
                     local->second,
                     local->second,
                     *value,
-                    *selected_offset});
+                    selected_offset});
             } else {
                 process_.operations.emplace_back(
                     CopyRegister{local->second, *value});
@@ -5786,7 +5791,7 @@ private:
                 if (language_ == frontend::Language::Vhdl2008
                     && target_domain
                         == frontend::ValueDomain::Integer
-                    && !selected_offset
+                    && !has_selected_offset
                     && !dynamic_selection) {
                     if (!is_integer_expression(element.value)) {
                         report(
@@ -5810,7 +5815,7 @@ private:
                 }
                 if (language_
                         == frontend::Language::Vhdl2008
-                    && !selected_offset
+                    && !has_selected_offset
                     && !dynamic_selection
                     && contextual_target_type != nullptr
                     && !contextual_target_type
@@ -5865,12 +5870,12 @@ private:
                         *dynamic_selection,
                         rejection,
                         mode});
-            } else if (selected_offset) {
+            } else if (has_selected_offset) {
                 process_.operations.emplace_back(
                     WriteProjectedWaveformSlice{
                         signal->second,
                         std::move(waveform),
-                        *selected_offset,
+                        selected_offset,
                         rejection,
                         mode});
             } else {
@@ -5922,7 +5927,7 @@ private:
         }
         if (language_ == frontend::Language::Vhdl2008
             && target_domain == frontend::ValueDomain::Integer
-            && !selected_offset
+            && !has_selected_offset
             && !dynamic_selection) {
             if (!is_integer_expression(statement.value)) {
                 report(
@@ -5945,7 +5950,7 @@ private:
             emit_integer_check(*value, range);
         }
         if (language_ == frontend::Language::Vhdl2008
-            && !selected_offset
+            && !has_selected_offset
             && !dynamic_selection
             && contextual_target_type != nullptr
             && !contextual_target_type
@@ -5971,10 +5976,10 @@ private:
                         signal->second,
                         *value,
                         *dynamic_selection});
-            } else if (selected_offset) {
+            } else if (has_selected_offset) {
                 process_.operations.emplace_back(
                     WriteBlockingSlice{
-                        signal->second, *value, *selected_offset});
+                        signal->second, *value, selected_offset});
             } else {
                 process_.operations.emplace_back(
                     WriteBlocking{signal->second, *value});
@@ -6012,12 +6017,12 @@ private:
                         delay,
                         rejection,
                         mode});
-            } else if (selected_offset) {
+            } else if (has_selected_offset) {
                 process_.operations.emplace_back(
                     WriteProjectedSlice{
                         signal->second,
                         *value,
-                        *selected_offset,
+                        selected_offset,
                         delay,
                         rejection,
                         mode});
@@ -6051,12 +6056,12 @@ private:
                             *value,
                             *dynamic_selection,
                             delays});
-                } else if (selected_offset) {
+                } else if (has_selected_offset) {
                     process_.operations.emplace_back(
                         WriteInertialSlice{
                             signal->second,
                             *value,
-                            *selected_offset,
+                            selected_offset,
                             delays});
                 } else {
                     process_.operations.emplace_back(
@@ -6070,12 +6075,12 @@ private:
                         *value,
                         *dynamic_selection,
                         statement.delay->magnitude});
-            } else if (selected_offset) {
+            } else if (has_selected_offset) {
                 process_.operations.emplace_back(
                     WriteAfterSlice{
                         signal->second,
                         *value,
-                        *selected_offset,
+                        selected_offset,
                         statement.delay->magnitude});
             } else {
                 process_.operations.emplace_back(WriteAfter{
@@ -6091,9 +6096,9 @@ private:
                         signal->second,
                         *value,
                         *dynamic_selection});
-            } else if (selected_offset) {
+            } else if (has_selected_offset) {
                 process_.operations.emplace_back(WriteBlockingSlice{
-                    signal->second, *value, *selected_offset});
+                    signal->second, *value, selected_offset});
             } else {
                 process_.operations.emplace_back(
                     WriteBlocking{signal->second, *value});
@@ -6105,9 +6110,9 @@ private:
                         signal->second,
                         *value,
                         *dynamic_selection});
-            } else if (selected_offset) {
+            } else if (has_selected_offset) {
                 process_.operations.emplace_back(WriteUpdateSlice{
-                    signal->second, *value, *selected_offset});
+                    signal->second, *value, selected_offset});
             } else {
                 process_.operations.emplace_back(
                     WriteUpdate{signal->second, *value});
