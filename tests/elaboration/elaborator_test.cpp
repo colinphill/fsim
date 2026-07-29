@@ -4264,7 +4264,7 @@ end architecture;
         == "0");
     assert(
         default_interpreter->signal_value(*logic_value).to_msb_string()
-        == "X");
+        == "U");
 
     const auto nine_state_literals = fsim::frontend::parse_text(
         "nine_state_literals.vhd",
@@ -4296,7 +4296,7 @@ end architecture;
         nine_state_interpreter
             ->signal_value(*nine_state_value)
             .to_msb_string()
-        == "X01XXZ01");
+        == "ULH-WZ01");
 
     const auto lossy_assignment = fsim::frontend::parse_text(
         "lossy_assignment.sv",

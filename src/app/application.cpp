@@ -4793,6 +4793,8 @@ struct Simulation::Impl {
       jit = std::make_unique<compiler::LlvmJit>(std::move(options));
 
       signal_widths.reserve(built.design.signals().size());
+      signal_value_kinds.reserve(
+          built.design.signals().size());
       for (const auto& signal : built.design.signals()) {
         if (signal.width
             > std::numeric_limits<std::uint32_t>::max()) {
@@ -4802,6 +4804,11 @@ struct Simulation::Impl {
           signal_widths.push_back(
               static_cast<std::uint32_t>(signal.width));
         }
+        signal_value_kinds.push_back(
+            signal.source_domain
+                    == frontend::ValueDomain::Logic9
+                ? runtime::simir::ValueKind::logic9
+                : runtime::simir::ValueKind::logic4);
       }
       const auto& processes = built.design.processes();
       for (const auto& specialization :
@@ -4812,7 +4819,10 @@ struct Simulation::Impl {
         symbols.reserve(specialization.processes.size());
         for (const auto process_id : specialization.processes) {
           const auto& process = processes.at(process_id);
-          if (!jit->supports_process(process, signal_widths)) {
+          if (!jit->supports_process(
+                  process,
+                  signal_widths,
+                  signal_value_kinds)) {
             continue;
           }
           selected.push_back(&process);
@@ -4836,7 +4846,10 @@ struct Simulation::Impl {
             built.specialization_cache_keys.at(
                 specialization.id);
         jit->add_process_module(
-            module_identity, entries, signal_widths);
+            module_identity,
+            entries,
+            signal_widths,
+            signal_value_kinds);
         ++compiled_modules;
         for (std::size_t index = 0; index < selected.size(); ++index) {
           const auto handle = jit->lookup(symbols[index]);
@@ -4987,6 +5000,8 @@ struct Simulation::Impl {
   // Shared by every compiled executor. It is fully populated before executor
   // installation and outlives the interpreter that owns those executors.
   std::vector<std::uint32_t> signal_widths;
+  std::vector<runtime::simir::ValueKind>
+      signal_value_kinds;
   // The interpreter owns executors referring to this JIT. Member destruction
   // is reversed, so declaring the JIT first destroys the interpreter first.
   std::unique_ptr<compiler::LlvmJit> jit;
@@ -5250,9 +5265,15 @@ std::optional<PackedLogic4> parse_value(
     return std::nullopt;
   }
   try {
+    if (normalized.find_first_of("UWLH-")
+        != std::string::npos) {
+      return PackedLogic4::from_logic9_msb_string(
+          normalized);
+    }
     return PackedLogic4::from_msb_string(normalized);
   } catch (const std::invalid_argument&) {
-    error = "value must contain only 0, 1, X, or Z";
+    error =
+        "value must contain only 0, 1, X, Z, U, W, L, H, or -";
     return std::nullopt;
   }
 }

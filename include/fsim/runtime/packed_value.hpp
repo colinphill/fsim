@@ -25,6 +25,18 @@ struct Logic4Word {
   friend bool operator==(const Logic4Word&, const Logic4Word&) = default;
 };
 
+/// Four bit-planes carrying the ordinal encoding of up to 64 Logic9 values.
+///
+/// This is intentionally separate from the aval/bval ABI used by Logic4.
+/// Generated code must opt in to this representation rather than silently
+/// projecting a nine-state value onto four states.
+struct Logic9Word {
+  std::size_t width{};
+  std::array<std::uint64_t, 4> planes{};
+
+  friend bool operator==(const Logic9Word&, const Logic9Word&) = default;
+};
+
 /// A packed two-state vector. Index zero is the rightmost (least-significant)
 /// element when constructed from or rendered to a string.
 class PackedBit2 {
@@ -63,37 +75,62 @@ public:
 
   [[nodiscard]] static PackedLogic4 from_msb_string(std::string_view value);
   [[nodiscard]] static PackedLogic4
+  from_logic9_msb_string(std::string_view value);
+  [[nodiscard]] static PackedLogic4
   from_aval_bval(std::size_t width, std::uint64_t aval,
                  std::uint64_t bval);
+  [[nodiscard]] static PackedLogic4
+  from_logic9_word(const Logic9Word& value);
 
   [[nodiscard]] std::size_t width() const noexcept { return width_; }
   [[nodiscard]] bool empty() const noexcept { return width_ == 0; }
+  [[nodiscard]] bool is_logic9() const noexcept { return logic9_; }
   [[nodiscard]] Logic4 get(std::size_t index) const;
+  [[nodiscard]] Logic9 get_logic9(std::size_t index) const;
   void set(std::size_t index, Logic4 value);
+  void set_logic9(std::size_t index, Logic9 value);
   void fill(Logic4 value) noexcept;
+  void fill(Logic9 value);
 
   [[nodiscard]] std::span<const std::uint64_t>
   aval_words() const noexcept;
   [[nodiscard]] std::span<const std::uint64_t>
   bval_words() const noexcept;
   [[nodiscard]] Logic4Word low_word() const;
+  [[nodiscard]] Logic9Word logic9_low_word() const;
+  [[nodiscard]] PackedLogic4 promoted_to_logic9() const;
   [[nodiscard]] std::string to_msb_string() const;
 
   friend bool operator==(const PackedLogic4 &, const PackedLogic4 &) = default;
 
 private:
+  void promote_to_logic9();
   [[nodiscard]] std::span<std::uint64_t>
   mutable_aval_words() noexcept;
   [[nodiscard]] std::span<std::uint64_t>
   mutable_bval_words() noexcept;
+  [[nodiscard]] std::span<const std::uint64_t>
+  logic9_plane(std::size_t index) const noexcept;
+  [[nodiscard]] std::span<std::uint64_t>
+  mutable_logic9_plane(std::size_t index) noexcept;
   void mask_unused_bits() noexcept;
 
   std::size_t width_{};
+  bool logic9_{};
   std::uint64_t inline_aval_{};
   std::uint64_t inline_bval_{};
+  std::uint64_t inline_logic9_plane2_{};
+  std::uint64_t inline_logic9_plane3_{};
   std::vector<std::uint64_t> aval_;
   std::vector<std::uint64_t> bval_;
+  std::vector<std::uint64_t> logic9_plane2_;
+  std::vector<std::uint64_t> logic9_plane3_;
 };
+
+/// Preferred name for the common packed transport value. PackedLogic4 remains
+/// available because the existing public vertical-slice API used that name;
+/// exact Logic9 values are distinguished by is_logic9().
+using PackedValue = PackedLogic4;
 
 /// A packed std_logic vector encoded as four independent bit planes.
 class PackedLogic9 {
@@ -123,6 +160,7 @@ private:
 };
 
 [[nodiscard]] PackedLogic4 collapse_to_logic4(const PackedLogic9 &value);
+[[nodiscard]] PackedLogic4 collapse_to_logic4(const PackedLogic4 &value);
 [[nodiscard]] PackedLogic9 expand_to_logic9(const PackedLogic4 &value);
 
 [[nodiscard]] PackedLogic4 resolve(std::span<const PackedLogic4> drivers);

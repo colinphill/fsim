@@ -39,6 +39,13 @@ using ConstantEnvironment =
         || domain == frontend::ValueDomain::Integer;
 }
 
+[[nodiscard]] constexpr runtime::simir::ValueKind value_kind(
+    const frontend::ValueDomain domain) noexcept {
+    return domain == frontend::ValueDomain::Logic9
+        ? runtime::simir::ValueKind::logic9
+        : runtime::simir::ValueKind::logic4;
+}
+
 std::optional<std::int64_t> evaluate_constant_expression(
     const Expression& expression,
     const ConstantEnvironment& environment,
@@ -165,7 +172,12 @@ std::optional<LoweredLiteral> literal_value(
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic9;
             return LoweredLiteral{
-                PackedLogic4(1, runtime::to_logic4(*parsed)), domain};
+                domain == frontend::ValueDomain::Logic9
+                    ? PackedLogic4::from_logic9_msb_string(
+                          std::string_view{text}.substr(1, 1))
+                    : PackedLogic4(
+                          1, runtime::to_logic4(*parsed)),
+                domain};
         }
         const auto parsed = runtime::parse_logic4(text[1]);
         if (!parsed) {
@@ -194,7 +206,10 @@ std::optional<LoweredLiteral> literal_value(
                     }
                 }
                 return LoweredLiteral{
-                    runtime::collapse_to_logic4(nine_state), domain};
+                    domain == frontend::ValueDomain::Logic9
+                        ? PackedLogic4::from_logic9_msb_string(text)
+                        : runtime::collapse_to_logic4(nine_state),
+                    domain};
             }
             auto value = PackedLogic4::from_msb_string(text);
             auto domain = frontend::ValueDomain::Bit2;
@@ -2723,6 +2738,11 @@ public:
             process_.operations.emplace_back(Jump{resume_entry});
         }
         process_.register_count = next_register_;
+        process_.register_value_kinds.reserve(register_domains_.size());
+        for (const auto domain : register_domains_) {
+            process_.register_value_kinds.push_back(
+                value_kind(domain));
+        }
         next_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
@@ -2780,6 +2800,11 @@ public:
             process_.operations.emplace_back(Halt{});
         }
         process_.register_count = next_register_;
+        process_.register_value_kinds.reserve(register_domains_.size());
+        for (const auto domain : register_domains_) {
+            process_.register_value_kinds.push_back(
+                value_kind(domain));
+        }
         next_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
@@ -2929,7 +2954,8 @@ private:
                         static_cast<std::uint32_t>(
                             variable.span.begin.column)},
                     {},
-                    {}});
+                    {},
+                    value_kind(variable.type.domain)});
                 if (variable.type.integer_range) {
                     const auto [lower, upper] =
                         integer_bounds(variable.type.integer_range);
@@ -3012,6 +3038,10 @@ private:
                 is_two_state_domain(variable.type.domain)
                     ? Logic4::zero
                     : Logic4::x};
+            if (variable.type.domain
+                    == frontend::ValueDomain::Logic9) {
+                initial_value.fill(runtime::Logic9::u);
+            }
             if (variable.type.domain
                     == frontend::ValueDomain::Integer
                 && local.width != 0) {
@@ -6659,7 +6689,10 @@ private:
                 operation = BinaryOperator::modulo_unsigned;
             } else if (
                 expression.text == "=" || expression.text == "==") {
-                operation = BinaryOperator::equal;
+                operation =
+                    language_ == frontend::Language::Vhdl2008
+                        ? BinaryOperator::case_equal
+                        : BinaryOperator::equal;
             } else if (
                 language_ != frontend::Language::Vhdl2008
                 && (expression.text == "==="
@@ -6679,7 +6712,8 @@ private:
             } else if (
                 language_ == frontend::Language::Vhdl2008
                 && expression.text == "/=") {
-                operation = BinaryOperator::not_equal;
+                operation = BinaryOperator::case_equal;
+                invert_result = true;
             } else if (expression.text == "<") {
                 operation = BinaryOperator::less_unsigned;
             } else if (expression.text == "<=") {
@@ -9145,6 +9179,10 @@ private:
         auto initial_value =
             PackedLogic4(static_cast<std::size_t>(width), initial);
         if (declaration.type.domain
+                == frontend::ValueDomain::Logic9) {
+            initial_value.fill(runtime::Logic9::u);
+        }
+        if (declaration.type.domain
                 == frontend::ValueDomain::Integer
             && width != 0) {
             initial_value = integer_value(
@@ -9153,7 +9191,11 @@ private:
                     : std::numeric_limits<std::int32_t>::min());
         }
         design_.signals_.push_back(
-            {full_name, std::move(initial_value)});
+            {
+                full_name,
+                std::move(initial_value),
+                ResolutionKind::none,
+                value_kind(declaration.type.domain)});
         return id;
     }
 

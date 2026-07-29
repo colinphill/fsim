@@ -313,11 +313,17 @@ void VcdWriter::change(VcdSignal signal, const PackedBit2 &value) {
 
 void VcdWriter::change(VcdSignal signal, const PackedLogic4 &value) {
   auto &declaration = impl_->get(signal);
-  std::string encoded;
-  encoded.reserve(value.width());
-  for (const auto character : value.to_msb_string()) {
-    encoded.push_back(character == 'X' ? 'x' : character == 'Z' ? 'z'
-                                                               : character);
+  std::string encoded(value.width(), 'x');
+  if (value.is_logic9()) {
+    for (std::size_t index = 0; index < value.width(); ++index) {
+      encoded[value.width() - index - 1] =
+          vcd_char(value.get_logic9(index));
+    }
+  } else {
+    for (std::size_t index = 0; index < value.width(); ++index) {
+      encoded[value.width() - index - 1] =
+          vcd_char(value.get(index));
+    }
   }
   impl_->write_value(declaration, std::move(encoded));
 }

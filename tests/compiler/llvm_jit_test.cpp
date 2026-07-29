@@ -3296,6 +3296,32 @@ void test_process_module_grouping_at_level(
     const std::array<std::uint32_t, 1> wide_widths{65};
     assert(rejected.supports_process(supported, wide_widths));
     assert(!rejected.supports_process(too_wide, wide_widths));
+    Process exact_register;
+    exact_register.id = 24;
+    exact_register.name = "exact_register";
+    exact_register.register_count = 1;
+    exact_register.register_value_kinds = {
+        ValueKind::logic9};
+    exact_register.operations = {
+        LoadConstant{
+            0,
+            PackedLogic4::from_logic9_msb_string("W")},
+        Halt{}};
+    assert(!rejected.supports_process(
+        exact_register, std::array<std::uint32_t, 0>{}));
+    Process exact_signal_access;
+    exact_signal_access.id = 25;
+    exact_signal_access.name = "exact_signal_access";
+    exact_signal_access.register_count = 1;
+    exact_signal_access.operations = {
+        ReadSignal{0, 0}, Halt{}};
+    const std::array<std::uint32_t, 1> scalar_widths{1};
+    const std::array<ValueKind, 1> exact_signal_kinds{
+        ValueKind::logic9};
+    assert(!rejected.supports_process(
+        exact_signal_access,
+        scalar_widths,
+        exact_signal_kinds));
     const std::array unsupported_entries{
         JitProcessModuleEntry{"eligible", &supported},
         JitProcessModuleEntry{"unsupported", &too_wide},

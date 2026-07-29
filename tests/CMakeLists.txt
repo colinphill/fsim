@@ -422,6 +422,26 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_vhdl_logic9_application_tests
+    app/vhdl_logic9_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_vhdl_logic9_application_tests
+  )
+  target_link_libraries(
+    fsim_vhdl_logic9_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.vhdl_logic9
+    COMMAND fsim_vhdl_logic9_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vhdl_logic9
+    PROPERTIES LABELS "fast;vhdl;logic9;resolution"
+  )
+
+  add_executable(
     fsim_vhdl_projected_application_tests
     app/vhdl_projected_application_test.cpp
   )

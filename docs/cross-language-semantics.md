@@ -68,9 +68,10 @@ are errors unless an explicit same-language conversion appears in the design.
 The current executable subset aliases an equal-width whole parent signal to
 each connected child port. It validates width, signedness, and implicit loss
 into a 2-state destination. Its demonstrated boundary uses matching descending
-8-bit vectors. General ascending/descending ordinal remapping, Boolean/integer
-conversion, and preservation of all VHDL nine-state symbols across the
-boundary remain v1 work.
+8-bit vectors. The shared signal retains its owning language's value domain;
+each VHDL or SV process read/write view applies the table below, with automated
+runtime evidence in both hierarchy directions. General ascending/descending
+ordinal remapping and Boolean/integer conversion remain v1 work.
 
 ### Logic mapping
 
@@ -96,16 +97,18 @@ resolver = "std_logic"
 resolver = "sv_wire"
 ```
 
-The current common executable value path preserves `0`, `1`, `X`, and `Z`.
-Within that bounded domain, `std_logic` follows the corresponding standard
-logic cases and `sv_wire` uses four-state wire resolution. Each executable
-process owns an independent driver slot, including for whole/slice blocking,
+The common executable value path retains all nine VHDL states for a Logic9
+signal and `0`, `1`, `X`, and `Z` for a Logic4 signal. `std_logic` uses the
+complete standard nine-state table, including the single-driver `-` rule;
+`sv_wire` uses four-state wire resolution. Each executable process owns an
+independent domain-preserving driver slot, including for whole/slice blocking,
 NBA, future, inertial, and projected writes. Native SV `wire`/`tri` and VHDL
 `std_logic`/`std_logic_vector` signals select their policy automatically;
 explicit mixed-boundary resolvers select it on an otherwise unresolved parent.
-Multiple unresolved drivers remain an elaboration error. Full nine-state
-driver storage, strengths, wired-AND/OR nets, and charge storage remain v1
-work.
+Multiple unresolved drivers remain an elaboration error. Strengths,
+wired-AND/OR nets, and charge storage remain v1 work. Exact nine-state
+processes currently use the reference evaluator in compiled mode until the
+Logic9 generated-code ABI path is added.
 
 ## Time and phase lattice
 

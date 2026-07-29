@@ -6714,6 +6714,10 @@ endmodule
   assert(!fsim::app::parse_time("1ps", "1ns", error));
   const auto value = fsim::app::parse_value("10xz", 4, error);
   assert(value && value->to_msb_string() == "10XZ");
+  const auto logic9 =
+      fsim::app::parse_value("uWlH-", 5, error);
+  assert(logic9 && logic9->is_logic9());
+  assert(logic9->to_msb_string() == "UWLH-");
 
   auto compiled_debug_project =
       fsim::app::build_project(config, diagnostics);

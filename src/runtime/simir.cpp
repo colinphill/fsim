@@ -340,8 +340,16 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 
 [[nodiscard]] PackedLogic4 unary_not(const PackedLogic4 &source) {
   PackedLogic4 result(source.width(), Logic4::x);
+  if (source.is_logic9()) {
+    result.fill(Logic9::u);
+  }
   for (std::size_t index = 0; index < source.width(); ++index) {
-    result.set(index, logic_not(source.get(index)));
+    if (source.is_logic9()) {
+      result.set_logic9(
+          index, logic_not(source.get_logic9(index)));
+    } else {
+      result.set(index, logic_not(source.get(index)));
+    }
   }
   return result;
 }
@@ -538,26 +546,55 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
               ? value.get(0)
           : Logic4::zero;
   PackedLogic4 result(value.width(), fill);
+  if (value.is_logic9()) {
+    const auto logic9_fill =
+        operation == ShiftOperator::arithmetic_right
+            ? value.get_logic9(value.width() - 1U)
+            : operation == ShiftOperator::arithmetic_left
+                ? value.get_logic9(0)
+                : Logic9::zero;
+    result.fill(logic9_fill);
+  }
   if (amount >= value.width()) {
     return result;
   }
   for (std::size_t index = 0; index < value.width(); ++index) {
     if (operation == ShiftOperator::rotate_left) {
-      result.set(
-          index,
-          value.get((index + value.width() - amount) % value.width()));
+      const auto source_index =
+          (index + value.width() - amount) % value.width();
+      if (value.is_logic9()) {
+        result.set_logic9(
+            index, value.get_logic9(source_index));
+      } else {
+        result.set(index, value.get(source_index));
+      }
     } else if (operation == ShiftOperator::rotate_right) {
-      result.set(
-          index,
-          value.get((index + amount) % value.width()));
+      const auto source_index =
+          (index + amount) % value.width();
+      if (value.is_logic9()) {
+        result.set_logic9(
+            index, value.get_logic9(source_index));
+      } else {
+        result.set(index, value.get(source_index));
+      }
     } else if (
         operation == ShiftOperator::logical_left
         || operation == ShiftOperator::arithmetic_left) {
       if (index >= amount) {
-        result.set(index, value.get(index - amount));
+        if (value.is_logic9()) {
+          result.set_logic9(
+              index, value.get_logic9(index - amount));
+        } else {
+          result.set(index, value.get(index - amount));
+        }
       }
     } else if (index + amount < value.width()) {
-      result.set(index, value.get(index + amount));
+      if (value.is_logic9()) {
+        result.set_logic9(
+            index, value.get_logic9(index + amount));
+      } else {
+        result.set(index, value.get(index + amount));
+      }
     }
   }
   return result;
@@ -573,8 +610,16 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
         "extract range is outside its source value");
   }
   PackedLogic4 result(width, Logic4::zero);
+  if (source.is_logic9()) {
+    result.fill(Logic9::u);
+  }
   for (std::size_t bit = 0; bit < width; ++bit) {
-    result.set(bit, source.get(offset + bit));
+    if (source.is_logic9()) {
+      result.set_logic9(
+          bit, source.get_logic9(offset + bit));
+    } else {
+      result.set(bit, source.get(offset + bit));
+    }
   }
   return result;
 }
@@ -589,7 +634,12 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
         "insert range is outside its target value");
   }
   for (std::size_t bit = 0; bit < source.width(); ++bit) {
-    target.set(offset + bit, source.get(bit));
+    if (source.is_logic9() || target.is_logic9()) {
+      target.set_logic9(
+          offset + bit, source.get_logic9(bit));
+    } else {
+      target.set(offset + bit, source.get(bit));
+    }
   }
   return target;
 }
@@ -614,11 +664,23 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
         "concatenation operand widths do not match its result width");
   }
   PackedLogic4 result(width, Logic4::zero);
+  if (std::ranges::any_of(
+          operands,
+          [](const PackedLogic4& operand) {
+            return operand.is_logic9();
+          })) {
+    result.fill(Logic9::u);
+  }
   std::size_t offset = 0;
   for (auto operand = operands.rbegin();
        operand != operands.rend(); ++operand) {
     for (std::size_t bit = 0; bit < operand->width(); ++bit) {
-      result.set(offset + bit, operand->get(bit));
+      if (result.is_logic9()) {
+        result.set_logic9(
+            offset + bit, operand->get_logic9(bit));
+      } else {
+        result.set(offset + bit, operand->get(bit));
+      }
     }
     offset += operand->width();
   }
@@ -864,6 +926,15 @@ struct SignedDivision {
       || operation == BinaryOperator::casex_equal) {
     auto result = PackedLogic4(1, Logic4::one);
     for (std::size_t index = 0; index < lhs.width(); ++index) {
+      if (operation == BinaryOperator::case_equal
+          && (lhs.is_logic9() || rhs.is_logic9())) {
+        if (lhs.get_logic9(index)
+            != rhs.get_logic9(index)) {
+          result.set(0, Logic4::zero);
+          break;
+        }
+        continue;
+      }
       const auto left = lhs.get(index);
       const auto right = rhs.get(index);
       const auto wildcard =
@@ -990,6 +1061,11 @@ struct SignedDivision {
   }
 
   PackedLogic4 result(lhs.width(), Logic4::zero);
+  const auto exact_logic9 =
+      lhs.is_logic9() || rhs.is_logic9();
+  if (exact_logic9) {
+    result.fill(Logic9::u);
+  }
   const bool arithmetic =
       operation == BinaryOperator::add_unsigned
       || operation == BinaryOperator::subtract_unsigned
@@ -1056,13 +1132,40 @@ struct SignedDivision {
   for (std::size_t index = 0; index < lhs.width(); ++index) {
     switch (operation) {
     case BinaryOperator::bit_and:
-      result.set(index, logic_and(lhs.get(index), rhs.get(index)));
+      if (exact_logic9) {
+        result.set_logic9(
+            index,
+            logic_and(
+                lhs.get_logic9(index),
+                rhs.get_logic9(index)));
+      } else {
+        result.set(
+            index, logic_and(lhs.get(index), rhs.get(index)));
+      }
       break;
     case BinaryOperator::bit_or:
-      result.set(index, logic_or(lhs.get(index), rhs.get(index)));
+      if (exact_logic9) {
+        result.set_logic9(
+            index,
+            logic_or(
+                lhs.get_logic9(index),
+                rhs.get_logic9(index)));
+      } else {
+        result.set(
+            index, logic_or(lhs.get(index), rhs.get(index)));
+      }
       break;
     case BinaryOperator::bit_xor:
-      result.set(index, logic_xor(lhs.get(index), rhs.get(index)));
+      if (exact_logic9) {
+        result.set_logic9(
+            index,
+            logic_xor(
+                lhs.get_logic9(index),
+                rhs.get_logic9(index)));
+      } else {
+        result.set(
+            index, logic_xor(lhs.get(index), rhs.get(index)));
+      }
       break;
     case BinaryOperator::add_unsigned:
     case BinaryOperator::subtract_unsigned:
@@ -1408,7 +1511,7 @@ struct Interpreter::Impl {
   struct ProjectedTransaction {
     std::uint64_t id{};
     SimulationTick time{};
-    Logic4 value{Logic4::x};
+    PackedLogic4 value;
     ScheduledTaskHandle handle;
   };
 
@@ -1493,6 +1596,36 @@ struct Interpreter::Impl {
     return process.registers[id];
   }
 
+  [[nodiscard]] static ValueKind register_value_kind(
+      const ProcessState& process,
+      const RegisterId id) {
+    if (process.program.register_value_kinds.empty()) {
+      return ValueKind::logic4;
+    }
+    return process.program.register_value_kinds.at(id);
+  }
+
+  [[nodiscard]] static PackedLogic4 coerce_value_kind(
+      PackedLogic4 value,
+      const ValueKind kind) {
+    if (kind == ValueKind::logic9) {
+      return value.is_logic9()
+          ? value
+          : value.promoted_to_logic9();
+    }
+    return value.is_logic9()
+        ? collapse_to_logic4(value)
+        : value;
+  }
+
+  [[nodiscard]] PackedLogic4 normalize_signal_value(
+      const SignalId signal,
+      PackedLogic4 value) const {
+    return coerce_value_kind(
+        std::move(value),
+        get_signal(signal).value_kind);
+  }
+
   void remove_dynamic_wait(ProcessState &process) {
     if (!process.waiting_on_signal) {
       return;
@@ -1517,12 +1650,14 @@ struct Interpreter::Impl {
       ProcessState& process,
       const RegisterId destination,
       const PackedLogic4& value) {
+    const auto converted = coerce_value_kind(
+        value, register_value_kind(process, destination));
     if (process.executor) {
       process.executor->write_register(
-          destination, value);
+          destination, converted);
       return;
     }
-    get_register(process, destination) = value;
+    get_register(process, destination) = converted;
   }
 
   void clear_wait_timeout(ProcessState& process) {
@@ -2138,6 +2273,8 @@ struct Interpreter::Impl {
     if (driven_values[signal_id].width() != value.width()) {
       throw std::invalid_argument("SimIR signal assignment width mismatch");
     }
+    value = normalize_signal_value(
+        signal_id, std::move(value));
     driven_values[signal_id] = value;
     if (!forced_values[signal_id].has_value()) {
       publish(signal_id, std::move(value));
@@ -2147,6 +2284,12 @@ struct Interpreter::Impl {
   [[nodiscard]] PackedLogic4 initial_driver_value(
       const SignalId signal_id) const {
     const auto& signal = get_signal(signal_id);
+    if (signal.value_kind == ValueKind::logic9) {
+      auto result = PackedLogic4{
+          signal.initial_value.width(), Logic4::x};
+      result.fill(Logic9::u);
+      return result;
+    }
     const auto initial =
         signal.resolution == ResolutionKind::sv_wire
             ? Logic4::z
@@ -2185,10 +2328,6 @@ struct Interpreter::Impl {
       drivers.push_back(
           *external_driver_values.at(signal_id));
     }
-    // The executable SimIR value path is currently four-state. Both supported
-    // policies therefore use the common collapsed 0/1/X/Z resolution kernel;
-    // the distinct policy is retained for elaboration, visibility, and future
-    // nine-state driver storage.
     return runtime::resolve(
         std::span<const PackedLogic4>{drivers});
   }
@@ -2231,6 +2370,8 @@ struct Interpreter::Impl {
       throw std::invalid_argument(
           "SimIR driver assignment width mismatch");
     }
+    value = normalize_signal_value(
+        signal_id, std::move(value));
     driver_slot(process, signal_id) = std::move(value);
   }
 
@@ -2400,6 +2541,8 @@ struct Interpreter::Impl {
     if (driven_values[signal_id].width() != staged_value.width()) {
       throw std::invalid_argument("SimIR signal assignment width mismatch");
     }
+    staged_value = normalize_signal_value(
+        signal_id, std::move(staged_value));
     pending_updates.push_back(PendingUpdate{
         signal_id,
         driver,
@@ -2437,6 +2580,9 @@ struct Interpreter::Impl {
       throw std::invalid_argument(
           "partial update range is outside its target signal");
     }
+    value = coerce_value_kind(
+        std::move(value),
+        get_signal(signal_id).value_kind);
     pending_updates.push_back(PendingUpdate{
         signal_id, driver, offset, std::move(value)});
     schedule_update_commit();
@@ -2550,7 +2696,8 @@ struct Interpreter::Impl {
       const ProcessId process,
       const SignalId signal,
       const std::uint32_t offset,
-      const std::vector<std::pair<Logic4, SimulationTick>>& elements,
+      const std::vector<
+          std::pair<PackedLogic4, SimulationTick>>& elements,
       const SimulationTick rejection,
       const ProjectedDelayMode mode) {
     if (elements.empty()) {
@@ -2675,7 +2822,7 @@ struct Interpreter::Impl {
             stage_update_slice(
                 process,
                 signal,
-                PackedLogic4{1, committed_value},
+                committed_value,
                 offset);
           });
       } catch (...) {
@@ -2719,13 +2866,20 @@ struct Interpreter::Impl {
       throw std::invalid_argument(
           "projected write range is outside its target signal");
     }
-    std::vector<std::pair<Logic4, SimulationTick>> scalar_elements;
+    std::vector<
+        std::pair<PackedLogic4, SimulationTick>> scalar_elements;
     scalar_elements.reserve(elements.size());
     for (std::size_t bit = 0; bit < width; ++bit) {
       scalar_elements.clear();
       for (const auto& element : elements) {
+        auto scalar = PackedLogic4{1, Logic4::x};
+        if (element.value.is_logic9()) {
+          scalar.fill(element.value.get_logic9(bit));
+        } else {
+          scalar.set(0, element.value.get(bit));
+        }
         scalar_elements.emplace_back(
-            element.value.get(bit), element.delay);
+            std::move(scalar), element.delay);
       }
       schedule_projected_scalar_waveform(
           process,
@@ -3625,12 +3779,19 @@ void Interpreter::Impl::execute(ProcessId id) {
     std::visit(
         Overloaded{
             [&](const LoadConstant &op) {
-              get_register(process, op.destination) = op.value;
+              get_register(process, op.destination) =
+                  coerce_value_kind(
+                      op.value,
+                      register_value_kind(
+                          process, op.destination));
               ++process.pc;
             },
             [&](const ReadSignal &op) {
               get_register(process, op.destination) =
-                  get_signal(op.signal).initial_value;
+                  coerce_value_kind(
+                      get_signal(op.signal).initial_value,
+                      register_value_kind(
+                          process, op.destination));
               ++process.pc;
             },
             [&](const SignalEvent& op) {
@@ -3648,7 +3809,10 @@ void Interpreter::Impl::execute(ProcessId id) {
             [&](const SignalLastValue& op) {
               (void)get_signal(op.signal);
               get_register(process, op.destination) =
-                  signal_last_values[op.signal];
+                  coerce_value_kind(
+                      signal_last_values[op.signal],
+                      register_value_kind(
+                          process, op.destination));
               ++process.pc;
             },
             [&](const SignalLastEvent& op) {
@@ -3676,7 +3840,10 @@ void Interpreter::Impl::execute(ProcessId id) {
             },
             [&](const CopyRegister& op) {
               get_register(process, op.destination) =
-                  get_register(process, op.source);
+                  coerce_value_kind(
+                      get_register(process, op.source),
+                      register_value_kind(
+                          process, op.destination));
               ++process.pc;
             },
             [&](const UnaryNot &op) {
@@ -4260,6 +4427,12 @@ ProcessId Interpreter::add_process(Process process) {
     throw std::invalid_argument(
         "a SimIR final process cannot initialize at time zero");
   }
+  if (!process.register_value_kinds.empty()
+      && process.register_value_kinds.size()
+          != process.register_count) {
+    throw std::invalid_argument(
+        "SimIR register value-kind count does not match register_count");
+  }
   for (const auto signal : process.static_sensitivity) {
     if (signal.signal >= impl_->signals.size()) {
       throw std::invalid_argument("process sensitivity references invalid signal");
@@ -4388,6 +4561,8 @@ void Interpreter::force_signal(SignalId signal, PackedLogic4 value) {
   if (impl_->get_signal(signal).initial_value.width() != value.width()) {
     throw std::invalid_argument("SimIR signal force width mismatch");
   }
+  value = impl_->normalize_signal_value(
+      signal, std::move(value));
   impl_->forced_values[signal] = value;
   impl_->publish(signal, std::move(value));
 }

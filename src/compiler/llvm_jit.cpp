@@ -93,6 +93,7 @@ using runtime::simir::Stop;
 using runtime::simir::TimeDisplay;
 using runtime::simir::UnaryNot;
 using runtime::simir::UnknownBranchPolicy;
+using runtime::simir::ValueKind;
 using runtime::simir::WaitFor;
 using runtime::simir::WaitOn;
 using runtime::simir::WaitSensitivity;
@@ -133,7 +134,7 @@ using NativeProcess = fsim_jit_process_v1;
 }
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v17";
+    "fsim-llvm-native-object-v18";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -451,7 +452,9 @@ struct ValidatedProcess {
 
 [[nodiscard]] ValidatedProcess
 validate_process(const Process &process,
-                 const std::span<const std::uint32_t> signal_widths) {
+                 const std::span<const std::uint32_t> signal_widths,
+                 const std::span<const ValueKind>
+                     signal_value_kinds) {
   if (process.operations.empty()) {
     throw LlvmJitError("cannot JIT an empty SimIR process");
   }
@@ -465,6 +468,28 @@ validate_process(const Process &process,
       static_cast<std::size_t>(std::numeric_limits<RegisterId>::max())) {
     throw LlvmJitUnsupportedError(
         "SimIR process has too many registers for the JIT ABI");
+  }
+  if (!process.register_value_kinds.empty()
+      && process.register_value_kinds.size()
+          != process.register_count) {
+    throw LlvmJitError(
+        "SimIR register value-domain metadata count does not match "
+        "register_count");
+  }
+  if (std::ranges::any_of(
+          process.register_value_kinds,
+          [](const ValueKind kind) {
+            return kind == ValueKind::logic9;
+          })) {
+    throw LlvmJitUnsupportedError(
+        "exact nine-state registers are outside the current LLVM "
+        "aval/bval subset");
+  }
+  if (!signal_value_kinds.empty()
+      && signal_value_kinds.size() != signal_widths.size()) {
+    throw LlvmJitError(
+        "SimIR signal value-domain metadata count does not match "
+        "signal_widths");
   }
 
   ValidatedProcess result;
@@ -509,6 +534,13 @@ validate_process(const Process &process,
       record_unsupported(
           instruction,
           "the LLVM scalar subset requires signal widths in [1, 64]");
+    }
+    if (!signal_value_kinds.empty()
+        && signal_value_kinds[signal] == ValueKind::logic9) {
+      record_unsupported(
+          instruction,
+          "an exact nine-state signal access is outside the current "
+          "LLVM aval/bval subset");
     }
     return width;
   };
@@ -648,6 +680,12 @@ validate_process(const Process &process,
                     index,
                     "LoadConstant width is outside the supported [1, 64] "
                     "range");
+              }
+              if (operation.value.is_logic9()) {
+                record_unsupported(
+                    index,
+                    "an exact nine-state constant is outside the current "
+                    "LLVM aval/bval subset");
               }
               record_definition(operation.destination, index);
               constrain_width(operation.destination, operation.value.width(),
@@ -1684,6 +1722,16 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
   add_key_u64(builder, "process-id", process.id);
   builder.add("process-name", process.name);
   add_key_u64(builder, "register-count", process.register_count);
+  add_key_u64(
+      builder,
+      "register-value-kind-count",
+      process.register_value_kinds.size());
+  for (const auto kind : process.register_value_kinds) {
+    add_key_u64(
+        builder,
+        "register-value-kind",
+        static_cast<std::underlying_type_t<ValueKind>>(kind));
+  }
   add_key_u64(builder, "sensitivity-count",
               process.static_sensitivity.size());
   for (const auto &sensitivity : process.static_sensitivity) {
@@ -1693,7 +1741,6 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
         static_cast<std::underlying_type_t<runtime::simir::EdgeKind>>(
             sensitivity.edge));
   }
-
   add_key_u64(builder, "operation-count", process.operations.size());
   for (const auto &operation : process.operations) {
     std::visit(
@@ -4973,12 +5020,14 @@ LlvmJit &LlvmJit::operator=(LlvmJit &&) noexcept = default;
 
 bool LlvmJit::supports_process(
     const Process& process,
-    const std::span<const std::uint32_t> signal_widths) const {
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const ValueKind> signal_value_kinds) const {
   if (!impl_) {
     throw LlvmJitError("cannot use a moved-from LlvmJit");
   }
   try {
-    (void)validate_process(process, signal_widths);
+    (void)validate_process(
+        process, signal_widths, signal_value_kinds);
     return true;
   } catch (const LlvmJitUnsupportedError&) {
     return false;
@@ -4988,7 +5037,8 @@ bool LlvmJit::supports_process(
 void LlvmJit::add_process_module(
     const std::string_view module_identity,
     const std::span<const JitProcessModuleEntry> entries,
-    const std::span<const std::uint32_t> signal_widths) {
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const ValueKind> signal_value_kinds) {
   if (!impl_) {
     throw LlvmJitError("cannot use a moved-from LlvmJit");
   }
@@ -5028,7 +5078,8 @@ void LlvmJit::add_process_module(
           "duplicate LLVM process symbol '" + owned_symbol + "'");
     }
 
-    auto validated = validate_process(*entry.process, signal_widths);
+    auto validated = validate_process(
+        *entry.process, signal_widths, signal_value_kinds);
     auto cache_key = make_native_object_cache_key(
         owned_symbol, *entry.process, signal_widths,
         impl_->options.optimization, impl_->jit->getTargetTriple(),
@@ -5118,10 +5169,12 @@ void LlvmJit::add_process_module(
 
 void LlvmJit::add_process(
     const std::string_view symbol, const Process &process,
-    const std::span<const std::uint32_t> signal_widths) {
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const ValueKind> signal_value_kinds) {
   const std::array entries{
       JitProcessModuleEntry{symbol, &process}};
-  add_process_module(symbol, entries, signal_widths);
+  add_process_module(
+      symbol, entries, signal_widths, signal_value_kinds);
 }
 
 JitProcessHandle LlvmJit::lookup(const std::string_view symbol) {

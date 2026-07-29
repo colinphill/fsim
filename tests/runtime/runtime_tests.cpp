@@ -70,6 +70,62 @@ void test_logic() {
           "std_logic resolution table must match IEEE std_logic_1164");
     }
   }
+
+  constexpr std::array<std::string_view, 9> and_golden{
+      "UU0UUU0UU",
+      "UX0XXX0XX",
+      "000000000",
+      "UX01XX01X",
+      "UX0XXX0XX",
+      "UX0XXX0XX",
+      "000000000",
+      "UX01XX01X",
+      "UX0XXX0XX"};
+  constexpr std::array<std::string_view, 9> or_golden{
+      "UUU1UUU1U",
+      "UXX1XXX1X",
+      "UX01XX01X",
+      "111111111",
+      "UXX1XXX1X",
+      "UXX1XXX1X",
+      "UX01XX01X",
+      "111111111",
+      "UXX1XXX1X"};
+  constexpr std::array<std::string_view, 9> xor_golden{
+      "UUUUUUUUU",
+      "UXXXXXXXX",
+      "UX01XX01X",
+      "UX10XX10X",
+      "UXXXXXXXX",
+      "UXXXXXXXX",
+      "UX01XX01X",
+      "UX10XX10X",
+      "UXXXXXXXX"};
+  constexpr std::string_view not_golden{"UX10XX10X"};
+  for (std::size_t left = 0; left < states.size(); ++left) {
+    require(
+        to_char(logic_not(states[left])) == not_golden[left],
+        "std_logic not table must match IEEE std_logic_1164");
+    for (std::size_t right = 0; right < states.size(); ++right) {
+      require(
+          to_char(logic_and(states[left], states[right]))
+              == and_golden[left][right],
+          "std_logic and table must match IEEE std_logic_1164");
+      require(
+          to_char(logic_or(states[left], states[right]))
+              == or_golden[left][right],
+          "std_logic or table must match IEEE std_logic_1164");
+      require(
+          to_char(logic_xor(states[left], states[right]))
+              == xor_golden[left][right],
+          "std_logic xor table must match IEEE std_logic_1164");
+    }
+  }
+  const std::array single_driver{Logic9::dont_care};
+  require(
+      resolve(std::span<const Logic9>{single_driver})
+          == Logic9::dont_care,
+      "one unresolved '-' driver must remain '-'");
 }
 
 void test_packed_values() {
@@ -129,6 +185,38 @@ void test_packed_values() {
   require(collapse_to_logic4(nine).to_msb_string() == "X01ZX01X",
           "nine-state collapse");
 
+  const auto exact =
+      PackedValue::from_logic9_msb_string("U01ZWLH-");
+  require(exact.is_logic9(), "common value must retain Logic9 domain");
+  require(
+      exact.to_msb_string() == "U01ZWLH-",
+      "common value must round-trip all nine states");
+  require(
+      exact.logic9_low_word()
+          == Logic9Word{
+              8,
+              {
+                  UINT64_C(0b00101010),
+                  UINT64_C(0b01100110),
+                  UINT64_C(0b00011110),
+                  UINT64_C(0b00000001)}},
+      "common Logic9 low word must retain four ordinal planes");
+  require(
+      collapse_to_logic4(exact).to_msb_string() == "X01ZX01X",
+      "explicit common-value collapse must follow boundary mapping");
+  require(
+      collapse_to_logic4(exact)
+              .promoted_to_logic9()
+              .to_msb_string()
+          == "X01ZX01X",
+      "four-to-nine expansion must map states directly");
+  try {
+    (void)exact.low_word();
+    throw std::runtime_error(
+        "exact Logic9 value exposed a lossy aval/bval word");
+  } catch (const std::invalid_argument&) {
+  }
+
   const std::vector four_drivers = {
       PackedLogic4::from_msb_string("ZZ01"),
       PackedLogic4::from_msb_string("10Z1"),
@@ -136,6 +224,16 @@ void test_packed_values() {
   require(resolve(std::span<const PackedLogic4>(four_drivers))
               .to_msb_string() == "1001",
           "packed four-state resolution");
+
+  const std::vector exact_drivers = {
+      PackedValue::from_logic9_msb_string("ZL-H"),
+      PackedValue::from_logic9_msb_string("HZZL"),
+  };
+  require(
+      resolve(std::span<const PackedValue>{exact_drivers})
+              .to_msb_string()
+          == "HLXW",
+      "packed common values must use exact std_logic resolution");
 }
 
 void test_scheduler_phase_order() {

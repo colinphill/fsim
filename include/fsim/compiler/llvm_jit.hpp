@@ -175,7 +175,9 @@ public:
   /// specialization module and retain interpreter fallback.
   [[nodiscard]] bool supports_process(
       const runtime::simir::Process& process,
-      std::span<const std::uint32_t> signal_widths) const;
+      std::span<const std::uint32_t> signal_widths,
+      std::span<const runtime::simir::ValueKind>
+          signal_value_kinds = {}) const;
 
   /// Validate, lower, optimize, and add several process functions as one
   /// native compilation/cache unit.
@@ -186,14 +188,18 @@ public:
   void add_process_module(
       std::string_view module_identity,
       std::span<const JitProcessModuleEntry> entries,
-      std::span<const std::uint32_t> signal_widths);
+      std::span<const std::uint32_t> signal_widths,
+      std::span<const runtime::simir::ValueKind>
+          signal_value_kinds = {});
 
   /// Add one process as a one-function module.
   ///
   /// This compatibility wrapper uses symbol as the module identity.
   void add_process(std::string_view symbol,
                    const runtime::simir::Process &process,
-                   std::span<const std::uint32_t> signal_widths);
+                   std::span<const std::uint32_t> signal_widths,
+                   std::span<const runtime::simir::ValueKind>
+                       signal_value_kinds = {});
 
   /// Compile/materialize a symbol through ORC and return an opaque handle.
   [[nodiscard]] JitProcessHandle lookup(std::string_view symbol);

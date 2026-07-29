@@ -116,6 +116,22 @@ PackedLogic4 PackedLogic4::from_msb_string(std::string_view value) {
   return result;
 }
 
+PackedLogic4 PackedLogic4::from_logic9_msb_string(
+    const std::string_view value) {
+  PackedLogic4 result(value.size(), Logic4::zero);
+  result.promote_to_logic9();
+  for (std::size_t offset = 0; offset < value.size(); ++offset) {
+    const auto parsed =
+        parse_logic9(value[value.size() - offset - 1]);
+    if (!parsed) {
+      throw std::invalid_argument(
+          "nine-state vector contains an invalid digit");
+    }
+    result.set_logic9(offset, *parsed);
+  }
+  return result;
+}
+
 PackedLogic4 PackedLogic4::from_aval_bval(
     const std::size_t width,
     const std::uint64_t aval,
@@ -127,6 +143,22 @@ PackedLogic4 PackedLogic4::from_aval_bval(
   PackedLogic4 result(width, Logic4::zero);
   result.inline_aval_ = aval;
   result.inline_bval_ = bval;
+  result.mask_unused_bits();
+  return result;
+}
+
+PackedLogic4 PackedLogic4::from_logic9_word(
+    const Logic9Word& value) {
+  if (value.width == 0 || value.width > bits_per_word) {
+    throw std::invalid_argument(
+        "nine-state word width must be between 1 and 64");
+  }
+  PackedLogic4 result(value.width, Logic4::zero);
+  result.logic9_ = true;
+  result.inline_aval_ = value.planes[0];
+  result.inline_bval_ = value.planes[1];
+  result.inline_logic9_plane2_ = value.planes[2];
+  result.inline_logic9_plane3_ = value.planes[3];
   result.mask_unused_bits();
   return result;
 }
@@ -180,11 +212,18 @@ Logic4Word PackedLogic4::low_word() const {
     throw std::invalid_argument(
         "four-state word width must be between 1 and 64");
   }
+  if (logic9_) {
+    throw std::invalid_argument(
+        "an exact nine-state value has no lossless aval/bval word");
+  }
   return {width_, inline_aval_, inline_bval_};
 }
 
 Logic4 PackedLogic4::get(std::size_t index) const {
   check_index(index, width_);
+  if (logic9_) {
+    return to_logic4(get_logic9(index));
+  }
   const auto aval = read_bit(aval_words(), index);
   const auto bval = read_bit(bval_words(), index);
   if (!bval) {
@@ -193,8 +232,31 @@ Logic4 PackedLogic4::get(std::size_t index) const {
   return aval ? Logic4::x : Logic4::z;
 }
 
+Logic9 PackedLogic4::get_logic9(const std::size_t index) const {
+  check_index(index, width_);
+  if (!logic9_) {
+    return to_logic9(get(index));
+  }
+  std::uint8_t encoded{};
+  for (std::size_t plane = 0; plane < 4; ++plane) {
+    encoded = static_cast<std::uint8_t>(
+        encoded
+        | (static_cast<std::uint8_t>(
+               read_bit(logic9_plane(plane), index))
+           << plane));
+  }
+  return encoded
+          <= static_cast<std::uint8_t>(Logic9::dont_care)
+      ? static_cast<Logic9>(encoded)
+      : Logic9::x;
+}
+
 void PackedLogic4::set(std::size_t index, Logic4 value) {
   check_index(index, width_);
+  if (logic9_) {
+    set_logic9(index, to_logic9(value));
+    return;
+  }
   const auto aval = mutable_aval_words();
   const auto bval = mutable_bval_words();
   switch (value) {
@@ -217,7 +279,38 @@ void PackedLogic4::set(std::size_t index, Logic4 value) {
   }
 }
 
+void PackedLogic4::set_logic9(
+    const std::size_t index,
+    const Logic9 value) {
+  check_index(index, width_);
+  if (!logic9_) {
+    promote_to_logic9();
+  }
+  const auto encoded = static_cast<std::uint8_t>(value);
+  for (std::size_t plane = 0; plane < 4; ++plane) {
+    write_bit(
+        mutable_logic9_plane(plane),
+        index,
+        ((encoded >> plane) & 1U) != 0);
+  }
+}
+
 void PackedLogic4::fill(Logic4 value) noexcept {
+  if (logic9_) {
+    const auto encoded =
+        static_cast<std::uint8_t>(to_logic9(value));
+    for (std::size_t plane = 0; plane < 4; ++plane) {
+      auto words = mutable_logic9_plane(plane);
+      std::fill(
+          words.begin(),
+          words.end(),
+          ((encoded >> plane) & 1U) != 0
+              ? ~std::uint64_t{0}
+              : std::uint64_t{0});
+    }
+    mask_unused_bits();
+    return;
+  }
   const bool aval = value == Logic4::one || value == Logic4::x;
   const bool bval = value == Logic4::x || value == Logic4::z;
   const auto aval_words = mutable_aval_words();
@@ -229,17 +322,137 @@ void PackedLogic4::fill(Logic4 value) noexcept {
   mask_unused_bits();
 }
 
+void PackedLogic4::fill(const Logic9 value) {
+  if (!logic9_) {
+    promote_to_logic9();
+  }
+  const auto encoded = static_cast<std::uint8_t>(value);
+  for (std::size_t plane = 0; plane < 4; ++plane) {
+    auto words = mutable_logic9_plane(plane);
+    std::fill(
+        words.begin(),
+        words.end(),
+        ((encoded >> plane) & 1U) != 0
+            ? ~std::uint64_t{0}
+            : std::uint64_t{0});
+  }
+  mask_unused_bits();
+}
+
+Logic9Word PackedLogic4::logic9_low_word() const {
+  if (width_ == 0 || width_ > bits_per_word) {
+    throw std::invalid_argument(
+        "nine-state word width must be between 1 and 64");
+  }
+  Logic9Word result{width_};
+  if (logic9_) {
+    result.planes = {
+        inline_aval_,
+        inline_bval_,
+        inline_logic9_plane2_,
+        inline_logic9_plane3_};
+    return result;
+  }
+  for (std::size_t index = 0; index < width_; ++index) {
+    const auto encoded =
+        static_cast<std::uint8_t>(to_logic9(get(index)));
+    for (std::size_t plane = 0; plane < 4; ++plane) {
+      if (((encoded >> plane) & 1U) != 0) {
+        result.planes[plane] |= std::uint64_t{1} << index;
+      }
+    }
+  }
+  return result;
+}
+
+PackedLogic4 PackedLogic4::promoted_to_logic9() const {
+  auto result = *this;
+  result.promote_to_logic9();
+  return result;
+}
+
 std::string PackedLogic4::to_msb_string() const {
   std::string result(width_, 'X');
   for (std::size_t index = 0; index < width_; ++index) {
-    result[width_ - index - 1] = to_char(get(index));
+    result[width_ - index - 1] =
+        logic9_ ? to_char(get_logic9(index)) : to_char(get(index));
   }
   return result;
+}
+
+void PackedLogic4::promote_to_logic9() {
+  if (logic9_) {
+    return;
+  }
+  std::vector<Logic4> old_values;
+  old_values.reserve(width_);
+  for (std::size_t index = 0; index < width_; ++index) {
+    old_values.push_back(get(index));
+  }
+  if (width_ > bits_per_word) {
+    logic9_plane2_.assign(word_count(width_), 0);
+    logic9_plane3_.assign(word_count(width_), 0);
+  }
+  logic9_ = true;
+  for (std::size_t index = 0; index < width_; ++index) {
+    set_logic9(index, to_logic9(old_values[index]));
+  }
+}
+
+std::span<const std::uint64_t>
+PackedLogic4::logic9_plane(const std::size_t index) const noexcept {
+  if (width_ == 0 || index >= 4) {
+    return {};
+  }
+  if (index == 0) {
+    return aval_words();
+  }
+  if (index == 1) {
+    return bval_words();
+  }
+  if (width_ <= bits_per_word) {
+    return index == 2
+        ? std::span<const std::uint64_t>{
+              &inline_logic9_plane2_, 1}
+        : std::span<const std::uint64_t>{
+              &inline_logic9_plane3_, 1};
+  }
+  return index == 2
+      ? std::span<const std::uint64_t>{logic9_plane2_}
+      : std::span<const std::uint64_t>{logic9_plane3_};
+}
+
+std::span<std::uint64_t>
+PackedLogic4::mutable_logic9_plane(
+    const std::size_t index) noexcept {
+  if (width_ == 0 || index >= 4) {
+    return {};
+  }
+  if (index == 0) {
+    return mutable_aval_words();
+  }
+  if (index == 1) {
+    return mutable_bval_words();
+  }
+  if (width_ <= bits_per_word) {
+    return index == 2
+        ? std::span<std::uint64_t>{
+              &inline_logic9_plane2_, 1}
+        : std::span<std::uint64_t>{
+              &inline_logic9_plane3_, 1};
+  }
+  return index == 2
+      ? std::span<std::uint64_t>{logic9_plane2_}
+      : std::span<std::uint64_t>{logic9_plane3_};
 }
 
 void PackedLogic4::mask_unused_bits() noexcept {
   mask_last(mutable_aval_words(), width_);
   mask_last(mutable_bval_words(), width_);
+  if (logic9_) {
+    mask_last(mutable_logic9_plane(2), width_);
+    mask_last(mutable_logic9_plane(3), width_);
+  }
 }
 
 PackedLogic9::PackedLogic9(std::size_t width, Logic9 initial)
@@ -324,10 +537,21 @@ PackedLogic4 collapse_to_logic4(const PackedLogic9 &value) {
   return result;
 }
 
+PackedLogic4 collapse_to_logic4(const PackedLogic4& value) {
+  if (!value.is_logic9()) {
+    return value;
+  }
+  PackedLogic4 result(value.width(), Logic4::zero);
+  for (std::size_t index = 0; index < value.width(); ++index) {
+    result.set(index, to_logic4(value.get_logic9(index)));
+  }
+  return result;
+}
+
 PackedLogic9 expand_to_logic9(const PackedLogic4 &value) {
   PackedLogic9 result(value.width(), Logic9::zero);
   for (std::size_t index = 0; index < value.width(); ++index) {
-    result.set(index, to_logic9(value.get(index)));
+    result.set(index, value.get_logic9(index));
   }
   return result;
 }
@@ -336,14 +560,35 @@ PackedLogic4 resolve(std::span<const PackedLogic4> drivers) {
   if (drivers.empty()) {
     return PackedLogic4{};
   }
+  if (drivers.size() == 1) {
+    return drivers.front();
+  }
   const auto width = drivers.front().width();
+  const auto logic9 = std::ranges::any_of(
+      drivers,
+      [](const PackedLogic4& driver) {
+        return driver.is_logic9();
+      });
   PackedLogic4 result(width, Logic4::z);
+  if (logic9) {
+    result.fill(Logic9::z);
+  }
   for (const auto &driver : drivers) {
     if (driver.width() != width) {
       throw std::invalid_argument("cannot resolve drivers of different widths");
     }
     for (std::size_t index = 0; index < width; ++index) {
-      result.set(index, resolve(result.get(index), driver.get(index)));
+      if (logic9) {
+        result.set_logic9(
+            index,
+            resolve(
+                result.get_logic9(index),
+                driver.get_logic9(index)));
+      } else {
+        result.set(
+            index,
+            resolve(result.get(index), driver.get(index)));
+      }
     }
   }
   return result;
@@ -352,6 +597,9 @@ PackedLogic4 resolve(std::span<const PackedLogic4> drivers) {
 PackedLogic9 resolve(std::span<const PackedLogic9> drivers) {
   if (drivers.empty()) {
     return PackedLogic9{};
+  }
+  if (drivers.size() == 1) {
+    return drivers.front();
   }
   const auto width = drivers.front().width();
   PackedLogic9 result(width, Logic9::z);

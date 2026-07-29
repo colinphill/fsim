@@ -82,7 +82,11 @@ The following foundation is implemented:
   the debugger or Ctrl-C control hook is replaced, transactional Tcl project
   replacement, runtime trace configuration, and assertion
   callback/diagnostic metadata;
-- packed 2-, 4-, and 9-state value kernels;
+- packed 2-, 4-, and 9-state value kernels plus a domain-preserving common
+  transport value with exact Logic9 signals, registers, projected
+  transactions, driver slots, standard resolution, debug/C API reads, and
+  VCD mapping; exact Logic9 generated code is capability-gated for the next
+  compiler batch;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
 - executable SystemVerilog procedural lexical blocks with named-scope
@@ -1516,6 +1520,37 @@ and relocation, SystemC plug-in/fiber/datatype coverage, LLVM/C ABI tests,
 interpreter/LLVM differentials, VCD, cache, debugger-facing application tests,
 the checked VHDL integer subtype and mixed-direction binding coverage, and all
 preceding feature batches. No CI state was inspected for this local gate.
+
+### Thirty-fifth feature batch — exact VHDL nine-state transport
+
+The planned ten implementation features are:
+
+1. Extend the common packed runtime value with an explicit four-state or
+   nine-state representation while retaining the allocation-free existing
+   low-word path for two-/four-state generated code.
+2. Preserve all `std_ulogic` states `U`, `X`, `0`, `1`, `Z`, `W`, `L`, `H`,
+   and `-` in scalar/vector literals, rendering, equality, and default
+   initialization.
+3. Retain signal and register value domains in SimIR so exact nine-state
+   values cannot accidentally enter the existing aval/bval LLVM subset.
+4. Preserve nine-state values through reads, copies, extracts, inserts,
+   concatenations, whole/slice stores, waits, and signal attributes.
+5. Execute IEEE `std_logic_1164` elementwise `not`, `and`, `or`, `xor`,
+   `nand`, `nor`, `xnor`, equality, and inequality behavior in the reference
+   interpreter.
+6. Preserve nine-state transactions through blocking/update/future/inertial
+   and projected writes, process-owned driver slots, deposits, forces, and
+   release.
+7. Resolve scalar and packed `std_logic` driver collections with the complete
+   nine-state resolution table and publish only exact effective changes.
+8. Insert explicit ordinal element conversions at VHDL/SV boundaries so the
+   shared signal store retains the owning domain without changing either
+   language's internal view.
+9. Expose canonical nine-state signal/local/driver values through debugger
+   inspection, native C reads, callbacks, and the required VCD collapse rules.
+10. Make LLVM capability and cache behavior reject exact nine-state processes
+    without lossy compilation, then require focused interpreter/hybrid/VCD
+    evidence before the full local regression and push gate.
 
 ## v1 release condition
 

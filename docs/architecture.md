@@ -28,7 +28,7 @@ The architectural invariants are:
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
-| Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, four-state process-owned driver slots, native/explicit resolution policies, committed value changes, deposit, and force/release masking are current; full nine-state/wired/strength resolution remains planned |
+| Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, domain-preserving process-owned driver slots, exact nine-state `std_logic` and four-state `sv_wire` policies, committed value changes, deposit, and force/release masking are current; wired/strength resolution remains planned |
 | Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with source/time/signal breakpoints, all four step modes, and bounded packed process-local reads are current; complete local scopes/types are planned |
 
 The language-specific HIR will retain resolved symbols, types, overload choices,
@@ -181,9 +181,10 @@ The association syntax owns ordering legality, so VHDL may use positional
 actuals followed by named actuals while Verilog/SystemVerilog may not mix the
 two forms. Typed scalar construction actuals also cross SystemC factories in
 both directions. Expression port actuals, unpacked/record boundaries, and
-full nine-state, wired-net, and strength-aware multi-driver resolution remain
-outside this slice; bounded four-state native and explicit resolution is
-current.
+wired-net or strength-aware multi-driver resolution remain outside this slice.
+Exact nine-state `std_logic` and four-state `sv_wire` resolution are current
+in the reference runtime; exact nine-state generated code remains a
+capability-gated interpreter fallback.
 
 The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
@@ -238,11 +239,14 @@ The runtime distinguishes three logic domains:
 Packed storage is used throughout. Scalar and common vectors up to 64 bits are
 the fast path; wide values will use specialized runtime kernels. Conversion to
 a lower-state domain must be explicit whenever information could be lost.
-`PackedLogic4` stores common values as inline `aval`/`bval` planes and exposes a
-checked `Logic4Word` representation for widths up to 64 bits. The simulation
-kernel's external-executor boundary and generated-code callbacks share this
-allocation-free word path for reads and blocking, update-phase, and delayed
-writes, while preserving signal and width validation at the boundary.
+The common packed value retains either the inline `aval`/`bval` Logic4
+representation or four ordinal Logic9 planes. It exposes checked
+allocation-free `Logic4Word` and `Logic9Word` representations for widths up to
+64 elements and rejects a lossy Logic9-to-aval/bval request. The current
+external-executor and generated-code callbacks use only the Logic4 word path;
+per-process/per-signal SimIR value-kind metadata prevents an exact Logic9
+process from entering that subset until the appended Logic9 callback path is
+implemented.
 
 Simulation time is an unsigned 64-bit tick count at one elaborated global
 resolution. The v1 elaborator will select the finest declared VHDL, SV, or

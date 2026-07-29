@@ -135,10 +135,13 @@ same-value transaction for which `'event` remains false.
 
 VHDL identifiers are canonicalized case-insensitively. Verilog and
 SystemVerilog identifiers remain case-sensitive. VHDL nine-state scalar and
-vector literals are accepted by executable lowering and collapse into the
-current common four-state representation using the documented mixed-language
-mapping. Preserving the full nine-state domain through signals, resolution, and
-all VHDL operations is still in progress.
+vector literals retain `U`, `X`, `0`, `1`, `Z`, `W`, `L`, `H`, and `-`
+through common signals, locals, structural operations, projected transactions,
+signal last-value state, standard logical operators, equality, and
+`std_logic` resolution in the reference engine. Compiled mode deliberately
+uses the reference evaluator for a process that has an exact nine-state
+register or accesses an exact nine-state signal; direct LLVM Logic9 lowering
+is still in progress.
 
 For the bounded hierarchy slice, child ports alias parent signal IDs after
 width, signedness, and lossy-2-state checks. Same-language lookup and explicit
@@ -156,10 +159,13 @@ the same for loop-generated children using deterministic, language-neutral
 alternative label. This does not yet establish
 complete VHDL generic or SystemVerilog parameter typing and sizing, SystemC
 construction schemas, general vector-direction conversion,
-aggregates/interfaces, or full nine-state/wired-net resolution. Bounded
-four-state `std_logic`/`sv_wire` resolution uses process-owned driver slots
-across explicit mixed bindings. SystemC factories already elaborate as peer
-hierarchy nodes in either direction through explicit bindings.
+aggregates/interfaces, or wired-net resolution beyond `sv_wire`. Exact
+nine-state `std_logic` and four-state `sv_wire` resolution use process-owned
+driver slots across explicit mixed bindings. At a VHDL/SV boundary the owning
+signal domain is retained and the reader/writer view applies the documented
+ordinal per-element conversion in either hierarchy direction. SystemC
+factories already elaborate as peer hierarchy nodes in either direction
+through explicit bindings.
 
 ## v1 target
 

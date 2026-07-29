@@ -614,10 +614,16 @@ enum class ResolutionKind : std::uint8_t {
   std_logic,
 };
 
+enum class ValueKind : std::uint8_t {
+  logic4,
+  logic9,
+};
+
 struct Signal {
   std::string name;
   PackedLogic4 initial_value;
   ResolutionKind resolution{ResolutionKind::none};
+  ValueKind value_kind{ValueKind::logic4};
 };
 
 struct Sensitivity {
@@ -635,6 +641,7 @@ struct DebugLocal {
   SourceLocation source;
   std::optional<std::int32_t> integer_lower;
   std::optional<std::int32_t> integer_upper;
+  ValueKind value_kind{ValueKind::logic4};
 };
 
 struct Process {
@@ -644,6 +651,7 @@ struct Process {
   std::vector<DebugLocal> debug_locals;
   std::vector<Sensitivity> static_sensitivity;
   std::vector<Operation> operations;
+  std::vector<ValueKind> register_value_kinds;
   bool initialize{true};
   // A SystemVerilog final process is excluded from ordinary initialization
   // and queued exactly once when ordinary simulation terminates.

@@ -174,6 +174,100 @@ parse_logic9(char value) noexcept {
   return lhs == rhs ? Logic4::zero : Logic4::one;
 }
 
+/// IEEE std_logic_1164 logical tables. Results are in the UX01 subset.
+[[nodiscard]] constexpr Logic9 logic_not(Logic9 value) noexcept {
+  constexpr Logic9 table[] = {
+      Logic9::u, Logic9::x, Logic9::one, Logic9::zero, Logic9::x,
+      Logic9::x, Logic9::one, Logic9::zero, Logic9::x};
+  const auto index = static_cast<std::uint8_t>(value);
+  return index < 9 ? table[index] : Logic9::x;
+}
+
+[[nodiscard]] constexpr Logic9
+logic_and(Logic9 lhs, Logic9 rhs) noexcept {
+  constexpr Logic9 table[9][9] = {
+      {Logic9::u, Logic9::u, Logic9::zero, Logic9::u, Logic9::u,
+       Logic9::u, Logic9::zero, Logic9::u, Logic9::u},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::x, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::x, Logic9::x},
+      {Logic9::zero, Logic9::zero, Logic9::zero, Logic9::zero,
+       Logic9::zero, Logic9::zero, Logic9::zero, Logic9::zero,
+       Logic9::zero},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::one, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::x, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::x, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::x, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::x, Logic9::x},
+      {Logic9::zero, Logic9::zero, Logic9::zero, Logic9::zero,
+       Logic9::zero, Logic9::zero, Logic9::zero, Logic9::zero,
+       Logic9::zero},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::one, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::x, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::x, Logic9::x},
+  };
+  const auto left = static_cast<std::uint8_t>(lhs);
+  const auto right = static_cast<std::uint8_t>(rhs);
+  return left < 9 && right < 9 ? table[left][right] : Logic9::x;
+}
+
+[[nodiscard]] constexpr Logic9
+logic_or(Logic9 lhs, Logic9 rhs) noexcept {
+  constexpr Logic9 table[9][9] = {
+      {Logic9::u, Logic9::u, Logic9::u, Logic9::one, Logic9::u,
+       Logic9::u, Logic9::u, Logic9::one, Logic9::u},
+      {Logic9::u, Logic9::x, Logic9::x, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::x, Logic9::one, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::one, Logic9::x},
+      {Logic9::one, Logic9::one, Logic9::one, Logic9::one,
+       Logic9::one, Logic9::one, Logic9::one, Logic9::one,
+       Logic9::one},
+      {Logic9::u, Logic9::x, Logic9::x, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::x, Logic9::one, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::x, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::x, Logic9::one, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::one, Logic9::x},
+      {Logic9::one, Logic9::one, Logic9::one, Logic9::one,
+       Logic9::one, Logic9::one, Logic9::one, Logic9::one,
+       Logic9::one},
+      {Logic9::u, Logic9::x, Logic9::x, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::x, Logic9::one, Logic9::x},
+  };
+  const auto left = static_cast<std::uint8_t>(lhs);
+  const auto right = static_cast<std::uint8_t>(rhs);
+  return left < 9 && right < 9 ? table[left][right] : Logic9::x;
+}
+
+[[nodiscard]] constexpr Logic9
+logic_xor(Logic9 lhs, Logic9 rhs) noexcept {
+  constexpr Logic9 table[9][9] = {
+      {Logic9::u, Logic9::u, Logic9::u, Logic9::u, Logic9::u,
+       Logic9::u, Logic9::u, Logic9::u, Logic9::u},
+      {Logic9::u, Logic9::x, Logic9::x, Logic9::x, Logic9::x,
+       Logic9::x, Logic9::x, Logic9::x, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::one, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::one, Logic9::zero, Logic9::x,
+       Logic9::x, Logic9::one, Logic9::zero, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::x, Logic9::x, Logic9::x,
+       Logic9::x, Logic9::x, Logic9::x, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::x, Logic9::x, Logic9::x,
+       Logic9::x, Logic9::x, Logic9::x, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::zero, Logic9::one, Logic9::x,
+       Logic9::x, Logic9::zero, Logic9::one, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::one, Logic9::zero, Logic9::x,
+       Logic9::x, Logic9::one, Logic9::zero, Logic9::x},
+      {Logic9::u, Logic9::x, Logic9::x, Logic9::x, Logic9::x,
+       Logic9::x, Logic9::x, Logic9::x, Logic9::x},
+  };
+  const auto left = static_cast<std::uint8_t>(lhs);
+  const auto right = static_cast<std::uint8_t>(rhs);
+  return left < 9 && right < 9 ? table[left][right] : Logic9::x;
+}
+
 /// Resolve two four-state wire drivers. Z is the identity element.
 [[nodiscard]] constexpr Logic4 resolve(Logic4 lhs, Logic4 rhs) noexcept {
   if (lhs == Logic4::z) {
@@ -225,6 +319,9 @@ parse_logic9(char value) noexcept {
 
 [[nodiscard]] constexpr Logic9 resolve(std::span<const Logic9> drivers) noexcept {
   // std_logic_1164 specifies Z for an empty collection of drivers.
+  if (drivers.size() == 1) {
+    return drivers.front();
+  }
   auto result = Logic9::z;
   for (const auto driver : drivers) {
     result = resolve(result, driver);

@@ -311,8 +311,8 @@ behavior plus named static `begin : label` blocks inside explicit
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
 particular, complete semantic analysis, general mixed-boundary conversions,
-full nine-state VHDL and wired-net resolution, complete VHDL generic typing
-and SystemVerilog
+direct LLVM lowering for the preserved nine-state VHDL domain, wired-net
+resolution beyond `sv_wire`, complete VHDL generic typing and SystemVerilog
 parameter typing, complete scoped/local type coverage and call
 safe points, broader interpreter/JIT differential coverage, remaining SystemC
 kernel behavior, parameterized/nonconstant and multiple rise/fall/turnoff
@@ -535,9 +535,11 @@ uses a hybrid engine. Processes whose supported value-bearing operations are
 at most 64 bits execute through LLVM at the selected O0/O2 setting—O2 by
 default—while typed capability misses fall back per process to the reference
 evaluator under the same deterministic kernel. Generated callbacks and the
-reference kernel share a checked
-allocation-free single-word `Logic4` representation for values up to 64 bits,
-including blocking, update-phase, and delayed writes. The plain-C runtime-table
+reference kernel share a checked allocation-free single-word `Logic4`
+representation for values up to 64 bits, including blocking, update-phase,
+and delayed writes. The reference kernel additionally retains four-plane
+Logic9 words and routes any exact nine-state process away from the aval/bval
+LLVM subset, avoiding silent collapse. The plain-C runtime-table
 ABI retains its v1 prefix and append-only scheduled, transition-inertial, and
 VHDL projected whole/slice callbacks; generated code size-gates those fields
 per process before use. The configured

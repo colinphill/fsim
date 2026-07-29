@@ -324,6 +324,40 @@ max_deltas = 1000
 )TOML";
   }
   {
+    std::ofstream source(directory / "logic9.vhd");
+    source << R"(
+entity api_logic9 is
+  port (value : out std_logic_vector(7 downto 0));
+end entity;
+architecture rtl of api_logic9 is
+begin
+end architecture;
+)";
+  }
+  const auto logic9_manifest_path = directory / "logic9.toml";
+  {
+    std::ofstream manifest(logic9_manifest_path);
+    manifest << R"TOML(
+schema = 1
+[project]
+name = "api-logic9-test"
+top = "vhdl:work.api_logic9(rtl)"
+time_resolution = "1ns"
+
+[[source_set]]
+language = "vhdl"
+standard = "2008"
+library = "work"
+files = ["logic9.vhd"]
+
+[build]
+cache_path = "logic9-cache"
+
+[run]
+max_deltas = 1000
+)TOML";
+  }
+  {
     std::ofstream source(directory / "severity_actions.sv");
     source << R"(
 module severity_actions;
@@ -1559,6 +1593,80 @@ max_deltas = 1000
       == UINT64_C(0x0123456789abcdef));
 
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
+
+  fsim_session_t logic9_session = FSIM_INVALID_SESSION;
+  assert(
+      fsim_session_create(&options, &logic9_session)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_load_project(
+          logic9_session,
+          logic9_manifest_path.string().c_str())
+      == FSIM_STATUS_OK);
+  assert(fsim_session_check(logic9_session) == FSIM_STATUS_OK);
+  assert(fsim_session_build(logic9_session) == FSIM_STATUS_OK);
+  fsim_object_t logic9_value = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          logic9_session, text("value"), &logic9_value)
+      == FSIM_STATUS_OK);
+  char logic9_text[9]{};
+  std::size_t logic9_required = 0;
+  assert(
+      fsim_session_read_value(
+          logic9_session,
+          logic9_value,
+          logic9_text,
+          sizeof(logic9_text),
+          &logic9_required)
+      == FSIM_STATUS_OK);
+  assert(logic9_required == sizeof(logic9_text));
+  assert(std::string{logic9_text} == "UUUUUUUU");
+  assert(
+      fsim_session_deposit(
+          logic9_session,
+          logic9_value,
+          text("ULH-WZ01"))
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          logic9_session,
+          logic9_value,
+          logic9_text,
+          sizeof(logic9_text),
+          &logic9_required)
+      == FSIM_STATUS_OK);
+  assert(std::string{logic9_text} == "ULH-WZ01");
+  assert(
+      fsim_session_force(
+          logic9_session,
+          logic9_value,
+          text("HHHHLLLL"))
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          logic9_session,
+          logic9_value,
+          logic9_text,
+          sizeof(logic9_text),
+          &logic9_required)
+      == FSIM_STATUS_OK);
+  assert(std::string{logic9_text} == "HHHHLLLL");
+  assert(
+      fsim_session_release(logic9_session, logic9_value)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          logic9_session,
+          logic9_value,
+          logic9_text,
+          sizeof(logic9_text),
+          &logic9_required)
+      == FSIM_STATUS_OK);
+  assert(std::string{logic9_text} == "ULH-WZ01");
+  assert(
+      fsim_session_destroy(logic9_session)
+      == FSIM_STATUS_OK);
 
   CallbackCounts severity_counts;
   severity_counts.manifest = severity_manifest_path.string();
