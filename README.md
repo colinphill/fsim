@@ -44,6 +44,12 @@ The current tree contains:
   bounds; subtype-typed constants/generics; entity-to-architecture visibility;
   range-safe hierarchy aliases; and interpreter/LLVM O0/O2, debugger-local,
   VCD, and transitive native-cache equivalence;
+- package-, entity-, and architecture-declared one-dimensional VHDL array
+  types over scalar bit/Boolean/std_logic/std_ulogic or visible scalar
+  subtypes, with constrained and `integer`/`natural`/`positive range <>`
+  forms, nominal assignment and hierarchy checks, whole/index/slice reads and
+  writes, explicit mixed-language wrapper enforcement, and interpreter/LLVM
+  O0/O2, debugger, VCD, and cache equivalence;
 - architecture-local or project-package, non-nested VHDL record types with
   case-insensitive scalar/packed logic, bit, and Boolean elements;
   use-clause or selected-name visibility; reusable same-language entity ports;

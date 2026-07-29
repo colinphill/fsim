@@ -95,6 +95,9 @@ std::optional<std::uint64_t> Type::width() const noexcept {
   if (packed_range_expression) {
     return std::nullopt;
   }
+  if (vhdl_array) {
+    return std::nullopt;
+  }
   if (!packed_members.empty()) {
     return std::nullopt;
   }

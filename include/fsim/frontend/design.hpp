@@ -175,6 +175,24 @@ struct PackedMember {
   [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
 
+/// Source-level metadata for a one-dimensional VHDL array type.
+///
+/// The common runtime may store a supported scalar-element array in the same
+/// packed representation as a built-in vector, but the frontend retains the
+/// nominal array declaration, index subtype, element subtype, and constraint
+/// state so legality and hierarchy checks never infer compatibility from width
+/// alone.
+struct VhdlArrayInfo {
+  std::string index_subtype;
+  SourceSpan index_span;
+  std::optional<IntegerRange> index_base_range;
+  std::string element_spelling;
+  std::string element_named_type;
+  SourceSpan element_span;
+  ValueDomain element_domain{ValueDomain::Unknown};
+  bool unconstrained{};
+};
+
 enum class PackedAggregateKind {
   None,
   Struct,
@@ -229,6 +247,10 @@ struct Type {
   // A range parsed on an unresolved named VHDL type. Type resolution moves
   // this to integer_range_expression or enumeration_range_expression.
   std::optional<DiscreteRangeExpression> discrete_range_expression;
+  // Present only for a source-level VHDL array declaration or a type/subtype
+  // resolved from one. The packed range above is the concrete object
+  // constraint; this metadata preserves nominal array semantics.
+  std::optional<VhdlArrayInfo> vhdl_array;
 
   Type() = default;
   Type(
@@ -255,6 +277,7 @@ struct EnumLiteralDeclaration {
 enum class TypeDeclarationKind {
   Alias,
   VhdlEnumeration,
+  VhdlArray,
   VhdlRecord,
   VhdlSubtype,
   SystemVerilogTypedef,

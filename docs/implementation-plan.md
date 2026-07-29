@@ -407,10 +407,14 @@ select its application gate with
 `ctest --test-dir <build> -L expressions --output-on-failure`.
 
 The Windows LLVM jobs install the exact full LLVM 22.1.8 development archive
-through `KyleMayes/install-llvm-action`, pinned by commit SHA, and then
-independently verify both `llvm-config` and
-`LLVMConfig.cmake`. This avoids accepting a compiler-only package when the ORC
-development libraries are required.
+through a repository-owned PowerShell adapter. It verifies the published
+SHA-256 digest, uses 7-Zip for the XZ layer and Windows `tar` for the inner
+archive, then independently verifies both `llvm-config` and
+`LLVMConfig.cmake`. Repository-owned Visual Studio discovery and environment
+export replace the former Node 20 setup actions; checkout uses the Node
+24-based `actions/checkout@v7`. This avoids both deprecated action runtimes and
+accepting a compiler-only package when the ORC development libraries are
+required.
 
 ### Cross-platform implementation and test rules
 
@@ -465,16 +469,15 @@ Completed:
 - Linux GCC and Windows MSVC Debug/Release workflow definitions;
 - exact LLVM 22.1.8 Linux and Windows Debug/Release workflow definitions,
   including Windows MSVC and clang-cl builds using the pinned full development
-  archive; and
+  archive;
+- interactive/batch Tcl 9.0.4 fallback, relocation, callback, debugger,
+  failure-exit, native-C linkage, and LLVM-backed execution validated on the
+  Windows and Linux CI matrix; and
 - sanitizer and VHDL-parser/Verilog-SV-preprocessor-parser fuzzer workflow
   definitions.
 
 Remaining before completion:
 
-- validate the migrated Tcl 9 fallback and its interactive/batch behavior on
-  Windows runners when CI inspection is next requested; the forced fallback,
-  staged and installed relocation, callback/debugger/failure paths, native C
-  API linkage, and exact LLVM 22.1.8 build pass locally on Linux;
 - consume the planned support dependencies where their corresponding features
   are implemented, instead of only pinning version policy;
 - complete cross-platform Unicode/path and console-interrupt validation.
@@ -1997,6 +2000,76 @@ interpreter/LLVM O0/O2 success and failure behavior, debugger/VCD/cache
 evidence, fetched Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the strict
 native ABI, and every preceding feature batch. No CI state was inspected for
 this local gate.
+
+### Forty-fourth feature batch — VHDL user-defined array types
+
+The planned ten implementation features are:
+
+1. Represent a VHDL array declaration independently from an anonymous packed
+   vector, retaining nominal identity, index subtype/range form, element
+   subtype, direction, constraint state, and source spans in typed HIR.
+2. Parse constrained and unconstrained one-dimensional array declarations in
+   entity, architecture, and package declarative regions, including
+   `integer`, `natural`, and `positive` index subtypes and explicit locally
+   static `to`/`downto` ranges.
+3. Resolve built-in and visible named scalar element subtypes plus local,
+   selected, imported, and chained array type/subtype references without
+   losing declaration identity or element state domain.
+4. Apply array constraints from subtype declarations and object subtype
+   indications, fold package constants and prior generics per specialization,
+   and reject illegal reconstraints or constraints outside a constrained
+   base.
+5. Diagnose malformed dimensions, unsupported multidimensional or composite
+   elements, invalid index bases, zero-width executable ranges, unknown
+   element types, range overflow, and nominally incompatible values with
+   stable parser/elaboration codes.
+6. Derive packed storage width and `Bit2`/Boolean/`Logic9` defaults from the
+   scalar element subtype while retaining declared array bounds for ordinal
+   mapping and debug metadata.
+7. Execute whole-array values, equality, constant indexing and slicing, whole
+   and selected signal/local writes, and conditional alternatives with
+   same-nominal-array type checking in interpreter and LLVM O0/O2 modes.
+8. Validate same-language array ports by nominal identity, width, direction,
+   and constraint compatibility; require scalar/vector wrappers at
+   cross-language boundaries rather than silently erasing VHDL array
+   identity.
+9. Preserve array identity and declared bounds through specialization,
+   debugger/VCD rendering, cold/warm native-object reuse, and package-edit
+   cache invalidation.
+10. Add focused positive, negative, frontend, elaboration, and application
+    evidence; update the VHDL feature matrix; then run, record, and push the
+    full local regression gate.
+
+All ten implementation features are complete. Typed HIR now distinguishes
+nominal VHDL arrays from anonymous packed vectors while retaining index and
+element subtype metadata, source spans, direction, bounds, and constraint
+state. The parser accepts bounded one-dimensional constrained and
+`integer`/`natural`/`positive range <>` declarations in package, entity, and
+architecture regions and emits targeted diagnostics for malformed or
+unsupported declarations.
+
+Elaboration resolves built-in, local, imported, and selected scalar element
+subtypes, chained array subtypes, package-constant and prior-generic bounds,
+and specialization-dependent object constraints. It enforces index-base and
+nominal legality, rejects nonconcrete packed objects, retains transitive
+package dependencies, validates same-language hierarchy by nominal identity,
+and requires explicit scalar/vector wrappers at mixed-language boundaries.
+Whole-array copy and equality, conditional alternatives, constant index and
+slice reads, and whole or selected signal/local writes share the existing
+packed interpreter and LLVM lowering while preserving declared ordinal
+mapping.
+
+The application differential covers interpreter and LLVM O0/O2 execution,
+ascending and descending constraints, package constants and generics,
+same-language hierarchy, Boolean and nine-state defaults, persistent debug
+locals, debugger display, normalized VCD, cold/warm native-object reuse, and
+package-edit invalidation. Focused frontend and elaboration evidence covers
+selected package element subtypes plus every new declaration, constraint,
+nominal-operator, and boundary diagnostic.
+
+The Node-runtime CI detour preceding this batch finished in commit `c6d4071`;
+run `30444076195` passed all twelve Linux/Windows jobs and every job reported
+zero annotations.
 
 ## v1 release condition
 

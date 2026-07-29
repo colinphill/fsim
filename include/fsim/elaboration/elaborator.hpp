@@ -169,6 +169,7 @@ struct SignalInfo {
     frontend::ValueDomain source_domain{frontend::ValueDomain::Unknown};
     bool is_signed{};
     std::optional<frontend::PackedRange> packed_range;
+    std::optional<frontend::VhdlArrayInfo> vhdl_array;
     std::vector<frontend::PackedMember> packed_members;
     std::optional<frontend::IntegerRange> integer_range;
     std::string nominal_type;

@@ -10926,6 +10926,224 @@ endmodule
         has_diagnostic(
             invalid_monitor_design, "FSIM-ELAB-103"));
 
+    const auto array_source = fsim::frontend::parse_text(
+        "vhdl_arrays.vhd",
+        R"(
+package Scalar_Types is
+  subtype External_Logic_T is std_logic;
+end package;
+
+package Array_Types is
+  type Flags_T is array (natural range <>) of boolean;
+  subtype Quartet_T is Flags_T(0 to 3);
+  type Logic_Bus_T is array (7 downto 0)
+    of work.scalar_types.external_logic_t;
+  type Bits_T is array (integer range <>) of bit;
+end package;
+
+use work.array_types.all;
+entity Array_Dut is
+  port (
+    Source : in Quartet_T;
+    Result : out Quartet_T;
+    Logic_Bus : out Logic_Bus_T
+  );
+end entity;
+
+use work.array_types.all;
+architecture rtl of Array_Dut is
+  signal Local_Bits : Bits_T(-1 to 2);
+begin
+  Result <= Source;
+  Logic_Bus <= "10100101";
+  Local_Bits <= "1100";
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(array_source.ok());
+    const auto array_design = fsim::elaboration::elaborate(
+        array_source.design, "vhdl:work.array_dut(rtl)");
+    if (!array_design.ok()) {
+        for (const auto& diagnostic : array_design.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(array_design.ok());
+    const auto array_source_signal =
+        array_design.design->find_signal("source");
+    const auto array_result_signal =
+        array_design.design->find_signal("result");
+    const auto array_logic_signal =
+        array_design.design->find_signal("logic_bus");
+    const auto array_local_signal =
+        array_design.design->find_signal("local_bits");
+    assert(
+        array_source_signal && array_result_signal
+        && array_logic_signal && array_local_signal);
+    const auto& array_source_info =
+        array_design.design->signals().at(*array_source_signal);
+    const auto& array_result_info =
+        array_design.design->signals().at(*array_result_signal);
+    const auto& array_logic_info =
+        array_design.design->signals().at(*array_logic_signal);
+    const auto& array_local_info =
+        array_design.design->signals().at(*array_local_signal);
+    assert(
+        array_source_info.vhdl_array
+        && !array_source_info.vhdl_array->unconstrained
+        && array_source_info.width == 4
+        && array_source_info.source_domain
+            == fsim::frontend::ValueDomain::Boolean
+        && array_source_info.nominal_type
+            == array_result_info.nominal_type
+        && array_source_info.packed_range
+        && array_source_info.packed_range->left == 0
+        && array_source_info.packed_range->right == 3
+        && !array_source_info.packed_range->descending);
+    assert(
+        array_logic_info.vhdl_array
+        && array_logic_info.width == 8
+        && array_logic_info.source_domain
+            == fsim::frontend::ValueDomain::Logic9
+        && array_logic_info.vhdl_array->element_spelling
+            == "std_logic"
+        && array_logic_info.vhdl_array->element_named_type.empty()
+        && array_logic_info.packed_range
+        && array_logic_info.packed_range->descending);
+    assert(
+        array_local_info.vhdl_array
+        && array_local_info.width == 4
+        && array_local_info.packed_range
+        && array_local_info.packed_range->left == -1
+        && array_local_info.packed_range->right == 2
+        && !array_local_info.packed_range->descending);
+    auto array_interpreter =
+        array_design.design->create_interpreter();
+    array_interpreter->deposit_signal(
+        *array_source_signal,
+        fsim::runtime::PackedLogic4::from_msb_string("1010"));
+    array_interpreter->start();
+    (void)array_interpreter->run();
+    assert(
+        array_interpreter->signal_value(*array_result_signal)
+            .to_msb_string()
+            == "1010");
+    assert(
+        array_interpreter->signal_value(*array_logic_signal)
+            .to_msb_string()
+            == "10100101");
+    assert(
+        array_interpreter->signal_value(*array_local_signal)
+            .to_msb_string()
+            == "1100");
+
+    const auto invalid_array_source =
+        fsim::frontend::parse_text(
+            "invalid_vhdl_arrays.vhd",
+            R"(
+package Invalid_Array_Types is
+  type A_T is array (natural range <>) of bit;
+  type B_T is array (natural range <>) of bit;
+  type Fixed_T is array (3 downto 0) of bit;
+end package;
+
+use work.invalid_array_types.all;
+entity Invalid_Array_Child is
+  port (Value : in A_T(0 to 3));
+end entity;
+use work.invalid_array_types.all;
+architecture rtl of Invalid_Array_Child is
+begin
+end architecture;
+
+use work.invalid_array_types.all;
+entity Invalid_Arrays is
+end entity;
+use work.invalid_array_types.all;
+architecture rtl of Invalid_Arrays is
+  subtype Bad_Reconstraint_T is Fixed_T(1 downto 0);
+  type Nested_T is array (0 to 1) of A_T;
+  signal Null_Array : A_T(3 to 0);
+  signal Negative_Natural : A_T(-1 to 2);
+  signal Unconstrained : A_T;
+  signal A : A_T(0 to 3);
+  signal B : B_T(0 to 3);
+  signal Equal : boolean;
+begin
+  B <= A;
+  Equal <= A = B;
+  Equal <= A < A;
+  Child : entity work.Invalid_Array_Child(rtl)
+    port map (Value => B);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_array_source.ok());
+    const auto invalid_array_design =
+        fsim::elaboration::elaborate(
+            invalid_array_source.design,
+            "vhdl:work.invalid_arrays(rtl)");
+    assert(!invalid_array_design.ok());
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAY-001"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAY-002"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAY-003"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAY-005"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAY-006"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAY-007"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHSUBTYPE-004"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-BIND-056"));
+
+    const auto foreign_array_parent =
+        fsim::frontend::parse_text(
+            "foreign_array_parent.sv",
+            R"(
+module foreign_array_parent;
+  logic [3:0] value;
+  invalid_array_child child(.value(value));
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(foreign_array_parent.ok());
+    auto mixed_array_design =
+        invalid_array_source.design;
+    mixed_array_design.units.insert(
+        mixed_array_design.units.end(),
+        foreign_array_parent.design.units.begin(),
+        foreign_array_parent.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        foreign_array_binding{
+            {
+                "foreign_array_parent.child",
+                "vhdl:work.invalid_array_child(rtl)",
+                std::nullopt}};
+    const auto rejected_foreign_array =
+        fsim::elaboration::elaborate(
+            mixed_array_design,
+            "sv:work.foreign_array_parent",
+            foreign_array_binding);
+    assert(
+        !rejected_foreign_array.ok()
+        && has_diagnostic(
+            rejected_foreign_array,
+            "FSIM-ELAB-BIND-055"));
+
     const auto random_source = fsim::frontend::parse_text(
         "random.sv",
         R"(

@@ -1696,6 +1696,137 @@ end architecture;
       "malformed and duplicate subtype declarations have stable diagnostics");
 }
 
+void test_vhdl_array_type_declarations() {
+  const auto parsed = parse_text(
+      "array_types.vhd",
+      R"(
+package Scalar_Types is
+  subtype External_Logic_T is std_logic;
+end package;
+
+package Array_Types is
+  subtype Logic_Element_T is std_logic;
+  type Flags_T is array (natural range <>) of boolean;
+  subtype Quartet_T is Flags_T(0 to 3);
+  type Logic_Bus_T is array (7 downto 0) of std_logic;
+  type Selected_T is array (positive range 1 to 4)
+    of Logic_Element_T;
+  type Direct_Selected_T is array (0 to 1)
+    of work.scalar_types.external_logic_t;
+end package;
+
+use work.array_types.all;
+entity Array_Endpoint is
+  port (
+    Flags : in Quartet_T;
+    Logic_Bus : out Logic_Bus_T
+  );
+  type Local_Bits_T is array (integer range <>) of bit;
+  subtype Local_Byte_T is Local_Bits_T(0 to 7);
+end entity;
+
+use work.array_types.all;
+architecture rtl of Array_Endpoint is
+  signal Local : Local_Byte_T;
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      parsed.ok(),
+      "constrained and unconstrained one-dimensional VHDL arrays parse");
+  const auto* package =
+      parsed.design.find(UnitKind::VhdlPackage, "array_types");
+  require(
+      package != nullptr && package->type_aliases.size() == 6,
+      "array package retains scalar alias, array declarations, and subtype");
+  const auto& flags = package->type_aliases[1];
+  require(
+      flags.declaration_kind == TypeDeclarationKind::VhdlArray
+          && flags.type.vhdl_array
+          && flags.type.vhdl_array->unconstrained
+          && flags.type.vhdl_array->index_subtype == "natural"
+          && flags.type.vhdl_array->index_base_range
+          && flags.type.vhdl_array->index_base_range->left == 0
+          && flags.type.vhdl_array->element_domain
+              == ValueDomain::Boolean
+          && flags.type.nominal_type.find(":flags_t")
+              != std::string::npos
+          && !flags.type.width(),
+      "unconstrained array HIR retains nominal/index/element metadata");
+  const auto& quartet = package->type_aliases[2];
+  require(
+      quartet.declaration_kind == TypeDeclarationKind::VhdlSubtype
+          && quartet.type.named_type == "flags_t"
+          && quartet.type.packed_range
+          && quartet.type.packed_range->left == 0
+          && quartet.type.packed_range->right == 3
+          && quartet.type.packed_range_expression
+          && quartet.type.width() == 4,
+      "constrained array subtype HIR retains its unresolved base and bounds");
+  const auto& logic_bus = package->type_aliases[3];
+  require(
+      logic_bus.declaration_kind == TypeDeclarationKind::VhdlArray
+          && logic_bus.type.vhdl_array
+          && !logic_bus.type.vhdl_array->unconstrained
+          && logic_bus.type.domain == ValueDomain::Logic9
+          && logic_bus.type.packed_range
+          && logic_bus.type.packed_range->left == 7
+          && logic_bus.type.packed_range->right == 0
+          && logic_bus.type.packed_range->descending
+          && logic_bus.type.width() == 8,
+      "constrained array declaration retains direction and packed width");
+  const auto& selected = package->type_aliases[4];
+  require(
+      selected.type.vhdl_array
+          && selected.type.vhdl_array->index_subtype == "positive"
+          && selected.type.vhdl_array->element_named_type
+              == "logic_element_t"
+          && selected.type.domain == ValueDomain::Unknown
+          && selected.type.width() == 4,
+      "named scalar element subtype remains unresolved in frontend HIR");
+  require(
+      package->type_aliases[5].type.vhdl_array
+          && package->type_aliases[5]
+                 .type.vhdl_array->element_named_type
+              == "work.scalar_types.external_logic_t",
+      "directly selected package element subtype remains qualified in HIR");
+  const auto* entity =
+      parsed.design.find(UnitKind::VhdlEntity, "array_endpoint");
+  require(
+      entity != nullptr && entity->type_aliases.size() == 2
+          && entity->type_aliases[0].declaration_kind
+              == TypeDeclarationKind::VhdlArray
+          && entity->type_aliases[0].type.vhdl_array
+          && entity->type_aliases[0].type.vhdl_array->index_subtype
+              == "integer"
+          && entity->type_aliases[1].type.named_type
+              == "local_bits_t",
+      "entity-local array declarations and constrained subtypes are retained");
+
+  const auto rejected = parse_text(
+      "invalid_array_types.vhd",
+      R"(
+package Invalid_Arrays is
+  type Matrix_T is array (0 to 1, 0 to 1) of bit;
+  type Composite_T is array (0 to 1) of bit_vector(1 downto 0);
+  type Bad_Index_T is array (boolean range <>) of bit;
+end package;
+)",
+      Language::Vhdl2008);
+  require(
+      !rejected.ok()
+          && std::ranges::count_if(
+                 rejected.diagnostics,
+                 [](const Diagnostic& diagnostic) {
+                   return diagnostic.code
+                       == "FSIM-VHDL-UNSUPPORTED-027";
+                 })
+              >= 3,
+      "multidimensional, composite-element, and invalid-index arrays are "
+      "targeted rather than silently accepted");
+}
+
 void test_vhdl_enumeration_declarations() {
   const auto result = parse_text(
       "enumeration_declarations.vhd",
@@ -7817,6 +7948,7 @@ int main() {
     test_signed_type_and_expression_nodes();
     test_vhdl_runtime_integer_nodes();
     test_vhdl_subtype_declarations();
+    test_vhdl_array_type_declarations();
     test_vhdl_enumeration_declarations();
     test_vhdl_enumeration_attributes();
     test_vhdl_enumeration_subtype_ranges();

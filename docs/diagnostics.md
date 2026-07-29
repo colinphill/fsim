@@ -214,6 +214,12 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-140` | error | A VHDL enumeration declaration is missing its closing parenthesis. |
 | `FSIM-VHDL-PARSE-141` | error | A VHDL enumeration declaration is missing its terminating semicolon. |
 | `FSIM-VHDL-PARSE-142` | error | A one-argument VHDL enumeration scalar attribute is missing its parenthesized argument. |
+| `FSIM-VHDL-PARSE-143` | error | A VHDL array declaration is missing its opening parenthesis. |
+| `FSIM-VHDL-PARSE-144` | error | An unconstrained VHDL array index has a malformed `<>` box. |
+| `FSIM-VHDL-PARSE-145` | error | A constrained VHDL array index is missing `to` or `downto`. |
+| `FSIM-VHDL-PARSE-146` | error | A VHDL array index definition is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-147` | error | A VHDL array declaration is missing `of` before its element subtype. |
+| `FSIM-VHDL-PARSE-148` | error | A VHDL array type declaration is missing its terminating semicolon. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -274,6 +280,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
 | `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element requires guarded-signal driver disconnection, which is not executable yet. |
 | `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
+| `FSIM-VHDL-UNSUPPORTED-027` | error | A VHDL array declaration has multiple dimensions, a noninteger index subtype, or an element outside the current scalar packed subset. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -701,6 +708,13 @@ therefore excluded.
 | `FSIM-ELAB-VHSUBTYPE-002` | error | A derived integer subtype constraint lies outside its resolved base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-003` | error | A packed index constraint is applied to a scalar, record, or otherwise nonarray base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-004` | error | A constrained packed-array subtype is constrained again. |
+| `FSIM-ELAB-VHARRAY-001` | error | A VHDL array element subtype resolves to an unsupported composite, integer, enumeration, unknown, or nonscalar type. |
+| `FSIM-ELAB-VHARRAY-002` | error | A VHDL array constraint is null and cannot be represented by the current packed runtime. |
+| `FSIM-ELAB-VHARRAY-003` | error | A VHDL array constraint lies outside its `integer`, `natural`, or `positive` index subtype. |
+| `FSIM-ELAB-VHARRAY-004` | error | A VHDL array constraint width overflows the packed runtime representation. |
+| `FSIM-ELAB-VHARRAY-005` | error | A VHDL array object uses an unconstrained or otherwise nonconcrete array subtype. |
+| `FSIM-ELAB-VHARRAY-006` | error | Assignment or comparison mixes values from different nominal VHDL array types. |
+| `FSIM-ELAB-VHARRAY-007` | error | An operator other than equality or inequality is applied to a VHDL array value in the current bounded semantic path. |
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |
@@ -793,6 +807,8 @@ therefore excluded.
 | `FSIM-ELAB-BIND-052` | error | A VHDL enumeration crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-053` | error | A same-language VHDL hierarchy boundary connects different nominal enumeration types. |
 | `FSIM-ELAB-BIND-054` | error | Same-language VHDL enumeration subtype ranges cannot guarantee a range-safe alias in the port's data-flow direction. |
+| `FSIM-ELAB-BIND-055` | error | A VHDL array crosses a language boundary without a same-language scalar/vector wrapper. |
+| `FSIM-ELAB-BIND-056` | error | A same-language VHDL hierarchy boundary connects different nominal array types. |
 
 ## Time, runtime, trace, and design cache
 

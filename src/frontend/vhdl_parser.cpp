@@ -788,6 +788,164 @@ class VhdlParser final : private detail::ParserBase {
     }
     expect_keyword(
         "is", true, "FSIM-VHDL-PARSE-127");
+    if (match_keyword("array", true)) {
+      Type type;
+      type.spelling = canonical_name;
+      type.nominal_type =
+          start.span.source_name + ":"
+          + std::to_string(start.span.begin.offset) + ":"
+          + canonical_name;
+      VhdlArrayInfo array;
+
+      expect(
+          TokenKind::LeftParen,
+          "'(' after array",
+          "FSIM-VHDL-PARSE-143");
+      const auto index_start = current();
+      bool has_range = false;
+      bool unconstrained = false;
+      std::optional<Expression> left_expression;
+      std::optional<Expression> right_expression;
+      SourceSpan index_range_span;
+      bool descending = false;
+
+      if (at(TokenKind::Identifier)
+          && keyword("range", 1, true)) {
+        const auto index_type = advance();
+        array.index_subtype =
+            vhdl_name(index_type.text);
+        array.index_span = index_type.span;
+        match_keyword("range", true);
+        has_range = true;
+        if (match(TokenKind::Less)) {
+          unconstrained = true;
+          expect(
+              TokenKind::Greater,
+              "'>' in unconstrained array index '<>'",
+              "FSIM-VHDL-PARSE-144");
+        }
+      } else {
+        array.index_subtype = "integer";
+        array.index_span = index_start.span;
+        has_range = true;
+      }
+
+      constexpr auto integer_first =
+          std::int64_t{std::numeric_limits<std::int32_t>::min()};
+      constexpr auto integer_last =
+          std::int64_t{std::numeric_limits<std::int32_t>::max()};
+      if (array.index_subtype == "integer") {
+        array.index_base_range =
+            IntegerRange{integer_first, integer_last, false};
+      } else if (array.index_subtype == "natural") {
+        array.index_base_range =
+            IntegerRange{0, integer_last, false};
+      } else if (array.index_subtype == "positive") {
+        array.index_base_range =
+            IntegerRange{1, integer_last, false};
+      } else {
+        error(
+            index_start,
+            "FSIM-VHDL-UNSUPPORTED-027",
+            "one-dimensional VHDL arrays currently require an integer, "
+            "natural, or positive index subtype");
+      }
+
+      if (has_range && !unconstrained) {
+        left_expression = parse_expression();
+        if (match_keyword("downto", true)) {
+          descending = true;
+        } else if (match_keyword("to", true)) {
+          descending = false;
+        } else {
+          error(
+              current(),
+              "FSIM-VHDL-PARSE-145",
+              "expected 'to' or 'downto' in array index range");
+        }
+        right_expression = parse_expression();
+        index_range_span =
+            cover(index_start.span, previous().span);
+      }
+      if (match(TokenKind::Comma)) {
+        error(
+            previous(),
+            "FSIM-VHDL-UNSUPPORTED-027",
+            "multidimensional VHDL array declarations are not implemented");
+        while (!at_end() && !at(TokenKind::RightParen)
+               && !at(TokenKind::Semicolon)) {
+          advance();
+        }
+      }
+      expect(
+          TokenKind::RightParen,
+          "')' after array index definition",
+          "FSIM-VHDL-PARSE-146");
+      expect_keyword(
+          "of", true, "FSIM-VHDL-PARSE-147");
+      const auto element_start = current();
+      const auto element_type =
+          parse_vhdl_type(true, true);
+      const bool unresolved_element =
+          !element_type.named_type.empty();
+      const auto element_width = element_type.width();
+      const bool supported_element =
+          unresolved_element
+          || (element_width && *element_width == 1
+              && element_type.packed_members.empty()
+              && element_type.enumeration_literals.empty()
+              && element_type.domain != ValueDomain::Integer
+              && element_type.domain != ValueDomain::Unknown);
+      if (!supported_element) {
+        error(
+            element_start,
+            "FSIM-VHDL-UNSUPPORTED-027",
+            "one-dimensional VHDL arrays currently require a scalar bit, "
+            "Boolean, std_logic, std_ulogic, or visible scalar subtype "
+            "element");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after array type declaration",
+          "FSIM-VHDL-PARSE-148");
+
+      array.element_spelling = element_type.spelling;
+      array.element_named_type = element_type.named_type;
+      array.element_span =
+          element_type.named_type_span.source_name.empty()
+              ? element_start.span
+              : element_type.named_type_span;
+      array.element_domain = element_type.domain;
+      array.unconstrained = unconstrained;
+      type.domain = element_type.domain;
+      type.vhdl_array = std::move(array);
+      if (left_expression && right_expression) {
+        const auto left =
+            simple_integer_constant(*left_expression);
+        const auto right =
+            simple_integer_constant(*right_expression);
+        if (left && right) {
+          type.packed_range =
+              PackedRange{*left, *right, descending};
+        }
+        type.packed_range_expression =
+            PackedRangeExpression{
+                std::move(*left_expression),
+                std::move(*right_expression),
+                index_range_span,
+                descending};
+      }
+      if (!duplicate && supported_element) {
+        vhdl_named_types_.insert(canonical_name);
+        unit.type_aliases.push_back(TypeAliasDeclaration{
+            canonical_name,
+            std::move(type),
+            span_from(start, previous()),
+            {},
+            TypeDeclarationKind::VhdlArray});
+      }
+      return;
+    }
     if (match(TokenKind::LeftParen)) {
       Type type;
       type.spelling = canonical_name;

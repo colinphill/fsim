@@ -1709,17 +1709,55 @@ void substitute_parameters(
         *right,
         type.packed_range_expression->descending.value_or(
             *left >= *right)};
+    if (type.vhdl_array) {
+        const bool null =
+            range.descending ? range.left < range.right
+                             : range.left > range.right;
+        if (null) {
+            diagnostics.push_back({
+                "FSIM-ELAB-VHARRAY-002",
+                "null VHDL array constraints are not executable in the "
+                "current packed runtime",
+                type.packed_range_expression->span});
+            type.packed_range.reset();
+            type.packed_range_expression.reset();
+            return;
+        }
+        if (type.vhdl_array->index_base_range
+            && (!type.vhdl_array->index_base_range->contains(range.left)
+                || !type.vhdl_array->index_base_range->contains(
+                    range.right))) {
+            diagnostics.push_back({
+                "FSIM-ELAB-VHARRAY-003",
+                "VHDL array constraint lies outside index subtype '"
+                    + type.vhdl_array->index_subtype + "'",
+                type.packed_range_expression->span});
+            type.packed_range.reset();
+            type.packed_range_expression.reset();
+            return;
+        }
+    }
     if (range.width() == 0) {
         diagnostics.push_back({
-            language == frontend::Language::Vhdl2008
+            type.vhdl_array
+                ? "FSIM-ELAB-VHARRAY-004"
+                : language == frontend::Language::Vhdl2008
                 ? "FSIM-ELAB-GENERIC-007"
                 : "FSIM-ELAB-PARAM-007",
-            "packed range width overflows fsim's 64-bit range",
+            type.vhdl_array
+                ? "VHDL array constraint width overflows fsim's 64-bit "
+                  "packed representation"
+                : "packed range width overflows fsim's 64-bit range",
             type.packed_range_expression->span});
+        type.packed_range.reset();
+        type.packed_range_expression.reset();
         return;
     }
     type.packed_range = range;
     type.packed_range_expression.reset();
+    if (type.vhdl_array) {
+        type.vhdl_array->unconstrained = false;
+    }
 }
 
 void substitute_parameters(
@@ -6585,6 +6623,24 @@ private:
                   || source_type == nullptr) {
                   return true;
               }
+              const bool expected_array =
+                  expected_type->vhdl_array.has_value();
+              const bool source_array =
+                  source_type->vhdl_array.has_value();
+              if (expected_array || source_array) {
+                  if (expected_array && source_array
+                      && expected_type->nominal_type
+                          == source_type->nominal_type) {
+                      return true;
+                  }
+                  report(
+                      "FSIM-ELAB-VHARRAY-006",
+                      "VHDL array values require the same nominal type; "
+                      "expected '" + expected_type->spelling
+                          + "' but found '" + source_type->spelling + "'",
+                      expression.span);
+                  return false;
+              }
               const bool expected_enumeration =
                   !expected_type->enumeration_literals.empty();
               const bool source_enumeration =
@@ -7061,6 +7117,15 @@ private:
         }
         if (expression.kind == ExpressionKind::Slice
             && expression.operands.size() == 3) {
+            if (language_ == frontend::Language::Vhdl2008
+                && expected_type != nullptr
+                && expected_type->vhdl_array
+                && expression.operands[0].kind
+                    == ExpressionKind::Identifier
+                && !enumeration_context_compatible(
+                    object_type(expression.operands[0].text))) {
+                return std::nullopt;
+            }
             const auto source_width =
                 infer_width(expression.operands[0]);
             const auto selection =
@@ -8446,16 +8511,28 @@ private:
         }
         if (expression.kind == ExpressionKind::Binary && expression.operands.size() == 2) {
             const frontend::Type* binary_context_type = nullptr;
+            const auto expression_object_type =
+                [&](const Expression& operand)
+                    -> const frontend::Type* {
+                  if (operand.kind == ExpressionKind::Identifier) {
+                      return object_type(operand.text);
+                  }
+                  if ((operand.kind == ExpressionKind::Index
+                       || operand.kind == ExpressionKind::Slice)
+                      && !operand.operands.empty()
+                      && operand.operands[0].kind
+                          == ExpressionKind::Identifier) {
+                      return object_type(
+                          operand.operands[0].text);
+                  }
+                  return nullptr;
+                };
             const frontend::Type* lhs_object_type =
-                expression.operands[0].kind
-                        == ExpressionKind::Identifier
-                    ? object_type(expression.operands[0].text)
-                    : nullptr;
+                expression_object_type(
+                    expression.operands[0]);
             const frontend::Type* rhs_object_type =
-                expression.operands[1].kind
-                        == ExpressionKind::Identifier
-                    ? object_type(expression.operands[1].text)
-                    : nullptr;
+                expression_object_type(
+                    expression.operands[1]);
             const auto* lhs_enumeration_type =
                 enumeration_expression_type(
                     expression.operands[0]);
@@ -8491,6 +8568,42 @@ private:
                             ->packed_members.empty()) {
                         binary_context_type = nullptr;
                     }
+                }
+            }
+            if (language_ == frontend::Language::Vhdl2008) {
+                const bool lhs_array =
+                    lhs_object_type != nullptr
+                    && lhs_object_type->vhdl_array.has_value();
+                const bool rhs_array =
+                    rhs_object_type != nullptr
+                    && rhs_object_type->vhdl_array.has_value();
+                if (lhs_array || rhs_array) {
+                    if (expression.text != "="
+                        && expression.text != "/=") {
+                        report(
+                            "FSIM-ELAB-VHARRAY-007",
+                            "operator '" + expression.text
+                                + "' is not implemented for VHDL array "
+                                  "values",
+                            expression.span);
+                        return std::nullopt;
+                    }
+                    if (lhs_object_type != nullptr
+                        && rhs_object_type != nullptr
+                        && (!lhs_array || !rhs_array
+                            || lhs_object_type->nominal_type
+                                != rhs_object_type->nominal_type)) {
+                        report(
+                            "FSIM-ELAB-VHARRAY-006",
+                            "VHDL array values require the same nominal "
+                            "type in equality expressions",
+                            expression.span);
+                        return std::nullopt;
+                    }
+                    binary_context_type =
+                        lhs_array
+                            ? lhs_object_type
+                            : rhs_object_type;
                 }
             }
             const bool lhs_enumeration =
@@ -10262,6 +10375,8 @@ private:
             type_environment);
         import_qualified_vhdl_package_constants(
             effective_package, import_stack);
+        import_qualified_vhdl_package_types(
+            effective_package, type_environment, import_stack);
         resolve_named_types(
             effective_package, type_environment, true);
         for (const auto& [name, binding] : type_environment) {
@@ -10499,7 +10614,16 @@ private:
                         type.named_type,
                         type.named_type_span);
                 }
-            });
+                if (type.vhdl_array
+                    && !type.vhdl_array->element_named_type.empty()
+                    && type.vhdl_array->element_named_type.find('.')
+                        != std::string::npos) {
+                    referenced_types.try_emplace(
+                        type.vhdl_array->element_named_type,
+                        type.vhdl_array->element_span);
+                }
+            },
+            true);
         std::vector<std::string> ordered;
         ordered.reserve(referenced_types.size());
         for (const auto& [name, span] : referenced_types) {
@@ -10991,7 +11115,8 @@ private:
             [&](const frontend::Type& type) {
                 const auto name =
                     simple_type_name(type.spelling);
-                return name == "bit_vector"
+                return type.vhdl_array.has_value()
+                    || name == "bit_vector"
                     || name == "std_logic_vector"
                     || name == "std_ulogic_vector"
                     || name == "signed"
@@ -11135,6 +11260,9 @@ private:
                         derived.packed_range;
                     base.packed_range_expression =
                         derived.packed_range_expression;
+                    if (base.vhdl_array) {
+                        base.vhdl_array->unconstrained = false;
+                    }
                 }
                 return base;
             };
@@ -11165,6 +11293,42 @@ private:
             return resolved;
         };
         resolve_type = [&](frontend::Type& type) {
+            if (type.vhdl_array
+                && !type.vhdl_array->element_named_type.empty()) {
+                frontend::Type element;
+                element.spelling =
+                    type.vhdl_array->element_spelling;
+                element.named_type =
+                    type.vhdl_array->element_named_type;
+                element.named_type_span =
+                    type.vhdl_array->element_span;
+                if (!resolve_type(element)) {
+                    return false;
+                }
+                const auto width = element.width();
+                if (!width || *width != 1
+                    || element.vhdl_array
+                    || !element.packed_members.empty()
+                    || !element.enumeration_literals.empty()
+                    || element.domain
+                        == frontend::ValueDomain::Integer
+                    || element.domain
+                        == frontend::ValueDomain::Unknown) {
+                    report(
+                        "FSIM-ELAB-VHARRAY-001",
+                        "VHDL array type '" + type.spelling
+                            + "' requires a resolved scalar bit, Boolean, "
+                              "std_logic, or std_ulogic element subtype",
+                        type.vhdl_array->element_span);
+                    return false;
+                }
+                type.vhdl_array->element_domain =
+                    element.domain;
+                type.vhdl_array->element_spelling =
+                    element.spelling;
+                type.vhdl_array->element_named_type.clear();
+                type.domain = element.domain;
+            }
             if (type.named_type.empty()) {
                 return !vhdl
                     || validate_direct_constraints(type);
@@ -11636,6 +11800,15 @@ private:
                 declaration.span);
             return std::nullopt;
         }
+        if (declaration.type.vhdl_array
+            && !declaration.type.width()) {
+            report(
+                "FSIM-ELAB-VHARRAY-005",
+                "VHDL array object '" + declaration.name
+                    + "' requires a concrete non-null index constraint",
+                declaration.span);
+            return std::nullopt;
+        }
         const auto width = declaration.type.width().value_or(1);
         if (width == 0 || width > std::numeric_limits<std::size_t>::max()) {
             report(
@@ -11669,6 +11842,7 @@ private:
             declaration.type.domain,
             declaration.type.is_signed,
             declaration.type.packed_range,
+            declaration.type.vhdl_array,
             declaration.type.packed_members,
             declaration.type.integer_range,
             declaration.type.nominal_type,
@@ -11806,6 +11980,34 @@ private:
                 "packed aggregate boundary '" + path + "."
                     + port.name
                     + "' requires a same-language scalar/vector wrapper",
+                source);
+            return;
+        }
+        const bool port_array =
+            port.type.vhdl_array.has_value();
+        const bool actual_array =
+            actual.vhdl_array.has_value();
+        if (cross_language
+            && (port_array || actual_array)) {
+            report(
+                "FSIM-ELAB-BIND-055",
+                "VHDL array boundary '" + path + "."
+                    + port.name
+                    + "' requires a same-language scalar/vector wrapper",
+                source);
+            return;
+        }
+        if (!cross_language
+            && (port_array || actual_array)
+            && (!port_array
+                || !actual_array
+                || port.type.nominal_type
+                    != actual.nominal_type)) {
+            report(
+                "FSIM-ELAB-BIND-056",
+                "VHDL array boundary '" + path + "."
+                    + port.name
+                    + "' requires the same nominal array type",
                 source);
             return;
         }
