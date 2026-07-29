@@ -1318,8 +1318,14 @@ event-controlled forms wait before reading their RHS; delayed NBAs use the
 existing transport update callbacks without an ABI change. Direct runtime
 coverage proves stable cross-process ordering independently of HDL
 multi-driver legality, while the source differential uses legal single-driver
-same-slot/equal-deadline cases. The full local regression and push gate remain
-pending.
+same-slot/equal-deadline cases.
+
+After feature commit `dfc5014`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 31 tests in 72.31 seconds on 2026-07-28. The
+gate includes fetched Boost.Context 1.91.0, fetched Tcl 9.0.4 and relocation,
+SystemC plug-in/fiber coverage, LLVM/C ABI tests, interpreter/LLVM
+differentials, VCD, cache, debugger-facing application tests, and the new
+procedural-assignment target. No CI state was inspected for this local gate.
 
 ## v1 release condition
 
