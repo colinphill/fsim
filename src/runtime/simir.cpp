@@ -2932,6 +2932,11 @@ struct Interpreter::Impl::ExecutionContext final
     return owner.get_signal(signal).initial_value.low_word();
   }
 
+  [[nodiscard]] Logic9Word
+  read_signal_logic9_word(const SignalId signal) const override {
+    return owner.get_signal(signal).initial_value.logic9_low_word();
+  }
+
   void write_blocking(
       const SignalId signal, PackedLogic4 value) override {
     owner.commit_driver(process, signal, std::move(value));
@@ -3179,6 +3184,13 @@ struct Interpreter::Impl::ExecutionContext final
   signal_last_value_word(const SignalId signal) const override {
     (void)owner.get_signal(signal);
     return owner.signal_last_values[signal].low_word();
+  }
+
+  [[nodiscard]] Logic9Word
+  signal_last_value_logic9_word(
+      const SignalId signal) const override {
+    (void)owner.get_signal(signal);
+    return owner.signal_last_values[signal].logic9_low_word();
   }
 
   [[nodiscard]] SimulationTick

@@ -85,8 +85,8 @@ The following foundation is implemented:
 - packed 2-, 4-, and 9-state value kernels plus a domain-preserving common
   transport value with exact Logic9 signals, registers, projected
   transactions, driver slots, standard resolution, debug/C API reads, and
-  VCD mapping; exact Logic9 generated code is capability-gated for the next
-  compiler batch;
+  VCD mapping, plus bounded direct LLVM O0/O2 execution through four ordinal
+  planes and append-only exact runtime callbacks for values up to 64 elements;
 - deterministic single-thread scheduling and a typed SimIR interpreter;
 - bounded handwritten VHDL-2008 and Verilog/SystemVerilog frontends;
 - executable SystemVerilog procedural lexical blocks with named-scope
@@ -110,7 +110,8 @@ The following foundation is implemented:
   metadata, canonical retained-value reads, and explicit unavailable state
   before a lexical block first executes;
 - an LLVM 22.1.8 ORC adapter with caller-owned resumable process frames for
-  processes whose value-bearing operations are up to 64 bits, with O0/O2
+  processes whose value-bearing operations are up to 64 bits, including
+  append-only caller-owned Logic9 register planes, with O0/O2
   lowering for update-phase/delayed writes plus dynamic/static sensitivity
   waits, integrated as a hybrid per-process engine for `build`/`run` and a
   forced-O0 hybrid engine for the bounded `debug` path;
@@ -1562,6 +1563,34 @@ independent four-state and integer-only processes remain eligible within the
 same design. The LLVM 22.1.8 Release/Werror regression passed 35/35 tests in
 82.35 seconds after updating older collapsed-`X` and compiled-process cache
 expectations. No CI state was inspected for this local gate.
+
+### Thirty-sixth feature batch — direct LLVM Logic9 execution
+
+The planned ten implementation features are:
+
+1. Append four-plane Logic9 words and projected-waveform elements to the
+   versioned plain-C JIT ABI without changing existing field offsets.
+2. Append caller-owned third/fourth register-plane storage to resumable
+   process frames and validate it only for processes that require Logic9.
+3. Carry register and signal value kinds into lowering and native-object
+   cache identity so mixed four-/nine-state modules remain deterministic.
+4. Lower exact Logic9 constants, signal reads, last-value reads, copies,
+   extracts, inserts, concatenations, shifts, and rotations directly.
+5. Lower complete IEEE `std_logic_1164` elementwise NOT/AND/OR/XOR tables and
+   exact equality over bit-sliced ordinal planes.
+6. Convert explicitly between ordinal Logic9 planes and aval/bval Logic4
+   planes at mixed-domain register and signal boundaries without lossy
+   implicit access.
+7. Add direct Logic9 blocking, update, delayed, inertial, projected, partial,
+   and atomic waveform callbacks to the kernel-owned scheduler.
+8. Preserve exact compiled locals through debugger reads/writes and retain
+   O0 safe-point frame visibility.
+9. Exercise exact O0/O2 generated execution, native cache hits, mixed
+   ownership, resolution, projected transactions, VCD, and interpreter/JIT
+   equivalence in focused tests.
+10. Restore compiled-process expectations for newly supported VHDL processes,
+    update VH-015 documentation, then run and push the full local regression
+    gate.
 
 ## v1 release condition
 

@@ -242,11 +242,11 @@ a lower-state domain must be explicit whenever information could be lost.
 The common packed value retains either the inline `aval`/`bval` Logic4
 representation or four ordinal Logic9 planes. It exposes checked
 allocation-free `Logic4Word` and `Logic9Word` representations for widths up to
-64 elements and rejects a lossy Logic9-to-aval/bval request. The current
-external-executor and generated-code callbacks use only the Logic4 word path;
-per-process/per-signal SimIR value-kind metadata prevents an exact Logic9
-process from entering that subset until the appended Logic9 callback path is
-implemented.
+64 elements and rejects a lossy Logic9-to-aval/bval request. The generated
+runtime ABI preserves its original v1 prefix and appends pointer-based
+four-plane Logic9 callbacks plus caller-owned third/fourth register planes.
+Per-process/per-signal SimIR value-kind metadata selects the correct path and
+drives explicit conversion at mixed-domain boundaries.
 
 Simulation time is an unsigned 64-bit tick count at one elaborated global
 resolution. The v1 elaborator will select the finest declared VHDL, SV, or

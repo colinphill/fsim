@@ -3493,9 +3493,11 @@ end architecture rtl;
             reference.native_cache
             == fsim::app::NativeCacheStatistics{});
 #if defined(FSIM_HAS_LLVM)
+        assert(hybrid.compiled_processes > 0);
         assert(
             hybrid.compiled_processes
             <= hybrid.process_count);
+        assert(hybrid.compiled_modules > 0);
         assert(
             hybrid.compiled_modules
             <= hybrid.compiled_processes);
@@ -3534,6 +3536,10 @@ end architecture rtl;
     compare_captures(reference, hybrid);
 #if defined(FSIM_HAS_LLVM)
     assert(hybrid.process_count == 2);
+    assert(
+        hybrid.compiled_processes
+        == hybrid.process_count);
+    assert(hybrid.compiled_modules == 2);
 #endif
 
     auto warm_project = fsim::app::build_project(
@@ -3905,8 +3911,8 @@ end architecture rtl;
   assert(vhdl_wait_hybrid.result.time == 4);
   assert(vhdl_wait_hybrid.process_count == 1);
 #if defined(FSIM_HAS_LLVM)
-  assert(vhdl_wait_hybrid.compiled_processes == 0);
-  assert(vhdl_wait_hybrid.compiled_modules == 0);
+  assert(vhdl_wait_hybrid.compiled_processes == 1);
+  assert(vhdl_wait_hybrid.compiled_modules == 1);
 #endif
   const decltype(vhdl_wait_reference.changes)
       expected_vhdl_wait_changes = {
@@ -4358,8 +4364,8 @@ end architecture rtl;
   assert(vhdl_select_concat_hybrid.result.time == 5);
   assert(vhdl_select_concat_hybrid.process_count == 4);
 #if defined(FSIM_HAS_LLVM)
-  assert(vhdl_select_concat_hybrid.compiled_processes == 0);
-  assert(vhdl_select_concat_hybrid.compiled_modules == 0);
+  assert(vhdl_select_concat_hybrid.compiled_processes == 4);
+  assert(vhdl_select_concat_hybrid.compiled_modules == 1);
 #endif
   assert((
       vhdl_select_concat_hybrid.final_values
@@ -4408,8 +4414,8 @@ end architecture rtl;
   assert(vhdl_signed_hybrid.result.time == 0);
   assert(vhdl_signed_hybrid.process_count == 3);
 #if defined(FSIM_HAS_LLVM)
-  assert(vhdl_signed_hybrid.compiled_processes == 0);
-  assert(vhdl_signed_hybrid.compiled_modules == 0);
+  assert(vhdl_signed_hybrid.compiled_processes == 3);
+  assert(vhdl_signed_hybrid.compiled_modules == 1);
 #endif
   assert((
       vhdl_signed_hybrid.final_values
@@ -4549,7 +4555,7 @@ end architecture rtl;
 #if defined(FSIM_HAS_LLVM)
     assert(
         vhdl_conditional_statement_hybrid.compiled_processes
-        == 2);
+        == 3);
     assert(
         vhdl_conditional_statement_hybrid.compiled_modules
         == 1);
@@ -4989,11 +4995,11 @@ end architecture rtl;
           generic_cold,
           "vhdl_generic_top.wide_child"));
 #if defined(FSIM_HAS_LLVM)
-  assert(generic_cold.simulation.compiled_processes == 1);
-  assert(generic_cold.simulation.compiled_modules == 1);
+  assert(generic_cold.simulation.compiled_processes == 3);
+  assert(generic_cold.simulation.compiled_modules == 3);
   assert(generic_cold.simulation.native_cache.hits == 0);
-  assert(generic_cold.simulation.native_cache.misses == 1);
-  assert(generic_cold.simulation.native_cache.stores == 1);
+  assert(generic_cold.simulation.native_cache.misses == 3);
+  assert(generic_cold.simulation.native_cache.stores == 3);
 #endif
 
   const auto generic_warm =
@@ -5001,7 +5007,7 @@ end architecture rtl;
           fsim::app::SimulationEngine::compiled, "2");
   assert(generic_warm.keys == generic_cold.keys);
 #if defined(FSIM_HAS_LLVM)
-  assert(generic_warm.simulation.native_cache.hits == 1);
+  assert(generic_warm.simulation.native_cache.hits == 3);
   assert(generic_warm.simulation.native_cache.misses == 0);
 #endif
 
@@ -5038,9 +5044,9 @@ end architecture rtl;
           generic_cold,
           "vhdl_generic_top.wide_child"));
 #if defined(FSIM_HAS_LLVM)
-  assert(generic_changed.simulation.native_cache.hits == 0);
-  assert(generic_changed.simulation.native_cache.misses == 1);
-  assert(generic_changed.simulation.native_cache.stores == 1);
+  assert(generic_changed.simulation.native_cache.hits == 1);
+  assert(generic_changed.simulation.native_cache.misses == 2);
+  assert(generic_changed.simulation.native_cache.stores == 2);
 #endif
 
   write_vhdl_generic_entity("interface revision 2");
@@ -5074,10 +5080,10 @@ end architecture rtl;
       == 1);
   assert(
       generic_interface_changed.simulation.native_cache.misses
-      == 0);
+      == 2);
   assert(
       generic_interface_changed.simulation.native_cache.stores
-      == 0);
+      == 2);
 #endif
 
   const auto package_base_constant_source =
@@ -5263,14 +5269,14 @@ end architecture rtl;
   assert(package_constant_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
   assert(
-      package_constant_cold.simulation.compiled_processes == 0);
+      package_constant_cold.simulation.compiled_processes == 2);
   assert(
-      package_constant_cold.simulation.compiled_modules == 0);
+      package_constant_cold.simulation.compiled_modules == 1);
   assert(package_constant_cold.simulation.native_cache.hits == 0);
   assert(
-      package_constant_cold.simulation.native_cache.misses == 0);
+      package_constant_cold.simulation.native_cache.misses == 1);
   assert(
-      package_constant_cold.simulation.native_cache.stores == 0);
+      package_constant_cold.simulation.native_cache.stores == 1);
 #endif
 
   const auto package_constant_warm =
@@ -5280,7 +5286,7 @@ end architecture rtl;
       package_constant_warm.specialization_key
       == package_constant_cold.specialization_key);
 #if defined(FSIM_HAS_LLVM)
-  assert(package_constant_warm.simulation.native_cache.hits == 0);
+  assert(package_constant_warm.simulation.native_cache.hits == 1);
   assert(
       package_constant_warm.simulation.native_cache.misses == 0);
 #endif
@@ -5295,7 +5301,7 @@ end architecture rtl;
 #if defined(FSIM_HAS_LLVM)
   assert(
       package_unrelated_changed.simulation.native_cache.hits
-      == 0);
+      == 1);
   assert(
       package_unrelated_changed.simulation.native_cache.misses
       == 0);
@@ -5315,9 +5321,9 @@ end architecture rtl;
   assert(
       package_context_changed.simulation.native_cache.hits == 0);
   assert(
-      package_context_changed.simulation.native_cache.misses == 0);
+      package_context_changed.simulation.native_cache.misses == 1);
   assert(
-      package_context_changed.simulation.native_cache.stores == 0);
+      package_context_changed.simulation.native_cache.stores == 1);
 #endif
 
   write_package_constants(9);
@@ -5340,9 +5346,9 @@ end architecture rtl;
   assert(
       package_constant_changed.simulation.native_cache.hits == 0);
   assert(
-      package_constant_changed.simulation.native_cache.misses == 0);
+      package_constant_changed.simulation.native_cache.misses == 1);
   assert(
-      package_constant_changed.simulation.native_cache.stores == 0);
+      package_constant_changed.simulation.native_cache.stores == 1);
 #endif
 
   const auto systemverilog_base_package_source =
@@ -5805,17 +5811,17 @@ endmodule
 #if defined(FSIM_HAS_LLVM)
   assert(
       vhdl_to_sv_actual_cold.simulation.compiled_processes
-      == 1);
+      == 2);
   assert(
-      vhdl_to_sv_actual_cold.simulation.compiled_modules == 1);
+      vhdl_to_sv_actual_cold.simulation.compiled_modules == 2);
   assert(
       vhdl_to_sv_actual_cold.simulation.native_cache.hits == 0);
   assert(
       vhdl_to_sv_actual_cold.simulation.native_cache.misses
-      == 1);
+      == 2);
   assert(
       vhdl_to_sv_actual_cold.simulation.native_cache.stores
-      == 1);
+      == 2);
 #endif
   const auto vhdl_to_sv_actual_warm =
       run_vhdl_to_sv_actual(
@@ -5825,7 +5831,7 @@ endmodule
       == vhdl_to_sv_actual_cold.keys);
 #if defined(FSIM_HAS_LLVM)
   assert(
-      vhdl_to_sv_actual_warm.simulation.native_cache.hits == 1);
+      vhdl_to_sv_actual_warm.simulation.native_cache.hits == 2);
   assert(
       vhdl_to_sv_actual_warm.simulation.native_cache.misses
       == 0);
@@ -6050,15 +6056,15 @@ endmodule
   assert(generated_loop_cold.simulation.process_count == 4);
 #if defined(FSIM_HAS_LLVM)
   assert(
-      generated_loop_cold.simulation.compiled_processes == 1);
+      generated_loop_cold.simulation.compiled_processes == 4);
   assert(
-      generated_loop_cold.simulation.compiled_modules == 1);
+      generated_loop_cold.simulation.compiled_modules == 4);
   assert(
       generated_loop_cold.simulation.native_cache.hits == 0);
   assert(
-      generated_loop_cold.simulation.native_cache.misses == 1);
+      generated_loop_cold.simulation.native_cache.misses == 4);
   assert(
-      generated_loop_cold.simulation.native_cache.stores == 1);
+      generated_loop_cold.simulation.native_cache.stores == 4);
 #endif
   const auto generated_loop_warm =
       run_generated_loop(
@@ -6066,7 +6072,7 @@ endmodule
   assert(generated_loop_warm.keys == generated_loop_cold.keys);
 #if defined(FSIM_HAS_LLVM)
   assert(
-      generated_loop_warm.simulation.native_cache.hits == 1);
+      generated_loop_warm.simulation.native_cache.hits == 4);
   assert(
       generated_loop_warm.simulation.native_cache.misses == 0);
 #endif
@@ -6162,15 +6168,15 @@ endmodule
   assert(generated_case_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
   assert(
-      generated_case_cold.simulation.compiled_processes == 1);
+      generated_case_cold.simulation.compiled_processes == 2);
   assert(
-      generated_case_cold.simulation.compiled_modules == 1);
+      generated_case_cold.simulation.compiled_modules == 2);
   assert(
       generated_case_cold.simulation.native_cache.hits == 0);
   assert(
-      generated_case_cold.simulation.native_cache.misses == 1);
+      generated_case_cold.simulation.native_cache.misses == 2);
   assert(
-      generated_case_cold.simulation.native_cache.stores == 1);
+      generated_case_cold.simulation.native_cache.stores == 2);
 #endif
   const auto generated_case_warm =
       run_generated_case(
@@ -6178,7 +6184,7 @@ endmodule
   assert(generated_case_warm.keys == generated_case_cold.keys);
 #if defined(FSIM_HAS_LLVM)
   assert(
-      generated_case_warm.simulation.native_cache.hits == 1);
+      generated_case_warm.simulation.native_cache.hits == 2);
   assert(
       generated_case_warm.simulation.native_cache.misses == 0);
 #endif
@@ -6275,8 +6281,7 @@ endmodule
       [&](const fsim::project::Config& behavior_config,
           const std::vector<std::string_view>& local_paths,
           const std::vector<std::string>& expected_values,
-          const std::size_t expected_processes,
-          const std::size_t expected_compiled_processes) {
+          const std::size_t expected_processes) {
         const auto reference = run_generated_behavior(
             behavior_config,
             fsim::app::SimulationEngine::interpreter,
@@ -6315,19 +6320,11 @@ endmodule
 #if defined(FSIM_HAS_LLVM)
         assert(
             cold.simulation.compiled_processes
-            == expected_compiled_processes);
-        const auto expected_modules =
-            expected_compiled_processes == 0 ? 0U : 1U;
-        assert(
-            cold.simulation.compiled_modules
-            == expected_modules);
+            == expected_processes);
+        assert(cold.simulation.compiled_modules == 1);
         assert(cold.simulation.native_cache.hits == 0);
-        assert(
-            cold.simulation.native_cache.misses
-            == expected_modules);
-        assert(
-            cold.simulation.native_cache.stores
-            == expected_modules);
+        assert(cold.simulation.native_cache.misses == 1);
+        assert(cold.simulation.native_cache.stores == 1);
 #endif
         const auto warm = run_generated_behavior(
             behavior_config,
@@ -6335,9 +6332,7 @@ endmodule
             local_paths);
         assert(warm.keys == cold.keys);
 #if defined(FSIM_HAS_LLVM)
-        assert(
-            warm.simulation.native_cache.hits
-            == expected_modules);
+        assert(warm.simulation.native_cache.hits == 1);
         assert(warm.simulation.native_cache.misses == 0);
 #endif
       };
@@ -6345,38 +6340,32 @@ endmodule
       generated_behavior_sv_config,
       {"selected.generated_value"},
       {"0110", "0101"},
-      2,
       2);
   verify_generated_behavior(
       generated_behavior_vhdl_config,
       {"chosen.generated_value"},
       {"0111", "0110"},
-      2,
-      0);
+      2);
   verify_generated_behavior(
       generated_range_behavior_vhdl_config,
       {},
       {"1001"},
-      1,
-      0);
+      1);
   verify_generated_behavior(
       generated_static_behavior_sv_config,
       {"direct_value", "named_scope.nested_value"},
       {"0100", "0010", "0011"},
-      3,
       3);
   verify_generated_behavior(
       generated_implicit_behavior_sv_config,
       {"implicit_scope.generated_value"},
       {"0111", "0110"},
-      2,
       2);
   verify_generated_behavior(
       generated_block_behavior_vhdl_config,
       {"static_scope.generated_value"},
       {"1000", "0111"},
-      2,
-      0);
+      2);
 
   // Verilog preprocessing consumes exact transitive snapshots. A header edit
   // must invalidate both the analysis object and the owning specialization,

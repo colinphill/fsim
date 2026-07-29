@@ -434,12 +434,12 @@ end architecture;
     assert(reference.final_values == warm.final_values);
     assert(reference.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 0);
+    assert(cold.compiled_processes == 12);
     assert(cold.native_cache.hits == 0);
-    assert(cold.native_cache.misses == 0);
-    assert(cold.native_cache.stores == 0);
-    assert(warm.compiled_processes == 0);
-    assert(warm.native_cache.hits == 0);
+    assert(cold.native_cache.misses == 1);
+    assert(cold.native_cache.stores == 1);
+    assert(warm.compiled_processes == 12);
+    assert(warm.native_cache.hits == 1);
     assert(warm.native_cache.misses == 0);
 #else
     assert(cold.compiled_processes == 0);

@@ -489,11 +489,18 @@ endmodule
         == compiled.resolved_drivers);
     assert(reference.vcd == compiled.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 0);
-    assert(compiled.compiled_modules == 0);
+    assert(compiled.compiled_processes > 0);
+    assert(compiled.compiled_modules > 0);
+    assert(
+        compiled.compiled_modules
+        <= compiled.compiled_processes);
     assert(compiled.native_cache.hits == 0);
-    assert(compiled.native_cache.misses == 0);
-    assert(compiled.native_cache.stores == 0);
+    assert(
+        compiled.native_cache.misses
+        == compiled.compiled_modules);
+    assert(
+        compiled.native_cache.stores
+        == compiled.compiled_modules);
 #endif
 
     const auto sv_parent_config = make_mixed_config(
@@ -550,10 +557,10 @@ endmodule
         vhdl_parent_reference.value
         == vhdl_parent_compiled.value);
 #if defined(FSIM_HAS_LLVM)
-    assert(sv_parent_compiled.compiled_processes == 0);
-    assert(sv_parent_compiled.compiled_modules == 0);
-    assert(vhdl_parent_compiled.compiled_processes == 0);
-    assert(vhdl_parent_compiled.compiled_modules == 0);
+    assert(sv_parent_compiled.compiled_processes > 0);
+    assert(sv_parent_compiled.compiled_modules > 0);
+    assert(vhdl_parent_compiled.compiled_processes > 0);
+    assert(vhdl_parent_compiled.compiled_modules > 0);
 #endif
   }
 

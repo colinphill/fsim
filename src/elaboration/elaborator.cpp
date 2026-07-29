@@ -6588,8 +6588,11 @@ private:
                     expression.operands[1].span);
                 return std::nullopt;
             }
+            const auto value_domain = register_domain(*value);
             const auto result_domain =
-                is_two_state_domain(register_domain(*value))
+                value_domain == frontend::ValueDomain::Logic9
+                    ? frontend::ValueDomain::Logic9
+                    : is_two_state_domain(value_domain)
                         && is_two_state_domain(register_domain(*amount))
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic4;

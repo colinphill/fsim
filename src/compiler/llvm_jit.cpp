@@ -44,6 +44,7 @@
 namespace fsim::compiler {
 namespace {
 
+using runtime::Logic9;
 using runtime::simir::Assert;
 using runtime::simir::Binary;
 using runtime::simir::BinaryOperator;
@@ -134,7 +135,7 @@ using NativeProcess = fsim_jit_process_v1;
 }
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v18";
+    "fsim-llvm-native-object-v19";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -176,17 +177,30 @@ static_assert(
     offsetof(fsim_jit_runtime_v1, write_projected_waveform) == 216);
 static_assert(
     offsetof(fsim_jit_runtime_v1, write_projected_waveform_slice) == 224);
-static_assert(sizeof(fsim_jit_runtime_v1) == 232);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, read_signal_logic9) == 232);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, write_formatted_logic9) == 344);
+static_assert(sizeof(fsim_jit_runtime_v1) == 352);
 static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
-static_assert(sizeof(fsim_jit_frame_v1) == 64);
+static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
+static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
+static_assert(sizeof(fsim_jit_frame_v1) == 80);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
 static_assert(offsetof(fsim_jit_frame_v1, register_initialized) == 56);
+static_assert(
+    offsetof(fsim_jit_frame_v1, register_logic9_plane2) == 64);
+static_assert(
+    offsetof(fsim_jit_frame_v1, register_logic9_plane3) == 72);
 static_assert(sizeof(fsim_jit_resume_result_v1) == 24);
 
 constexpr auto kJitRuntimeV1PrefixSize =
     static_cast<std::uint32_t>(
         offsetof(fsim_jit_runtime_v1, write_update));
+constexpr auto kJitFrameV1PrefixSize =
+    static_cast<std::uint32_t>(
+        offsetof(fsim_jit_frame_v1, register_logic9_plane2));
 
 class PersistentLlvmObjectCache final : public llvm::ObjectCache {
 public:
@@ -423,6 +437,7 @@ reject_unsupported(const Process &process, const std::size_t instruction,
 
 struct ValidatedProcess {
   std::vector<std::uint32_t> register_widths;
+  bool uses_logic9{};
   bool requires_resume{};
   bool uses_write_update{};
   bool uses_write_after{};
@@ -476,15 +491,6 @@ validate_process(const Process &process,
         "SimIR register value-domain metadata count does not match "
         "register_count");
   }
-  if (std::ranges::any_of(
-          process.register_value_kinds,
-          [](const ValueKind kind) {
-            return kind == ValueKind::logic9;
-          })) {
-    throw LlvmJitUnsupportedError(
-        "exact nine-state registers are outside the current LLVM "
-        "aval/bval subset");
-  }
   if (!signal_value_kinds.empty()
       && signal_value_kinds.size() != signal_widths.size()) {
     throw LlvmJitError(
@@ -493,6 +499,11 @@ validate_process(const Process &process,
   }
 
   ValidatedProcess result;
+  result.uses_logic9 = std::ranges::any_of(
+      process.register_value_kinds,
+      [](const ValueKind kind) {
+        return kind == ValueKind::logic9;
+      });
   result.register_widths.resize(process.register_count);
   std::vector<RegisterId> parents(process.register_count);
   std::vector<std::size_t> root_widths(process.register_count);
@@ -537,10 +548,7 @@ validate_process(const Process &process,
     }
     if (!signal_value_kinds.empty()
         && signal_value_kinds[signal] == ValueKind::logic9) {
-      record_unsupported(
-          instruction,
-          "an exact nine-state signal access is outside the current "
-          "LLVM aval/bval subset");
+      result.uses_logic9 = true;
     }
     return width;
   };
@@ -681,12 +689,9 @@ validate_process(const Process &process,
                     "LoadConstant width is outside the supported [1, 64] "
                     "range");
               }
-              if (operation.value.is_logic9()) {
-                record_unsupported(
-                    index,
-                    "an exact nine-state constant is outside the current "
-                    "LLVM aval/bval subset");
-              }
+              result.uses_logic9 =
+                  result.uses_logic9
+                  || operation.value.is_logic9();
               record_definition(operation.destination, index);
               constrain_width(operation.destination, operation.value.width(),
                               index);
@@ -1689,6 +1694,7 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
 [[nodiscard]] std::string make_native_object_cache_key(
     const std::string_view symbol, const Process &process,
     const std::span<const std::uint32_t> signal_widths,
+    const std::span<const ValueKind> signal_value_kinds,
     const JitOptimizationLevel optimization,
     const llvm::Triple &target_triple, const llvm::DataLayout &data_layout,
     const std::string_view target_cpu,
@@ -1730,6 +1736,41 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
     add_key_u64(
         builder,
         "register-value-kind",
+        static_cast<std::underlying_type_t<ValueKind>>(kind));
+  }
+  std::vector<runtime::simir::SignalId> referenced_signals;
+  for (const auto& operation : process.operations) {
+    std::visit(
+        [&](const auto& value) {
+          using OperationType = std::decay_t<decltype(value)>;
+          if constexpr (requires { value.signal; }) {
+            referenced_signals.push_back(value.signal);
+          } else if constexpr (
+              std::is_same_v<OperationType, WaitOn>) {
+            referenced_signals.insert(
+                referenced_signals.end(),
+                value.signals.begin(),
+                value.signals.end());
+          }
+        },
+        operation);
+  }
+  std::ranges::sort(referenced_signals);
+  const auto unique_end = std::ranges::unique(referenced_signals).begin();
+  referenced_signals.erase(unique_end, referenced_signals.end());
+  add_key_u64(
+      builder, "referenced-signal-count", referenced_signals.size());
+  for (const auto signal : referenced_signals) {
+    add_key_u64(builder, "referenced-signal", signal);
+    add_key_u64(
+        builder, "referenced-signal-width", signal_widths[signal]);
+    const auto kind =
+        signal_value_kinds.empty()
+            ? ValueKind::logic4
+            : signal_value_kinds[signal];
+    add_key_u64(
+        builder,
+        "referenced-signal-value-kind",
         static_cast<std::underlying_type_t<ValueKind>>(kind));
   }
   add_key_u64(builder, "sensitivity-count",
@@ -2368,11 +2409,13 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
 
 [[nodiscard]] JitProcessFrameLayout
 make_frame_layout(const std::string_view cache_key,
-                  const std::size_t register_count) {
+                  const std::size_t register_count,
+                  const bool uses_logic9) {
   return {
       cache_key_word(cache_key, 0),
       cache_key_word(cache_key, 16),
       static_cast<std::uint32_t>(register_count),
+      uses_logic9,
   };
 }
 
@@ -2380,6 +2423,9 @@ struct EncodedValue {
   llvm::Value *aval{};
   llvm::Value *bval{};
   std::uint32_t width{};
+  llvm::Value* logic9_plane2{};
+  llvm::Value* logic9_plane3{};
+  ValueKind kind{ValueKind::logic4};
 };
 
 struct RegisterSlot {
@@ -2387,6 +2433,9 @@ struct RegisterSlot {
   llvm::Value *bval{};
   llvm::Value *initialized{};
   std::uint32_t width{};
+  llvm::Value* logic9_plane2{};
+  llvm::Value* logic9_plane3{};
+  ValueKind kind{ValueKind::logic4};
 };
 
 [[nodiscard]] EncodedValue
@@ -2395,22 +2444,209 @@ load_register(llvm::IRBuilder<> &builder,
               const RegisterId id) {
   const auto &slot = registers[id];
   auto *i64 = llvm::Type::getInt64Ty(builder.getContext());
+  llvm::Value* zero = llvm::ConstantInt::get(i64, 0);
   return {
       builder.CreateLoad(i64, slot.aval, "register.aval"),
       builder.CreateLoad(i64, slot.bval, "register.bval"),
       slot.width,
+      slot.kind == ValueKind::logic9
+          ? builder.CreateLoad(
+                i64, slot.logic9_plane2, "register.logic9.plane2")
+          : zero,
+      slot.kind == ValueKind::logic9
+          ? builder.CreateLoad(
+                i64, slot.logic9_plane3, "register.logic9.plane3")
+          : zero,
+      slot.kind,
   };
+}
+
+[[nodiscard]] EncodedValue coerce_value_kind(
+    llvm::IRBuilder<>& builder,
+    EncodedValue value,
+    const ValueKind destination_kind) {
+  if (value.kind == destination_kind) {
+    return value;
+  }
+  auto* i64 = llvm::Type::getInt64Ty(builder.getContext());
+  auto* zero = llvm::ConstantInt::get(i64, 0);
+  if (value.logic9_plane2 == nullptr) {
+    value.logic9_plane2 = zero;
+  }
+  if (value.logic9_plane3 == nullptr) {
+    value.logic9_plane3 = zero;
+  }
+  const auto mask_value =
+      value.width == 64
+          ? ~std::uint64_t{0}
+          : (std::uint64_t{1} << value.width) - 1U;
+  auto* mask = llvm::ConstantInt::get(i64, mask_value);
+  if (destination_kind == ValueKind::logic9) {
+    auto* plane0 = builder.CreateAnd(value.aval, mask);
+    auto* plane1 = builder.CreateAnd(
+        builder.CreateNot(value.bval), mask);
+    auto* plane2 = builder.CreateAnd(
+        builder.CreateAnd(
+            builder.CreateNot(value.aval), value.bval),
+        mask);
+    return {
+        plane0,
+        plane1,
+        value.width,
+        plane2,
+        zero,
+        ValueKind::logic9};
+  }
+
+  const auto state_mask =
+      [&](const std::uint8_t state) -> llvm::Value* {
+        llvm::Value* selected = mask;
+        const std::array planes{
+            value.aval,
+            value.bval,
+            value.logic9_plane2,
+            value.logic9_plane3};
+        for (std::size_t plane = 0; plane < planes.size(); ++plane) {
+          const auto bit = ((state >> plane) & 1U) != 0;
+          selected = builder.CreateAnd(
+              selected,
+              bit ? planes[plane]
+                  : builder.CreateNot(planes[plane]));
+        }
+        return builder.CreateAnd(selected, mask);
+      };
+  const auto zero_state = builder.CreateOr(
+      state_mask(static_cast<std::uint8_t>(Logic9::zero)),
+      state_mask(static_cast<std::uint8_t>(Logic9::l)));
+  const auto one_state = builder.CreateOr(
+      state_mask(static_cast<std::uint8_t>(Logic9::one)),
+      state_mask(static_cast<std::uint8_t>(Logic9::h)));
+  const auto z_state =
+      state_mask(static_cast<std::uint8_t>(Logic9::z));
+  auto* known = builder.CreateOr(zero_state, one_state);
+  auto* x_state = builder.CreateAnd(
+      builder.CreateNot(builder.CreateOr(known, z_state)), mask);
+  return {
+      builder.CreateOr(one_state, x_state),
+      builder.CreateOr(z_state, x_state),
+      value.width,
+      zero,
+      zero,
+      ValueKind::logic4};
+}
+
+[[nodiscard]] llvm::Value* logic9_state_mask(
+    llvm::IRBuilder<>& builder,
+    const EncodedValue& value,
+    const std::uint8_t state) {
+  auto* i64 = llvm::Type::getInt64Ty(builder.getContext());
+  const auto mask_value =
+      value.width == 64
+          ? ~std::uint64_t{0}
+          : (std::uint64_t{1} << value.width) - 1U;
+  llvm::Value* selected =
+      llvm::ConstantInt::get(i64, mask_value);
+  const std::array planes{
+      value.aval,
+      value.bval,
+      value.logic9_plane2,
+      value.logic9_plane3};
+  for (std::size_t plane = 0; plane < planes.size(); ++plane) {
+    selected = builder.CreateAnd(
+        selected,
+        ((state >> plane) & 1U) != 0
+            ? planes[plane]
+            : builder.CreateNot(planes[plane]));
+  }
+  return builder.CreateAnd(
+      selected, llvm::ConstantInt::get(i64, mask_value));
+}
+
+[[nodiscard]] EncodedValue map_logic9_unary(
+    llvm::IRBuilder<>& builder,
+    const EncodedValue& value,
+    const std::array<Logic9, 9>& table) {
+  auto* i64 = llvm::Type::getInt64Ty(builder.getContext());
+  std::array<llvm::Value*, 4> result{
+      llvm::ConstantInt::get(i64, 0),
+      llvm::ConstantInt::get(i64, 0),
+      llvm::ConstantInt::get(i64, 0),
+      llvm::ConstantInt::get(i64, 0)};
+  for (std::uint8_t state = 0; state < table.size(); ++state) {
+    auto* selected = logic9_state_mask(builder, value, state);
+    const auto encoded =
+        static_cast<std::uint8_t>(table[state]);
+    for (std::size_t plane = 0; plane < result.size(); ++plane) {
+      if (((encoded >> plane) & 1U) != 0) {
+        result[plane] =
+            builder.CreateOr(result[plane], selected);
+      }
+    }
+  }
+  return {
+      result[0],
+      result[1],
+      value.width,
+      result[2],
+      result[3],
+      ValueKind::logic9};
+}
+
+[[nodiscard]] EncodedValue map_logic9_binary(
+    llvm::IRBuilder<>& builder,
+    const EncodedValue& lhs,
+    const EncodedValue& rhs,
+    const std::array<std::array<Logic9, 9>, 9>& table) {
+  auto* i64 = llvm::Type::getInt64Ty(builder.getContext());
+  std::array<llvm::Value*, 4> result{
+      llvm::ConstantInt::get(i64, 0),
+      llvm::ConstantInt::get(i64, 0),
+      llvm::ConstantInt::get(i64, 0),
+      llvm::ConstantInt::get(i64, 0)};
+  std::array<llvm::Value*, 9> left_masks{};
+  std::array<llvm::Value*, 9> right_masks{};
+  for (std::uint8_t state = 0; state < 9; ++state) {
+    left_masks[state] = logic9_state_mask(builder, lhs, state);
+    right_masks[state] = logic9_state_mask(builder, rhs, state);
+  }
+  for (std::uint8_t left = 0; left < 9; ++left) {
+    for (std::uint8_t right = 0; right < 9; ++right) {
+      auto* selected = builder.CreateAnd(
+          left_masks[left], right_masks[right]);
+      const auto encoded =
+          static_cast<std::uint8_t>(table[left][right]);
+      for (std::size_t plane = 0; plane < result.size(); ++plane) {
+        if (((encoded >> plane) & 1U) != 0) {
+          result[plane] =
+              builder.CreateOr(result[plane], selected);
+        }
+      }
+    }
+  }
+  return {
+      result[0],
+      result[1],
+      lhs.width,
+      result[2],
+      result[3],
+      ValueKind::logic9};
 }
 
 void store_register(llvm::IRBuilder<> &builder,
                     const std::vector<RegisterSlot> &registers,
-                    const RegisterId id, const EncodedValue value) {
-  builder.CreateStore(value.aval, registers[id].aval);
-  builder.CreateStore(value.bval, registers[id].bval);
+                    const RegisterId id, EncodedValue value) {
+  const auto& slot = registers[id];
+  value = coerce_value_kind(builder, value, slot.kind);
+  builder.CreateStore(value.aval, slot.aval);
+  builder.CreateStore(value.bval, slot.bval);
+  if (slot.kind == ValueKind::logic9) {
+    builder.CreateStore(value.logic9_plane2, slot.logic9_plane2);
+    builder.CreateStore(value.logic9_plane3, slot.logic9_plane3);
+  }
   builder.CreateStore(
       llvm::ConstantInt::get(
           llvm::Type::getInt8Ty(builder.getContext()), 1),
-      registers[id].initialized);
+      slot.initialized);
 }
 
 struct EncodedBit {
@@ -2946,6 +3182,7 @@ void optimize_module(llvm::Module &module,
 void lower_process(llvm::Module &module, const std::string &symbol,
                    const Process &process,
                    const std::span<const std::uint32_t> signal_widths,
+                   const std::span<const ValueKind> signal_value_kinds,
                    const ValidatedProcess &validated,
                    const bool debug_instrumentation) {
   auto &context = module.getContext();
@@ -2958,12 +3195,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
        i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
       {i32, i32, i64, i64, i32, i32, i32, i32, pointer, pointer,
-       pointer},
+       pointer, pointer, pointer},
       "fsim_jit_frame_v1");
   auto *result_type = llvm::StructType::create(
       context, {i32, i32, i32, i32, i64},
@@ -3180,6 +3419,62 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 30),
         "write_projected_waveform_slice");
   }
+  llvm::Value* read_logic9_callback = nullptr;
+  llvm::Value* write_logic9_callback = nullptr;
+  llvm::Value* write_update_logic9_callback = nullptr;
+  llvm::Value* write_after_logic9_callback = nullptr;
+  llvm::Value* write_blocking_slice_logic9_callback = nullptr;
+  llvm::Value* write_update_slice_logic9_callback = nullptr;
+  llvm::Value* write_after_slice_logic9_callback = nullptr;
+  llvm::Value* signal_last_value_logic9_callback = nullptr;
+  llvm::Value* write_inertial_logic9_callback = nullptr;
+  llvm::Value* write_inertial_slice_logic9_callback = nullptr;
+  llvm::Value* write_projected_logic9_callback = nullptr;
+  llvm::Value* write_projected_slice_logic9_callback = nullptr;
+  llvm::Value* write_projected_waveform_logic9_callback = nullptr;
+  llvm::Value* write_projected_waveform_slice_logic9_callback = nullptr;
+  llvm::Value* write_formatted_logic9_callback = nullptr;
+  if (validated.uses_logic9) {
+    const auto load_callback =
+        [&](const unsigned index,
+            const llvm::Twine& name) -> llvm::Value* {
+          return builder.CreateLoad(
+              pointer,
+              builder.CreateStructGEP(
+                  runtime_type, runtime_argument, index),
+              name);
+        };
+    read_logic9_callback =
+        load_callback(31, "read_signal_logic9");
+    write_logic9_callback =
+        load_callback(32, "write_signal_logic9");
+    write_update_logic9_callback =
+        load_callback(33, "write_update_logic9");
+    write_after_logic9_callback =
+        load_callback(34, "write_after_logic9");
+    write_blocking_slice_logic9_callback =
+        load_callback(35, "write_signal_slice_logic9");
+    write_update_slice_logic9_callback =
+        load_callback(36, "write_update_slice_logic9");
+    write_after_slice_logic9_callback =
+        load_callback(37, "write_after_slice_logic9");
+    signal_last_value_logic9_callback =
+        load_callback(38, "signal_last_value_logic9");
+    write_inertial_logic9_callback =
+        load_callback(39, "write_inertial_logic9");
+    write_inertial_slice_logic9_callback =
+        load_callback(40, "write_inertial_slice_logic9");
+    write_projected_logic9_callback =
+        load_callback(41, "write_projected_logic9");
+    write_projected_slice_logic9_callback =
+        load_callback(42, "write_projected_slice_logic9");
+    write_projected_waveform_logic9_callback =
+        load_callback(43, "write_projected_waveform_logic9");
+    write_projected_waveform_slice_logic9_callback =
+        load_callback(44, "write_projected_waveform_slice_logic9");
+    write_formatted_logic9_callback =
+        load_callback(45, "write_formatted_logic9");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -3267,6 +3562,71 @@ void lower_process(llvm::Module &module, const std::string &symbol,
           i64,
           {pointer, i32, i32, i64, i64, i64, i64, pointer},
           false);
+  auto* logic9_word_type = llvm::ArrayType::get(i64, 4);
+  auto* read_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, pointer},
+          false);
+  auto* write_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, pointer},
+          false);
+  auto* write_after_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, pointer, i64},
+          false);
+  auto* write_slice_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, pointer},
+          false);
+  auto* write_after_slice_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, pointer, i64},
+          false);
+  auto* write_inertial_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, pointer, i64, i64, i64},
+          false);
+  auto* write_inertial_slice_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, pointer, i64, i64, i64},
+          false);
+  auto* write_projected_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, pointer, i64, i64, i32},
+          false);
+  auto* write_projected_slice_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, pointer, i64, i64, i32},
+          false);
+  auto* logic9_projected_element_type = llvm::StructType::create(
+      context,
+      {logic9_word_type, i64},
+      "fsim_jit_logic9_projected_element_v1");
+  auto* write_projected_waveform_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, pointer, i32, i64, i32},
+          false);
+  auto* write_projected_waveform_slice_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, pointer, i32, i64, i32},
+          false);
+  auto* formatted_output_logic9_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, pointer},
+          false);
 
   auto *register_aval = builder.CreateLoad(
       pointer, builder.CreateStructGEP(frame_type, frame_argument, 8),
@@ -3277,6 +3637,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
   auto *register_initialized = builder.CreateLoad(
       pointer, builder.CreateStructGEP(frame_type, frame_argument, 10),
       "register.initialized.base");
+  auto* register_logic9_plane2 = builder.CreateLoad(
+      pointer,
+      builder.CreateStructGEP(frame_type, frame_argument, 11),
+      "register.logic9.plane2.base");
+  auto* register_logic9_plane3 = builder.CreateLoad(
+      pointer,
+      builder.CreateStructGEP(frame_type, frame_argument, 12),
+      "register.logic9.plane3.base");
   auto *i8 = llvm::Type::getInt8Ty(context);
   std::vector<RegisterSlot> registers(process.register_count);
   for (std::size_t index = 0; index < process.register_count; ++index) {
@@ -3295,9 +3663,66 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             i8, register_initialized, constant_i64(context, index),
             "register." + std::to_string(index) + ".initialized"),
         width,
+        builder.CreateGEP(
+            i64,
+            register_logic9_plane2,
+            constant_i64(context, index),
+            "register." + std::to_string(index)
+                + ".logic9.plane2"),
+        builder.CreateGEP(
+            i64,
+            register_logic9_plane3,
+            constant_i64(context, index),
+            "register." + std::to_string(index)
+                + ".logic9.plane3"),
+        process.register_value_kinds.empty()
+            ? ValueKind::logic4
+            : process.register_value_kinds[index],
     };
   }
   auto *read_bval_slot = builder.CreateAlloca(i64, nullptr, "read.bval");
+  auto* logic9_word_slot =
+      builder.CreateAlloca(logic9_word_type, nullptr, "logic9.word");
+  const auto logic9_plane_pointer =
+      [&](llvm::Value* storage,
+          const std::uint32_t plane) -> llvm::Value* {
+        return builder.CreateInBoundsGEP(
+            logic9_word_type,
+            storage,
+            {
+                llvm::ConstantInt::get(i32, 0),
+                llvm::ConstantInt::get(i32, plane)});
+      };
+  const auto store_logic9_word =
+      [&](llvm::Value* storage, EncodedValue value) {
+        value = coerce_value_kind(
+            builder, value, ValueKind::logic9);
+        const std::array planes{
+            value.aval,
+            value.bval,
+            value.logic9_plane2,
+            value.logic9_plane3};
+        for (std::uint32_t plane = 0; plane < 4; ++plane) {
+          builder.CreateStore(
+              planes[plane],
+              logic9_plane_pointer(storage, plane));
+        }
+      };
+  const auto load_logic9_word =
+      [&](llvm::Value* storage,
+          const std::uint32_t width) -> EncodedValue {
+        return {
+            builder.CreateLoad(
+                i64, logic9_plane_pointer(storage, 0)),
+            builder.CreateLoad(
+                i64, logic9_plane_pointer(storage, 1)),
+            width,
+            builder.CreateLoad(
+                i64, logic9_plane_pointer(storage, 2)),
+            builder.CreateLoad(
+                i64, logic9_plane_pointer(storage, 3)),
+            ValueKind::logic9};
+      };
 
   const auto return_result =
       [&](const std::uint32_t status, const std::uint32_t instruction,
@@ -3385,17 +3810,101 @@ void lower_process(llvm::Module &module, const std::string &symbol,
     std::visit(
         Overloaded{
             [&](const LoadConstant &operation) {
-              const auto aval = operation.value.aval_words().front();
-              const auto bval = operation.value.bval_words().front();
+              EncodedValue value{};
+              if (operation.value.is_logic9()) {
+                const auto word = operation.value.logic9_low_word();
+                value = {
+                    constant_i64(context, word.planes[0]),
+                    constant_i64(context, word.planes[1]),
+                    static_cast<std::uint32_t>(word.width),
+                    constant_i64(context, word.planes[2]),
+                    constant_i64(context, word.planes[3]),
+                    ValueKind::logic9};
+              } else {
+                const auto word = operation.value.low_word();
+                value = {
+                    constant_i64(context, word.aval),
+                    constant_i64(context, word.bval),
+                    static_cast<std::uint32_t>(word.width)};
+              }
               store_register(
                   builder, registers, operation.destination,
-                  EncodedValue{
-                      constant_i64(context, aval),
-                      constant_i64(context, bval),
-                      validated.register_widths[operation.destination]});
+                  value);
               branch_to_next();
             },
             [&](const WriteProjectedWaveform& operation) {
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              if (signal_kind == ValueKind::logic9) {
+                auto* array_type = llvm::ArrayType::get(
+                    logic9_projected_element_type,
+                    operation.elements.size());
+                auto* storage = builder.CreateAlloca(
+                    array_type,
+                    nullptr,
+                    "projected.logic9.waveform");
+                for (std::size_t element_index = 0;
+                     element_index < operation.elements.size();
+                     ++element_index) {
+                  const auto& element =
+                      operation.elements[element_index];
+                  auto source = coerce_value_kind(
+                      builder,
+                      load_register(
+                          builder,
+                          registers,
+                          element.source),
+                      ValueKind::logic9);
+                  auto* slot = builder.CreateInBoundsGEP(
+                      array_type,
+                      storage,
+                      {
+                          llvm::ConstantInt::get(i32, 0),
+                          llvm::ConstantInt::get(
+                              i32,
+                              static_cast<std::uint32_t>(
+                                  element_index))});
+                  store_logic9_word(
+                      builder.CreateStructGEP(
+                          logic9_projected_element_type,
+                          slot,
+                          0),
+                      source);
+                  builder.CreateStore(
+                      constant_i64(context, element.delay),
+                      builder.CreateStructGEP(
+                          logic9_projected_element_type,
+                          slot,
+                          1));
+                }
+                const auto first = load_register(
+                    builder,
+                    registers,
+                    operation.elements.front().source);
+                builder.CreateCall(
+                    write_projected_waveform_logic9_type,
+                    write_projected_waveform_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        llvm::ConstantInt::get(i32, first.width),
+                        storage,
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                operation.elements.size())),
+                        constant_i64(
+                            context, operation.rejection),
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                operation.mode))});
+                branch_to_next();
+                return;
+              }
               auto* array_type = llvm::ArrayType::get(
                   projected_element_type, operation.elements.size());
               auto* storage = builder.CreateAlloca(
@@ -3449,8 +3958,36 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteProjected& operation) {
-              const auto source =
-                  load_register(builder, registers, operation.source);
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_projected_logic9_type,
+                    write_projected_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        logic9_word_slot,
+                        constant_i64(
+                            context, operation.delay),
+                        constant_i64(
+                            context, operation.rejection),
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                operation.mode))});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_projected_type,
                   write_projected_callback,
@@ -3468,8 +4005,35 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteInertial& operation) {
-              const auto source =
-                  load_register(builder, registers, operation.source);
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_inertial_logic9_type,
+                    write_inertial_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        logic9_word_slot,
+                        constant_i64(
+                            context, operation.delays.rise),
+                        constant_i64(
+                            context, operation.delays.fall),
+                        constant_i64(
+                            context,
+                            operation.delays.turnoff)});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_inertial_type,
                   write_inertial_callback,
@@ -3485,6 +4049,38 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const ReadSignal &operation) {
+              const auto width = signal_widths[operation.signal];
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              if (signal_kind == ValueKind::logic9) {
+                builder.CreateCall(
+                    read_logic9_type,
+                    read_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        logic9_word_slot});
+                auto value =
+                    load_logic9_word(logic9_word_slot, width);
+                auto* mask =
+                    constant_i64(context, width_mask(width));
+                value.aval = builder.CreateAnd(value.aval, mask);
+                value.bval = builder.CreateAnd(value.bval, mask);
+                value.logic9_plane2 =
+                    builder.CreateAnd(value.logic9_plane2, mask);
+                value.logic9_plane3 =
+                    builder.CreateAnd(value.logic9_plane3, mask);
+                store_register(
+                    builder,
+                    registers,
+                    operation.destination,
+                    value);
+                branch_to_next();
+                return;
+              }
               builder.CreateStore(constant_i64(context, 0), read_bval_slot);
               auto *aval = builder.CreateCall(
                   read_type, read_callback,
@@ -3493,7 +4089,6 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   "aval");
               auto *bval =
                   builder.CreateLoad(i64, read_bval_slot, "bval.value");
-              const auto width = signal_widths[operation.signal];
               auto *mask = constant_i64(context, width_mask(width));
               store_register(
                   builder, registers, operation.destination,
@@ -3521,6 +4116,28 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const SignalLastValue& operation) {
+              const auto width = signal_widths[operation.signal];
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              if (signal_kind == ValueKind::logic9) {
+                builder.CreateCall(
+                    read_logic9_type,
+                    signal_last_value_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        logic9_word_slot});
+                store_register(
+                    builder,
+                    registers,
+                    operation.destination,
+                    load_logic9_word(logic9_word_slot, width));
+                branch_to_next();
+                return;
+              }
               builder.CreateStore(
                   constant_i64(context, 0), read_bval_slot);
               auto* aval = builder.CreateCall(
@@ -3533,7 +4150,6 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   "signal.last_value.aval");
               auto* bval = builder.CreateLoad(
                   i64, read_bval_slot, "signal.last_value.bval");
-              const auto width = signal_widths[operation.signal];
               auto* mask = constant_i64(context, width_mask(width));
               store_register(
                   builder, registers, operation.destination,
@@ -3585,6 +4201,25 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             [&](const UnaryNot &operation) {
               const auto source =
                   load_register(builder, registers, operation.source);
+              if (source.kind == ValueKind::logic9) {
+                constexpr auto table = [] {
+                  std::array<Logic9, 9> values{};
+                  for (std::size_t state = 0;
+                       state < values.size();
+                       ++state) {
+                    values[state] = runtime::logic_not(
+                        static_cast<Logic9>(state));
+                  }
+                  return values;
+                }();
+                store_register(
+                    builder,
+                    registers,
+                    operation.destination,
+                    map_logic9_unary(builder, source, table));
+                branch_to_next();
+                return;
+              }
               auto *mask = constant_i64(context, width_mask(source.width));
               auto *aval = builder.CreateAnd(
                   builder.CreateOr(builder.CreateNot(source.aval),
@@ -3596,9 +4231,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const LogicalNot& operation) {
-              const auto source =
+              const auto source = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.source);
+                      builder, registers, operation.source),
+                  ValueKind::logic4);
               auto *mask =
                   constant_i64(context, width_mask(source.width));
               auto *known_ones = builder.CreateAnd(
@@ -3627,10 +4264,18 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             [&](const LogicalBinary& operation) {
               const auto left = truth_bit(
                   builder,
-                  load_register(builder, registers, operation.lhs));
+                  coerce_value_kind(
+                      builder,
+                      load_register(
+                          builder, registers, operation.lhs),
+                      ValueKind::logic4));
               const auto right = truth_bit(
                   builder,
-                  load_register(builder, registers, operation.rhs));
+                  coerce_value_kind(
+                      builder,
+                      load_register(
+                          builder, registers, operation.rhs),
+                      ValueKind::logic4));
               const auto result =
                   operation.operation
                           == LogicalBinaryOperator::logical_and
@@ -3649,9 +4294,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const Reduction& operation) {
-              const auto source =
+              const auto source = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.source);
+                      builder, registers, operation.source),
+                  ValueKind::logic4);
               if (operation.operation
                       == ReductionOperator::one_hot
                   || operation.operation
@@ -3726,8 +4373,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const CountOnes& operation) {
-              const auto source = load_register(
-                  builder, registers, operation.source);
+              const auto source = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.source),
+                  ValueKind::logic4);
               llvm::Value* count = llvm::ConstantInt::get(
                   llvm::Type::getInt64Ty(context), 0);
               for (std::uint32_t bit = 0;
@@ -3756,8 +4406,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const CountBits& operation) {
-              const auto source = load_register(
-                  builder, registers, operation.source);
+              const auto source = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.source),
+                  ValueKind::logic4);
               llvm::Value* count = llvm::ConstantInt::get(
                   llvm::Type::getInt64Ty(context), 0);
               for (std::uint32_t bit = 0;
@@ -3810,9 +4463,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               const auto value =
                   load_register(
                       builder, registers, operation.value);
-              const auto amount =
+              const auto amount = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.amount);
+                      builder, registers, operation.amount),
+                  ValueKind::logic4);
               auto* value_mask =
                   constant_i64(context, width_mask(value.width));
               auto* amount_mask =
@@ -3860,7 +4515,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                             amount_bits);
               const auto shift_component =
                   [&](llvm::Value* component,
-                      const ShiftOperator selected_operation)
+                      const ShiftOperator selected_operation,
+                      const bool zero_plane)
                       -> llvm::Value* {
                     if (selected_operation
                             == ShiftOperator::rotate_left
@@ -3908,12 +4564,30 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                             constant_i64(context, 0));
                         return builder.CreateOr(shifted, fill);
                       }
+                      if (zero_plane) {
+                        auto* fill_mask = builder.CreateSub(
+                            builder.CreateShl(
+                                constant_i64(context, 1),
+                                safe_amount),
+                            constant_i64(context, 1));
+                        return builder.CreateOr(
+                            shifted, fill_mask);
+                      }
                       return shifted;
                     }
                     if (selected_operation
                         == ShiftOperator::logical_right) {
-                      return builder.CreateLShr(
+                      auto* shifted = builder.CreateLShr(
                           component, safe_amount);
+                      if (zero_plane) {
+                        auto* fill_mask = builder.CreateXor(
+                            value_mask,
+                            builder.CreateLShr(
+                                value_mask, safe_amount));
+                        return builder.CreateOr(
+                            shifted, fill_mask);
+                      }
+                      return shifted;
                     }
                     const auto extension_shift =
                         64U - value.width;
@@ -3928,25 +4602,36 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                         sign_extended, safe_amount);
                   };
               const auto selected_shift_component =
-                  [&](llvm::Value* component) -> llvm::Value* {
+                  [&](llvm::Value* component,
+                      const bool zero_plane) -> llvm::Value* {
                     auto* positive = shift_component(
-                        component, operation.operation);
+                        component, operation.operation, zero_plane);
                     if (!operation.signed_amount) {
                       return positive;
                     }
                     auto* negative = shift_component(
                         component,
-                        reverse_shift(operation.operation));
+                        reverse_shift(operation.operation),
+                        zero_plane);
                     return builder.CreateSelect(
                         amount_negative, negative, positive);
                   };
               auto* shifted_aval =
-                  selected_shift_component(value.aval);
+                  selected_shift_component(value.aval, false);
               auto* shifted_bval =
-                  selected_shift_component(value.bval);
+                  selected_shift_component(
+                      value.bval,
+                      value.kind == ValueKind::logic9);
+              auto* shifted_plane2 =
+                  selected_shift_component(
+                      value.logic9_plane2, false);
+              auto* shifted_plane3 =
+                  selected_shift_component(
+                      value.logic9_plane3, false);
               const auto oversized_component =
                   [&](llvm::Value* component,
-                      const ShiftOperator selected_operation)
+                      const ShiftOperator selected_operation,
+                      const bool zero_plane)
                       -> llvm::Value* {
                     if (selected_operation
                         == ShiftOperator::arithmetic_right) {
@@ -3975,25 +4660,36 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                           value_mask,
                           constant_i64(context, 0));
                     }
-                    return constant_i64(context, 0);
+                    return constant_i64(
+                        context, zero_plane ? width_mask(value.width) : 0);
                   };
               const auto selected_oversized_component =
-                  [&](llvm::Value* component) -> llvm::Value* {
+                  [&](llvm::Value* component,
+                      const bool zero_plane) -> llvm::Value* {
                     auto* positive = oversized_component(
-                        component, operation.operation);
+                        component, operation.operation, zero_plane);
                     if (!operation.signed_amount) {
                       return positive;
                     }
                     auto* negative = oversized_component(
                         component,
-                        reverse_shift(operation.operation));
+                        reverse_shift(operation.operation),
+                        zero_plane);
                     return builder.CreateSelect(
                         amount_negative, negative, positive);
                   };
               auto* oversized_aval =
-                  selected_oversized_component(value.aval);
+                  selected_oversized_component(value.aval, false);
               auto* oversized_bval =
-                  selected_oversized_component(value.bval);
+                  selected_oversized_component(
+                      value.bval,
+                      value.kind == ValueKind::logic9);
+              auto* oversized_plane2 =
+                  selected_oversized_component(
+                      value.logic9_plane2, false);
+              auto* oversized_plane3 =
+                  selected_oversized_component(
+                      value.logic9_plane3, false);
               auto* known_aval = builder.CreateSelect(
                   rotating
                       ? llvm::ConstantInt::getFalse(context)
@@ -4006,6 +4702,45 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       : amount_too_large,
                   oversized_bval,
                   builder.CreateAnd(shifted_bval, value_mask));
+              auto* known_plane2 = builder.CreateSelect(
+                  rotating
+                      ? llvm::ConstantInt::getFalse(context)
+                      : amount_too_large,
+                  oversized_plane2,
+                  builder.CreateAnd(shifted_plane2, value_mask));
+              auto* known_plane3 = builder.CreateSelect(
+                  rotating
+                      ? llvm::ConstantInt::getFalse(context)
+                      : amount_too_large,
+                  oversized_plane3,
+                  builder.CreateAnd(shifted_plane3, value_mask));
+              if (value.kind == ValueKind::logic9) {
+                store_register(
+                    builder,
+                    registers,
+                    operation.destination,
+                    EncodedValue{
+                        builder.CreateSelect(
+                            amount_unknown,
+                            value_mask,
+                            known_aval),
+                        builder.CreateSelect(
+                            amount_unknown,
+                            constant_i64(context, 0),
+                            known_bval),
+                        value.width,
+                        builder.CreateSelect(
+                            amount_unknown,
+                            constant_i64(context, 0),
+                            known_plane2),
+                        builder.CreateSelect(
+                            amount_unknown,
+                            constant_i64(context, 0),
+                            known_plane3),
+                        ValueKind::logic9});
+                branch_to_next();
+                return;
+              }
               store_register(
                   builder, registers, operation.destination,
                   EncodedValue{
@@ -4033,16 +4768,31 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       builder.CreateAnd(
                           builder.CreateLShr(source.bval, shift),
                           mask),
-                      operation.width});
+                      operation.width,
+                      builder.CreateAnd(
+                          builder.CreateLShr(
+                              source.logic9_plane2, shift),
+                          mask),
+                      builder.CreateAnd(
+                          builder.CreateLShr(
+                              source.logic9_plane3, shift),
+                          mask),
+                      source.kind});
               branch_to_next();
             },
             [&](const Insert& operation) {
-              const auto target =
+              const auto destination_kind =
+                  registers[operation.destination].kind;
+              const auto target = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.target);
-              const auto source =
+                      builder, registers, operation.target),
+                  destination_kind);
+              const auto source = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.source);
+                      builder, registers, operation.source),
+                  destination_kind);
               auto* source_mask =
                   constant_i64(context, width_mask(source.width));
               auto* shifted_mask =
@@ -4066,34 +4816,70 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   builder.CreateShl(
                       builder.CreateAnd(source.bval, source_mask),
                       shift));
+              auto* plane2 = builder.CreateOr(
+                  builder.CreateAnd(
+                      target.logic9_plane2, keep_mask),
+                  builder.CreateShl(
+                      builder.CreateAnd(
+                          source.logic9_plane2, source_mask),
+                      shift));
+              auto* plane3 = builder.CreateOr(
+                  builder.CreateAnd(
+                      target.logic9_plane3, keep_mask),
+                  builder.CreateShl(
+                      builder.CreateAnd(
+                          source.logic9_plane3, source_mask),
+                      shift));
               store_register(
                   builder, registers, operation.destination,
-                  EncodedValue{aval, bval, target.width});
+                  EncodedValue{
+                      aval,
+                      bval,
+                      target.width,
+                      plane2,
+                      plane3,
+                      destination_kind});
               branch_to_next();
             },
             [&](const Concatenate& operation) {
               llvm::Value* aval = constant_i64(context, 0);
               llvm::Value* bval = constant_i64(context, 0);
+              llvm::Value* plane2 = constant_i64(context, 0);
+              llvm::Value* plane3 = constant_i64(context, 0);
+              const auto destination_kind =
+                  registers[operation.destination].kind;
               std::uint32_t offset = 0;
               for (auto operand = operation.operands.rbegin();
                    operand != operation.operands.rend(); ++operand) {
-                const auto source =
-                    load_register(builder, registers, *operand);
+                const auto source = coerce_value_kind(
+                    builder,
+                    load_register(builder, registers, *operand),
+                    destination_kind);
                 auto* source_mask =
                     constant_i64(context, width_mask(source.width));
                 auto* source_aval =
                     builder.CreateAnd(source.aval, source_mask);
                 auto* source_bval =
                     builder.CreateAnd(source.bval, source_mask);
+                auto* source_plane2 = builder.CreateAnd(
+                    source.logic9_plane2, source_mask);
+                auto* source_plane3 = builder.CreateAnd(
+                    source.logic9_plane3, source_mask);
                 if (offset != 0) {
                   auto* shift = constant_i64(context, offset);
                   source_aval =
                       builder.CreateShl(source_aval, shift);
                   source_bval =
                       builder.CreateShl(source_bval, shift);
+                  source_plane2 =
+                      builder.CreateShl(source_plane2, shift);
+                  source_plane3 =
+                      builder.CreateShl(source_plane3, shift);
                 }
                 aval = builder.CreateOr(aval, source_aval);
                 bval = builder.CreateOr(bval, source_bval);
+                plane2 = builder.CreateOr(plane2, source_plane2);
+                plane3 = builder.CreateOr(plane3, source_plane3);
                 offset += source.width;
               }
               auto* mask =
@@ -4103,15 +4889,106 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   EncodedValue{
                       builder.CreateAnd(aval, mask),
                       builder.CreateAnd(bval, mask),
-                      operation.width});
+                      operation.width,
+                      builder.CreateAnd(plane2, mask),
+                      builder.CreateAnd(plane3, mask),
+                      destination_kind});
               branch_to_next();
             },
             [&](const Binary &operation) {
-              const auto value =
-                  lower_binary(
-                      builder, operation.operation,
-                      load_register(builder, registers, operation.lhs),
-                      load_register(builder, registers, operation.rhs));
+              auto lhs =
+                  load_register(builder, registers, operation.lhs);
+              auto rhs =
+                  load_register(builder, registers, operation.rhs);
+              EncodedValue value{};
+              if (lhs.kind == ValueKind::logic9
+                  || rhs.kind == ValueKind::logic9) {
+                lhs = coerce_value_kind(
+                    builder, lhs, ValueKind::logic9);
+                rhs = coerce_value_kind(
+                    builder, rhs, ValueKind::logic9);
+                if (operation.operation
+                        == BinaryOperator::bit_and
+                    || operation.operation
+                        == BinaryOperator::bit_or
+                    || operation.operation
+                        == BinaryOperator::bit_xor) {
+                  const auto make_table =
+                      [&](const BinaryOperator selected) {
+                        std::array<
+                            std::array<Logic9, 9>, 9> table{};
+                        for (std::size_t left = 0;
+                             left < table.size();
+                             ++left) {
+                          for (std::size_t right = 0;
+                               right < table[left].size();
+                               ++right) {
+                            const auto left_state =
+                                static_cast<Logic9>(left);
+                            const auto right_state =
+                                static_cast<Logic9>(right);
+                            table[left][right] =
+                                selected
+                                        == BinaryOperator::bit_and
+                                    ? runtime::logic_and(
+                                          left_state,
+                                          right_state)
+                                    : selected
+                                              == BinaryOperator::bit_or
+                                          ? runtime::logic_or(
+                                                left_state,
+                                                right_state)
+                                          : runtime::logic_xor(
+                                                left_state,
+                                                right_state);
+                          }
+                        }
+                        return table;
+                      };
+                  value = map_logic9_binary(
+                      builder,
+                      lhs,
+                      rhs,
+                      make_table(operation.operation));
+                } else if (
+                    operation.operation
+                    == BinaryOperator::case_equal) {
+                  auto* mask = constant_i64(
+                      context, width_mask(lhs.width));
+                  auto* mismatch = builder.CreateAnd(
+                      builder.CreateOr(
+                          builder.CreateOr(
+                              builder.CreateXor(
+                                  lhs.aval, rhs.aval),
+                              builder.CreateXor(
+                                  lhs.bval, rhs.bval)),
+                          builder.CreateOr(
+                              builder.CreateXor(
+                                  lhs.logic9_plane2,
+                                  rhs.logic9_plane2),
+                              builder.CreateXor(
+                                  lhs.logic9_plane3,
+                                  rhs.logic9_plane3))),
+                      mask);
+                  auto* equal = builder.CreateICmpEQ(
+                      mismatch, constant_i64(context, 0));
+                  value = {
+                      builder.CreateZExt(equal, i64),
+                      constant_i64(context, 0),
+                      1};
+                } else {
+                  value = lower_binary(
+                      builder,
+                      operation.operation,
+                      coerce_value_kind(
+                          builder, lhs, ValueKind::logic4),
+                      coerce_value_kind(
+                          builder, rhs, ValueKind::logic4));
+                }
+              } else {
+                value = lower_binary(
+                    builder, operation.operation, lhs, rhs);
+              }
               store_register(
                   builder, registers, operation.destination, value);
               branch_to_next();
@@ -4362,23 +5239,40 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const ConditionalSelect& operation) {
-              const auto condition =
+              const auto condition = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.condition);
-              const auto when_true =
+                      builder, registers, operation.condition),
+                  ValueKind::logic4);
+              const auto destination_kind =
+                  registers[operation.destination].kind;
+              const auto when_true = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.when_true);
-              const auto when_false =
+                      builder, registers, operation.when_true),
+                  destination_kind);
+              const auto when_false = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.when_false);
+                      builder, registers, operation.when_false),
+                  destination_kind);
               auto *mask =
                   constant_i64(context, width_mask(when_true.width));
               auto *different = builder.CreateAnd(
                   builder.CreateOr(
-                      builder.CreateXor(
-                          when_true.aval, when_false.aval),
-                      builder.CreateXor(
-                          when_true.bval, when_false.bval)),
+                      builder.CreateOr(
+                          builder.CreateXor(
+                              when_true.aval, when_false.aval),
+                          builder.CreateXor(
+                              when_true.bval,
+                              when_false.bval)),
+                      builder.CreateOr(
+                          builder.CreateXor(
+                              when_true.logic9_plane2,
+                              when_false.logic9_plane2),
+                          builder.CreateXor(
+                              when_true.logic9_plane3,
+                              when_false.logic9_plane3))),
                   mask);
               auto *same = builder.CreateXor(different, mask);
               auto *merged_aval = builder.CreateOr(
@@ -4386,7 +5280,13 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   different);
               auto *merged_bval = builder.CreateOr(
                   builder.CreateAnd(when_true.bval, same),
-                  different);
+                  destination_kind == ValueKind::logic9
+                      ? constant_i64(context, 0)
+                      : different);
+              auto* merged_plane2 = builder.CreateAnd(
+                  when_true.logic9_plane2, same);
+              auto* merged_plane3 = builder.CreateAnd(
+                  when_true.logic9_plane3, same);
               auto *unknown = builder.CreateICmpNE(
                   builder.CreateAnd(
                       condition.bval, constant_i64(context, 1)),
@@ -4399,6 +5299,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   select_true, when_true.aval, when_false.aval);
               auto *known_bval = builder.CreateSelect(
                   select_true, when_true.bval, when_false.bval);
+              auto* known_plane2 = builder.CreateSelect(
+                  select_true,
+                  when_true.logic9_plane2,
+                  when_false.logic9_plane2);
+              auto* known_plane3 = builder.CreateSelect(
+                  select_true,
+                  when_true.logic9_plane3,
+                  when_false.logic9_plane3);
               store_register(
                   builder, registers, operation.destination,
                   EncodedValue{
@@ -4406,12 +5314,37 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                           unknown, merged_aval, known_aval),
                       builder.CreateSelect(
                           unknown, merged_bval, known_bval),
-                      when_true.width});
+                      when_true.width,
+                      builder.CreateSelect(
+                          unknown, merged_plane2, known_plane2),
+                      builder.CreateSelect(
+                          unknown, merged_plane3, known_plane3),
+                      destination_kind});
               branch_to_next();
             },
             [&](const WriteBlocking &operation) {
-              const auto source =
-                  load_register(builder, registers, operation.source);
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_logic9_type,
+                    write_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        logic9_word_slot});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_type, write_callback,
                   {context_pointer,
@@ -4420,8 +5353,28 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteUpdate &operation) {
-              const auto source =
-                  load_register(builder, registers, operation.source);
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_logic9_type,
+                    write_update_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        logic9_word_slot});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_type, write_update_callback,
                   {context_pointer,
@@ -4430,8 +5383,30 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteAfter &operation) {
-              const auto source =
-                  load_register(builder, registers, operation.source);
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
+                  load_register(
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_after_logic9_type,
+                    write_after_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        logic9_word_slot,
+                        constant_i64(
+                            context, operation.delay)});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_after_type, write_after_callback,
                   {context_pointer,
@@ -4440,9 +5415,31 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteBlockingSlice& operation) {
-              const auto source =
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.source);
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_slice_logic9_type,
+                    write_blocking_slice_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        llvm::ConstantInt::get(
+                            i32, operation.offset),
+                        llvm::ConstantInt::get(i32, source.width),
+                        logic9_word_slot});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_slice_type,
                   write_blocking_slice_callback,
@@ -4459,9 +5456,31 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteUpdateSlice& operation) {
-              const auto source =
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.source);
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_slice_logic9_type,
+                    write_update_slice_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        llvm::ConstantInt::get(
+                            i32, operation.offset),
+                        llvm::ConstantInt::get(i32, source.width),
+                        logic9_word_slot});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_slice_type,
                   write_update_slice_callback,
@@ -4478,9 +5497,33 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteAfterSlice& operation) {
-              const auto source =
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.source);
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_after_slice_logic9_type,
+                    write_after_slice_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        llvm::ConstantInt::get(
+                            i32, operation.offset),
+                        llvm::ConstantInt::get(i32, source.width),
+                        logic9_word_slot,
+                        constant_i64(
+                            context, operation.delay)});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_after_slice_type,
                   write_after_slice_callback,
@@ -4499,9 +5542,37 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteInertialSlice& operation) {
-              const auto source =
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.source);
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_inertial_slice_logic9_type,
+                    write_inertial_slice_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        llvm::ConstantInt::get(
+                            i32, operation.offset),
+                        llvm::ConstantInt::get(i32, source.width),
+                        logic9_word_slot,
+                        constant_i64(
+                            context, operation.delays.rise),
+                        constant_i64(
+                            context, operation.delays.fall),
+                        constant_i64(
+                            context, operation.delays.turnoff)});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_inertial_slice_type,
                   write_inertial_slice_callback,
@@ -4522,9 +5593,39 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteProjectedSlice& operation) {
-              const auto source =
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              const auto source = coerce_value_kind(
+                  builder,
                   load_register(
-                      builder, registers, operation.source);
+                      builder, registers, operation.source),
+                  signal_kind);
+              if (signal_kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, source);
+                builder.CreateCall(
+                    write_projected_slice_logic9_type,
+                    write_projected_slice_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        llvm::ConstantInt::get(
+                            i32, operation.offset),
+                        llvm::ConstantInt::get(i32, source.width),
+                        logic9_word_slot,
+                        constant_i64(
+                            context, operation.delay),
+                        constant_i64(
+                            context, operation.rejection),
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                operation.mode))});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   write_projected_slice_type,
                   write_projected_slice_callback,
@@ -4547,6 +5648,80 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               branch_to_next();
             },
             [&](const WriteProjectedWaveformSlice& operation) {
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              if (signal_kind == ValueKind::logic9) {
+                auto* array_type = llvm::ArrayType::get(
+                    logic9_projected_element_type,
+                    operation.elements.size());
+                auto* storage = builder.CreateAlloca(
+                    array_type,
+                    nullptr,
+                    "projected.logic9.slice.waveform");
+                for (std::size_t element_index = 0;
+                     element_index < operation.elements.size();
+                     ++element_index) {
+                  const auto& element =
+                      operation.elements[element_index];
+                  auto source = coerce_value_kind(
+                      builder,
+                      load_register(
+                          builder,
+                          registers,
+                          element.source),
+                      ValueKind::logic9);
+                  auto* slot = builder.CreateInBoundsGEP(
+                      array_type,
+                      storage,
+                      {
+                          llvm::ConstantInt::get(i32, 0),
+                          llvm::ConstantInt::get(
+                              i32,
+                              static_cast<std::uint32_t>(
+                                  element_index))});
+                  store_logic9_word(
+                      builder.CreateStructGEP(
+                          logic9_projected_element_type,
+                          slot,
+                          0),
+                      source);
+                  builder.CreateStore(
+                      constant_i64(context, element.delay),
+                      builder.CreateStructGEP(
+                          logic9_projected_element_type,
+                          slot,
+                          1));
+                }
+                const auto first = load_register(
+                    builder,
+                    registers,
+                    operation.elements.front().source);
+                builder.CreateCall(
+                    write_projected_waveform_slice_logic9_type,
+                    write_projected_waveform_slice_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        llvm::ConstantInt::get(
+                            i32, operation.offset),
+                        llvm::ConstantInt::get(i32, first.width),
+                        storage,
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                operation.elements.size())),
+                        constant_i64(
+                            context, operation.rejection),
+                        llvm::ConstantInt::get(
+                            i32,
+                            static_cast<std::uint32_t>(
+                                operation.mode))});
+                branch_to_next();
+                return;
+              }
               auto* array_type = llvm::ArrayType::get(
                   projected_element_type, operation.elements.size());
               auto* storage = builder.CreateAlloca(
@@ -4701,6 +5876,20 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             [&](const FormatDisplay& operation) {
               const auto value =
                   load_register(builder, registers, operation.source);
+              if (value.kind == ValueKind::logic9) {
+                store_logic9_word(logic9_word_slot, value);
+                builder.CreateCall(
+                    formatted_output_logic9_type,
+                    write_formatted_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(i32, process.id),
+                        llvm::ConstantInt::get(i32, instruction),
+                        llvm::ConstantInt::get(i32, value.width),
+                        logic9_word_slot});
+                branch_to_next();
+                return;
+              }
               builder.CreateCall(
                   formatted_output_type,
                   formatted_output_callback,
@@ -5082,11 +6271,15 @@ void LlvmJit::add_process_module(
         *entry.process, signal_widths, signal_value_kinds);
     auto cache_key = make_native_object_cache_key(
         owned_symbol, *entry.process, signal_widths,
+        signal_value_kinds,
         impl_->options.optimization, impl_->jit->getTargetTriple(),
         impl_->jit->getDataLayout(), impl_->target_cpu,
         impl_->target_features);
     const Impl::ProcessInfo process_info{
-        make_frame_layout(cache_key, entry.process->register_count),
+        make_frame_layout(
+            cache_key,
+            entry.process->register_count,
+            validated.uses_logic9),
         static_cast<std::uint32_t>(entry.process->operations.size()),
         validated.requires_resume,
         validated.uses_write_update,
@@ -5135,6 +6328,7 @@ void LlvmJit::add_process_module(
   for (const auto& item : prepared) {
     lower_process(
         *module, item.symbol, *item.process, signal_widths,
+        signal_value_kinds,
         item.validated,
         impl_->options.optimization == JitOptimizationLevel::o0);
   }
@@ -5230,21 +6424,48 @@ void LlvmJit::initialize_frame(
     const JitProcessHandle process, fsim_jit_frame_v1 &frame,
     const std::span<std::uint64_t> register_aval,
     const std::span<std::uint64_t> register_bval,
-    const std::span<std::uint8_t> register_initialized) const {
+    const std::span<std::uint8_t> register_initialized,
+    const std::span<std::uint64_t> register_logic9_plane2,
+    const std::span<std::uint64_t> register_logic9_plane3) const {
   const auto layout = frame_layout(process);
   if (register_aval.size() < layout.register_count ||
       register_bval.size() < layout.register_count
-      || register_initialized.size() < layout.register_count) {
+      || register_initialized.size() < layout.register_count
+      || (layout.uses_logic9
+          && (register_logic9_plane2.size() < layout.register_count
+              || register_logic9_plane3.size()
+                  < layout.register_count))) {
     throw LlvmJitError(
         "caller-owned JIT register storage is smaller than the frame layout");
   }
   if (layout.register_count != 0 &&
-      register_aval.data() == register_bval.data()) {
+      (register_aval.data() == register_bval.data()
+       || (layout.uses_logic9
+           && (register_logic9_plane2.data()
+                   == register_logic9_plane3.data()
+               || register_logic9_plane2.data()
+                   == register_aval.data()
+               || register_logic9_plane2.data()
+                   == register_bval.data()
+               || register_logic9_plane3.data()
+                   == register_aval.data()
+               || register_logic9_plane3.data()
+                   == register_bval.data())))) {
     throw LlvmJitError(
-        "caller-owned JIT aval and bval register storage must be distinct");
+        "caller-owned JIT register planes must be distinct");
   }
   std::fill_n(register_aval.begin(), layout.register_count, UINT64_C(0));
   std::fill_n(register_bval.begin(), layout.register_count, UINT64_C(0));
+  if (layout.uses_logic9) {
+    std::fill_n(
+        register_logic9_plane2.begin(),
+        layout.register_count,
+        UINT64_C(0));
+    std::fill_n(
+        register_logic9_plane3.begin(),
+        layout.register_count,
+        UINT64_C(0));
+  }
   std::fill_n(
       register_initialized.begin(), layout.register_count, UINT8_C(0));
   frame = {
@@ -5259,6 +6480,12 @@ void LlvmJit::initialize_frame(
       register_aval.data(),
       register_bval.data(),
       register_initialized.data(),
+      layout.uses_logic9
+          ? register_logic9_plane2.data()
+          : nullptr,
+      layout.uses_logic9
+          ? register_logic9_plane3.data()
+          : nullptr,
   };
 }
 
@@ -5568,10 +6795,36 @@ LlvmJit::resume(const JitProcessHandle process,
           "JIT runtime ABI requires random_value for this process");
     }
   }
+  if (entry.info.frame_layout.uses_logic9) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include Logic9 callbacks");
+    }
+    if (runtime.read_signal_logic9 == nullptr
+        || runtime.write_signal_logic9 == nullptr
+        || runtime.write_update_logic9 == nullptr
+        || runtime.write_after_logic9 == nullptr
+        || runtime.write_signal_slice_logic9 == nullptr
+        || runtime.write_update_slice_logic9 == nullptr
+        || runtime.write_after_slice_logic9 == nullptr
+        || runtime.signal_last_value_logic9 == nullptr
+        || runtime.write_inertial_logic9 == nullptr
+        || runtime.write_inertial_slice_logic9 == nullptr
+        || runtime.write_projected_logic9 == nullptr
+        || runtime.write_projected_slice_logic9 == nullptr
+        || runtime.write_projected_waveform_logic9 == nullptr
+        || runtime.write_projected_waveform_slice_logic9 == nullptr
+        || runtime.write_formatted_logic9 == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires Logic9 callbacks for this process");
+    }
+  }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {
     throw LlvmJitError("JIT frame ABI version mismatch");
   }
-  if (frame.struct_size < sizeof(fsim_jit_frame_v1)) {
+  if (frame.struct_size < kJitFrameV1PrefixSize
+      || (entry.info.frame_layout.uses_logic9
+          && frame.struct_size < sizeof(fsim_jit_frame_v1))) {
     throw LlvmJitError("JIT frame ABI structure is too small");
   }
   if (frame.layout_id_low != entry.info.frame_layout.layout_id_low ||
@@ -5588,6 +6841,12 @@ LlvmJit::resume(const JitProcessHandle process,
       frame.register_aval == frame.register_bval) {
     throw LlvmJitError(
         "JIT frame aval and bval register storage must be distinct");
+  }
+  if (entry.info.frame_layout.uses_logic9
+      && frame.register_count != 0
+      && (frame.register_logic9_plane2 == nullptr
+          || frame.register_logic9_plane3 == nullptr)) {
+    throw LlvmJitError("JIT frame Logic9 register storage is null");
   }
 
   const auto terminal_result =
@@ -5716,13 +6975,23 @@ LlvmJit::execute(const JitProcessHandle process,
       found->second.info.frame_layout.register_count);
   std::vector<std::uint8_t> register_initialized(
       found->second.info.frame_layout.register_count);
+  std::vector<std::uint64_t> register_logic9_plane2(
+      found->second.info.frame_layout.uses_logic9
+          ? found->second.info.frame_layout.register_count
+          : 0);
+  std::vector<std::uint64_t> register_logic9_plane3(
+      found->second.info.frame_layout.uses_logic9
+          ? found->second.info.frame_layout.register_count
+          : 0);
   fsim_jit_frame_v1 frame{};
   initialize_frame(
       process,
       frame,
       register_aval,
       register_bval,
-      register_initialized);
+      register_initialized,
+      register_logic9_plane2,
+      register_logic9_plane3);
   fsim_jit_resume_result_v1 result{
       FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1,
       static_cast<std::uint32_t>(sizeof(fsim_jit_resume_result_v1)),

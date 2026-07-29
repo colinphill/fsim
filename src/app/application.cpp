@@ -146,21 +146,29 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       compiler::LlvmJit& jit,
       const compiler::JitProcessHandle handle,
       const runtime::simir::Process& process,
-      std::span<const std::uint32_t> signal_widths)
+      std::span<const std::uint32_t> signal_widths,
+      std::span<const runtime::simir::ValueKind> signal_value_kinds)
       : jit_(jit),
         handle_(handle),
         process_(process),
-        signal_widths_(signal_widths) {
+        signal_widths_(signal_widths),
+        signal_value_kinds_(signal_value_kinds) {
     const auto layout = jit_.frame_layout(handle_);
     register_aval_.resize(layout.register_count);
     register_bval_.resize(layout.register_count);
+    if (layout.uses_logic9) {
+      register_logic9_plane2_.resize(layout.register_count);
+      register_logic9_plane3_.resize(layout.register_count);
+    }
     register_initialized_.resize(layout.register_count);
     jit_.initialize_frame(
         handle_,
         frame_,
         register_aval_,
         register_bval_,
-        register_initialized_);
+        register_initialized_,
+        register_logic9_plane2_,
+        register_logic9_plane3_);
   }
 
   [[nodiscard]] runtime::simir::ProcessResumeResult resume(
@@ -172,7 +180,11 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
 
     CallbackState callback_state{
-        &context, &process_, signal_widths_, {}};
+        &context,
+        &process_,
+        signal_widths_,
+        signal_value_kinds_,
+        {}};
     fsim_jit_runtime_v1 runtime{};
     runtime.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V1;
     runtime.struct_size = sizeof(runtime);
@@ -208,6 +220,29 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.write_projected_waveform = write_projected_waveform;
     runtime.write_projected_waveform_slice =
         write_projected_waveform_slice;
+    runtime.read_signal_logic9 = read_signal_logic9;
+    runtime.write_signal_logic9 = write_signal_logic9;
+    runtime.write_update_logic9 = write_update_logic9;
+    runtime.write_after_logic9 = write_after_logic9;
+    runtime.write_signal_slice_logic9 =
+        write_signal_slice_logic9;
+    runtime.write_update_slice_logic9 =
+        write_update_slice_logic9;
+    runtime.write_after_slice_logic9 =
+        write_after_slice_logic9;
+    runtime.signal_last_value_logic9 =
+        signal_last_value_logic9;
+    runtime.write_inertial_logic9 = write_inertial_logic9;
+    runtime.write_inertial_slice_logic9 =
+        write_inertial_slice_logic9;
+    runtime.write_projected_logic9 = write_projected_logic9;
+    runtime.write_projected_slice_logic9 =
+        write_projected_slice_logic9;
+    runtime.write_projected_waveform_logic9 =
+        write_projected_waveform_logic9;
+    runtime.write_projected_waveform_slice_logic9 =
+        write_projected_waveform_slice_logic9;
+    runtime.write_formatted_logic9 = write_formatted_logic9;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -385,6 +420,20 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       throw std::logic_error{
           "compiled process debug local has not been initialized"};
     }
+    const auto kind =
+        process_.register_value_kinds.empty()
+            ? runtime::simir::ValueKind::logic4
+            : process_.register_value_kinds[id];
+    if (kind == runtime::simir::ValueKind::logic9) {
+      return PackedLogic4::from_logic9_word(
+          {
+              width,
+              {
+                  register_aval_[id],
+                  register_bval_[id],
+                  register_logic9_plane2_[id],
+                  register_logic9_plane3_[id]}});
+    }
     return PackedLogic4::from_aval_bval(
         width, register_aval_[id], register_bval_[id]);
   }
@@ -398,8 +447,21 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       throw compiler::LlvmJitError{
           "compiled process register write is out of range"};
     }
-    register_aval_[id] = value.aval_words().front();
-    register_bval_[id] = value.bval_words().front();
+    const auto kind =
+        process_.register_value_kinds.empty()
+            ? runtime::simir::ValueKind::logic4
+            : process_.register_value_kinds[id];
+    if (kind == runtime::simir::ValueKind::logic9) {
+      const auto word = value.logic9_low_word();
+      register_aval_[id] = word.planes[0];
+      register_bval_[id] = word.planes[1];
+      register_logic9_plane2_[id] = word.planes[2];
+      register_logic9_plane3_[id] = word.planes[3];
+    } else {
+      const auto word = value.low_word();
+      register_aval_[id] = word.aval;
+      register_bval_[id] = word.bval;
+    }
     register_initialized_[id] = 1;
   }
 
@@ -408,6 +470,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime::simir::ProcessExecutionContext* context{};
     const runtime::simir::Process* process{};
     std::span<const std::uint32_t> signal_widths;
+    std::span<const runtime::simir::ValueKind> signal_value_kinds;
     std::exception_ptr failure;
   };
 
@@ -464,6 +527,33 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void read_signal_logic9(
+      void* context,
+      const std::uint32_t signal,
+      fsim_jit_logic9_word_v1* result) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    clear_logic9_word(result);
+    if (state.failure) {
+      return;
+    }
+    try {
+      require_logic9_signal(state, signal, result);
+      const auto value =
+          state.context->read_signal_logic9_word(signal);
+      if (value.width != state.signal_widths[signal]) {
+        throw std::logic_error(
+            "generated Logic9 read observed an invalid width");
+      }
+      result->planes[0] = value.planes[0];
+      result->planes[1] = value.planes[1];
+      result->planes[2] = value.planes[2];
+      result->planes[3] = value.planes[3];
+    } catch (...) {
+      capture_failure(state);
+      clear_logic9_word(result);
+    }
+  }
+
   static void write_signal(
       void* context,
       const std::uint32_t signal,
@@ -483,6 +573,23 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_signal_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const fsim_jit_logic9_word_v1* value) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_blocking(
+          signal,
+          checked_logic9_value(state, signal, value));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   static void write_update(
       void* context,
       const std::uint32_t signal,
@@ -497,6 +604,23 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           checked_write_word(state, signal, aval, bval);
       state.context->write_update_word(
           signal, value);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_update_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const fsim_jit_logic9_word_v1* value) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_update(
+          signal,
+          checked_logic9_value(state, signal, value));
     } catch (...) {
       capture_failure(state);
     }
@@ -522,6 +646,25 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_after_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const fsim_jit_logic9_word_v1* value,
+      const std::uint64_t delay) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_after(
+          signal,
+          checked_logic9_value(state, signal, value),
+          delay);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   static void write_inertial(
       void* context,
       const std::uint32_t signal,
@@ -540,6 +683,27 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       state.context->write_inertial_word(
           signal,
           value,
+          {rise_delay, fall_delay, turnoff_delay});
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_inertial_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const fsim_jit_logic9_word_v1* value,
+      const std::uint64_t rise_delay,
+      const std::uint64_t fall_delay,
+      const std::uint64_t turnoff_delay) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_inertial(
+          signal,
+          checked_logic9_value(state, signal, value),
           {rise_delay, fall_delay, turnoff_delay});
     } catch (...) {
       capture_failure(state);
@@ -572,6 +736,29 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_projected_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const fsim_jit_logic9_word_v1* value,
+      const std::uint64_t delay,
+      const std::uint64_t rejection,
+      const std::uint32_t mode) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_projected(
+          signal,
+          checked_logic9_value(state, signal, value),
+          delay,
+          rejection,
+          projected_delay_mode(mode));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   static void write_signal_slice(
       void* context,
       const std::uint32_t signal,
@@ -588,6 +775,27 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           state, signal, offset, width, aval, bval);
       state.context->write_blocking_slice_word(
           signal, value, offset);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_signal_slice_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const fsim_jit_logic9_word_v1* value) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_blocking_slice(
+          signal,
+          checked_logic9_slice(
+              state, signal, offset, width, value),
+          offset);
     } catch (...) {
       capture_failure(state);
     }
@@ -614,6 +822,27 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_update_slice_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const fsim_jit_logic9_word_v1* value) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_update_slice(
+          signal,
+          checked_logic9_slice(
+              state, signal, offset, width, value),
+          offset);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   static void write_after_slice(
       void* context,
       const std::uint32_t signal,
@@ -631,6 +860,29 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           state, signal, offset, width, aval, bval);
       state.context->write_after_slice_word(
           signal, value, offset, delay);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_after_slice_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const fsim_jit_logic9_word_v1* value,
+      const std::uint64_t delay) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_after_slice(
+          signal,
+          checked_logic9_slice(
+              state, signal, offset, width, value),
+          offset,
+          delay);
     } catch (...) {
       capture_failure(state);
     }
@@ -663,6 +915,31 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_inertial_slice_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const fsim_jit_logic9_word_v1* value,
+      const std::uint64_t rise_delay,
+      const std::uint64_t fall_delay,
+      const std::uint64_t turnoff_delay) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_inertial_slice(
+          signal,
+          checked_logic9_slice(
+              state, signal, offset, width, value),
+          offset,
+          {rise_delay, fall_delay, turnoff_delay});
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   static void write_projected_slice(
       void* context,
       const std::uint32_t signal,
@@ -683,6 +960,33 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       state.context->write_projected_slice_word(
           signal,
           value,
+          offset,
+          delay,
+          rejection,
+          projected_delay_mode(mode));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_projected_slice_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const fsim_jit_logic9_word_v1* value,
+      const std::uint64_t delay,
+      const std::uint64_t rejection,
+      const std::uint32_t mode) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      state.context->write_projected_slice(
+          signal,
+          checked_logic9_slice(
+              state, signal, offset, width, value),
           offset,
           delay,
           rejection,
@@ -722,6 +1026,43 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
         values.push_back({
             PackedLogic4::from_aval_bval(
                 word.width, word.aval, word.bval),
+            elements[index].delay});
+      }
+      state.context->write_projected_waveform(
+          signal,
+          std::move(values),
+          rejection,
+          projected_delay_mode(mode));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_projected_waveform_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t width,
+      const fsim_jit_logic9_projected_element_v1* elements,
+      const std::uint32_t count,
+      const std::uint64_t rejection,
+      const std::uint32_t mode) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (elements == nullptr || count == 0
+          || signal >= state.signal_widths.size()
+          || width != state.signal_widths[signal]) {
+        throw std::logic_error(
+            "invalid generated Logic9 projected-waveform callback");
+      }
+      std::vector<runtime::simir::ProjectedWaveformValue> values;
+      values.reserve(count);
+      for (std::uint32_t index = 0; index < count; ++index) {
+        values.push_back({
+            checked_logic9_value(
+                state, signal, &elements[index].value),
             elements[index].delay});
       }
       state.context->write_projected_waveform(
@@ -778,6 +1119,48 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_projected_waveform_slice_logic9(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const fsim_jit_logic9_projected_element_v1* elements,
+      const std::uint32_t count,
+      const std::uint64_t rejection,
+      const std::uint32_t mode) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (elements == nullptr || count == 0) {
+        throw std::logic_error(
+            "invalid generated Logic9 projected-slice-waveform "
+            "callback");
+      }
+      std::vector<runtime::simir::ProjectedWaveformValue> values;
+      values.reserve(count);
+      for (std::uint32_t index = 0; index < count; ++index) {
+        values.push_back({
+            checked_logic9_slice(
+                state,
+                signal,
+                offset,
+                width,
+                &elements[index].value),
+            elements[index].delay});
+      }
+      state.context->write_projected_waveform_slice(
+          signal,
+          std::move(values),
+          offset,
+          rejection,
+          projected_delay_mode(mode));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   [[nodiscard]] static runtime::simir::ProjectedDelayMode
   projected_delay_mode(const std::uint32_t mode) {
     if (mode == FSIM_JIT_PROJECTED_TRANSPORT) {
@@ -805,6 +1188,73 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           "generated write-signal callback received an invalid width");
     }
     return {width, aval, bval};
+  }
+
+  static void clear_logic9_word(
+      fsim_jit_logic9_word_v1* value) noexcept {
+    if (value == nullptr) {
+      return;
+    }
+    value->planes[0] = 0;
+    value->planes[1] = 0;
+    value->planes[2] = 0;
+    value->planes[3] = 0;
+  }
+
+  static void require_logic9_signal(
+      const CallbackState& state,
+      const std::uint32_t signal,
+      const fsim_jit_logic9_word_v1* value) {
+    if (value == nullptr
+        || state.context == nullptr
+        || signal >= state.signal_widths.size()
+        || signal >= state.signal_value_kinds.size()
+        || state.signal_value_kinds[signal]
+            != runtime::simir::ValueKind::logic9
+        || state.signal_widths[signal] == 0
+        || state.signal_widths[signal] > 64) {
+      throw std::logic_error(
+          "invalid generated Logic9 signal callback");
+    }
+  }
+
+  [[nodiscard]] static PackedLogic4 checked_logic9_value(
+      const CallbackState& state,
+      const std::uint32_t signal,
+      const fsim_jit_logic9_word_v1* value) {
+    require_logic9_signal(state, signal, value);
+    return PackedLogic4::from_logic9_word(
+        {
+            state.signal_widths[signal],
+            {
+                value->planes[0],
+                value->planes[1],
+                value->planes[2],
+                value->planes[3]}});
+  }
+
+  [[nodiscard]] static PackedLogic4 checked_logic9_slice(
+      const CallbackState& state,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const fsim_jit_logic9_word_v1* value) {
+    require_logic9_signal(state, signal, value);
+    const auto target_width = state.signal_widths[signal];
+    if (width == 0 || width > 64
+        || offset > target_width
+        || width > target_width - offset) {
+      throw std::logic_error(
+          "invalid generated Logic9 partial-write callback");
+    }
+    return PackedLogic4::from_logic9_word(
+        {
+            width,
+            {
+                value->planes[0],
+                value->planes[1],
+                value->planes[2],
+                value->planes[3]}});
   }
 
   [[nodiscard]] static runtime::Logic4Word checked_slice_word(
@@ -892,6 +1342,33 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
         *bval = 0;
       }
       return 0;
+    }
+  }
+
+  static void signal_last_value_logic9(
+      void* context,
+      const std::uint32_t signal,
+      fsim_jit_logic9_word_v1* result) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    clear_logic9_word(result);
+    if (state.failure) {
+      return;
+    }
+    try {
+      require_logic9_signal(state, signal, result);
+      const auto value =
+          state.context->signal_last_value_logic9_word(signal);
+      if (value.width != state.signal_widths[signal]) {
+        throw std::logic_error(
+            "generated Logic9 last-value read observed an invalid width");
+      }
+      result->planes[0] = value.planes[0];
+      result->planes[1] = value.planes[1];
+      result->planes[2] = value.planes[2];
+      result->planes[3] = value.planes[3];
+    } catch (...) {
+      capture_failure(state);
+      clear_logic9_word(result);
     }
   }
 
@@ -1082,6 +1559,59 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     }
   }
 
+  static void write_formatted_logic9(
+      void* context,
+      const std::uint32_t process,
+      const std::uint32_t instruction,
+      const std::uint32_t width,
+      const fsim_jit_logic9_word_v1* value) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (state.context == nullptr
+          || state.process == nullptr
+          || state.process->id != process
+          || instruction >= state.process->operations.size()
+          || width == 0 || width > 64
+          || value == nullptr) {
+        throw std::logic_error{
+            "invalid generated Logic9 formatted-output callback"};
+      }
+      const auto* operation =
+          std::get_if<runtime::simir::FormatDisplay>(
+              &state.process->operations[instruction]);
+      if (operation == nullptr) {
+        throw std::logic_error{
+            "generated Logic9 formatted-output callback references a "
+            "different operation"};
+      }
+      const auto packed = PackedLogic4::from_logic9_word(
+          {
+              width,
+              {
+                  value->planes[0],
+                  value->planes[1],
+                  value->planes[2],
+                  value->planes[3]}});
+      state.context->display_formatted(
+          operation->prefix,
+          operation->suffix,
+          operation->format,
+          packed,
+          operation->newline,
+          operation->postponed,
+          operation->signed_decimal,
+          operation->suppress_leading_zero,
+          operation->minimum_width,
+          operation->left_justify,
+          operation->zero_pad);
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
   static void write_time(
       void* context,
       const std::uint32_t process,
@@ -1237,9 +1767,12 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
   compiler::JitProcessHandle handle_;
   const runtime::simir::Process& process_;
   std::span<const std::uint32_t> signal_widths_;
+  std::span<const runtime::simir::ValueKind> signal_value_kinds_;
   fsim_jit_frame_v1 frame_{};
   std::vector<std::uint64_t> register_aval_;
   std::vector<std::uint64_t> register_bval_;
+  std::vector<std::uint64_t> register_logic9_plane2_;
+  std::vector<std::uint64_t> register_logic9_plane3_;
   std::vector<std::uint8_t> register_initialized_;
 };
 
@@ -4856,7 +5389,11 @@ struct Simulation::Impl {
           interpreter->set_process_executor(
               selected[index]->id,
               std::make_unique<LlvmProcessExecutor>(
-                  *jit, handle, *selected[index], signal_widths));
+                  *jit,
+                  handle,
+                  *selected[index],
+                  signal_widths,
+                  signal_value_kinds));
           ++compiled_processes;
         }
       }

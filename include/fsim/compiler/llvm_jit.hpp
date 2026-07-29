@@ -80,6 +80,7 @@ struct JitProcessFrameLayout {
   std::uint64_t layout_id_low{};
   std::uint64_t layout_id_high{};
   std::uint32_t register_count{};
+  bool uses_logic9{};
 
   friend bool operator==(JitProcessFrameLayout,
                          JitProcessFrameLayout) = default;
@@ -216,7 +217,10 @@ public:
   void initialize_frame(JitProcessHandle process, fsim_jit_frame_v1 &frame,
                         std::span<std::uint64_t> register_aval,
                         std::span<std::uint64_t> register_bval,
-                        std::span<std::uint8_t> register_initialized) const;
+                        std::span<std::uint8_t> register_initialized,
+                        std::span<std::uint64_t> register_logic9_plane2 = {},
+                        std::span<std::uint64_t> register_logic9_plane3 = {})
+      const;
 
   /// Run from the frame PC until completion, failure, Stop, or suspension.
   ///

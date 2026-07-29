@@ -225,8 +225,8 @@ The current tree contains:
   resumable frames for timed, dynamic-signal, and static-sensitivity waits,
   yields, design stop, loops containing suspension points or per-iteration
   source safe points, update-phase and delayed writes, and a shared checked
-  allocation-free single-word `Logic4`
-  `aval`/`bval` path into the simulation kernel; eligible processes owned by
+  allocation-free single-word `Logic4` `aval`/`bval` and four-plane `Logic9`
+  paths into the simulation kernel; eligible processes owned by
   one bounded elaborated specialization are lowered and optimized together in
   one LLVM module while capability misses retain per-process fallback;
 - a checksummed persistent object-cache primitive with process-aware per-key
@@ -311,7 +311,7 @@ behavior plus named static `begin : label` blocks inside explicit
 The full v1 language coverage described in
 [Language support](docs/language-support.md) is not implemented yet. In
 particular, complete semantic analysis, general mixed-boundary conversions,
-direct LLVM lowering for the preserved nine-state VHDL domain, wired-net
+wired-net
 resolution beyond `sv_wire`, complete VHDL generic typing and SystemVerilog
 parameter typing, complete scoped/local type coverage and call
 safe points, broader interpreter/JIT differential coverage, remaining SystemC
@@ -535,14 +535,17 @@ uses a hybrid engine. Processes whose supported value-bearing operations are
 at most 64 bits execute through LLVM at the selected O0/O2 setting—O2 by
 default—while typed capability misses fall back per process to the reference
 evaluator under the same deterministic kernel. Generated callbacks and the
-reference kernel share a checked allocation-free single-word `Logic4`
-representation for values up to 64 bits, including blocking, update-phase,
-and delayed writes. The reference kernel additionally retains four-plane
-Logic9 words and routes any exact nine-state process away from the aval/bval
-LLVM subset, avoiding silent collapse. The plain-C runtime-table
-ABI retains its v1 prefix and append-only scheduled, transition-inertial, and
-VHDL projected whole/slice callbacks; generated code size-gates those fields
-per process before use. The configured
+reference kernel share checked allocation-free single-word `Logic4` and
+four-plane `Logic9` representations for values up to 64 bits. Generated
+Logic9 code preserves all nine ordinal states through constants, reads,
+structural operations, IEEE logical operators, exact equality, formatting,
+debug frames, and blocking, update-phase, delayed, inertial, projected,
+partial, and atomic waveform writes. Explicit register/signal domain
+conversion prevents a Logic9 value from silently entering the aval/bval path.
+The plain-C runtime-table ABI retains its v1 prefix and appends pointer-based
+Logic9 callbacks and caller-owned frame planes so aggregate calling
+conventions never cross the compiler boundary; generated code size-gates
+those fields per process before use. The configured
 cache stores one native object per compiled specialization module under
 `llvm-native`; `fsim build` reports compiled process/module counts and native
 cache hits, misses, stores, rejected entries, and maintenance failures. The

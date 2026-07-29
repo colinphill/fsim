@@ -138,10 +138,10 @@ SystemVerilog identifiers remain case-sensitive. VHDL nine-state scalar and
 vector literals retain `U`, `X`, `0`, `1`, `Z`, `W`, `L`, `H`, and `-`
 through common signals, locals, structural operations, projected transactions,
 signal last-value state, standard logical operators, equality, and
-`std_logic` resolution in the reference engine. Compiled mode deliberately
-uses the reference evaluator for a process that has an exact nine-state
-register or accesses an exact nine-state signal; direct LLVM Logic9 lowering
-is still in progress.
+`std_logic` resolution in both the reference engine and generated LLVM O0/O2
+code for supported values up to 64 elements. Generated code uses appended
+pointer-based four-plane callbacks and explicit Logic9/Logic4 conversions;
+wide-value runtime kernels remain incomplete.
 
 For the bounded hierarchy slice, child ports alias parent signal IDs after
 width, signedness, and lossy-2-state checks. Same-language lookup and explicit

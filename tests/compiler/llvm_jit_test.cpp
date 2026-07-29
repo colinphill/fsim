@@ -33,6 +33,7 @@ using fsim::compiler::LlvmJitOptions;
 using fsim::compiler::LlvmJitUnsupportedError;
 using fsim::runtime::PackedLogic4;
 using fsim::runtime::Logic4;
+using fsim::runtime::Logic9;
 using namespace fsim::runtime::simir;
 
 struct EncodedSignal {
@@ -96,6 +97,7 @@ struct ProjectedWrite {
 
 struct TestRuntime {
   std::array<EncodedSignal, 16> signals{};
+  std::array<std::array<std::uint64_t, 4>, 16> logic9_signals{};
   std::uint32_t assertion_count{};
   std::uint32_t failed_process{};
   std::uint32_t failed_instruction{};
@@ -111,6 +113,7 @@ struct TestRuntime {
   std::vector<std::uint32_t> report_instructions;
   std::vector<std::uint32_t> formatted_instructions;
   std::vector<EncodedSignal> formatted_values;
+  std::vector<std::array<std::uint64_t, 4>> formatted_logic9_values;
   std::vector<std::uint32_t> time_instructions;
   std::vector<std::uint32_t> monitor_install_instructions;
   std::vector<std::uint32_t> monitor_control_instructions;
@@ -118,6 +121,196 @@ struct TestRuntime {
   std::vector<InertialWrite> inertial_writes;
   std::vector<ProjectedWrite> projected_writes;
 };
+
+[[nodiscard]] std::uint64_t low_mask(std::uint32_t width);
+
+[[nodiscard]] std::array<std::uint64_t, 4> logic9_value(
+    const fsim_jit_logic9_word_v1* value) {
+  assert(value != nullptr);
+  return {
+      value->planes[0],
+      value->planes[1],
+      value->planes[2],
+      value->planes[3]};
+}
+
+void store_logic9_value(
+    fsim_jit_logic9_word_v1* destination,
+    const std::array<std::uint64_t, 4>& value) {
+  assert(destination != nullptr);
+  std::copy(value.begin(), value.end(), destination->planes);
+}
+
+extern "C" void read_signal_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    fsim_jit_logic9_word_v1* value) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.logic9_signals.size());
+  store_logic9_value(value, runtime.logic9_signals[signal]);
+}
+
+extern "C" void write_signal_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const fsim_jit_logic9_word_v1* value) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.logic9_signals.size());
+  runtime.logic9_signals[signal] = logic9_value(value);
+}
+
+extern "C" void write_update_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const fsim_jit_logic9_word_v1* value) {
+  write_signal_logic9(opaque, signal, value);
+}
+
+extern "C" void write_after_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const fsim_jit_logic9_word_v1* value,
+    const std::uint64_t) {
+  write_signal_logic9(opaque, signal, value);
+}
+
+void write_signal_slice_logic9_impl(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_logic9_word_v1* value) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.logic9_signals.size());
+  assert(offset < 64 && width <= 64 - offset);
+  const auto mask = low_mask(width) << offset;
+  const auto source = logic9_value(value);
+  for (std::size_t plane = 0; plane < source.size(); ++plane) {
+    runtime.logic9_signals[signal][plane] =
+        (runtime.logic9_signals[signal][plane] & ~mask)
+        | ((source[plane] << offset) & mask);
+  }
+}
+
+extern "C" void write_signal_slice_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_logic9_word_v1* value) {
+  write_signal_slice_logic9_impl(
+      opaque, signal, offset, width, value);
+}
+
+extern "C" void write_update_slice_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_logic9_word_v1* value) {
+  write_signal_slice_logic9_impl(
+      opaque, signal, offset, width, value);
+}
+
+extern "C" void write_after_slice_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_logic9_word_v1* value,
+    const std::uint64_t) {
+  write_signal_slice_logic9_impl(
+      opaque, signal, offset, width, value);
+}
+
+extern "C" void signal_last_value_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    fsim_jit_logic9_word_v1* value) {
+  read_signal_logic9(opaque, signal, value);
+}
+
+extern "C" void write_inertial_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const fsim_jit_logic9_word_v1* value,
+    const std::uint64_t,
+    const std::uint64_t,
+    const std::uint64_t) {
+  write_signal_logic9(opaque, signal, value);
+}
+
+extern "C" void write_inertial_slice_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_logic9_word_v1* value,
+    const std::uint64_t,
+    const std::uint64_t,
+    const std::uint64_t) {
+  write_signal_slice_logic9_impl(
+      opaque, signal, offset, width, value);
+}
+
+extern "C" void write_projected_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const fsim_jit_logic9_word_v1* value,
+    const std::uint64_t,
+    const std::uint64_t,
+    const std::uint32_t) {
+  write_signal_logic9(opaque, signal, value);
+}
+
+extern "C" void write_projected_slice_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_logic9_word_v1* value,
+    const std::uint64_t,
+    const std::uint64_t,
+    const std::uint32_t) {
+  write_signal_slice_logic9_impl(
+      opaque, signal, offset, width, value);
+}
+
+extern "C" void write_projected_waveform_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t,
+    const fsim_jit_logic9_projected_element_v1* elements,
+    const std::uint32_t count,
+    const std::uint64_t,
+    const std::uint32_t) {
+  assert(elements != nullptr && count > 0);
+  write_signal_logic9(opaque, signal, &elements[count - 1].value);
+}
+
+extern "C" void write_projected_waveform_slice_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_logic9_projected_element_v1* elements,
+    const std::uint32_t count,
+    const std::uint64_t,
+    const std::uint32_t) {
+  assert(elements != nullptr && count > 0);
+  write_signal_slice_logic9_impl(
+      opaque, signal, offset, width, &elements[count - 1].value);
+}
+
+extern "C" void write_formatted_logic9(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t,
+    const std::uint32_t,
+    const fsim_jit_logic9_word_v1* value) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.formatted_logic9_values.push_back(logic9_value(value));
+}
 
 extern "C" std::uint64_t read_signal(void *opaque,
                                       const std::uint32_t signal,
@@ -473,39 +666,58 @@ extern "C" void write_projected_waveform_slice(
 }
 
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
-  return {
-      FSIM_JIT_RUNTIME_ABI_VERSION_V1,
-      static_cast<std::uint32_t>(sizeof(fsim_jit_runtime_v1)),
-      &runtime,
-      &read_signal,
-      &write_signal,
-      &assert_failed,
-      &write_update,
-      &write_after,
-      0,
-      0,
-      &write_signal_slice,
-      &write_update_slice,
-      &write_after_slice,
-      &signal_event,
-      &signal_last_value,
-      &signal_last_event,
-      &signal_active,
-      &write_output,
-      &schedule_output,
-      &write_report,
-      &write_formatted,
-      &write_time,
-      &install_monitor,
-      &control_monitor,
-      &random_value,
-      &write_inertial,
-      &write_inertial_slice,
-      &write_projected,
-      &write_projected_slice,
-      &write_projected_waveform,
-      &write_projected_waveform_slice,
-  };
+  fsim_jit_runtime_v1 result{};
+  result.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V1;
+  result.struct_size =
+      static_cast<std::uint32_t>(sizeof(fsim_jit_runtime_v1));
+  result.context = &runtime;
+  result.read_signal = &read_signal;
+  result.write_signal = &write_signal;
+  result.assert_failed = &assert_failed;
+  result.write_update = &write_update;
+  result.write_after = &write_after;
+  result.write_signal_slice = &write_signal_slice;
+  result.write_update_slice = &write_update_slice;
+  result.write_after_slice = &write_after_slice;
+  result.signal_event = &signal_event;
+  result.signal_last_value = &signal_last_value;
+  result.signal_last_event = &signal_last_event;
+  result.signal_active = &signal_active;
+  result.write_output = &write_output;
+  result.schedule_output = &schedule_output;
+  result.write_report = &write_report;
+  result.write_formatted = &write_formatted;
+  result.write_time = &write_time;
+  result.install_monitor = &install_monitor;
+  result.control_monitor = &control_monitor;
+  result.random_value = &random_value;
+  result.write_inertial = &write_inertial;
+  result.write_inertial_slice = &write_inertial_slice;
+  result.write_projected = &write_projected;
+  result.write_projected_slice = &write_projected_slice;
+  result.write_projected_waveform = &write_projected_waveform;
+  result.write_projected_waveform_slice =
+      &write_projected_waveform_slice;
+  result.read_signal_logic9 = &read_signal_logic9;
+  result.write_signal_logic9 = &write_signal_logic9;
+  result.write_update_logic9 = &write_update_logic9;
+  result.write_after_logic9 = &write_after_logic9;
+  result.write_signal_slice_logic9 = &write_signal_slice_logic9;
+  result.write_update_slice_logic9 = &write_update_slice_logic9;
+  result.write_after_slice_logic9 = &write_after_slice_logic9;
+  result.signal_last_value_logic9 = &signal_last_value_logic9;
+  result.write_inertial_logic9 = &write_inertial_logic9;
+  result.write_inertial_slice_logic9 =
+      &write_inertial_slice_logic9;
+  result.write_projected_logic9 = &write_projected_logic9;
+  result.write_projected_slice_logic9 =
+      &write_projected_slice_logic9;
+  result.write_projected_waveform_logic9 =
+      &write_projected_waveform_logic9;
+  result.write_projected_waveform_slice_logic9 =
+      &write_projected_waveform_slice_logic9;
+  result.write_formatted_logic9 = &write_formatted_logic9;
+  return result;
 }
 
 [[nodiscard]] fsim_jit_resume_result_v1 new_resume_result() {
@@ -1522,7 +1734,8 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   {
     auto wrong = frame;
     wrong.struct_size =
-        static_cast<std::uint32_t>(sizeof(fsim_jit_frame_v1) - 1U);
+        static_cast<std::uint32_t>(
+            offsetof(fsim_jit_frame_v1, register_logic9_plane2) - 1U);
     expect_error(
         [&] { (void)jit.resume(handle, descriptor, wrong, result); },
         "frame ABI structure is too small");
@@ -3307,7 +3520,7 @@ void test_process_module_grouping_at_level(
             0,
             PackedLogic4::from_logic9_msb_string("W")},
         Halt{}};
-    assert(!rejected.supports_process(
+    assert(rejected.supports_process(
         exact_register, std::array<std::uint32_t, 0>{}));
     Process exact_signal_access;
     exact_signal_access.id = 25;
@@ -3318,7 +3531,7 @@ void test_process_module_grouping_at_level(
     const std::array<std::uint32_t, 1> scalar_widths{1};
     const std::array<ValueKind, 1> exact_signal_kinds{
         ValueKind::logic9};
-    assert(!rejected.supports_process(
+    assert(rejected.supports_process(
         exact_signal_access,
         scalar_widths,
         exact_signal_kinds));
@@ -4117,6 +4330,51 @@ void test_integer_cache_identity(
   assert(cached_object_paths(cache_directory).size() == 3);
 }
 
+void test_signal_kind_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol = "cached_signal_kind";
+  const std::array<std::uint32_t, 2> widths{8, 8};
+  const auto process = make_cached_signal_process(0);
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+
+  {
+    LlvmJit cold{options};
+    const std::array<ValueKind, 2> kinds{
+        ValueKind::logic4, ValueKind::logic4};
+    cold.add_process(symbol, process, widths, kinds);
+    run_cached_signal_process(cold, symbol);
+    expect_cache_statistics(cold, 0, 1, 1);
+  }
+  {
+    LlvmJit unrelated_change{options};
+    const std::array<ValueKind, 2> kinds{
+        ValueKind::logic4, ValueKind::logic9};
+    unrelated_change.add_process(
+        symbol, process, widths, kinds);
+    run_cached_signal_process(unrelated_change, symbol);
+    expect_cache_statistics(unrelated_change, 1, 0, 0);
+  }
+  {
+    LlvmJit referenced_change{options};
+    const std::array<ValueKind, 2> kinds{
+        ValueKind::logic9, ValueKind::logic4};
+    referenced_change.add_process(
+        symbol, process, widths, kinds);
+    run_cached_signal_process(referenced_change, symbol);
+    expect_cache_statistics(referenced_change, 0, 1, 1);
+  }
+  {
+    LlvmJit exact_warm{options};
+    const std::array<ValueKind, 2> kinds{
+        ValueKind::logic9, ValueKind::logic4};
+    exact_warm.add_process(symbol, process, widths, kinds);
+    run_cached_signal_process(exact_warm, symbol);
+    expect_cache_statistics(exact_warm, 1, 0, 0);
+  }
+  assert(cached_object_paths(cache_directory).size() == 2);
+}
+
 void test_persistent_object_cache() {
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -4140,9 +4398,126 @@ void test_persistent_object_cache() {
       root / "projected-waveform");
   test_signed_shift_cache_identity(root / "signed-shift");
   test_integer_cache_identity(root / "integer");
+  test_signal_kind_cache_identity(root / "signal-kind");
 
   std::filesystem::remove_all(root, error);
   assert(!error);
+}
+
+[[nodiscard]] std::array<std::uint64_t, 4> planes(
+    const PackedLogic4& value) {
+  return value.logic9_low_word().planes;
+}
+
+void test_logic9_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol) {
+  Process process;
+  process.id = 91;
+  process.name = "logic9_exact";
+  process.register_count = 6;
+  process.register_value_kinds = {
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic4,
+      ValueKind::logic9};
+  const auto all_high =
+      PackedLogic4::from_logic9_msb_string("HHHHHHHH");
+  process.operations = {
+      ReadSignal{0, 4},
+      UnaryNot{1, 0},
+      LoadConstant{2, all_high},
+      Binary{BinaryOperator::bit_and, 3, 0, 2},
+      CopyRegister{4, 0},
+      CopyRegister{5, 4},
+      WriteBlocking{0, 1},
+      WriteUpdate{1, 3},
+      WriteBlocking{2, 4},
+      WriteAfter{3, 5, 7},
+      FormatDisplay{
+          0, OutputFormat::binary, "", "", true, false},
+      Halt{}};
+
+  const std::array<std::uint32_t, 5> widths{8, 8, 8, 8, 8};
+  const std::array<ValueKind, 5> kinds{
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic4,
+      ValueKind::logic9,
+      ValueKind::logic9};
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  assert(jit.supports_process(process, widths, kinds));
+  jit.add_process(symbol, process, widths, kinds);
+  const auto handle = jit.lookup(symbol);
+  const auto layout = jit.frame_layout(handle);
+  assert(layout.uses_logic9);
+  std::vector<std::uint64_t> register_aval(layout.register_count);
+  std::vector<std::uint64_t> register_bval(layout.register_count);
+  std::vector<std::uint8_t> register_initialized(
+      layout.register_count);
+  fsim_jit_frame_v1 frame{};
+  expect_error(
+      [&] {
+        jit.initialize_frame(
+            handle,
+            frame,
+            register_aval,
+            register_bval,
+            register_initialized);
+      },
+      "smaller than the frame layout");
+  std::vector<std::uint64_t> register_plane2(layout.register_count);
+  std::vector<std::uint64_t> register_plane3(layout.register_count);
+  jit.initialize_frame(
+      handle,
+      frame,
+      register_aval,
+      register_bval,
+      register_initialized,
+      register_plane2,
+      register_plane3);
+  assert(frame.register_logic9_plane2 == register_plane2.data());
+  assert(frame.register_logic9_plane3 == register_plane3.data());
+
+  const auto source =
+      PackedLogic4::from_logic9_msb_string("U01ZWLH-");
+  auto expected_not = source;
+  auto expected_and = source;
+  for (std::size_t bit = 0; bit < source.width(); ++bit) {
+    expected_not.set_logic9(
+        bit, fsim::runtime::logic_not(source.get_logic9(bit)));
+    expected_and.set_logic9(
+        bit,
+        fsim::runtime::logic_and(
+            source.get_logic9(bit), Logic9::h));
+  }
+  const auto collapsed =
+      fsim::runtime::collapse_to_logic4(source);
+  const auto reexpanded = collapsed.promoted_to_logic9();
+
+  TestRuntime runtime;
+  runtime.logic9_signals[4] = planes(source);
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(handle, descriptor)
+      == JitExecutionStatus::completed);
+  assert(runtime.logic9_signals[0] == planes(expected_not));
+  assert(runtime.logic9_signals[1] == planes(expected_and));
+  assert(runtime.signals[2] == encode(collapsed));
+  assert(runtime.logic9_signals[3] == planes(reexpanded));
+  assert(runtime.formatted_logic9_values.size() == 1);
+  assert(runtime.formatted_logic9_values.front() == planes(source));
+
+  auto missing_exact_callback = descriptor;
+  missing_exact_callback.read_signal_logic9 = nullptr;
+  expect_error(
+      [&] {
+        (void)jit.execute(
+            handle, missing_exact_callback);
+      },
+      "Logic9 callbacks");
 }
 
 void test_rejections() {
@@ -4992,6 +5367,10 @@ int main() {
       JitOptimizationLevel::o0, "display_o0");
   test_display_at_level(
       JitOptimizationLevel::o2, "display_o2");
+  test_logic9_at_level(
+      JitOptimizationLevel::o0, "logic9_o0");
+  test_logic9_at_level(
+      JitOptimizationLevel::o2, "logic9_o2");
   test_persistent_object_cache();
   test_rejections();
   std::cout << "LLVM JIT tests passed with LLVM " << LlvmJit::llvm_version()

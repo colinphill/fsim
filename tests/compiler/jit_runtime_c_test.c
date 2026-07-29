@@ -93,7 +93,50 @@ _Static_assert(
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, write_projected_waveform_slice) == 224,
     "runtime partial projected-waveform callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 232,
+_Static_assert(offsetof(fsim_jit_runtime_v1, read_signal_logic9) == 232,
+               "runtime exact read callback was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_signal_logic9) == 240,
+               "runtime exact blocking callback was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_update_logic9) == 248,
+               "runtime exact update callback was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, write_after_logic9) == 256,
+               "runtime exact delayed callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_signal_slice_logic9) == 264,
+    "runtime exact partial blocking callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_update_slice_logic9) == 272,
+    "runtime exact partial update callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_after_slice_logic9) == 280,
+    "runtime exact partial delayed callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, signal_last_value_logic9) == 288,
+    "runtime exact last-value callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_inertial_logic9) == 296,
+    "runtime exact inertial callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_inertial_slice_logic9) == 304,
+    "runtime exact partial inertial callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_logic9) == 312,
+    "runtime exact projected callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_slice_logic9) == 320,
+    "runtime exact partial projected callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_waveform_logic9) == 328,
+    "runtime exact waveform callback was not appended");
+_Static_assert(
+    offsetof(
+        fsim_jit_runtime_v1,
+        write_projected_waveform_slice_logic9) == 336,
+    "runtime exact partial waveform callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_formatted_logic9) == 344,
+    "runtime exact formatting callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 352,
                "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
@@ -103,6 +146,19 @@ _Static_assert(offsetof(fsim_jit_projected_element_v1, bval) == 8,
                "projected-waveform bval offset changed");
 _Static_assert(offsetof(fsim_jit_projected_element_v1, delay) == 16,
                "projected-waveform delay offset changed");
+_Static_assert(sizeof(fsim_jit_logic9_word_v1) == 32,
+               "unexpected exact word ABI size");
+_Static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40,
+               "unexpected exact waveform element ABI size");
+_Static_assert(
+    offsetof(fsim_jit_logic9_projected_element_v1, delay) == 32,
+    "exact waveform delay offset changed");
+_Static_assert(offsetof(fsim_jit_frame_v1, register_logic9_plane2) == 64,
+               "exact frame plane two was not appended");
+_Static_assert(offsetof(fsim_jit_frame_v1, register_logic9_plane3) == 72,
+               "exact frame plane three was not appended");
+_Static_assert(sizeof(fsim_jit_frame_v1) == 80,
+               "unexpected exact frame ABI size");
 _Static_assert(FSIM_JIT_PROJECTED_TRANSPORT == UINT32_C(0),
                "projected transport mode changed");
 _Static_assert(FSIM_JIT_PROJECTED_INERTIAL == UINT32_C(1),
@@ -519,7 +575,22 @@ int main(void) {
       write_projected,
       write_projected_slice,
       write_projected_waveform,
-      write_projected_waveform_slice};
+      write_projected_waveform_slice,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);

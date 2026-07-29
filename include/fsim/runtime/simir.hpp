@@ -688,6 +688,10 @@ public:
   read_signal_word(SignalId signal) const {
     return read_signal(signal).low_word();
   }
+  [[nodiscard]] virtual Logic9Word
+  read_signal_logic9_word(SignalId signal) const {
+    return read_signal(signal).logic9_low_word();
+  }
   virtual void write_blocking_word(
       SignalId signal, const Logic4Word value) {
     write_blocking(
@@ -907,6 +911,12 @@ public:
   [[nodiscard]] virtual Logic4Word signal_last_value_word(SignalId) const {
     throw std::logic_error{
         "alternate process executor does not support signal last-value reads"};
+  }
+  [[nodiscard]] virtual Logic9Word
+  signal_last_value_logic9_word(SignalId) const {
+    throw std::logic_error{
+        "alternate process executor does not support exact signal "
+        "last-value reads"};
   }
 
   /// Elapsed global-resolution ticks since the latest effective-value event,
