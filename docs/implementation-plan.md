@@ -2470,6 +2470,20 @@ all 42 tests in 96.58 seconds on 2026-07-29, including the full application
 integration, interpreter/JIT differential, mixed-language, SystemC, Tcl 9.0.4,
 native API, debugger, VCD, and cache coverage. No CI state was inspected.
 
+### LLVM-disabled portability repair
+
+The application source decomposition initially left the
+`LlvmProcessExecutor` implementation and LLVM optimization adapter visible in
+an LLVM-disabled compilation even though their declarations and dependencies
+were correctly guarded. `application_executors.cpp` now applies the same
+`FSIM_HAS_LLVM` boundary to those definitions while continuing to compile the
+common SystemC executor and application helpers in both configurations.
+
+The warnings-as-errors GCC Debug build with `FSIM_LLVM_MODE=OFF` completes and
+all 41 non-LLVM tests pass in 170.92 seconds. The exact LLVM 22.1.8 Release
+application target, compiled-expression test, and source-line-budget test also
+pass. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

@@ -3,6 +3,8 @@
 
 namespace fsim::app::application_detail {
 
+#if defined(FSIM_HAS_LLVM)
+
 LlvmProcessExecutor::LlvmProcessExecutor(
      compiler::LlvmJit& jit,
      const compiler::JitProcessHandle handle,
@@ -1628,6 +1630,8 @@ std::uint64_t LlvmProcessExecutor::random_value(
     }
   }
 
+#endif
+
 SystemCProcessExecutor::SystemCProcessExecutor(
      std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
      const std::uint64_t process)
@@ -1703,11 +1707,15 @@ void SystemCProcessExecutor::update_channel(
   return (high << 32U) ^ low;
 }
 
+#if defined(FSIM_HAS_LLVM)
+
 [[nodiscard]] compiler::JitOptimizationLevel jit_optimization(
     const project::Optimization optimization) noexcept  {
   return optimization == project::Optimization::o0
       ? compiler::JitOptimizationLevel::o0
       : compiler::JitOptimizationLevel::o2;
 }
+
+#endif
 
 } // namespace fsim::app::application_detail
