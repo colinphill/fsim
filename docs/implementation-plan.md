@@ -1552,6 +1552,17 @@ The planned ten implementation features are:
     without lossy compilation, then require focused interpreter/hybrid/VCD
     evidence before the full local regression and push gate.
 
+Completed in feature commit `7360d77` and regression-compatibility commit
+`aac0f7f`. The common runtime now retains exact VHDL Logic9 values through
+elaboration, typed SimIR, structural and logical operations, projected
+transactions, process-owned resolution, mixed-language conversion, debug/C
+API reads, and VCD mapping. LLVM compilation explicitly rejects processes
+that would expose exact values through the current aval/bval ABI, while
+independent four-state and integer-only processes remain eligible within the
+same design. The LLVM 22.1.8 Release/Werror regression passed 35/35 tests in
+82.35 seconds after updating older collapsed-`X` and compiled-process cache
+expectations. No CI state was inspected for this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
