@@ -328,7 +328,12 @@ add_library(
 add_library(fsim::runtime ALIAS fsim_runtime)
 fsim_configure_library(fsim_runtime)
 
-add_library(fsim_elaboration STATIC src/elaboration/elaborator.cpp)
+  add_library(
+    fsim_elaboration
+    STATIC
+      src/elaboration/elaborated_design.cpp
+      src/elaboration/elaborator.cpp
+  )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)
 target_link_libraries(fsim_elaboration PUBLIC fsim_frontend fsim_runtime)
