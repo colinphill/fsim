@@ -115,8 +115,5 @@ foreach ($line in $environmentLines) {
   $exported += 1
 }
 
-Write-Host (
-  "Configured Visual Studio at $installationPath for host "
-  + "$HostArchitecture, target $Architecture; exported $exported "
-  + "environment changes"
-)
+$message = "Configured Visual Studio at $installationPath for host $HostArchitecture, target $Architecture; exported $exported environment changes"
+Write-Host $message
