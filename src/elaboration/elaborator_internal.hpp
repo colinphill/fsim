@@ -233,6 +233,7 @@ using QualifiedIdentifierMap =
 struct NamedTypeBinding {
     frontend::Type type;
     std::string owner;
+    bool interface_formal{};
 };
 
 using NamedTypeEnvironment =
@@ -430,6 +431,23 @@ struct SpecializedUnit {
     ConstantEnvironment environment;
     std::vector<std::pair<std::string, std::string>> values;
 };
+
+struct InterfaceTypeSpecialization {
+    DesignUnit unit;
+    std::vector<frontend::ParameterOverride> value_overrides;
+    std::vector<std::pair<std::string, std::string>> values;
+    bool applied{};
+};
+
+NamedTypeEnvironment local_vhdl_type_environment(
+    const DesignUnit& unit);
+
+InterfaceTypeSpecialization specialize_vhdl_interface_types(
+    const DesignUnit& source,
+    const std::vector<frontend::ParameterOverride>& overrides,
+    const NamedTypeEnvironment& parent_types,
+    frontend::Language association_language,
+    std::vector<Diagnostic>& diagnostics);
 
 enum class SpecializationDiagnostic {
     invalid_actual,
@@ -898,6 +916,7 @@ private:
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
         const ConstantEnvironment& parent_environment,
+        const NamedTypeEnvironment& parent_types,
         const frontend::Language association_language);
 
     void finish();

@@ -79,6 +79,7 @@ add_executable(
   elaboration/elaborator_numeric_test.cpp
   elaboration/elaborator_selection_test.cpp
   elaboration/elaborator_types_test.cpp
+  elaboration/elaborator_type_generic_test.cpp
 )
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
@@ -224,14 +225,32 @@ if(TARGET fsim_application)
     fsim_sv_parameter_sizing_application_tests
     PRIVATE fsim_application
   )
-  add_test(
-    NAME fsim.application.sv_parameter_sizing
-    COMMAND fsim_sv_parameter_sizing_application_tests
-  )
+add_test(
+  NAME fsim.application.sv_parameter_sizing
+  COMMAND fsim_sv_parameter_sizing_application_tests
+)
   set_tests_properties(
     fsim.application.sv_parameter_sizing
-    PROPERTIES LABELS "fast;parameters;systemverilog"
-  )
+  PROPERTIES LABELS "fast;parameters;systemverilog"
+)
+
+add_executable(
+  fsim_vhdl_type_generic_application_tests
+  app/vhdl_type_generic_application_test.cpp
+)
+fsim_configure_test(fsim_vhdl_type_generic_application_tests)
+target_link_libraries(
+  fsim_vhdl_type_generic_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_type_generics
+  COMMAND fsim_vhdl_type_generic_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_type_generics
+  PROPERTIES LABELS "fast;generics;vhdl;cache;hierarchy"
+)
 
   add_executable(
     fsim_scoped_local_application_tests

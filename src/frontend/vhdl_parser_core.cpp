@@ -360,6 +360,14 @@ void VhdlParser::add_vhdl_generic(
   ParameterDeclaration generic,
   const Token& name) {
   const auto canonical = generic.name;
+  const auto type_conflict =
+      generic.kind == ParameterKind::Type
+      && (vhdl_named_types_.contains(canonical)
+          || std::ranges::any_of(
+              unit.type_aliases,
+              [&](const auto& declaration) {
+                return declaration.name == canonical;
+              }));
   const auto object_conflict =
       std::any_of(
           unit.ports.begin(),
@@ -373,6 +381,14 @@ void VhdlParser::add_vhdl_generic(
           [&](const SignalDeclaration& declaration) {
             return declaration.name == canonical;
           });
+  if (type_conflict) {
+    error(
+        name,
+        "FSIM-VHDL-SEM-036",
+        "interface type generic '" + canonical
+            + "' conflicts with a bounded type declaration");
+    return;
+  }
   if (object_conflict) {
     error(
         name,
@@ -404,6 +420,34 @@ void VhdlParser::parse_vhdl_generics(
       "'(' after generic",
       "FSIM-VHDL-PARSE-050");
   while (!at_end() && !at(TokenKind::RightParen)) {
+    if (match_keyword("type", true)) {
+      const auto type_start = previous();
+      const auto name =
+          expect_identifier("interface type generic name");
+      ParameterDeclaration generic;
+      generic.name = vhdl_name(name.text);
+      generic.span = span_from(type_start, name);
+      generic.kind = ParameterKind::Type;
+      add_vhdl_generic(unit, std::move(generic), name);
+      if (match_keyword("is", true)
+          || match(TokenKind::ColonEqual)) {
+        error(
+            previous(),
+            "FSIM-VHDL-UNSUPPORTED-028",
+            "classified or defaulted interface type generics are not "
+            "part of the VHDL-2008 unclassified 'type T' form");
+        skip_to_semicolon();
+      }
+      if (!match(TokenKind::Semicolon)
+          && !at(TokenKind::RightParen)) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-052",
+            "expected ';' between generic declarations");
+        skip_to_semicolon();
+      }
+      continue;
+    }
     std::vector<Token> names;
     names.push_back(expect_identifier("generic name"));
     while (match(TokenKind::Comma)) {

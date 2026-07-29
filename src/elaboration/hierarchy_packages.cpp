@@ -42,7 +42,7 @@ HierarchyBuilder::HierarchyBuilder(
 
     void HierarchyBuilder::build(const DesignUnit& root) {
         auto specialized = specialize_selected_unit(
-            root, {}, {}, root.language);
+            root, {}, {}, {}, root.language);
         instantiate(
             specialized.unit,
             design_.top_,

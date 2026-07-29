@@ -327,6 +327,11 @@ struct PortConnection {
   SourceSpan span;
 };
 
+enum class ParameterKind {
+  Value,
+  Type,
+};
+
 struct ParameterDeclaration {
   std::string name;
   Type type;
@@ -335,6 +340,9 @@ struct ParameterDeclaration {
   Expression default_value;
   bool local{};
   SourceSpan span;
+  // VHDL-2008 interface type generics are type formals rather than
+  // constant/value formals. Other current declarations use Value.
+  ParameterKind kind{ParameterKind::Value};
 };
 
 struct ParameterOverride {

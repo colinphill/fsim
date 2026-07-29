@@ -14,6 +14,13 @@ void VhdlParser::parse_type_declaration(
           unit.type_aliases.end(),
           [&](const TypeAliasDeclaration& declaration) {
             return declaration.name == canonical_name;
+          })
+      || std::any_of(
+          unit.parameters.begin(),
+          unit.parameters.end(),
+          [&](const ParameterDeclaration& parameter) {
+            return parameter.kind == ParameterKind::Type
+                && parameter.name == canonical_name;
           });
   if (duplicate) {
     error(
@@ -447,6 +454,13 @@ void VhdlParser::parse_subtype_declaration(
           unit.type_aliases.end(),
           [&](const TypeAliasDeclaration& declaration) {
             return declaration.name == canonical_name;
+          })
+      || std::any_of(
+          unit.parameters.begin(),
+          unit.parameters.end(),
+          [&](const ParameterDeclaration& parameter) {
+            return parameter.kind == ParameterKind::Type
+                && parameter.name == canonical_name;
           });
   if (duplicate) {
     error(

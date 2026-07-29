@@ -13,5 +13,6 @@ int main() {
   test_numeric_and_system_function_lowering();
   test_selection_and_assignment_lowering();
   test_assertion_types_and_random_lowering();
+  test_vhdl_interface_type_generics();
   std::cout << "elaborator tests passed\n";
 }

@@ -285,6 +285,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element requires guarded-signal driver disconnection, which is not executable yet. |
 | `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
 | `FSIM-VHDL-UNSUPPORTED-027` | error | A VHDL array declaration has multiple dimensions, a noninteger index subtype, or an element outside the current scalar packed subset. |
+| `FSIM-VHDL-UNSUPPORTED-028` | error | A VHDL interface type generic uses a classified or defaulted form beyond the VHDL-2008 unclassified `type T` subset. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -757,6 +758,10 @@ therefore excluded.
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
 | `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves to something other than scalar integer, Boolean, or bit. |
+| `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated actual type mark. |
+| `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a type mark. |
+| `FSIM-ELAB-GENTYPE-003` | error | A VHDL interface type generic actual names a type that is not visible at the association. |
+| `FSIM-ELAB-GENTYPE-004` | error | A VHDL interface type generic is given an actual through a non-VHDL association boundary. |
 | `FSIM-ELAB-PARAM-001` | error | A parameter override has an unknown/local target, is missing or excessive, or is applied to a SystemC factory. |
 | `FSIM-ELAB-PARAM-002` | error | A parameter override is duplicated during elaboration. |
 | `FSIM-ELAB-PARAM-003` | error | Named and positional parameter overrides are mixed during elaboration. |

@@ -100,6 +100,6 @@ void test_case_and_expression_lowering();
 void test_numeric_and_system_function_lowering();
 void test_selection_and_assignment_lowering();
 void test_assertion_types_and_random_lowering();
+void test_vhdl_interface_type_generics();
 
 } // namespace fsim::tests::elaboration
-

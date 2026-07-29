@@ -750,6 +750,7 @@ void test_vhdl_generics() {
       R"(
 entity generic_child is
   generic (
+    type Element_T;
     Width, Depth : positive := 8;
     Enabled : boolean := true;
     Required : integer
@@ -774,12 +775,14 @@ architecture rtl of generic_top is
 begin
   named_child: entity work.generic_child(rtl)
     generic map (
+      Element_T => bit,
       Width => 4,
       Required => 2
     )
     port map (data => named_data);
   mixed_child: entity work.generic_child(rtl)
     generic map (
+      bit,
       2,
       Enabled => false,
       Required => 1
@@ -794,20 +797,24 @@ end architecture;
   const auto* child =
       result.design.find(UnitKind::VhdlEntity, "generic_child");
   require(
-      child != nullptr && child->parameters.size() == 4,
+      child != nullptr && child->parameters.size() == 5,
       "VHDL generics are retained in declaration order");
   require(
-      child->parameters[0].name == "width"
-          && child->parameters[0].type.spelling == "positive"
-          && child->parameters[0].default_value.text == "8"
-          && child->parameters[1].name == "depth"
-          && child->parameters[2].type.domain
+      child->parameters[0].name == "element_t"
+          && child->parameters[0].kind == ParameterKind::Type
+          && child->parameters[0].default_value.kind
+              == ExpressionKind::Invalid
+          && child->parameters[1].name == "width"
+          && child->parameters[1].type.spelling == "positive"
+          && child->parameters[1].default_value.text == "8"
+          && child->parameters[2].name == "depth"
+          && child->parameters[3].type.domain
               == ValueDomain::Boolean
-          && child->parameters[2].default_value.kind
-              == ExpressionKind::BooleanLiteral
           && child->parameters[3].default_value.kind
+              == ExpressionKind::BooleanLiteral
+          && child->parameters[4].default_value.kind
               == ExpressionKind::Invalid,
-      "typed defaults and required generics");
+      "type formals, typed defaults, and required value generics");
   require(
       child->ports.size() == 1
           && !child->ports[0].type.packed_range
@@ -828,14 +835,14 @@ end architecture;
           && top_architecture->instances.size() == 2
           && top_architecture->instances[0]
                  .parameter_overrides.size()
-              == 2
+              == 3
           && top_architecture->instances[0]
                  .parameter_overrides[0].name
-              == std::optional<std::string>{"width"}
+              == std::optional<std::string>{"element_t"}
           && !top_architecture->instances[1]
                   .parameter_overrides[0].name
           && top_architecture->instances[1]
-                 .parameter_overrides[1].name
+                 .parameter_overrides[2].name
               == std::optional<std::string>{"enabled"},
       "named and positional-then-named generic maps are represented");
 
@@ -844,10 +851,13 @@ end architecture;
       R"(
 entity invalid_generic is
   generic (
+    type Classified is range <>;
+    type Defaulted := integer;
     Clash : integer := 1;
     Clash : integer := 2;
     Vector_Value : bit_vector(1 downto 0) := "00"
   );
+  type Classified is (First, Second);
   port (Clash : in bit);
 end entity;
 architecture rtl of invalid_generic is
@@ -881,7 +891,9 @@ end architecture;
           && has_code("FSIM-VHDL-SEM-014")
           && has_code("FSIM-VHDL-SEM-015")
           && has_code("FSIM-VHDL-SEM-016")
-          && has_code("FSIM-VHDL-UNSUPPORTED-018"),
+          && has_code("FSIM-VHDL-SEM-036")
+          && has_code("FSIM-VHDL-UNSUPPORTED-018")
+          && has_code("FSIM-VHDL-UNSUPPORTED-028"),
       "VHDL generic diagnostics are stable and targeted");
 }
 

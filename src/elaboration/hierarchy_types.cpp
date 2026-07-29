@@ -284,6 +284,9 @@ using namespace elaboration_detail;
                         use_span);
                     return false;
                 }
+                if (imported->second.interface_formal) {
+                    return true;
+                }
                 base = imported->second.type;
             }
             if (!vhdl) {
@@ -453,6 +456,21 @@ using namespace elaboration_detail;
             result, import_stack);
         import_qualified_vhdl_package_types(
             result, type_environment, import_stack);
+        for (const auto& generic : result.parameters) {
+            if (generic.kind
+                != frontend::ParameterKind::Type) {
+                continue;
+            }
+            type_environment.insert_or_assign(
+                generic.name,
+                NamedTypeBinding{
+                    {},
+                    (entity->library.empty()
+                         ? std::string{"work"}
+                         : entity->library)
+                        + "." + entity->name,
+                    true});
+        }
 
         // Entity interfaces have their own declarative region. Resolve them
         // without exposing architecture-local type declarations, then merge
@@ -467,6 +485,10 @@ using namespace elaboration_detail;
             effective_interface, type_environment, true);
         for (const auto& generic :
              effective_interface.parameters) {
+            if (generic.kind
+                == frontend::ParameterKind::Type) {
+                continue;
+            }
             const auto resolved = std::find_if(
                 result.parameters.begin(),
                 result.parameters.end(),
@@ -483,7 +505,8 @@ using namespace elaboration_detail;
             if ((generic.type.packed_range
                  && generic.type.enumeration_literals.empty())
                 || !generic.type.packed_members.empty()
-                || (generic.type.domain
+                || (generic.type.named_type.empty()
+                    && generic.type.domain
                     != frontend::ValueDomain::Integer
                 && generic.type.domain
                     != frontend::ValueDomain::Boolean
@@ -519,8 +542,7 @@ using namespace elaboration_detail;
         resolve_named_types(
             result, type_environment, true, false);
         for (const auto& [name, binding] : type_environment) {
-            if ((binding.type.enumeration_literals.empty()
-                 && !binding.type.vhdl_array)
+            if (binding.interface_formal
                 || std::any_of(
                     result.type_aliases.begin(),
                     result.type_aliases.end(),
@@ -546,13 +568,32 @@ using namespace elaboration_detail;
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
         const ConstantEnvironment& parent_environment,
+        const NamedTypeEnvironment& parent_types,
         const frontend::Language association_language) {
-        return specialize_unit(
-            effective_unit(selected),
-            overrides,
+        auto type_specialized =
+            specialize_vhdl_interface_types(
+                effective_unit(selected),
+                overrides,
+                parent_types,
+                association_language,
+                diagnostics_);
+        if (type_specialized.applied) {
+            resolve_named_types(
+                type_specialized.unit, {}, true);
+        }
+        auto specialized = specialize_unit(
+            type_specialized.unit,
+            type_specialized.value_overrides,
             parent_environment,
             association_language,
             diagnostics_);
+        specialized.values.insert(
+            specialized.values.begin(),
+            std::make_move_iterator(
+                type_specialized.values.begin()),
+            std::make_move_iterator(
+                type_specialized.values.end()));
+        return specialized;
     }
 
 

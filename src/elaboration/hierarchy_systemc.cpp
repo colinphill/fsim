@@ -604,6 +604,7 @@ using namespace elaboration_detail;
                     *selected,
                     actuals,
                     {},
+                    {},
                     selected->language);
             auto child_aliases = connect_foreign_child(
                 child, specialized.unit, child_path, objects);
@@ -626,6 +627,10 @@ using namespace elaboration_detail;
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values) {
+        const auto parent_types =
+            unit.language == frontend::Language::Vhdl2008
+                ? local_vhdl_type_environment(unit)
+                : NamedTypeEnvironment{};
         if (!instance_paths_.insert(path).second) {
             report(
                 "FSIM-ELAB-HIER-001",
@@ -797,6 +802,7 @@ using namespace elaboration_detail;
                 *target,
                 instance.parameter_overrides,
                 parameter_environment,
+                parent_types,
                 unit.language);
             auto child_aliases = connect_instance(
                 instance,
