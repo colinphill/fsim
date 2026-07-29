@@ -99,7 +99,9 @@ using runtime::simir::WriteBlockingSlice;
 using runtime::simir::WriteInertial;
 using runtime::simir::WriteInertialSlice;
 using runtime::simir::WriteProjected;
+using runtime::simir::WriteProjectedWaveform;
 using runtime::simir::WriteProjectedSlice;
+using runtime::simir::WriteProjectedWaveformSlice;
 using runtime::simir::WriteUpdate;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
@@ -107,7 +109,7 @@ using runtime::simir::Yield;
 using NativeProcess = fsim_jit_process_v1;
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v14";
+    "fsim-llvm-native-object-v15";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -145,7 +147,12 @@ static_assert(
 static_assert(offsetof(fsim_jit_runtime_v1, write_projected) == 200);
 static_assert(
     offsetof(fsim_jit_runtime_v1, write_projected_slice) == 208);
-static_assert(sizeof(fsim_jit_runtime_v1) == 216);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_waveform) == 216);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_waveform_slice) == 224);
+static_assert(sizeof(fsim_jit_runtime_v1) == 232);
+static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
 static_assert(sizeof(fsim_jit_frame_v1) == 64);
 static_assert(offsetof(fsim_jit_frame_v1, register_aval) == 40);
 static_assert(offsetof(fsim_jit_frame_v1, register_bval) == 48);
@@ -370,11 +377,13 @@ struct ValidatedProcess {
   bool uses_write_after{};
   bool uses_write_inertial{};
   bool uses_write_projected{};
+  bool uses_write_projected_waveform{};
   bool uses_write_blocking_slice{};
   bool uses_write_update_slice{};
   bool uses_write_after_slice{};
   bool uses_write_inertial_slice{};
   bool uses_write_projected_slice{};
+  bool uses_write_projected_waveform_slice{};
   bool uses_debug_points{};
   bool uses_signal_event{};
   bool uses_signal_last_value{};
@@ -958,6 +967,65 @@ validate_process(const Process &process,
               }
               result.uses_write_projected = true;
             },
+            [&](const WriteProjectedWaveform& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              if (operation.elements.size() < 2) {
+                reject(
+                    process,
+                    index,
+                    "projected waveform requires at least two elements");
+              }
+              if (operation.elements.size()
+                  > std::numeric_limits<std::uint32_t>::max()) {
+                reject(
+                    process,
+                    index,
+                    "projected waveform has too many elements for the "
+                    "runtime ABI");
+              }
+              std::optional<runtime::SimulationTick> previous_delay;
+              for (const auto& element : operation.elements) {
+                record_use(element.source, index);
+                constrain_width(
+                    element.source, target_width, index);
+                if (previous_delay
+                    && element.delay <= *previous_delay) {
+                  reject(
+                      process,
+                      index,
+                      "projected-waveform delays must be strictly "
+                      "ascending");
+                }
+                previous_delay = element.delay;
+              }
+              switch (operation.mode) {
+              case runtime::simir::ProjectedDelayMode::transport:
+                if (operation.rejection != 0) {
+                  reject(
+                      process,
+                      index,
+                      "transport projected waveform has a rejection limit");
+                }
+                break;
+              case runtime::simir::ProjectedDelayMode::inertial:
+                if (operation.rejection
+                    > operation.elements.front().delay) {
+                  reject(
+                      process,
+                      index,
+                      "projected-waveform rejection exceeds its first "
+                      "delay");
+                }
+                break;
+              default:
+                reject(
+                    process,
+                    index,
+                    "projected waveform has an invalid delay mode");
+              }
+              result.uses_write_projected_waveform = true;
+            },
             [&](const WriteBlockingSlice& operation) {
               record_use(operation.source, index);
               (void)signal_width(operation.signal, index);
@@ -1008,6 +1076,71 @@ validate_process(const Process &process,
                     "transport projected slice has a rejection limit");
               }
               result.uses_write_projected_slice = true;
+            },
+            [&](const WriteProjectedWaveformSlice& operation) {
+              (void)signal_width(operation.signal, index);
+              if (operation.elements.size() < 2) {
+                reject(
+                    process,
+                    index,
+                    "projected slice waveform requires at least two "
+                    "elements");
+              }
+              if (operation.elements.size()
+                  > std::numeric_limits<std::uint32_t>::max()) {
+                reject(
+                    process,
+                    index,
+                    "projected slice waveform has too many elements for the "
+                    "runtime ABI");
+              }
+              std::optional<runtime::SimulationTick> previous_delay;
+              std::optional<RegisterId> first_source;
+              for (const auto& element : operation.elements) {
+                record_use(element.source, index);
+                if (first_source) {
+                  unify_registers(
+                      *first_source, element.source, index);
+                } else {
+                  first_source = element.source;
+                }
+                if (previous_delay
+                    && element.delay <= *previous_delay) {
+                  reject(
+                      process,
+                      index,
+                      "projected slice waveform delays must be strictly "
+                      "ascending");
+                }
+                previous_delay = element.delay;
+              }
+              switch (operation.mode) {
+              case runtime::simir::ProjectedDelayMode::transport:
+                if (operation.rejection != 0) {
+                  reject(
+                      process,
+                      index,
+                      "transport projected slice waveform has a rejection "
+                      "limit");
+                }
+                break;
+              case runtime::simir::ProjectedDelayMode::inertial:
+                if (operation.rejection
+                    > operation.elements.front().delay) {
+                  reject(
+                      process,
+                      index,
+                      "projected slice waveform rejection exceeds its first "
+                      "delay");
+                }
+                break;
+              default:
+                reject(
+                    process,
+                    index,
+                    "projected slice waveform has an invalid delay mode");
+              }
+              result.uses_write_projected_waveform_slice = true;
             },
             [&](const WaitFor &) {},
             [&](const WaitOn &operation) {
@@ -1203,6 +1336,23 @@ validate_process(const Process &process,
                    std::get_if<WriteProjectedSlice>(
                        &process.operations[index])) {
       validate_slice_write(*projected_write);
+    } else if (const auto* waveform_write =
+                   std::get_if<WriteProjectedWaveformSlice>(
+                       &process.operations[index])) {
+      const auto target_width =
+          signal_widths[waveform_write->signal];
+      for (const auto& element : waveform_write->elements) {
+        const auto source_width =
+            result.register_widths[element.source];
+        if (waveform_write->offset > target_width
+            || source_width
+                > target_width - waveform_write->offset) {
+          reject(
+              process,
+              index,
+              "partial waveform range is outside its target signal");
+        }
+      }
     }
   }
 
@@ -1634,6 +1784,23 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                   "mode",
                   static_cast<std::uint8_t>(value.mode));
             },
+            [&](const WriteProjectedWaveform& value) {
+              builder.add("operation", "WriteProjectedWaveform");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(
+                  builder, "element-count", value.elements.size());
+              for (const auto& element : value.elements) {
+                add_key_u64(builder, "source", element.source);
+                add_key_u64(builder, "delay", element.delay);
+              }
+              add_key_u64(builder, "rejection", value.rejection);
+              add_key_u64(
+                  builder,
+                  "mode",
+                  static_cast<std::uint8_t>(value.mode));
+            },
             [&](const WriteBlockingSlice& value) {
               builder.add("operation", "WriteBlockingSlice");
               add_key_u64(builder, "signal", value.signal);
@@ -1679,6 +1846,24 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "source", value.source);
               add_key_u64(builder, "offset", value.offset);
               add_key_u64(builder, "delay", value.delay);
+              add_key_u64(builder, "rejection", value.rejection);
+              add_key_u64(
+                  builder,
+                  "mode",
+                  static_cast<std::uint8_t>(value.mode));
+            },
+            [&](const WriteProjectedWaveformSlice& value) {
+              builder.add("operation", "WriteProjectedWaveformSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "offset", value.offset);
+              add_key_u64(
+                  builder, "element-count", value.elements.size());
+              for (const auto& element : value.elements) {
+                add_key_u64(builder, "source", element.source);
+                add_key_u64(builder, "delay", element.delay);
+              }
               add_key_u64(builder, "rejection", value.rejection);
               add_key_u64(
                   builder,
@@ -2596,7 +2781,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -2802,6 +2988,22 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 28),
         "write_projected_slice");
   }
+  llvm::Value* write_projected_waveform_callback = nullptr;
+  if (validated.uses_write_projected_waveform) {
+    write_projected_waveform_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 29),
+        "write_projected_waveform");
+  }
+  llvm::Value* write_projected_waveform_slice_callback = nullptr;
+  if (validated.uses_write_projected_waveform_slice) {
+    write_projected_waveform_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 30),
+        "write_projected_waveform_slice");
+  }
 
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
@@ -2843,6 +3045,18 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
           {pointer, i32, i32, i32, i64, i64, i64, i64, i32},
+          false);
+  auto* projected_element_type = llvm::StructType::create(
+      context, {i64, i64, i64}, "fsim_jit_projected_element_v1");
+  auto* write_projected_waveform_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, pointer, i32, i64, i32},
+          false);
+  auto* write_projected_waveform_slice_type =
+      llvm::FunctionType::get(
+          llvm::Type::getVoidTy(context),
+          {pointer, i32, i32, i32, pointer, i32, i64, i32},
           false);
   auto* signal_event_type =
       llvm::FunctionType::get(i32, {pointer, i32}, false);
@@ -2978,6 +3192,59 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       constant_i64(context, aval),
                       constant_i64(context, bval),
                       validated.register_widths[operation.destination]});
+              branch_to_next();
+            },
+            [&](const WriteProjectedWaveform& operation) {
+              auto* array_type = llvm::ArrayType::get(
+                  projected_element_type, operation.elements.size());
+              auto* storage = builder.CreateAlloca(
+                  array_type, nullptr, "projected.waveform");
+              for (std::size_t element_index = 0;
+                   element_index < operation.elements.size();
+                   ++element_index) {
+                const auto& element =
+                    operation.elements[element_index];
+                const auto source =
+                    load_register(builder, registers, element.source);
+                auto* slot = builder.CreateInBoundsGEP(
+                    array_type,
+                    storage,
+                    {llvm::ConstantInt::get(i32, 0),
+                     llvm::ConstantInt::get(
+                         i32,
+                         static_cast<std::uint32_t>(element_index))});
+                builder.CreateStore(
+                    source.aval,
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 0));
+                builder.CreateStore(
+                    source.bval,
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 1));
+                builder.CreateStore(
+                    constant_i64(context, element.delay),
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 2));
+              }
+              const auto first = load_register(
+                  builder, registers, operation.elements.front().source);
+              builder.CreateCall(
+                  write_projected_waveform_type,
+                  write_projected_waveform_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, operation.signal),
+                      llvm::ConstantInt::get(i32, first.width),
+                      storage,
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.elements.size())),
+                      constant_i64(context, operation.rejection),
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.mode))});
               branch_to_next();
             },
             [&](const WriteProjected& operation) {
@@ -3786,6 +4053,60 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                               operation.mode))});
               branch_to_next();
             },
+            [&](const WriteProjectedWaveformSlice& operation) {
+              auto* array_type = llvm::ArrayType::get(
+                  projected_element_type, operation.elements.size());
+              auto* storage = builder.CreateAlloca(
+                  array_type, nullptr, "projected.slice.waveform");
+              for (std::size_t element_index = 0;
+                   element_index < operation.elements.size();
+                   ++element_index) {
+                const auto& element =
+                    operation.elements[element_index];
+                const auto source =
+                    load_register(builder, registers, element.source);
+                auto* slot = builder.CreateInBoundsGEP(
+                    array_type,
+                    storage,
+                    {llvm::ConstantInt::get(i32, 0),
+                     llvm::ConstantInt::get(
+                         i32,
+                         static_cast<std::uint32_t>(element_index))});
+                builder.CreateStore(
+                    source.aval,
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 0));
+                builder.CreateStore(
+                    source.bval,
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 1));
+                builder.CreateStore(
+                    constant_i64(context, element.delay),
+                    builder.CreateStructGEP(
+                        projected_element_type, slot, 2));
+              }
+              const auto first = load_register(
+                  builder, registers, operation.elements.front().source);
+              builder.CreateCall(
+                  write_projected_waveform_slice_type,
+                  write_projected_waveform_slice_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, operation.signal),
+                      llvm::ConstantInt::get(i32, operation.offset),
+                      llvm::ConstantInt::get(i32, first.width),
+                      storage,
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.elements.size())),
+                      constant_i64(context, operation.rejection),
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.mode))});
+              branch_to_next();
+            },
             [&](const Assert &operation) {
               const auto condition =
                   load_register(builder, registers, operation.condition);
@@ -4113,11 +4434,13 @@ struct LlvmJit::Impl {
     bool uses_write_after{};
     bool uses_write_inertial{};
     bool uses_write_projected{};
+    bool uses_write_projected_waveform{};
     bool uses_write_blocking_slice{};
     bool uses_write_update_slice{};
     bool uses_write_after_slice{};
     bool uses_write_inertial_slice{};
     bool uses_write_projected_slice{};
+    bool uses_write_projected_waveform_slice{};
     bool uses_debug_points{};
     bool uses_signal_event{};
     bool uses_signal_last_value{};
@@ -4267,11 +4590,13 @@ void LlvmJit::add_process_module(
         validated.uses_write_after,
         validated.uses_write_inertial,
         validated.uses_write_projected,
+        validated.uses_write_projected_waveform,
         validated.uses_write_blocking_slice,
         validated.uses_write_update_slice,
         validated.uses_write_after_slice,
         validated.uses_write_inertial_slice,
         validated.uses_write_projected_slice,
+        validated.uses_write_projected_waveform_slice,
         validated.uses_debug_points,
         validated.uses_signal_event,
         validated.uses_signal_last_value,
@@ -4561,7 +4886,9 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_write_projected_slice) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(
+            fsim_jit_runtime_v1, write_projected_waveform)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include "
           "write_projected_slice");
@@ -4569,6 +4896,33 @@ LlvmJit::resume(const JitProcessHandle process,
     if (runtime.write_projected_slice == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires write_projected_slice for this "
+          "process");
+    }
+  }
+  if (entry.info.uses_write_projected_waveform) {
+    if (runtime.struct_size
+        < offsetof(
+            fsim_jit_runtime_v1,
+            write_projected_waveform_slice)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include "
+          "write_projected_waveform");
+    }
+    if (runtime.write_projected_waveform == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_projected_waveform for this "
+          "process");
+    }
+  }
+  if (entry.info.uses_write_projected_waveform_slice) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include "
+          "write_projected_waveform_slice");
+    }
+    if (runtime.write_projected_waveform_slice == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires write_projected_waveform_slice for this "
           "process");
     }
   }

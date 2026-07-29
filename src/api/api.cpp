@@ -222,6 +222,10 @@ std::optional<fsim::runtime::simir::SignalId> output_signal(
   if (const auto* value = std::get_if<WriteProjected>(&operation)) {
     return value->signal;
   }
+  if (const auto* value =
+          std::get_if<WriteProjectedWaveform>(&operation)) {
+    return value->signal;
+  }
   if (const auto* value = std::get_if<WriteBlockingSlice>(&operation)) {
     return value->signal;
   }
@@ -235,6 +239,10 @@ std::optional<fsim::runtime::simir::SignalId> output_signal(
     return value->signal;
   }
   if (const auto* value = std::get_if<WriteProjectedSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value =
+          std::get_if<WriteProjectedWaveformSlice>(&operation)) {
     return value->signal;
   }
   return std::nullopt;

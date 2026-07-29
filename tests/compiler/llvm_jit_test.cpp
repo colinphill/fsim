@@ -425,6 +425,53 @@ extern "C" void write_projected_slice(
       {signal, {aval, bval}, offset, width, delay, rejection, mode});
 }
 
+extern "C" void write_projected_waveform(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t width,
+    const fsim_jit_projected_element_v1* elements,
+    const std::uint32_t count,
+    const std::uint64_t rejection,
+    const std::uint32_t mode) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  assert(elements != nullptr && count >= 2);
+  for (std::uint32_t index = 0; index < count; ++index) {
+    runtime.projected_writes.push_back(
+        {signal,
+         {elements[index].aval, elements[index].bval},
+         0,
+         width,
+         elements[index].delay,
+         rejection,
+         mode});
+  }
+}
+
+extern "C" void write_projected_waveform_slice(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_projected_element_v1* elements,
+    const std::uint32_t count,
+    const std::uint64_t rejection,
+    const std::uint32_t mode) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  assert(elements != nullptr && count >= 2);
+  for (std::uint32_t index = 0; index < count; ++index) {
+    runtime.projected_writes.push_back(
+        {signal,
+         {elements[index].aval, elements[index].bval},
+         offset,
+         width,
+         elements[index].delay,
+         rejection,
+         mode});
+  }
+}
+
 [[nodiscard]] fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   return {
       FSIM_JIT_RUNTIME_ABI_VERSION_V1,
@@ -456,6 +503,8 @@ extern "C" void write_projected_slice(
       &write_inertial_slice,
       &write_projected,
       &write_projected_slice,
+      &write_projected_waveform,
+      &write_projected_waveform_slice,
   };
 }
 
@@ -854,7 +903,7 @@ void test_projected_callbacks_at_level(
   Process process;
   process.id = 7;
   process.name = "projected_callbacks";
-  process.register_count = 2;
+  process.register_count = 6;
   process.operations = {
       LoadConstant{0, PackedLogic4::from_msb_string("10XZ0101")},
       WriteProjected{
@@ -869,6 +918,21 @@ void test_projected_callbacks_at_level(
           1,
           3,
           13,
+          0,
+          ProjectedDelayMode::transport},
+      LoadConstant{2, PackedLogic4::from_msb_string("01010101")},
+      LoadConstant{3, PackedLogic4::from_msb_string("10101010")},
+      WriteProjectedWaveform{
+          0,
+          {{2, 17}, {3, 23}},
+          4,
+          ProjectedDelayMode::inertial},
+      LoadConstant{4, PackedLogic4::from_msb_string("01")},
+      LoadConstant{5, PackedLogic4::from_msb_string("10")},
+      WriteProjectedWaveformSlice{
+          1,
+          {{4, 19}, {5, 29}},
+          2,
           0,
           ProjectedDelayMode::transport},
       Halt{},
@@ -899,6 +963,38 @@ void test_projected_callbacks_at_level(
           3,
           2,
           13,
+          0,
+          FSIM_JIT_PROJECTED_TRANSPORT},
+      {
+          0,
+          encode(PackedLogic4::from_msb_string("01010101")),
+          0,
+          8,
+          17,
+          4,
+          FSIM_JIT_PROJECTED_INERTIAL},
+      {
+          0,
+          encode(PackedLogic4::from_msb_string("10101010")),
+          0,
+          8,
+          23,
+          4,
+          FSIM_JIT_PROJECTED_INERTIAL},
+      {
+          1,
+          encode(PackedLogic4::from_msb_string("01")),
+          2,
+          2,
+          19,
+          0,
+          FSIM_JIT_PROJECTED_TRANSPORT},
+      {
+          1,
+          encode(PackedLogic4::from_msb_string("10")),
+          2,
+          2,
+          29,
           0,
           FSIM_JIT_PROJECTED_TRANSPORT},
   };
@@ -933,6 +1029,38 @@ void test_projected_callbacks_at_level(
     expect_fatal_error(
         [&] { (void)jit.execute(handle, missing); },
         "requires write_projected_slice");
+  }
+  {
+    auto too_short = descriptor;
+    too_short.struct_size = static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, write_projected_waveform));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, too_short); },
+        "does not include write_projected_waveform");
+  }
+  {
+    auto missing = descriptor;
+    missing.write_projected_waveform = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing); },
+        "requires write_projected_waveform");
+  }
+  {
+    auto too_short = descriptor;
+    too_short.struct_size = static_cast<std::uint32_t>(
+        offsetof(
+            fsim_jit_runtime_v1,
+            write_projected_waveform_slice));
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, too_short); },
+        "does not include write_projected_waveform_slice");
+  }
+  {
+    auto missing = descriptor;
+    missing.write_projected_waveform_slice = nullptr;
+    expect_fatal_error(
+        [&] { (void)jit.execute(handle, missing); },
+        "requires write_projected_waveform_slice");
   }
 }
 
@@ -2632,6 +2760,24 @@ make_cached_scheduled_process(const bool delayed,
   return process;
 }
 
+[[nodiscard]] Process make_cached_projected_waveform_process(
+    const std::uint64_t second_delay,
+    const std::uint64_t rejection,
+    const ProjectedDelayMode mode) {
+  Process process;
+  process.id = 18;
+  process.name = "cached_projected_waveform_process";
+  process.register_count = 2;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10100101")},
+      LoadConstant{1, PackedLogic4::from_msb_string("01011010")},
+      WriteProjectedWaveform{
+          0, {{0, 5}, {1, second_delay}}, rejection, mode},
+      Halt{},
+  };
+  return process;
+}
+
 [[nodiscard]] Process
 make_cached_wait_process(const bool static_wait,
                          std::vector<SignalId> signals,
@@ -3558,6 +3704,44 @@ void test_projected_cache_identity(
   run(5, 0, ProjectedDelayMode::transport, 0, 1);
 }
 
+void test_projected_waveform_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol{"cached_projected_waveform"};
+  const std::array<std::uint32_t, 1> widths{8};
+  const auto run =
+      [&](const std::uint64_t second_delay,
+          const std::uint64_t rejection,
+          const ProjectedDelayMode mode,
+          const std::size_t hits,
+          const std::size_t misses) {
+        LlvmJit jit{
+            LlvmJitOptions{
+                JitOptimizationLevel::o2, cache_directory}};
+        jit.add_process(
+            symbol,
+            make_cached_projected_waveform_process(
+                second_delay, rejection, mode),
+            widths);
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        assert(
+            jit.execute(jit.lookup(symbol), descriptor)
+            == JitExecutionStatus::completed);
+        assert(runtime.projected_writes.size() == 2);
+        assert(runtime.projected_writes[0].delay == 5);
+        assert(runtime.projected_writes[1].delay == second_delay);
+        assert(runtime.projected_writes[0].rejection == rejection);
+        assert(runtime.projected_writes[0].mode
+               == static_cast<std::uint32_t>(mode));
+        expect_cache_statistics(jit, hits, misses, misses);
+      };
+  run(9, 2, ProjectedDelayMode::inertial, 0, 1);
+  run(9, 2, ProjectedDelayMode::inertial, 1, 0);
+  run(10, 2, ProjectedDelayMode::inertial, 0, 1);
+  run(9, 1, ProjectedDelayMode::inertial, 0, 1);
+  run(9, 0, ProjectedDelayMode::transport, 0, 1);
+}
+
 void test_persistent_object_cache() {
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -3577,6 +3761,8 @@ void test_persistent_object_cache() {
   test_cache_pruning_integration(root / "pruning");
   test_inertial_cache_identity(root / "inertial");
   test_projected_cache_identity(root / "projected");
+  test_projected_waveform_cache_identity(
+      root / "projected-waveform");
 
   std::filesystem::remove_all(root, error);
   assert(!error);
@@ -3630,6 +3816,27 @@ void test_rejections() {
             one_signal);
       },
       "invalid delay mode");
+  Process unordered_waveform;
+  unordered_waveform.name = "unordered_projected_waveform";
+  unordered_waveform.register_count = 2;
+  unordered_waveform.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      LoadConstant{1, PackedLogic4::from_msb_string("0")},
+      WriteProjectedWaveform{
+          0,
+          {{0, 5}, {1, 5}},
+          0,
+          ProjectedDelayMode::transport},
+      Halt{},
+  };
+  expect_error(
+      [&] {
+        jit.add_process(
+            "unordered_projected_waveform",
+            unordered_waveform,
+            one_signal);
+      },
+      "strictly ascending");
 
   Process empty_wait_on;
   empty_wait_on.id = 0;

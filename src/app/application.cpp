@@ -205,6 +205,9 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     runtime.write_inertial_slice = write_inertial_slice;
     runtime.write_projected = write_projected;
     runtime.write_projected_slice = write_projected_slice;
+    runtime.write_projected_waveform = write_projected_waveform;
+    runtime.write_projected_waveform_slice =
+        write_projected_waveform_slice;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -651,6 +654,92 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
           value,
           offset,
           delay,
+          rejection,
+          projected_delay_mode(mode));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_projected_waveform(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t width,
+      const fsim_jit_projected_element_v1* elements,
+      const std::uint32_t count,
+      const std::uint64_t rejection,
+      const std::uint32_t mode) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (elements == nullptr || count == 0
+          || signal >= state.signal_widths.size()
+          || width != state.signal_widths[signal]) {
+        throw std::logic_error(
+            "invalid generated projected-waveform callback");
+      }
+      std::vector<runtime::simir::ProjectedWaveformValue> values;
+      values.reserve(count);
+      for (std::uint32_t index = 0; index < count; ++index) {
+        const auto word = checked_write_word(
+            state,
+            signal,
+            elements[index].aval,
+            elements[index].bval);
+        values.push_back({
+            PackedLogic4::from_aval_bval(
+                word.width, word.aval, word.bval),
+            elements[index].delay});
+      }
+      state.context->write_projected_waveform(
+          signal,
+          std::move(values),
+          rejection,
+          projected_delay_mode(mode));
+    } catch (...) {
+      capture_failure(state);
+    }
+  }
+
+  static void write_projected_waveform_slice(
+      void* context,
+      const std::uint32_t signal,
+      const std::uint32_t offset,
+      const std::uint32_t width,
+      const fsim_jit_projected_element_v1* elements,
+      const std::uint32_t count,
+      const std::uint64_t rejection,
+      const std::uint32_t mode) noexcept {
+    auto& state = *static_cast<CallbackState*>(context);
+    if (state.failure) {
+      return;
+    }
+    try {
+      if (elements == nullptr || count == 0) {
+        throw std::logic_error(
+            "invalid generated projected-slice-waveform callback");
+      }
+      std::vector<runtime::simir::ProjectedWaveformValue> values;
+      values.reserve(count);
+      for (std::uint32_t index = 0; index < count; ++index) {
+        const auto word = checked_slice_word(
+            state,
+            signal,
+            offset,
+            width,
+            elements[index].aval,
+            elements[index].bval);
+        values.push_back({
+            PackedLogic4::from_aval_bval(
+                word.width, word.aval, word.bval),
+            elements[index].delay});
+      }
+      state.context->write_projected_waveform_slice(
+          signal,
+          std::move(values),
+          offset,
           rejection,
           projected_delay_mode(mode));
     } catch (...) {
@@ -3788,7 +3877,14 @@ void visit_delays(
     std::vector<frontend::Statement>& statements,
     Function&& function) {
   for (auto& statement : statements) {
-    if (statement.delay) {
+    if (!statement.vhdl_waveform.empty()) {
+      for (auto& element : statement.vhdl_waveform) {
+        if (element.delay) {
+          visit_delay(*element.delay, function);
+        }
+      }
+      statement.delay = statement.vhdl_waveform.front().delay;
+    } else if (statement.delay) {
       visit_delay(*statement.delay, function);
     }
     if (statement.vhdl_rejection_limit) {
@@ -3807,6 +3903,28 @@ void validate_vhdl_rejection_limits(
     diagnostic::Engine& diagnostics,
     bool& valid) {
   for (const auto& statement : statements) {
+    if (statement.vhdl_waveform.size() > 1) {
+      auto previous =
+          statement.vhdl_waveform.front().delay
+              ? statement.vhdl_waveform.front().delay->magnitude
+              : 0;
+      for (std::size_t index = 1;
+           index < statement.vhdl_waveform.size();
+           ++index) {
+        const auto current =
+            statement.vhdl_waveform[index].delay
+                ? statement.vhdl_waveform[index].delay->magnitude
+                : 0;
+        if (current <= previous) {
+          diagnostics.error(
+              "FSIM-VHDL-SEM-034",
+              "VHDL waveform-element delays must be strictly ascending",
+              span(statement.vhdl_waveform[index].span));
+          valid = false;
+        }
+        previous = current;
+      }
+    }
     if (statement.vhdl_rejection_limit) {
       const auto mechanism =
           statement.vhdl_delay_mechanism.value_or(
@@ -3819,7 +3937,11 @@ void validate_vhdl_rejection_limits(
         valid = false;
       }
       const auto first_delay =
-          statement.delay ? statement.delay->magnitude : 0;
+          !statement.vhdl_waveform.empty()
+              ? (statement.vhdl_waveform.front().delay
+                     ? statement.vhdl_waveform.front().delay->magnitude
+                     : 0)
+              : (statement.delay ? statement.delay->magnitude : 0);
       if (statement.vhdl_rejection_limit->magnitude > first_delay) {
         diagnostics.error(
             "FSIM-VHDL-SEM-032",

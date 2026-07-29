@@ -268,6 +268,24 @@ struct WriteProjected {
   ProjectedDelayMode mode{ProjectedDelayMode::inertial};
 };
 
+struct ProjectedWaveformElement {
+  RegisterId source{};
+  SimulationTick delay{};
+
+  friend bool operator==(
+      const ProjectedWaveformElement&,
+      const ProjectedWaveformElement&) = default;
+};
+
+/// Atomically replace a VHDL driver's projected output waveform with an
+/// ordered group of new transactions.
+struct WriteProjectedWaveform {
+  SignalId signal{};
+  std::vector<ProjectedWaveformElement> elements;
+  SimulationTick rejection{};
+  ProjectedDelayMode mode{ProjectedDelayMode::inertial};
+};
+
 /// Replace a contiguous packed range immediately in the active phase.
 struct WriteBlockingSlice {
   SignalId signal{};
@@ -304,6 +322,19 @@ struct WriteProjectedSlice {
   SimulationTick delay{};
   SimulationTick rejection{};
   ProjectedDelayMode mode{ProjectedDelayMode::inertial};
+};
+
+struct WriteProjectedWaveformSlice {
+  SignalId signal{};
+  std::vector<ProjectedWaveformElement> elements;
+  std::uint32_t offset{};
+  SimulationTick rejection{};
+  ProjectedDelayMode mode{ProjectedDelayMode::inertial};
+};
+
+struct ProjectedWaveformValue {
+  PackedLogic4 value;
+  SimulationTick delay{};
 };
 
 /// Return the shortest delay required by the bits that actually change.
@@ -524,10 +555,11 @@ using Operation =
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
                  Shift, Extract, Concatenate, Binary, Insert,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
-                 WriteInertial, WriteProjected, WriteBlockingSlice,
+                 WriteInertial, WriteProjected, WriteProjectedWaveform,
+                 WriteBlockingSlice,
                  WriteUpdateSlice,
                  WriteAfterSlice, WriteInertialSlice,
-                 WriteProjectedSlice,
+                 WriteProjectedSlice, WriteProjectedWaveformSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
                  Branch, DebugPoint, Assert, Display, FormatDisplay,
                  TimeDisplay, MonitorInstall, MonitorControl, RandomValue,
@@ -759,6 +791,33 @@ public:
         delay,
         rejection,
         mode);
+  }
+  virtual void write_projected_waveform(
+      SignalId signal,
+      std::vector<ProjectedWaveformValue> elements,
+      SimulationTick rejection,
+      ProjectedDelayMode mode) {
+    (void)signal;
+    (void)elements;
+    (void)rejection;
+    (void)mode;
+    throw std::logic_error{
+        "alternate process executor does not support projected waveforms"};
+  }
+  virtual void write_projected_waveform_slice(
+      SignalId signal,
+      std::vector<ProjectedWaveformValue> elements,
+      std::size_t offset,
+      SimulationTick rejection,
+      ProjectedDelayMode mode) {
+    (void)signal;
+    (void)elements;
+    (void)offset;
+    (void)rejection;
+    (void)mode;
+    throw std::logic_error{
+        "alternate process executor does not support projected slice "
+        "waveforms"};
   }
 
   /// Notify a kernel-owned event identity from an alternate language

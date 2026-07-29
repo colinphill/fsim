@@ -196,6 +196,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-122` | error | Expected `;` after a VHDL `report` statement. |
 | `FSIM-VHDL-PARSE-123` | error | Expected `inertial` after a VHDL `reject` time. |
 | `FSIM-VHDL-PARSE-124` | error | A VHDL delay mechanism appears anywhere other than immediately after `<=`. |
+| `FSIM-VHDL-PARSE-125` | error | `unaffected` is mixed with other elements instead of forming a complete waveform alternative. |
+| `FSIM-VHDL-PARSE-126` | error | A VHDL waveform is empty or lacks a value. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -227,6 +229,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-031` | error | A VHDL rejection limit is negative. |
 | `FSIM-VHDL-SEM-032` | error | A VHDL rejection limit exceeds the first waveform-element delay. |
 | `FSIM-VHDL-SEM-033` | error | A VHDL `reject` clause is paired with the transport delay mechanism. |
+| `FSIM-VHDL-SEM-034` | error | VHDL waveform-element delays are not strictly ascending after exact project-time normalization. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -248,6 +251,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package body or package declaration outside the bounded constant-only subset is not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
+| `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element requires guarded-signal driver disconnection, which is not executable yet. |
 
 ## Verilog and SystemVerilog frontend
 

@@ -35,6 +35,12 @@ extern "C" {
 #define FSIM_JIT_PROJECTED_TRANSPORT UINT32_C(0)
 #define FSIM_JIT_PROJECTED_INERTIAL UINT32_C(1)
 
+typedef struct fsim_jit_projected_element_v1 {
+  uint64_t aval;
+  uint64_t bval;
+  uint64_t delay;
+} fsim_jit_projected_element_v1;
+
 /*
  * Versioned plain-C boundary used by generated process functions.
  * Signal values use aval/bval encoding in the low bits selected by the
@@ -250,6 +256,28 @@ typedef struct fsim_jit_runtime_v1 {
       uint64_t aval,
       uint64_t bval,
       uint64_t delay,
+      uint64_t rejection,
+      uint32_t mode);
+
+  /*
+   * Append-only atomic multi-element waveform writes. elements is valid only
+   * for the duration of the synchronous callback and contains count entries.
+   */
+  void (*write_projected_waveform)(
+      void* context,
+      uint32_t signal,
+      uint32_t width,
+      const fsim_jit_projected_element_v1* elements,
+      uint32_t count,
+      uint64_t rejection,
+      uint32_t mode);
+  void (*write_projected_waveform_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      const fsim_jit_projected_element_v1* elements,
+      uint32_t count,
       uint64_t rejection,
       uint32_t mode);
 } fsim_jit_runtime_v1;

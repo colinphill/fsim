@@ -139,10 +139,11 @@ The current tree contains:
   Boolean `when`/`else` alternatives;
 - VHDL `with`/`select` concurrent signal assignments with grouped exact
   choices, a final `others`, inferred sensitivity, and optional waveform delay;
-- one-element VHDL sequential, conditional-concurrent, and selected signal
-  waveforms with exact integer time, implicit/explicit inertial, transport,
-  optional rejection limits, and per-scalar projected transactions for whole
-  or constant-slice targets;
+- ordered VHDL sequential, conditional-concurrent, and selected signal
+  waveforms with per-element exact integer time, `unaffected` alternatives,
+  implicit/explicit inertial, transport, optional rejection limits, and
+  atomic per-scalar projected transactions for whole or constant-slice
+  targets;
 - VHDL packed-object `'left`, `'right`, `'low`, `'high`, `'length`, and
   `'ascending` attributes with declared-direction preservation;
 - VHDL signal `'event` with delta-scoped effective-value-change semantics and

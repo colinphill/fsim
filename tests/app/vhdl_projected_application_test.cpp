@@ -92,14 +92,18 @@ Capture run_once(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.native_cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 7> names{
+  constexpr std::array<std::string_view, 11> names{
       "vhdl_projected.default_output",
       "vhdl_projected.explicit_output",
       "vhdl_projected.transport_output",
       "vhdl_projected.selected_output",
       "vhdl_projected.slice_output",
       "vhdl_projected.conditional_output",
-      "vhdl_projected.sequential_output"};
+      "vhdl_projected.sequential_output",
+      "vhdl_projected.waveform_output",
+      "vhdl_projected.waveform_slice_output",
+      "vhdl_projected.conditional_waveform_output",
+      "vhdl_projected.selected_waveform_output"};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> vcd_signals{};
   std::ostringstream vcd_output;
@@ -195,11 +199,27 @@ void verify_capture(const Capture& capture) {
   assert((
       changes_for(capture, "vhdl_projected.conditional_output")
       == std::vector<TimedValue>{
-          {"0", 6}, {"1", 26}, {"0", 28}}));
+          {"0", 6}, {"1", 20}, {"0", 22}}));
   assert((
       changes_for(capture, "vhdl_projected.sequential_output")
       == std::vector<TimedValue>{
           {"0", 0}, {"1", 25}, {"0", 28}}));
+  assert((
+      changes_for(capture, "vhdl_projected.waveform_output")
+      == std::vector<TimedValue>{
+          {"0", 1}, {"1", 4}, {"0", 7}}));
+  assert((
+      changes_for(capture, "vhdl_projected.waveform_slice_output")
+      == std::vector<TimedValue>{
+          {"X00X", 2}, {"X11X", 5}}));
+  assert((
+      changes_for(capture, "vhdl_projected.conditional_waveform_output")
+      == std::vector<TimedValue>{
+          {"1", 21}, {"0", 23}}));
+  assert((
+      changes_for(capture, "vhdl_projected.selected_waveform_output")
+      == std::vector<TimedValue>{
+          {"1", 22}, {"0", 25}}));
   assert(capture.vcd.find("$timescale 1ps $end")
          != std::string::npos);
   assert(capture.vcd.find("#28") != std::string::npos);
@@ -263,6 +283,36 @@ end architecture;
       [](const auto& diagnostic) {
         return diagnostic.code == "FSIM-TIME-0003";
       }));
+
+  const auto unordered_source =
+      directory / "unordered_waveform.vhd";
+  {
+    std::ofstream output(unordered_source, std::ios::binary);
+    output << R"(
+entity unordered_waveform is
+end entity;
+architecture rtl of unordered_waveform is
+  signal result : std_logic;
+begin
+  result <= transport '1' after 5 ps, '0' after 5 ps;
+end architecture;
+)";
+    assert(output.good());
+  }
+  auto unordered_config = make_config(
+      directory,
+      unordered_source,
+      fsim::project::Optimization::o2);
+  unordered_config.project.top =
+      "vhdl:work.unordered_waveform(rtl)";
+  fsim::diagnostic::Engine unordered_diagnostics;
+  assert(!fsim::app::build_project(
+      unordered_config, unordered_diagnostics));
+  assert(std::ranges::any_of(
+      unordered_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-VHDL-SEM-034";
+      }));
 }
 
 }  // namespace
@@ -295,6 +345,10 @@ architecture rtl of vhdl_projected is
   signal slice_output : std_logic_vector(3 downto 0);
   signal conditional_output : std_logic;
   signal sequential_output : std_logic;
+  signal waveform_output : std_logic;
+  signal waveform_slice_output : std_logic_vector(3 downto 0);
+  signal conditional_waveform_output : std_logic;
+  signal selected_waveform_output : std_logic;
 begin
   default_output <= default_drive after 5 ps;
   explicit_output <=
@@ -308,6 +362,17 @@ begin
       transport slice_drive after 3 ps;
   conditional_output <= transport
       transport_drive when selector else '0' after 6 ps;
+  waveform_output <= transport
+      '0' after 1 ps, '1' after 4 ps, '0' after 7 ps;
+  waveform_slice_output(2 downto 1) <= transport
+      "00" after 2 ps, "11" after 5 ps;
+  conditional_waveform_output <= transport
+      '1' after 1 ps, '0' after 3 ps
+      when selector else unaffected;
+  with selector select
+    selected_waveform_output <= transport
+      '1' after 2 ps, '0' after 5 ps when true,
+      unaffected when others;
 
   stimulus: process
   begin
@@ -369,11 +434,11 @@ end architecture;
     assert(reference.final_values == warm.final_values);
     assert(reference.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 8);
+    assert(cold.compiled_processes == 12);
     assert(cold.native_cache.hits == 0);
     assert(cold.native_cache.misses == 1);
     assert(cold.native_cache.stores == 1);
-    assert(warm.compiled_processes == 8);
+    assert(warm.compiled_processes == 12);
     assert(warm.native_cache.hits == 1);
     assert(warm.native_cache.misses == 0);
 #else

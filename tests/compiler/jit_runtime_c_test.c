@@ -87,8 +87,22 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, write_projected) == 200,
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, write_projected_slice) == 208,
     "runtime partial projected-write callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 216,
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_waveform) == 216,
+    "runtime projected-waveform callback was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_projected_waveform_slice) == 224,
+    "runtime partial projected-waveform callback was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 232,
                "unexpected extended runtime ABI size");
+_Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
+               "unexpected projected-waveform element size");
+_Static_assert(offsetof(fsim_jit_projected_element_v1, aval) == 0,
+               "projected-waveform aval offset changed");
+_Static_assert(offsetof(fsim_jit_projected_element_v1, bval) == 8,
+               "projected-waveform bval offset changed");
+_Static_assert(offsetof(fsim_jit_projected_element_v1, delay) == 16,
+               "projected-waveform delay offset changed");
 _Static_assert(FSIM_JIT_PROJECTED_TRANSPORT == UINT32_C(0),
                "projected transport mode changed");
 _Static_assert(FSIM_JIT_PROJECTED_INERTIAL == UINT32_C(1),
@@ -431,6 +445,47 @@ static void write_projected_slice(
       mode);
 }
 
+static void write_projected_waveform(
+    void* context,
+    uint32_t signal,
+    uint32_t width,
+    const fsim_jit_projected_element_v1* elements,
+    uint32_t count,
+    uint64_t rejection,
+    uint32_t mode) {
+  (void)width;
+  if (elements != NULL && count != 0) {
+    write_projected(
+        context,
+        signal,
+        elements[count - 1].aval,
+        elements[count - 1].bval,
+        elements[count - 1].delay,
+        rejection,
+        mode);
+  }
+}
+
+static void write_projected_waveform_slice(
+    void* context,
+    uint32_t signal,
+    uint32_t offset,
+    uint32_t width,
+    const fsim_jit_projected_element_v1* elements,
+    uint32_t count,
+    uint64_t rejection,
+    uint32_t mode) {
+  (void)offset;
+  write_projected_waveform(
+      context,
+      signal,
+      width,
+      elements,
+      count,
+      rejection,
+      mode);
+}
+
 int main(void) {
   callback_state state = {0};
   fsim_jit_runtime_v1 runtime = {
@@ -462,7 +517,9 @@ int main(void) {
       write_inertial,
       write_inertial_slice,
       write_projected,
-      write_projected_slice};
+      write_projected_slice,
+      write_projected_waveform,
+      write_projected_waveform_slice};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -555,6 +612,28 @@ int main(void) {
       UINT64_C(13),
       UINT64_C(0),
       FSIM_JIT_PROJECTED_TRANSPORT);
+  {
+    const fsim_jit_projected_element_v1 elements[2] = {
+        {UINT64_C(0), UINT64_C(0), UINT64_C(17)},
+        {UINT64_C(1), UINT64_C(0), UINT64_C(19)}};
+    runtime.write_projected_waveform(
+        runtime.context,
+        UINT32_C(16),
+        UINT32_C(1),
+        elements,
+        UINT32_C(2),
+        UINT64_C(2),
+        FSIM_JIT_PROJECTED_INERTIAL);
+    runtime.write_projected_waveform_slice(
+        runtime.context,
+        UINT32_C(16),
+        UINT32_C(3),
+        UINT32_C(1),
+        elements,
+        UINT32_C(2),
+        UINT64_C(0),
+        FSIM_JIT_PROJECTED_TRANSPORT);
+  }
 
   if (runtime.abi_version != UINT32_C(1) ||
       runtime.struct_size != sizeof(fsim_jit_runtime_v1)) {
@@ -607,8 +686,8 @@ int main(void) {
       state.inertial_rise != UINT64_C(5) ||
       state.inertial_fall != UINT64_C(6) ||
       state.inertial_turnoff != UINT64_C(7) ||
-      state.projected_count != UINT32_C(2) ||
-      state.projected_delay != UINT64_C(13) ||
+      state.projected_count != UINT32_C(4) ||
+      state.projected_delay != UINT64_C(19) ||
       state.projected_rejection != UINT64_C(0) ||
       state.projected_mode != FSIM_JIT_PROJECTED_TRANSPORT ||
       state.report_instruction != UINT32_C(24) ||

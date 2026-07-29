@@ -2019,11 +2019,13 @@ class VhdlParser final : private detail::ParserBase {
     statement.target = std::move(target);
     if (kind != AssignmentKind::Blocking) {
       parse_vhdl_delay_mechanism(statement);
-    }
-    statement.value = parse_conditional_assignment_value();
-    diagnose_misplaced_vhdl_delay_mechanism();
-    if (match_keyword("after", true)) {
-      statement.delay = parse_vhdl_delay(previous());
+      statement = parse_conditional_signal_assignment(std::move(statement));
+    } else {
+      statement.value = parse_conditional_assignment_value();
+      diagnose_misplaced_vhdl_delay_mechanism();
+      if (match_keyword("after", true)) {
+        statement.delay = parse_vhdl_delay(previous());
+      }
     }
     expect(TokenKind::Semicolon, "';' after assignment",
            "FSIM-VHDL-PARSE-029");
@@ -2058,11 +2060,7 @@ class VhdlParser final : private detail::ParserBase {
           common_assignment.vhdl_delay_mechanism;
       assignment.vhdl_rejection_limit =
           common_assignment.vhdl_rejection_limit;
-      assignment.value = parse_expression();
-      diagnose_misplaced_vhdl_delay_mechanism();
-      if (match_keyword("after", true)) {
-        assignment.delay = parse_vhdl_delay(previous());
-      }
+      parse_vhdl_waveform(assignment);
       expect_keyword("when", true, "FSIM-VHDL-PARSE-118");
       if (match_keyword("others", true)) {
         alternative.is_default = true;
@@ -2107,6 +2105,94 @@ class VhdlParser final : private detail::ParserBase {
         "FSIM-VHDL-PARSE-119");
     statement.span = span_from(start, previous());
     return statement;
+  }
+
+  Statement parse_conditional_signal_assignment(Statement assignment) {
+    const auto assignment_start = assignment.target.span;
+    parse_vhdl_waveform(assignment);
+    if (!match_keyword("when", true)) {
+      assignment.span = cover(assignment_start, previous().span);
+      return assignment;
+    }
+
+    Statement conditional;
+    conditional.kind = StatementKind::If;
+    conditional.vhdl_conditional_assignment = true;
+    conditional.condition = parse_expression();
+    expect_keyword("else", true, "FSIM-VHDL-PARSE-115");
+    conditional.statements.push_back(std::move(assignment));
+
+    Statement alternate;
+    alternate.kind = StatementKind::Assignment;
+    alternate.assignment_kind =
+        conditional.statements.front().assignment_kind;
+    alternate.target = conditional.statements.front().target;
+    alternate.vhdl_delay_mechanism =
+        conditional.statements.front().vhdl_delay_mechanism;
+    alternate.vhdl_rejection_limit =
+        conditional.statements.front().vhdl_rejection_limit;
+    conditional.else_statements.push_back(
+        parse_conditional_signal_assignment(std::move(alternate)));
+    conditional.span = cover(assignment_start, previous().span);
+    return conditional;
+  }
+
+  void parse_vhdl_waveform(Statement& statement) {
+    if (match_keyword("unaffected", true)) {
+      statement.vhdl_unaffected = true;
+      if (at(TokenKind::Comma)) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-125",
+            "'unaffected' must be the complete waveform alternative");
+        while (!at(TokenKind::Semicolon)
+               && !at(TokenKind::EndOfFile)) {
+          advance();
+        }
+      }
+      return;
+    }
+
+    do {
+      const auto start = current();
+      VhdlWaveformElement element;
+      if (match_keyword("null", true)) {
+        error(
+            previous(),
+            "FSIM-VHDL-UNSUPPORTED-025",
+            "null waveform elements require guarded-signal driver "
+            "disconnection, which is not supported yet");
+        element.value = Expression{
+            ExpressionKind::IntegerLiteral, "0", {}, previous().span};
+      } else if (
+          at(TokenKind::Semicolon) || keyword("when", 0, true)
+          || keyword("else", 0, true)) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-126",
+            "expected a value or 'unaffected' in a VHDL waveform");
+        element.value = Expression{
+            ExpressionKind::IntegerLiteral, "0", {}, current().span};
+      } else {
+        element.value = parse_expression();
+      }
+      diagnose_misplaced_vhdl_delay_mechanism();
+      if (match_keyword("after", true)) {
+        element.delay = parse_vhdl_delay(previous());
+      }
+      element.span = cover(start.span, previous().span);
+      statement.vhdl_waveform.push_back(std::move(element));
+    } while (match(TokenKind::Comma));
+
+    if (statement.vhdl_waveform.empty()) {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-126",
+          "expected at least one element in a VHDL waveform");
+      return;
+    }
+    statement.value = statement.vhdl_waveform.front().value;
+    statement.delay = statement.vhdl_waveform.front().delay;
   }
 
   void parse_vhdl_delay_mechanism(Statement& statement) {

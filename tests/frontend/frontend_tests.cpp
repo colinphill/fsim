@@ -1526,20 +1526,27 @@ end architecture;
           && architecture->processes.size() == 1,
       "VHDL conditional assignments must retain their statement contexts");
   const auto& concurrent =
-      architecture->concurrent_statements.front().value;
+      architecture->concurrent_statements.front();
   const auto& sequential =
-      architecture->processes.front().statements.front().value;
+      architecture->processes.front().statements.front();
   require(
-      concurrent.kind == ExpressionKind::Call
-          && concurrent.text == "?:"
-          && concurrent.operands.size() == 3
-          && concurrent.operands[2].kind == ExpressionKind::Call
-          && concurrent.operands[2].text == "?:",
+      concurrent.kind == StatementKind::If
+          && concurrent.statements.size() == 1
+          && concurrent.statements[0].value.text == "a"
+          && concurrent.else_statements.size() == 1
+          && concurrent.else_statements[0].kind == StatementKind::If
+          && concurrent.else_statements[0].statements[0].value.text == "b"
+          && concurrent.else_statements[0]
+                 .else_statements[0]
+                 .value.text
+              == "c",
       "chained VHDL conditional assignments must nest in source order");
   require(
-      sequential.kind == ExpressionKind::Call
-          && sequential.text == "?:"
-          && sequential.operands.size() == 3,
+      sequential.kind == StatementKind::If
+          && sequential.statements.size() == 1
+          && sequential.statements[0].value.text == "a"
+          && sequential.else_statements.size() == 1
+          && sequential.else_statements[0].value.text == "b",
       "sequential VHDL-2008 conditional assignments must use common HIR");
 
   const auto missing_else = parse_text(
@@ -1848,6 +1855,105 @@ end architecture;
           && has_code("FSIM-VHDL-PARSE-123")
           && has_code("FSIM-VHDL-PARSE-124"),
       "malformed and misplaced VHDL delay mechanisms are targeted");
+}
+
+void test_vhdl_ordered_waveforms() {
+  const auto parsed = parse_text(
+      "ordered_waveforms.vhd",
+      R"(
+architecture rtl of ordered_waveforms is
+  signal choose : boolean;
+  signal selector : std_logic;
+  signal source : std_logic_vector(1 downto 0);
+  signal result : std_logic_vector(1 downto 0);
+begin
+  result <= transport "00" after 1 ns, "11" after 4 ns;
+  result <= "01" after 2 ns, "10" after 6 ns
+            when choose else unaffected;
+  with selector select
+    result <= "00" after 1 ns, "11" after 3 ns when '0',
+              unaffected when others;
+  process
+  begin
+    result(1 downto 0) <=
+        inertial "10" after 2 ns, "01" after 5 ns;
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "ordered VHDL waveforms must parse");
+  const auto& unit = parsed.design.units.front();
+  require(
+      unit.concurrent_statements.size() == 3
+          && unit.processes.size() == 1,
+      "ordered waveform statement contexts");
+  const auto& simple = unit.concurrent_statements[0];
+  require(
+      simple.kind == StatementKind::Assignment
+          && simple.vhdl_waveform.size() == 2
+          && simple.vhdl_waveform[0].delay
+          && simple.vhdl_waveform[0].delay->magnitude == 1
+          && simple.vhdl_waveform[1].delay
+          && simple.vhdl_waveform[1].delay->magnitude == 4,
+      "simple ordered waveform HIR");
+  const auto& conditional = unit.concurrent_statements[1];
+  require(
+      conditional.kind == StatementKind::If
+          && conditional.statements[0].vhdl_waveform.size() == 2
+          && conditional.else_statements[0].vhdl_unaffected,
+      "conditional alternatives retain independent waveform state");
+  const auto& selected = unit.concurrent_statements[2];
+  require(
+      selected.kind == StatementKind::Case
+          && selected.case_alternatives.size() == 2
+          && selected.case_alternatives[0]
+                 .statements[0]
+                 .vhdl_waveform.size()
+              == 2
+          && selected.case_alternatives[1]
+                 .statements[0]
+                 .vhdl_unaffected,
+      "selected alternatives retain waveform or unaffected");
+  require(
+      unit.processes[0].statements[0].vhdl_waveform.size() == 2
+          && unit.processes[0]
+                 .statements[0]
+                 .target.kind
+              == ExpressionKind::Slice,
+      "sequential slice waveform HIR");
+
+  const auto malformed = parse_text(
+      "malformed_waveforms.vhd",
+      R"(
+architecture rtl of malformed_waveforms is
+  signal result : std_logic;
+begin
+  result <= unaffected, '1' after 1 ns;
+  result <= ;
+  result <= null after 1 ns;
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        malformed.diagnostics,
+        [code](const auto& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !malformed.ok()
+          && has_code("FSIM-VHDL-PARSE-125")
+          && has_code("FSIM-VHDL-PARSE-126")
+          && has_code("FSIM-VHDL-UNSUPPORTED-025"),
+      "malformed, empty, and null VHDL waveforms are targeted (mixed="
+          + std::to_string(has_code("FSIM-VHDL-PARSE-125"))
+          + ", empty="
+          + std::to_string(has_code("FSIM-VHDL-PARSE-126"))
+          + ", null="
+          + std::to_string(has_code("FSIM-VHDL-UNSUPPORTED-025"))
+          + ")");
 }
 
 void test_vhdl_case_statements() {
@@ -6727,6 +6833,7 @@ int main() {
     test_vhdl_array_attributes();
     test_vhdl_selected_assignments();
     test_vhdl_delay_mechanisms();
+    test_vhdl_ordered_waveforms();
     test_vhdl_case_statements();
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();

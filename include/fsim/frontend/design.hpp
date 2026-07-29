@@ -254,6 +254,12 @@ enum class VhdlDelayMechanism {
   Transport,
 };
 
+struct VhdlWaveformElement {
+  Expression value;
+  std::optional<Delay> delay;
+  SourceSpan span;
+};
+
 enum class StatementKind {
   Assignment,
   If,
@@ -356,11 +362,19 @@ struct Statement {
   // SystemVerilog do-while evaluates its condition after the body. Other
   // runtime loops use the default pre-test form.
   bool loop_post_test{};
+  // True only for an If node synthesized from a VHDL conditional signal
+  // assignment, preserving its distinct legality diagnostic.
+  bool vhdl_conditional_assignment{};
   std::optional<Delay> delay;
   // Present only on VHDL signal assignments. VHDL variable assignments and
   // assignments from the Verilog/SystemVerilog frontends leave this empty.
   std::optional<VhdlDelayMechanism> vhdl_delay_mechanism;
   std::optional<Delay> vhdl_rejection_limit;
+  // VHDL signal-assignment leaves preserve their complete ordered waveform.
+  // `value` and `delay` mirror the first element for source compatibility
+  // with consumers that have not yet opted into the multi-element form.
+  std::vector<VhdlWaveformElement> vhdl_waveform;
+  bool vhdl_unaffected{};
   std::vector<Sensitivity> sensitivities;
   std::string assertion_message;
   AssertionSeverity assertion_severity{AssertionSeverity::Error};

@@ -682,11 +682,13 @@ Supported compiled builds use LLVM 22.1.8, ORC, and LLJIT. The adapter public
 header exposes no LLVM class. Generated functions receive a versioned C table
 containing opaque context plus signal-read, blocking-write, assertion,
 update-write, delayed-write, transition-aware whole/slice inertial-write, and
-projected whole/slice write and signal-event callbacks. The `write_update`,
+projected whole/slice single-write and atomic waveform-array callbacks plus
+signal-event callbacks. The `write_update`,
 `write_after`, `signal_event`,
 `signal_last_value`, `signal_last_event`, `signal_active`, `write_inertial`,
 `write_inertial_slice`, `write_projected`, and `write_projected_slice`
-callbacks are append-only extensions of the v1
+callbacks, followed by `write_projected_waveform` and
+`write_projected_waveform_slice`, are append-only extensions of the v1
 table: original field offsets remain fixed, and each compiled process checks
 `struct_size` only for the callback tail it actually uses. A process using
 only an earlier operation set therefore remains valid with the corresponding
@@ -708,7 +710,7 @@ The current adapter compiles control-flow graphs containing loads, reads,
 common operations, blocking writes, assertions, jumps, branches, timed waits,
 dynamic-signal waits, static-sensitivity and permanent waits, next-delta yields,
 update-phase writes, transport delayed writes, whole/slice inertial writes,
-whole/slice projected-waveform writes,
+whole/slice single and atomic ordered projected-waveform writes,
 signal-event, transaction-activity,
 previous-value, and elapsed-event-time queries, design stop, and halt.
 A versioned caller-owned plain-C frame holds the process PC plus separate

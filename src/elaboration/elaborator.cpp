@@ -970,6 +970,10 @@ void substitute_parameters(
             statement.target, environment, domains, language);
         substitute_parameters(
             statement.value, environment, domains, language);
+        for (auto& element : statement.vhdl_waveform) {
+            substitute_parameters(
+                element.value, environment, domains, language);
+        }
         substitute_parameters(
             statement.condition, environment, domains, language);
         substitute_parameters(
@@ -1216,6 +1220,10 @@ void collect_qualified_identifiers(
             statement.target, identifiers);
         collect_qualified_identifiers(
             statement.value, identifiers);
+        for (const auto& element : statement.vhdl_waveform) {
+            collect_qualified_identifiers(
+                element.value, identifiers);
+        }
         collect_qualified_identifiers(
             statement.condition, identifiers);
         for (const auto& declaration : statement.declarations) {
@@ -1403,6 +1411,9 @@ void qualify_generated_statement(
     }
     qualify_generated_expression(statement.target, body_names);
     qualify_generated_expression(statement.value, body_names);
+    for (auto& element : statement.vhdl_waveform) {
+        qualify_generated_expression(element.value, body_names);
+    }
     qualify_generated_expression(statement.condition, body_names);
     for (auto& sensitivity : statement.sensitivities) {
         if (const auto found = body_names.find(sensitivity.signal);
@@ -2656,21 +2667,8 @@ public:
         emit_debug_point(DebugPointKind::process_entry, statement.span);
 
         std::set<std::string> dependencies;
-        if (statement.kind == StatementKind::Assert) {
-            collect_identifiers(statement.condition, dependencies);
-        } else if (statement.kind == StatementKind::Assignment) {
-            collect_identifiers(statement.value, dependencies);
-        } else if (statement.kind == StatementKind::Case) {
-            collect_identifiers(statement.condition, dependencies);
-            for (const auto& alternative :
-                 statement.case_alternatives) {
-                for (const auto& choice : alternative.choices) {
-                    collect_identifiers(choice, dependencies);
-                }
-                collect_statement_identifiers(
-                    alternative.statements, dependencies);
-            }
-        }
+        collect_statement_identifiers(
+            std::vector<Statement>{statement}, dependencies);
         for (const auto& dependency : dependencies) {
             if (const auto found = signals_.find(dependency); found != signals_.end()) {
                 process_.static_sensitivity.push_back({found->second, runtime::simir::EdgeKind::any});
@@ -3988,6 +3986,98 @@ private:
             }
             return;
         }
+        if (statement.vhdl_unaffected) {
+            return;
+        }
+        if (statement.vhdl_delay_mechanism
+            && statement.vhdl_waveform.size() > 1) {
+            std::vector<ProjectedWaveformElement> waveform;
+            waveform.reserve(statement.vhdl_waveform.size());
+            const auto target_domain =
+                selected_domain.value_or(
+                    design_.signal_info_[signal->second].source_domain);
+            std::optional<runtime::SimulationTick> previous_delay;
+            for (const auto& element : statement.vhdl_waveform) {
+                const auto value =
+                    lower_expression(element.value, target_width);
+                if (!value) {
+                    return;
+                }
+                if (register_width(*value) != target_width) {
+                    report(
+                        "FSIM-ELAB-047",
+                        "assignment width mismatch in VHDL waveform for '"
+                            + target_name + "'",
+                        element.span);
+                    return;
+                }
+                if ((target_domain == frontend::ValueDomain::Bit2
+                     || target_domain
+                         == frontend::ValueDomain::Boolean)
+                    && register_domain(*value)
+                        != frontend::ValueDomain::Bit2
+                    && register_domain(*value)
+                        != frontend::ValueDomain::Boolean) {
+                    report(
+                        "FSIM-ELAB-050",
+                        "assignment to two-state target '"
+                            + target_name
+                            + "' requires an explicit conversion from a "
+                              "four-/nine-state expression",
+                        element.span);
+                    return;
+                }
+                const auto delay =
+                    element.delay ? element.delay->magnitude : 0;
+                if (previous_delay && delay <= *previous_delay) {
+                    report(
+                        "FSIM-ELAB-055",
+                        "VHDL waveform-element delays must be strictly "
+                        "ascending",
+                        element.span);
+                    return;
+                }
+                previous_delay = delay;
+                waveform.push_back({*value, delay});
+            }
+            const auto mode =
+                *statement.vhdl_delay_mechanism
+                        == frontend::VhdlDelayMechanism::Transport
+                    ? ProjectedDelayMode::transport
+                    : ProjectedDelayMode::inertial;
+            const auto first_delay = waveform.front().delay;
+            const auto rejection =
+                statement.vhdl_rejection_limit
+                    ? statement.vhdl_rejection_limit->magnitude
+                    : (mode == ProjectedDelayMode::inertial
+                           ? first_delay
+                           : 0);
+            if (rejection > first_delay) {
+                report(
+                    "FSIM-ELAB-055",
+                    "a VHDL rejection limit cannot exceed the first "
+                    "waveform element delay",
+                    statement.span);
+                return;
+            }
+            if (selected_offset) {
+                process_.operations.emplace_back(
+                    WriteProjectedWaveformSlice{
+                        signal->second,
+                        std::move(waveform),
+                        *selected_offset,
+                        rejection,
+                        mode});
+            } else {
+                process_.operations.emplace_back(
+                    WriteProjectedWaveform{
+                        signal->second,
+                        std::move(waveform),
+                        rejection,
+                        mode});
+            }
+            return;
+        }
         const auto value = lower_expression(statement.value, target_width);
         if (!value) {
             return;
@@ -4130,7 +4220,13 @@ private:
 
     void lower_if(const Statement& statement) {
         const auto condition = lower_condition(
-            statement.condition, "FSIM-ELAB-048", "if");
+            statement.condition,
+            statement.vhdl_conditional_assignment
+                ? "FSIM-ELAB-092"
+                : "FSIM-ELAB-048",
+            statement.vhdl_conditional_assignment
+                ? "conditional-assignment"
+                : "if");
         if (!condition) {
             return;
         }
@@ -6865,7 +6961,14 @@ private:
         for (const auto& statement : statements) {
             switch (statement.kind) {
             case StatementKind::Assignment:
-                collect_identifiers(statement.value, output);
+                if (statement.vhdl_waveform.empty()) {
+                    collect_identifiers(statement.value, output);
+                } else {
+                    for (const auto& element :
+                         statement.vhdl_waveform) {
+                        collect_identifiers(element.value, output);
+                    }
+                }
                 break;
             case StatementKind::If:
             case StatementKind::Assert:
@@ -8321,6 +8424,10 @@ private:
                 } else if (const auto* projected =
                                std::get_if<WriteProjected>(&operation)) {
                     process_outputs.insert(projected->signal);
+                } else if (const auto* waveform =
+                               std::get_if<WriteProjectedWaveform>(
+                                   &operation)) {
+                    process_outputs.insert(waveform->signal);
                 } else if (const auto* blocking_slice =
                                std::get_if<WriteBlockingSlice>(
                                    &operation)) {
@@ -8341,6 +8448,10 @@ private:
                                std::get_if<WriteProjectedSlice>(
                                    &operation)) {
                     process_outputs.insert(projected_slice->signal);
+                } else if (const auto* waveform_slice =
+                               std::get_if<WriteProjectedWaveformSlice>(
+                                   &operation)) {
+                    process_outputs.insert(waveform_slice->signal);
                 }
             }
             for (const auto signal : process_outputs) {

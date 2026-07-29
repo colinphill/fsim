@@ -3767,6 +3767,108 @@ void test_simir_projected_writes() {
               {3, "1100"}, {5, "1110"}, {7, "1100"}},
       "projected vector and slice transactions are edited per scalar "
       "subelement");
+
+  Interpreter waveform{{1000, 32}};
+  const auto waveform_output = waveform.add_signal(
+      {"atomic-waveform", PackedLogic4::from_msb_string("0")});
+  Process atomic;
+  atomic.name = "atomic-waveform";
+  atomic.register_count = 2;
+  atomic.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      LoadConstant{1, PackedLogic4::from_msb_string("0")},
+      WriteProjectedWaveform{
+          waveform_output,
+          {{0, 5}, {1, 8}},
+          5,
+          ProjectedDelayMode::inertial},
+      Halt{},
+  };
+  static_cast<void>(waveform.add_process(std::move(atomic)));
+  std::vector<SimulationTick> waveform_changes;
+  waveform.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4&,
+          const SimulationTick time) {
+        if (signal == waveform_output) {
+          waveform_changes.push_back(time);
+        }
+      });
+  waveform.start();
+  static_cast<void>(waveform.run());
+  require(
+      waveform_changes == std::vector<SimulationTick>{5, 8}
+          && !waveform.scheduler().has_pending(),
+      "all new inertial waveform transactions are marked and retained "
+      "atomically");
+
+  Interpreter waveform_slice{{1000, 32}};
+  const auto waveform_slice_output = waveform_slice.add_signal(
+      {"atomic-slice-waveform",
+       PackedLogic4::from_msb_string("0000")});
+  Process atomic_slice;
+  atomic_slice.name = "atomic-slice-waveform";
+  atomic_slice.register_count = 2;
+  atomic_slice.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("10")},
+      LoadConstant{1, PackedLogic4::from_msb_string("01")},
+      WriteProjectedWaveformSlice{
+          waveform_slice_output,
+          {{0, 2}, {1, 5}},
+          1,
+          0,
+          ProjectedDelayMode::transport},
+      Halt{},
+  };
+  static_cast<void>(
+      waveform_slice.add_process(std::move(atomic_slice)));
+  std::vector<std::pair<SimulationTick, std::string>>
+      waveform_slice_changes;
+  waveform_slice.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        if (signal == waveform_slice_output) {
+          waveform_slice_changes.emplace_back(
+              time, value.to_msb_string());
+        }
+      });
+  waveform_slice.start();
+  static_cast<void>(waveform_slice.run());
+  require(
+      waveform_slice_changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {2, "0100"}, {5, "0010"}},
+      "atomic transport waveforms reconstruct packed slices");
+
+  Interpreter invalid_waveform{{1000, 32}};
+  const auto invalid_output = invalid_waveform.add_signal(
+      {"invalid-waveform", PackedLogic4::from_msb_string("0")});
+  Process invalid;
+  invalid.name = "invalid-waveform";
+  invalid.register_count = 2;
+  invalid.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      LoadConstant{1, PackedLogic4::from_msb_string("0")},
+      WriteProjectedWaveform{
+          invalid_output,
+          {{0, 5}, {1, 5}},
+          0,
+          ProjectedDelayMode::transport},
+      Halt{},
+  };
+  static_cast<void>(
+      invalid_waveform.add_process(std::move(invalid)));
+  invalid_waveform.start();
+  bool rejected_invalid_waveform = false;
+  try {
+    static_cast<void>(invalid_waveform.run());
+  } catch (const std::invalid_argument&) {
+    rejected_invalid_waveform = true;
+  }
+  require(
+      rejected_invalid_waveform,
+      "nonascending projected waveforms must fail at the runtime boundary");
 }
 
 void test_vcd() {

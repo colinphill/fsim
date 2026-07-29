@@ -2087,26 +2087,39 @@ struct Interpreter::Impl {
     }
   }
 
-  void schedule_projected_scalar(
+  void schedule_projected_scalar_waveform(
       const ProcessId process,
       const SignalId signal,
       const std::uint32_t offset,
-      const Logic4 value,
-      const SimulationTick delay,
+      const std::vector<std::pair<Logic4, SimulationTick>>& elements,
       const SimulationTick rejection,
       const ProjectedDelayMode mode) {
-    if (mode == ProjectedDelayMode::inertial
-        && rejection > delay) {
+    if (elements.empty()) {
       throw std::invalid_argument(
-          "projected-write rejection limit exceeds its delay");
+          "a projected waveform must contain at least one element");
     }
-    if (delay
-        > std::numeric_limits<SimulationTick>::max()
-            - scheduler.now()) {
-      throw std::overflow_error(
-          "simulation time overflow while scheduling projected write");
+    const auto first_delay = elements.front().second;
+    if (mode == ProjectedDelayMode::inertial
+        && rejection > first_delay) {
+      throw std::invalid_argument(
+          "projected-waveform rejection limit exceeds its first delay");
     }
-    const auto time = scheduler.now() + delay;
+    auto previous_delay = first_delay;
+    for (std::size_t index = 0; index < elements.size(); ++index) {
+      const auto delay = elements[index].second;
+      if (index != 0 && delay <= previous_delay) {
+        throw std::invalid_argument(
+            "projected-waveform delays must be strictly ascending");
+      }
+      if (delay
+          > std::numeric_limits<SimulationTick>::max()
+              - scheduler.now()) {
+        throw std::overflow_error(
+            "simulation time overflow while scheduling projected waveform");
+      }
+      previous_delay = delay;
+    }
+    const auto first_time = scheduler.now() + first_delay;
     const ProjectedDriverKey key{process, signal, offset};
     auto [driver, inserted] =
         projected_drivers.try_emplace(key);
@@ -2116,7 +2129,7 @@ struct Interpreter::Impl {
     const auto first_deleted = std::lower_bound(
         transactions.begin(),
         transactions.end(),
-        time,
+        first_time,
         [](const ProjectedTransaction& transaction,
            const SimulationTick candidate) {
           return transaction.time < candidate;
@@ -2128,17 +2141,25 @@ struct Interpreter::Impl {
     }
     transactions.erase(first_deleted, transactions.end());
 
-    const auto id = next_projected_transaction_id++;
-    transactions.push_back(
-        ProjectedTransaction{id, time, value, {}});
+    const auto old_count = transactions.size();
+    std::vector<std::uint64_t> new_ids;
+    new_ids.reserve(elements.size());
+    for (const auto& [value, delay] : elements) {
+      const auto id = next_projected_transaction_id++;
+      new_ids.push_back(id);
+      transactions.push_back(ProjectedTransaction{
+          id, scheduler.now() + delay, value, {}});
+    }
     if (mode == ProjectedDelayMode::inertial
-        && transactions.size() > 1) {
+        && old_count != 0) {
       std::vector<bool> marked(transactions.size(), false);
-      marked.back() = true;
-      const auto threshold = time - rejection;
-      for (std::size_t index = 0;
-           index + 1 < transactions.size();
+      for (std::size_t index = old_count;
+           index < transactions.size();
            ++index) {
+        marked[index] = true;
+      }
+      const auto threshold = first_time - rejection;
+      for (std::size_t index = 0; index < old_count; ++index) {
         marked[index] =
             transactions[index].time < threshold;
       }
@@ -2151,8 +2172,7 @@ struct Interpreter::Impl {
         }
       }
 
-      for (std::size_t index = transactions.size() - 1;
-           index-- > 0;) {
+      for (std::size_t index = old_count; index-- > 0;) {
         if (!marked[index]) {
           scheduler.cancel(transactions[index].handle);
           transactions.erase(
@@ -2162,14 +2182,17 @@ struct Interpreter::Impl {
       }
     }
 
-    const auto pending = std::ranges::find(
-        transactions, id, &ProjectedTransaction::id);
-    if (pending == transactions.end()) {
-      throw std::logic_error(
-          "new projected transaction was not retained");
-    }
-    try {
-      pending->handle = scheduler.schedule_after_cancelable(
+    for (std::size_t index = 0; index < new_ids.size(); ++index) {
+      const auto id = new_ids[index];
+      const auto delay = elements[index].second;
+      const auto pending = std::ranges::find(
+          transactions, id, &ProjectedTransaction::id);
+      if (pending == transactions.end()) {
+        throw std::logic_error(
+            "new projected transaction was not retained");
+      }
+      try {
+        pending->handle = scheduler.schedule_after_cancelable(
           delay,
           SchedulerPhase::update,
           process,
@@ -2195,9 +2218,62 @@ struct Interpreter::Impl {
                 PackedLogic4{1, committed_value},
                 offset);
           });
-    } catch (...) {
-      transactions.erase(pending);
-      throw;
+      } catch (...) {
+        transactions.erase(pending);
+        throw;
+      }
+    }
+  }
+
+  void schedule_projected_waveform(
+      const ProcessId process,
+      const SignalId signal,
+      const std::vector<ProjectedWaveformValue>& elements,
+      const std::optional<std::size_t> offset,
+      const SimulationTick rejection,
+      const ProjectedDelayMode mode) {
+    (void)get_signal(signal);
+    if (elements.empty()) {
+      throw std::invalid_argument(
+          "a projected waveform must contain at least one element");
+    }
+    const auto width = elements.front().value.width();
+    for (const auto& element : elements) {
+      if (element.value.width() != width) {
+        throw std::invalid_argument(
+            "projected-waveform element widths do not match");
+      }
+    }
+    const auto target_width = driven_values[signal].width();
+    const auto first = offset.value_or(0);
+    if (width == 0
+        || first > target_width
+        || width > target_width - first
+        || (!offset && width != target_width)
+        || first > std::numeric_limits<std::uint32_t>::max()
+        || width
+            > std::numeric_limits<std::uint32_t>::max()
+        || first + width
+            > static_cast<std::size_t>(
+                std::numeric_limits<std::uint32_t>::max())) {
+      throw std::invalid_argument(
+          "projected write range is outside its target signal");
+    }
+    std::vector<std::pair<Logic4, SimulationTick>> scalar_elements;
+    scalar_elements.reserve(elements.size());
+    for (std::size_t bit = 0; bit < width; ++bit) {
+      scalar_elements.clear();
+      for (const auto& element : elements) {
+        scalar_elements.emplace_back(
+            element.value.get(bit), element.delay);
+      }
+      schedule_projected_scalar_waveform(
+          process,
+          signal,
+          static_cast<std::uint32_t>(first + bit),
+          scalar_elements,
+          rejection,
+          mode);
     }
   }
 
@@ -2209,32 +2285,13 @@ struct Interpreter::Impl {
       const SimulationTick delay,
       const SimulationTick rejection,
       const ProjectedDelayMode mode) {
-    (void)get_signal(signal);
-    const auto target_width = driven_values[signal].width();
-    const auto first = offset.value_or(0);
-    if (value.width() == 0
-        || first > target_width
-        || value.width() > target_width - first
-        || (!offset && value.width() != target_width)
-        || first > std::numeric_limits<std::uint32_t>::max()
-        || value.width()
-            > std::numeric_limits<std::uint32_t>::max()
-        || first + value.width()
-            > static_cast<std::size_t>(
-                std::numeric_limits<std::uint32_t>::max())) {
-      throw std::invalid_argument(
-          "projected write range is outside its target signal");
-    }
-    for (std::size_t bit = 0; bit < value.width(); ++bit) {
-      schedule_projected_scalar(
-          process,
-          signal,
-          static_cast<std::uint32_t>(first + bit),
-          value.get(bit),
-          delay,
-          rejection,
-          mode);
-    }
+    schedule_projected_waveform(
+        process,
+        signal,
+        std::vector<ProjectedWaveformValue>{{value, delay}},
+        offset,
+        rejection,
+        mode);
   }
 
   [[noreturn]] void fail(const ProcessState &process,
@@ -2441,6 +2498,35 @@ struct Interpreter::Impl::ExecutionContext final
         value,
         offset,
         delay,
+        rejection,
+        mode);
+  }
+
+  void write_projected_waveform(
+      const SignalId signal,
+      std::vector<ProjectedWaveformValue> elements,
+      const SimulationTick rejection,
+      const ProjectedDelayMode mode) override {
+    owner.schedule_projected_waveform(
+        process,
+        signal,
+        elements,
+        std::nullopt,
+        rejection,
+        mode);
+  }
+
+  void write_projected_waveform_slice(
+      const SignalId signal,
+      std::vector<ProjectedWaveformValue> elements,
+      const std::size_t offset,
+      const SimulationTick rejection,
+      const ProjectedDelayMode mode) override {
+    owner.schedule_projected_waveform(
+        process,
+        signal,
+        elements,
+        offset,
         rejection,
         mode);
   }
@@ -3271,6 +3357,23 @@ void Interpreter::Impl::execute(ProcessId id) {
                   op.rejection,
                   op.mode);
             },
+            [&](const WriteProjectedWaveform& op) {
+              std::vector<ProjectedWaveformValue> elements;
+              elements.reserve(op.elements.size());
+              for (const auto& element : op.elements) {
+                elements.push_back(
+                    {get_register(process, element.source),
+                     element.delay});
+              }
+              ++process.pc;
+              schedule_projected_waveform(
+                  process.program.id,
+                  op.signal,
+                  elements,
+                  std::nullopt,
+                  op.rejection,
+                  op.mode);
+            },
             [&](const WriteBlockingSlice& op) {
               auto value = get_register(process, op.source);
               ++process.pc;
@@ -3318,6 +3421,23 @@ void Interpreter::Impl::execute(ProcessId id) {
                   value,
                   op.offset,
                   op.delay,
+                  op.rejection,
+                  op.mode);
+            },
+            [&](const WriteProjectedWaveformSlice& op) {
+              std::vector<ProjectedWaveformValue> elements;
+              elements.reserve(op.elements.size());
+              for (const auto& element : op.elements) {
+                elements.push_back(
+                    {get_register(process, element.source),
+                     element.delay});
+              }
+              ++process.pc;
+              schedule_projected_waveform(
+                  process.program.id,
+                  op.signal,
+                  elements,
+                  op.offset,
                   op.rejection,
                   op.mode);
             },
