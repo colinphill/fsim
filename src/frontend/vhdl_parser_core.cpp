@@ -320,7 +320,9 @@ void VhdlParser::parse_package_constant(
         type,
         value,
         true,
-        span_from(start, previous())});
+        span_from(start, previous()),
+        ParameterKind::Value,
+        std::nullopt});
   }
 }
 
@@ -481,7 +483,9 @@ void VhdlParser::parse_vhdl_generics(
               type,
               default_value,
               false,
-              span_from(name, previous())},
+              span_from(name, previous()),
+              ParameterKind::Value,
+              std::nullopt},
           name);
     }
     if (!match(TokenKind::Semicolon)

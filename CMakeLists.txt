@@ -338,6 +338,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_specialization.cpp
       src/elaboration/elaboration_sv_constants.cpp
       src/elaboration/elaboration_sv_generate.cpp
+      src/elaboration/elaboration_sv_type_parameters.cpp
       src/elaboration/elaboration_type_generics.cpp
       src/elaboration/elaboration_targets.cpp
       src/elaboration/hierarchy_packages.cpp

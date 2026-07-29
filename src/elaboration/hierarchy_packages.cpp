@@ -910,11 +910,36 @@ HierarchyBuilder::HierarchyBuilder(
             effective_package, import_stack, type_environment);
         import_qualified_systemverilog_package_items(
             effective_package, import_stack, type_environment);
+        for (const auto& parameter :
+             effective_package.parameters) {
+            if (parameter.kind
+                != frontend::ParameterKind::Type) {
+                continue;
+            }
+            type_environment.insert_or_assign(
+                parameter.name,
+                NamedTypeBinding{
+                    {},
+                    effective_package.name,
+                    true});
+        }
         resolve_named_types(
             effective_package, type_environment);
+        auto type_specialized =
+            specialize_systemverilog_type_parameters(
+                effective_package,
+                {},
+                {},
+                {},
+                frontend::Language::SystemVerilog2017,
+                diagnostics_);
+        if (type_specialized.applied) {
+            resolve_named_types(
+                type_specialized.unit, {}, false);
+        }
         auto specialized = specialize_unit(
-            effective_package,
-            {},
+            type_specialized.unit,
+            type_specialized.value_overrides,
             {},
             frontend::Language::SystemVerilog2017,
             diagnostics_);

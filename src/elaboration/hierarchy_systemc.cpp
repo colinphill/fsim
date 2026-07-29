@@ -633,6 +633,9 @@ using namespace elaboration_detail;
         const auto parent_types =
             unit.language == frontend::Language::Vhdl2008
                 ? local_vhdl_type_environment(unit)
+            : unit.language
+                    == frontend::Language::SystemVerilog2017
+                ? local_systemverilog_type_environment(unit)
                 : NamedTypeEnvironment{};
         if (!instance_paths_.insert(path).second) {
             report(

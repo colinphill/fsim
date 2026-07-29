@@ -334,31 +334,111 @@ endmodule
           && sized_unit->parameters[7].type.width() == 32,
       "integral parameter widths, domains, and signedness are typed");
 
-  const auto unsupported_parameter_types = parse_text(
-      "unsupported-parameter-types.sv",
+  const auto type_parameters = parse_text(
+      "type-parameters.sv",
       R"(
-module unsupported_parameter_types #(
+package types_pkg;
+  typedef logic [11:0] word_t;
+endpackage
+module typed_child #(
   parameter type ELEMENT = logic,
+  parameter type WORD = types_pkg::word_t,
+  parameter WIDTH = 3
+) (
+  input ELEMENT element,
+  input WORD word
+);
+endmodule
+module typed_parent;
+  typedef bit [7:0] byte_t;
+  typed_child #(
+    .ELEMENT(bit),
+    .WORD(byte_t),
+    .WIDTH(5)
+  ) child();
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      type_parameters.ok(),
+      "bounded SystemVerilog type parameters must parse");
+  const auto* typed_child =
+      type_parameters.design.find(
+          UnitKind::VerilogModule, "typed_child");
+  const auto* typed_parent =
+      type_parameters.design.find(
+          UnitKind::VerilogModule, "typed_parent");
+  require(
+      typed_child != nullptr
+          && typed_child->parameters.size() == 3
+          && typed_child->parameters[0].kind
+              == ParameterKind::Type
+          && typed_child->parameters[0].default_type
+          && typed_child->parameters[0].default_type->spelling
+              == "logic"
+          && typed_child->parameters[1].kind
+              == ParameterKind::Type
+          && typed_child->parameters[1].default_type
+          && typed_child->parameters[1].default_type->named_type
+              == "types_pkg::word_t"
+          && typed_child->parameters[2].kind
+              == ParameterKind::Value,
+      "type and value formals retain ordered distinct HIR");
+  require(
+      typed_parent != nullptr
+          && typed_parent->instances.size() == 1
+          && typed_parent->instances[0]
+                 .parameter_overrides.size()
+              == 3
+          && typed_parent->instances[0]
+                 .parameter_overrides[0].type_value
+          && typed_parent->instances[0]
+                 .parameter_overrides[0].type_value->spelling
+              == "bit"
+          && !typed_parent->instances[0]
+                  .parameter_overrides[1].type_value
+          && typed_parent->instances[0]
+                 .parameter_overrides[1].value.text
+              == "byte_t",
+      "unambiguous and identifier type actuals retain tentative HIR");
+
+  const auto unsupported_string_parameter = parse_text(
+      "unsupported-string-parameter.sv",
+      R"(
+module unsupported_string_parameter #(
   parameter string LABEL = "fsim"
 ) ();
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      !unsupported_parameter_types.ok()
+      !unsupported_string_parameter.ok()
           && std::ranges::any_of(
-              unsupported_parameter_types.diagnostics,
-              [](const auto& diagnostic) {
-                return diagnostic.code
-                    == "FSIM-SV-UNSUPPORTED-019";
-              })
-          && std::ranges::any_of(
-              unsupported_parameter_types.diagnostics,
+              unsupported_string_parameter.diagnostics,
               [](const auto& diagnostic) {
                 return diagnostic.code
                     == "FSIM-SV-UNSUPPORTED-020";
               }),
-      "type and string parameters receive targeted diagnostics");
+      "string value parameters retain a targeted diagnostic");
+
+  const auto type_namespace_conflict = parse_text(
+      "type-parameter-conflict.sv",
+      R"(
+module type_parameter_conflict #(
+  parameter type element_t = logic
+) ();
+  typedef logic element_t;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !type_namespace_conflict.ok()
+          && std::ranges::any_of(
+              type_namespace_conflict.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-055";
+              }),
+      "type parameters share the bounded typedef namespace");
 
   const auto verilog = parse_text(
       "clog2.v",

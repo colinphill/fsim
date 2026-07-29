@@ -73,6 +73,7 @@ add_executable(
   elaboration/elaborator_test.cpp
   elaboration/elaborator_specialization_test.cpp
   elaboration/elaborator_sv_constant_test.cpp
+  elaboration/elaborator_sv_type_parameter_test.cpp
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_process_test.cpp
@@ -232,6 +233,24 @@ add_test(
 )
   set_tests_properties(
     fsim.application.sv_parameter_sizing
+  PROPERTIES LABELS "fast;parameters;systemverilog"
+)
+
+add_executable(
+  fsim_sv_type_parameter_application_tests
+  app/sv_type_parameter_application_test.cpp
+)
+fsim_configure_test(fsim_sv_type_parameter_application_tests)
+target_link_libraries(
+  fsim_sv_type_parameter_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.sv_type_parameters
+  COMMAND fsim_sv_type_parameter_application_tests
+)
+set_tests_properties(
+  fsim.application.sv_type_parameters
   PROPERTIES LABELS "fast;parameters;systemverilog"
 )
 

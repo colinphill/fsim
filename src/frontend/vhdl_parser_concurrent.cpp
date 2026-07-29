@@ -315,7 +315,9 @@ void VhdlParser::parse_vhdl_generate_constant(
         type,
         value,
         true,
-        span_from(start, previous())});
+        span_from(start, previous()),
+        ParameterKind::Value,
+        std::nullopt});
   }
 }
 

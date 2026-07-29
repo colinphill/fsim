@@ -341,8 +341,30 @@ struct ParameterDeclaration {
   bool local{};
   SourceSpan span;
   // VHDL-2008 interface type generics are type formals rather than
-  // constant/value formals. Other current declarations use Value.
+  // constant/value formals. SystemVerilog type parameters use the same
+  // language-neutral distinction.
   ParameterKind kind{ParameterKind::Value};
+  // SystemVerilog type parameters retain a data-type default separately from
+  // value expressions. Empty denotes a required type actual.
+  std::optional<Type> default_type;
+
+  ParameterDeclaration() = default;
+
+  ParameterDeclaration(
+      std::string parameter_name,
+      Type parameter_type,
+      Expression parameter_default,
+      bool parameter_local,
+      SourceSpan parameter_span,
+      ParameterKind parameter_kind = ParameterKind::Value,
+      std::optional<Type> parameter_default_type = std::nullopt)
+      : name(std::move(parameter_name)),
+        type(std::move(parameter_type)),
+        default_value(std::move(parameter_default)),
+        local(parameter_local),
+        span(std::move(parameter_span)),
+        kind(parameter_kind),
+        default_type(std::move(parameter_default_type)) {}
 };
 
 struct ParameterOverride {
@@ -350,6 +372,21 @@ struct ParameterOverride {
   std::optional<std::string> name;
   Expression value;
   SourceSpan span;
+  // An unambiguously parsed SystemVerilog data-type actual. Identifier type
+  // marks remain in value until formal-aware elaboration disambiguates them.
+  std::optional<Type> type_value;
+
+  ParameterOverride() = default;
+
+  ParameterOverride(
+      std::optional<std::string> parameter_name,
+      Expression parameter_value,
+      SourceSpan parameter_span,
+      std::optional<Type> parameter_type_value = std::nullopt)
+      : name(std::move(parameter_name)),
+        value(std::move(parameter_value)),
+        span(std::move(parameter_span)),
+        type_value(std::move(parameter_type_value)) {}
 };
 
 enum class VerilogUnconnectedDrive {

@@ -504,12 +504,26 @@ struct InterfaceTypeSpecialization {
 NamedTypeEnvironment local_vhdl_type_environment(
     const DesignUnit& unit);
 
+NamedTypeEnvironment local_systemverilog_type_environment(
+    const DesignUnit& unit);
+
 InterfaceTypeSpecialization specialize_vhdl_interface_types(
     const DesignUnit& source,
     const std::vector<frontend::ParameterOverride>& overrides,
     const NamedTypeEnvironment& parent_types,
     frontend::Language association_language,
     std::vector<Diagnostic>& diagnostics);
+
+InterfaceTypeSpecialization specialize_systemverilog_type_parameters(
+    const DesignUnit& source,
+    const std::vector<frontend::ParameterOverride>& overrides,
+    const ConstantEnvironment& parent_environment,
+    const NamedTypeEnvironment& parent_types,
+    frontend::Language association_language,
+    std::vector<Diagnostic>& diagnostics);
+
+std::optional<std::string> systemverilog_type_parameter_identity(
+    const frontend::Type& type);
 
 enum class SpecializationDiagnostic {
     invalid_actual,

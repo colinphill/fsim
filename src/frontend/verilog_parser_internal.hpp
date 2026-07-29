@@ -539,6 +539,7 @@ class VerilogParser final : private detail::ParserBase {
       const Token& start);
 
   Type parse_parameter_type();
+  Type parse_type_parameter_actual();
 
   void add_parameter(
       DesignUnit& unit,

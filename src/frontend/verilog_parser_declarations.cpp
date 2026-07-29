@@ -12,6 +12,21 @@ void VerilogParser::parse_parameter_overrides(
       "FSIM-SV-PARSE-055");
   bool saw_named = false;
   bool saw_positional = false;
+  const auto begins_unambiguous_type_actual = [&]() {
+    return keyword("byte") || keyword("shortint")
+        || keyword("longint") || keyword("time")
+        || keyword("integer") || keyword("int")
+        || keyword("logic") || keyword("reg") || keyword("bit")
+        || keyword("signed") || keyword("unsigned")
+        || keyword("string") || at(TokenKind::LeftBracket);
+  };
+  const auto parse_actual = [&](ParameterOverride& override) {
+    if (begins_unambiguous_type_actual()) {
+      override.type_value = parse_type_parameter_actual();
+    } else {
+      override.value = parse_expression();
+    }
+  };
   while (!at_end() && !at(TokenKind::RightParen)) {
     const auto start = current();
     ParameterOverride override;
@@ -23,7 +38,7 @@ void VerilogParser::parse_parameter_overrides(
           TokenKind::LeftParen,
           "'(' after named parameter override",
           "FSIM-SV-PARSE-056");
-      override.value = parse_expression();
+      parse_actual(override);
       expect(
           TokenKind::RightParen,
           "')' after named parameter override",
@@ -41,7 +56,7 @@ void VerilogParser::parse_parameter_overrides(
       }
     } else {
       saw_positional = true;
-      override.value = parse_expression();
+      parse_actual(override);
     }
     override.span = cover(start.span, previous().span);
     instance.parameter_overrides.push_back(std::move(override));
@@ -490,7 +505,9 @@ void VerilogParser::parse_typedef(
               type,
               std::move(value),
               true,
-              cover(literal.span, previous().span)},
+              cover(literal.span, previous().span),
+              ParameterKind::Value,
+              std::nullopt},
           literal});
       previous_literal = literal.text;
       if (!match(TokenKind::Comma)) {
@@ -548,6 +565,20 @@ void VerilogParser::parse_typedef(
       [&](const TypeAliasDeclaration& alias) {
         return alias.name == name.text;
       });
+  const bool type_parameter_conflict = std::ranges::any_of(
+      unit.parameters,
+      [&](const ParameterDeclaration& parameter) {
+          return parameter.kind == ParameterKind::Type
+              && parameter.name == name.text;
+      });
+  if (type_parameter_conflict) {
+    error(
+        name,
+        "FSIM-SV-SEM-055",
+        "typedef declaration '" + name.text
+            + "' conflicts with a type parameter");
+    return;
+  }
   if (duplicate) {
     error(
         name,

@@ -705,7 +705,9 @@ void VerilogParser::parse_generated_parameter_group(
           type,
           std::move(value),
           true,
-          cover(start.span, previous().span)});
+          cover(start.span, previous().span),
+          ParameterKind::Value,
+          std::nullopt});
       ++current_generate_names_[name.text];
       local_names.push_back(name.text);
     }
@@ -725,15 +727,6 @@ Type VerilogParser::parse_parameter_type() {
       "implicit",
       std::nullopt,
       true};
-  if (keyword("type")) {
-    const auto unsupported = advance();
-    error(
-        unsupported,
-        "FSIM-SV-UNSUPPORTED-019",
-        "type parameters are not implemented; use an integral value "
-        "parameter");
-    return type;
-  }
   if (keyword("string")) {
     const auto unsupported = advance();
     error(
@@ -793,10 +786,54 @@ Type VerilogParser::parse_parameter_type() {
   return type;
 }
 
+Type VerilogParser::parse_type_parameter_actual() {
+  if (at(TokenKind::Identifier)
+      && !keyword_reserved(keyword_set_, current().text)) {
+    return parse_named_type();
+  }
+  if (keyword("string")) {
+    const auto unsupported = advance();
+    error(
+        unsupported,
+        "FSIM-SV-UNSUPPORTED-020",
+        "the string data type is not implemented as a bounded type "
+        "parameter actual");
+    return {};
+  }
+  if (keyword("byte") || keyword("shortint")
+      || keyword("longint") || keyword("time")
+      || keyword("integer") || keyword("int")
+      || keyword("logic") || keyword("reg") || keyword("bit")
+      || keyword("signed") || keyword("unsigned")
+      || at(TokenKind::LeftBracket)) {
+    return parse_parameter_type();
+  }
+  const auto unsupported = advance();
+  error(
+      unsupported,
+      "FSIM-SV-UNSUPPORTED-019",
+      "bounded type parameters require an integral built-in or visible "
+      "named packed type");
+  return {};
+}
+
 void VerilogParser::add_parameter(
   DesignUnit& unit,
   ParameterDeclaration parameter,
   const Token& name) {
+  if (parameter.kind == ParameterKind::Type
+      && std::ranges::any_of(
+          unit.type_aliases,
+          [&](const TypeAliasDeclaration& alias) {
+              return alias.name == parameter.name;
+          })) {
+    error(
+        name,
+        "FSIM-SV-SEM-055",
+        "type parameter '" + parameter.name
+            + "' conflicts with a typedef declaration");
+    return;
+  }
   if (declared_genvars_.contains(parameter.name)) {
     error(
         name,
@@ -846,14 +883,21 @@ void VerilogParser::parse_parameter_group(
   const bool local,
   const bool port_list,
   const Token& start) {
-  const auto type = parse_parameter_type();
+  const bool type_parameter = match_keyword("type");
+  const auto type =
+      type_parameter ? Type{} : parse_parameter_type();
   for (;;) {
     const auto name = expect_identifier(
         local ? "localparam name" : "parameter name");
     Expression value;
+    std::optional<Type> default_type;
     if (match(TokenKind::Assign)) {
-      value = parse_expression();
-    } else {
+      if (type_parameter) {
+        default_type = parse_type_parameter_actual();
+      } else {
+        value = parse_expression();
+      }
+    } else if (!type_parameter) {
       error(
           current(),
           "FSIM-SV-PARSE-050",
@@ -866,7 +910,11 @@ void VerilogParser::parse_parameter_group(
             type,
             std::move(value),
             local,
-            cover(start.span, previous().span)},
+            cover(start.span, previous().span),
+            type_parameter
+                ? ParameterKind::Type
+                : ParameterKind::Value,
+            std::move(default_type)},
         name);
     if (!match(TokenKind::Comma)) {
       break;

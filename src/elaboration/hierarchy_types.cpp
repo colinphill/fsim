@@ -368,7 +368,14 @@ using namespace elaboration_detail;
             };
 
         for (auto& parameter : unit.parameters) {
-            resolve_declaration(parameter);
+            if (parameter.kind
+                == frontend::ParameterKind::Type) {
+                if (parameter.default_type) {
+                    (void)resolve_type(*parameter.default_type);
+                }
+            } else {
+                resolve_declaration(parameter);
+            }
         }
         if (resolve_ports) {
             for (auto& port : unit.ports) {
@@ -399,8 +406,42 @@ using namespace elaboration_detail;
                 result, import_stack, type_environment);
             import_qualified_systemverilog_package_items(
                 result, import_stack, type_environment);
+            for (const auto& parameter : result.parameters) {
+                if (parameter.kind
+                    != frontend::ParameterKind::Type) {
+                    continue;
+                }
+                type_environment.insert_or_assign(
+                    parameter.name,
+                    NamedTypeBinding{
+                        {},
+                        (result.library.empty()
+                             ? std::string{"work"}
+                             : result.library)
+                            + "." + result.name,
+                        true});
+            }
             resolve_named_types(
                 result, type_environment);
+            for (const auto& [name, binding] : type_environment) {
+                if (binding.interface_formal
+                    || std::any_of(
+                        result.type_aliases.begin(),
+                        result.type_aliases.end(),
+                        [&](const auto& alias) {
+                            return alias.name == name;
+                        })) {
+                    continue;
+                }
+                result.type_aliases.push_back(
+                    frontend::TypeAliasDeclaration{
+                        name,
+                        binding.type,
+                        result.span,
+                        {},
+                        frontend::TypeDeclarationKind::
+                            SystemVerilogTypedef});
+            }
             return result;
         }
         if (selected.kind
@@ -570,16 +611,29 @@ using namespace elaboration_detail;
         const ConstantEnvironment& parent_environment,
         const NamedTypeEnvironment& parent_types,
         const frontend::Language association_language) {
+        auto effective = effective_unit(selected);
         auto type_specialized =
-            specialize_vhdl_interface_types(
-                effective_unit(selected),
-                overrides,
-                parent_types,
-                association_language,
-                diagnostics_);
+            selected.language
+                    == frontend::Language::SystemVerilog2017
+                ? specialize_systemverilog_type_parameters(
+                      effective,
+                      overrides,
+                      parent_environment,
+                      parent_types,
+                      association_language,
+                      diagnostics_)
+                : specialize_vhdl_interface_types(
+                      effective,
+                      overrides,
+                      parent_types,
+                      association_language,
+                      diagnostics_);
         if (type_specialized.applied) {
             resolve_named_types(
-                type_specialized.unit, {}, true);
+                type_specialized.unit,
+                {},
+                selected.language
+                    == frontend::Language::Vhdl2008);
         }
         auto specialized = specialize_unit(
             type_specialized.unit,
@@ -587,21 +641,103 @@ using namespace elaboration_detail;
             parent_environment,
             association_language,
             diagnostics_);
+        if (selected.language
+                == frontend::Language::SystemVerilog2017
+            && type_specialized.applied) {
+            for (auto& [name, identity] :
+                 type_specialized.values) {
+                const auto alias = std::ranges::find_if(
+                    specialized.unit.type_aliases,
+                    [&](const auto& candidate) {
+                        return candidate.name == name;
+                    });
+                const auto resolved =
+                    alias
+                        == specialized.unit.type_aliases.end()
+                    ? std::optional<std::string>{}
+                    : systemverilog_type_parameter_identity(
+                          alias->type);
+                if (!resolved) {
+                    report(
+                        "FSIM-ELAB-SVTYPEPARAM-003",
+                        "specialized data type for type parameter '"
+                            + name
+                            + "' is outside the bounded 1-64-bit "
+                              "packed integral subset",
+                        alias
+                                == specialized.unit.type_aliases.end()
+                            ? selected.span
+                            : alias->span);
+                    continue;
+                }
+                identity = *resolved;
+            }
+        }
         if (specialized.identity_values.empty()) {
             specialized.identity_values = specialized.values;
         }
-        specialized.values.insert(
-            specialized.values.begin(),
-            std::make_move_iterator(
-                type_specialized.values.begin()),
-            std::make_move_iterator(
-                type_specialized.values.end()));
-        specialized.identity_values.insert(
-            specialized.identity_values.begin(),
-            specialized.values.begin(),
-            specialized.values.begin()
-                + static_cast<std::ptrdiff_t>(
-                    type_specialized.values.size()));
+        if (!type_specialized.values.empty()) {
+            const auto value_values = std::move(specialized.values);
+            const auto value_identities =
+                std::move(specialized.identity_values);
+            std::unordered_set<std::string> consumed_values;
+            std::unordered_set<std::string> consumed_types;
+            const auto append_named =
+                [](auto& destination,
+                   const auto& source_values,
+                   const std::string_view name) {
+                  const auto found = std::ranges::find_if(
+                      source_values,
+                      [&](const auto& value) {
+                          return value.first == name;
+                      });
+                  if (found != source_values.end()) {
+                      destination.push_back(*found);
+                      return true;
+                  }
+                  return false;
+                };
+            for (const auto& parameter : effective.parameters) {
+                if (parameter.kind
+                    == frontend::ParameterKind::Type) {
+                    if (append_named(
+                            specialized.values,
+                            type_specialized.values,
+                            parameter.name)) {
+                        (void)append_named(
+                            specialized.identity_values,
+                            type_specialized.values,
+                            parameter.name);
+                        consumed_types.insert(parameter.name);
+                    }
+                } else if (append_named(
+                               specialized.values,
+                               value_values,
+                               parameter.name)) {
+                    (void)append_named(
+                        specialized.identity_values,
+                        value_identities,
+                        parameter.name);
+                    consumed_values.insert(parameter.name);
+                }
+            }
+            for (const auto& value : type_specialized.values) {
+                if (!consumed_types.contains(value.first)) {
+                    specialized.values.push_back(value);
+                    specialized.identity_values.push_back(value);
+                }
+            }
+            for (const auto& value : value_values) {
+                if (consumed_values.contains(value.first)) {
+                    continue;
+                }
+                specialized.values.push_back(value);
+                (void)append_named(
+                    specialized.identity_values,
+                    value_identities,
+                    value.first);
+            }
+        }
         return specialized;
     }
 
