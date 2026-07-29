@@ -81,6 +81,7 @@ std::optional<std::uint64_t> PackedMember::width() const noexcept {
     case ValueDomain::Boolean:
       return 1;
     case ValueDomain::Integer:
+      return 32;
     case ValueDomain::Unknown:
       return std::nullopt;
   }
@@ -104,6 +105,7 @@ std::optional<std::uint64_t> Type::width() const noexcept {
     case ValueDomain::Boolean:
       return 1;
     case ValueDomain::Integer:
+      return 32;
     case ValueDomain::Unknown:
       return std::nullopt;
   }

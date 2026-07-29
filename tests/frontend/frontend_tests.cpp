@@ -1138,6 +1138,93 @@ endmodule
       "SystemVerilog signed arithmetic, casts, and system-function nodes");
 }
 
+void test_vhdl_runtime_integer_nodes() {
+  const auto parsed = parse_text(
+      "integer_shift.vhd",
+      R"(
+entity integer_shift is
+  port (
+    value : in std_logic_vector(7 downto 0);
+    count : in integer;
+    shifted : out std_logic_vector(7 downto 0);
+    observed : out integer
+  );
+end entity;
+
+architecture rtl of integer_shift is
+  signal accumulated : integer;
+begin
+  shifted <= value sll count;
+  calculate: process(count)
+    variable local_count : integer := -1;
+  begin
+    local_count := count + 1;
+    accumulated <= abs local_count;
+    observed <= accumulated;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      parsed.ok(),
+      "base integer ports, signals, variables, and dynamic shifts must "
+      "parse");
+  const auto* entity =
+      parsed.design.find(UnitKind::VhdlEntity, "integer_shift");
+  const auto* architecture =
+      parsed.design.find(UnitKind::VhdlArchitecture, "rtl");
+  require(
+      entity != nullptr && entity->ports.size() == 4
+          && entity->ports[1].type.domain
+              == ValueDomain::Integer
+          && entity->ports[1].type.is_signed
+          && entity->ports[1].type.width() == 32
+          && entity->ports[3].type.domain
+              == ValueDomain::Integer,
+      "base integer port type metadata");
+  require(
+      architecture != nullptr
+          && architecture->signals.size() == 1
+          && architecture->signals.front().type.domain
+              == ValueDomain::Integer
+          && architecture->concurrent_statements.size() == 1
+          && architecture->concurrent_statements.front()
+                 .value.text
+              == "sll"
+          && architecture->concurrent_statements.front()
+                 .value.operands[1].kind
+              == ExpressionKind::Identifier
+          && architecture->processes.size() == 1
+          && architecture->processes.front().variables.size()
+              == 1
+          && architecture->processes.front().variables.front()
+                 .type.domain
+              == ValueDomain::Integer,
+      "runtime integer objects and dynamic-count HIR");
+
+  const auto unsupported_subtype = parse_text(
+      "natural_object.vhd",
+      R"(
+entity natural_object is
+  port (count : in natural);
+end entity;
+architecture rtl of natural_object is
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !unsupported_subtype.ok()
+          && std::ranges::any_of(
+              unsupported_subtype.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-014";
+              }),
+      "runtime natural/positive objects need a targeted range-enforcement "
+      "diagnostic");
+}
+
 void test_exponentiation_expression_nodes() {
   const auto systemverilog = parse_text(
       "power.sv",
@@ -6970,6 +7057,7 @@ int main() {
     test_vhdl_generics();
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
+    test_vhdl_runtime_integer_nodes();
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
     test_systemverilog_final_procedures();

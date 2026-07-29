@@ -659,9 +659,19 @@ VHDL `sll` and `srl` use the common zero-filling packed shift operations.
 `sla` replicates the rightmost packed element and `sra` replicates the
 leftmost packed element, including `X` or `Z`. `rol` and `ror` reduce the
 count modulo the packed width and retain every four-state element. Locally
-static negative counts reverse the operation direction (`sll`/`srl`,
-`sla`/`sra`, or `rol`/`ror`) before lowering the absolute magnitude. Dynamic
-VHDL shift counts remain pending.
+static and dynamic base-`integer` negative counts reverse the operation
+direction (`sll`/`srl`, `sla`/`sra`, or `rol`/`ror`) before using the
+absolute magnitude. SimIR records signed-count intent separately from the
+packed amount, so the arbitrary-width interpreter and allocation-free LLVM
+path share the same rule and native-object identity.
+
+The bounded VHDL base `integer` subtype is represented as a signed 32-bit
+two-state object for ports, signals, and process variables. Its default value
+is the left bound `-2^31`; ordinary in-range unary, arithmetic, `abs`,
+`rem`/`mod`, relational, assignment, debug, VCD, and compatible hierarchy
+paths reuse the common packed runtime. Checked overflow, explicit scalar
+ranges, and runtime `natural`/`positive` subtype enforcement remain pending,
+so this is not yet complete VHDL integer semantics.
 
 DesignIR retains each signal's optional declared packed range in addition to
 its normalized storage width. Constant SystemVerilog bit/part selects and VHDL

@@ -241,7 +241,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-011` | error | Port default expressions are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-013` | error | A subtype requires semantic type resolution not implemented in this slice. |
-| `FSIM-VHDL-UNSUPPORTED-014` | error | A non-generic integer-family object is parsed but not executable. |
+| `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family runtime object is outside the executable base-`integer` slice; `natural`/`positive` range enforcement remains unsupported. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
@@ -586,7 +586,7 @@ therefore excluded.
 | `FSIM-ELAB-067` | error | A VHDL arithmetic expression mixes explicitly signed and unsigned packed operands without conversion. |
 | `FSIM-ELAB-068` | error | A bit/part select does not have constant in-range bounds, a positive indexed width, or a direction compatible with its declared packed range. |
 | `FSIM-ELAB-069` | error | A concatenation is empty or has an operand/result width that cannot be inferred or represented. |
-| `FSIM-ELAB-070` | error | A VHDL packed shift or rotate count is not locally static in the current executable slice. |
+| `FSIM-ELAB-070` | error | A dynamic VHDL packed shift or rotate count does not have the executable base `integer` subtype. |
 | `FSIM-ELAB-071` | error | A sequential VHDL for-loop initial bound is not locally static. |
 | `FSIM-ELAB-072` | error | A sequential VHDL for-loop final bound is not locally static. |
 | `FSIM-ELAB-073` | error | A sequential VHDL for loop exceeds the bounded one-million-iteration elaboration limit. |

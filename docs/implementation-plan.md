@@ -1418,6 +1418,39 @@ interpreter/LLVM differentials, VCD, cache, debugger-facing application tests,
 and all preceding feature batches. No CI state was inspected for this local
 gate.
 
+### Thirty-third feature batch — VHDL integer counts and dynamic shifts
+
+The planned ten implementation features are:
+
+1. Give the bounded VHDL base `integer` subtype a portable 32-bit signed,
+   two-state runtime representation for ports, signals, and process variables.
+2. Preserve integer signedness and deterministic base-subtype initialization
+   through DesignIR, debug locals, signal reads/writes, and VCD visibility.
+3. Permit width- and signedness-compatible integer aliases through ordinary
+   hierarchy and explicit mixed-language boundaries while retaining the
+   no-lossy-conversion rule for four-state sources.
+4. Execute in-range base-integer unary, arithmetic, `abs`, `mod`/`rem`, and
+   relational expressions through the existing signed common operations,
+   while continuing to document overflow checking as incomplete.
+5. Require dynamic VHDL shift/rotate counts to have the base `integer` type
+   and retain targeted diagnostics for packed-vector or unsupported subtype
+   counts.
+6. Execute dynamic `sll` and `srl`, including negative-count direction
+   reversal and oversized zero-fill behavior.
+7. Execute dynamic `sla` and `sra`, including negative-count direction
+   reversal and the standard rightmost/leftmost element fill rules.
+8. Execute dynamic `rol` and `ror`, including negative-count direction
+   reversal and modulo-width normalization.
+9. Carry signed-count semantics explicitly in versioned SimIR cache identity,
+   the arbitrary-width interpreter, and allocation-free LLVM O0/O2 lowering
+   without changing the plain-C generated runtime ABI.
+10. Require focused parser, diagnostic, elaboration, runtime-kernel, native
+    cache, and VHDL interpreter/LLVM O0/O2/VCD evidence before the full local
+    regression and push gate.
+
+This batch is in progress. Focused tests remain the default until its
+ten-feature regression boundary.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

@@ -1129,6 +1129,72 @@ void test_simir_wide_reduction_and_shift() {
       "wide rotate reduces its amount modulo the operand width");
 }
 
+void test_simir_signed_shift_counts() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  std::array<SignalId, 6> outputs{};
+  for (std::size_t index = 0; index < outputs.size(); ++index) {
+    outputs[index] = interpreter.add_signal({
+        "top.signed_shift_" + std::to_string(index),
+        PackedLogic4(65, Logic4::x)});
+  }
+
+  const auto source =
+      "1" + std::string(63, '0') + "Z";
+  Process process;
+  process.id = 0;
+  process.name = "signed_shift_counts";
+  process.register_count = 8;
+  process.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_msb_string(source)},
+      LoadConstant{
+          1,
+          PackedLogic4::from_msb_string(
+              std::string(70, '1'))},
+      Shift{
+          ShiftOperator::logical_left, 2, 0, 1, true},
+      WriteBlocking{outputs[0], 2},
+      Shift{
+          ShiftOperator::logical_right, 3, 0, 1, true},
+      WriteBlocking{outputs[1], 3},
+      Shift{
+          ShiftOperator::arithmetic_left, 4, 0, 1, true},
+      WriteBlocking{outputs[2], 4},
+      Shift{
+          ShiftOperator::arithmetic_right, 5, 0, 1, true},
+      WriteBlocking{outputs[3], 5},
+      Shift{
+          ShiftOperator::rotate_left, 6, 0, 1, true},
+      WriteBlocking{outputs[4], 6},
+      Shift{
+          ShiftOperator::rotate_right, 7, 0, 1, true},
+      WriteBlocking{outputs[5], 7},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed,
+      "signed-count shift process completes");
+  const std::array expected{
+      "01" + std::string(63, '0'),
+      std::string(63, '0') + "Z0",
+      "11" + std::string(63, '0'),
+      std::string(63, '0') + "ZZ",
+      "Z1" + std::string(63, '0'),
+      std::string(63, '0') + "Z1"};
+  for (std::size_t index = 0; index < outputs.size(); ++index) {
+    require(
+        interpreter.signal_value(outputs[index]).to_msb_string()
+            == expected[index],
+        "negative arbitrary-width shift count reverses its operation");
+  }
+}
+
 void test_simir_wide_unsigned_arithmetic() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -4210,6 +4276,7 @@ int main() {
     test_simir_wildcard_case_matching();
     test_simir_wildcard_equality();
     test_simir_wide_reduction_and_shift();
+    test_simir_signed_shift_counts();
     test_simir_wide_unsigned_arithmetic();
     test_simir_wide_signed_arithmetic();
     test_simir_wide_extract_and_concatenate();

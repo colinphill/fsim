@@ -11,6 +11,7 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -3014,6 +3015,112 @@ end architecture rtl;
     assert(
         mixed_interpreter->signal_value(*mixed_inverted).to_msb_string()
         == "11111110");
+
+    const auto integer_boundary_vhdl =
+        fsim::frontend::parse_text(
+            "integer_boundary.vhd",
+            R"(
+entity integer_boundary is
+end entity;
+architecture rtl of integer_boundary is
+  signal source : integer;
+  signal result : integer;
+begin
+  source <= -2;
+  child: sv_integer_child
+    port map (value => source, result => result);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    const auto integer_boundary_sv =
+        fsim::frontend::parse_text(
+            "integer_child.sv",
+            R"(
+module sv_integer_child(
+  input bit signed [31:0] value,
+  output bit signed [31:0] result
+);
+  assign result = value + 1;
+endmodule
+
+module sv_logic_integer_child(
+  input bit signed [31:0] value,
+  output logic signed [31:0] result
+);
+  assign result = value + 1;
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(integer_boundary_vhdl.ok());
+    assert(integer_boundary_sv.ok());
+    auto integer_boundary_design =
+        integer_boundary_vhdl.design;
+    integer_boundary_design.units.insert(
+        integer_boundary_design.units.end(),
+        integer_boundary_sv.design.units.begin(),
+        integer_boundary_sv.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        integer_boundary_binding{
+            {
+                "integer_boundary.child",
+                "sv:work.sv_integer_child",
+                std::nullopt},
+        };
+    const auto elaborated_integer_boundary =
+        fsim::elaboration::elaborate(
+            integer_boundary_design,
+            "vhdl:work.integer_boundary(rtl)",
+            integer_boundary_binding);
+    if (!elaborated_integer_boundary.ok()) {
+      for (const auto& diagnostic :
+           elaborated_integer_boundary.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_integer_boundary.ok());
+    const auto integer_source =
+        elaborated_integer_boundary.design->find_signal(
+            "source");
+    const auto integer_result =
+        elaborated_integer_boundary.design->find_signal(
+            "result");
+    const auto integer_child_source =
+        elaborated_integer_boundary.design->find_signal(
+            "integer_boundary.child.value");
+    assert(
+        integer_source && integer_result
+        && integer_child_source);
+    assert(*integer_source == *integer_child_source);
+    auto integer_boundary_interpreter =
+        elaborated_integer_boundary.design
+            ->create_interpreter();
+    const auto integer_boundary_result =
+        integer_boundary_interpreter->run();
+    assert(
+        integer_boundary_result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        integer_boundary_interpreter
+            ->signal_value(*integer_result)
+            .to_msb_string()
+        == "11111111111111111111111111111111");
+    const std::vector<fsim::elaboration::Binding>
+        lossy_integer_boundary_binding{
+            {
+                "integer_boundary.child",
+                "sv:work.sv_logic_integer_child",
+                std::nullopt},
+        };
+    const auto rejected_lossy_integer_boundary =
+        fsim::elaboration::elaborate(
+            integer_boundary_design,
+            "vhdl:work.integer_boundary(rtl)",
+            lossy_integer_boundary_binding);
+    assert(!rejected_lossy_integer_boundary.ok());
+    assert(has_diagnostic(
+        rejected_lossy_integer_boundary,
+        "FSIM-ELAB-BIND-022"));
 
     const auto struct_boundary_sv =
         fsim::frontend::parse_text(
@@ -6947,6 +7054,126 @@ end architecture;
             ->signal_value(*vhdl_signed_outputs.back())
             .to_msb_string()
         == "00000101");
+
+    const auto dynamic_vhdl_shift =
+        fsim::frontend::parse_text(
+            "dynamic_vhdl_shift.vhd",
+            R"(
+entity dynamic_vhdl_shift is
+  port (
+    value : in std_logic_vector(7 downto 0);
+    count : in integer;
+    logical_left : out std_logic_vector(7 downto 0);
+    logical_right : out std_logic_vector(7 downto 0);
+    arithmetic_left : out std_logic_vector(7 downto 0);
+    arithmetic_right : out std_logic_vector(7 downto 0);
+    rotate_left : out std_logic_vector(7 downto 0);
+    rotate_right : out std_logic_vector(7 downto 0);
+    integer_result : out integer
+  );
+end entity;
+
+architecture rtl of dynamic_vhdl_shift is
+begin
+  calculate: process(value, count)
+    variable adjusted : integer := -1;
+  begin
+    adjusted := count + 1;
+    integer_result <= abs adjusted;
+    logical_left <= value sll count;
+    logical_right <= value srl count;
+    arithmetic_left <= value sla count;
+    arithmetic_right <= value sra count;
+    rotate_left <= value rol count;
+    rotate_right <= value ror count;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(dynamic_vhdl_shift.ok());
+    const auto elaborated_dynamic_vhdl_shift =
+        fsim::elaboration::elaborate(
+            dynamic_vhdl_shift.design,
+            "vhdl:work.dynamic_vhdl_shift(rtl)");
+    if (!elaborated_dynamic_vhdl_shift.ok()) {
+      for (const auto& diagnostic :
+           elaborated_dynamic_vhdl_shift.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_dynamic_vhdl_shift.ok());
+    const auto& dynamic_design =
+        *elaborated_dynamic_vhdl_shift.design;
+    const auto dynamic_count =
+        dynamic_design.find_signal("count");
+    const auto dynamic_value =
+        dynamic_design.find_signal("value");
+    const std::array dynamic_outputs{
+        dynamic_design.find_signal("logical_left"),
+        dynamic_design.find_signal("logical_right"),
+        dynamic_design.find_signal("arithmetic_left"),
+        dynamic_design.find_signal("arithmetic_right"),
+        dynamic_design.find_signal("rotate_left"),
+        dynamic_design.find_signal("rotate_right"),
+        dynamic_design.find_signal("integer_result")};
+    assert(dynamic_count && dynamic_value);
+    assert(std::ranges::all_of(
+        dynamic_outputs,
+        [](const auto& signal) {
+          return signal.has_value();
+        }));
+    const auto& count_info =
+        dynamic_design.signals().at(*dynamic_count);
+    assert(count_info.width == 32);
+    assert(
+        count_info.source_domain
+        == fsim::frontend::ValueDomain::Integer);
+    assert(count_info.is_signed);
+    assert(dynamic_design.processes().size() == 1);
+    const auto signed_shift_count = std::ranges::count_if(
+        dynamic_design.processes().front().operations,
+        [](const auto& operation) {
+          const auto* shift =
+              std::get_if<fsim::runtime::simir::Shift>(
+                  &operation);
+          return shift != nullptr && shift->signed_amount;
+        });
+    assert(signed_shift_count == 6);
+
+    auto dynamic_interpreter =
+        dynamic_design.create_interpreter();
+    assert(
+        dynamic_interpreter
+            ->signal_value(*dynamic_count)
+            .to_msb_string()
+        == "10000000000000000000000000000000");
+    dynamic_interpreter->deposit_signal(
+        *dynamic_value,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "10X0000Z"));
+    dynamic_interpreter->deposit_signal(
+        *dynamic_count,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            "11111111111111111111111111111111"));
+    (void)dynamic_interpreter->run();
+    const std::array<std::string_view, 7>
+        negative_expected{
+            "010X0000",
+            "0X0000Z0",
+            "110X0000",
+            "0X0000ZZ",
+            "Z10X0000",
+            "0X0000Z1",
+            "00000000000000000000000000000000"};
+    for (std::size_t index = 0;
+         index < dynamic_outputs.size(); ++index) {
+      assert(
+          dynamic_interpreter
+              ->signal_value(*dynamic_outputs[index])
+              .to_msb_string()
+          == negative_expected[index]);
+    }
 
     const auto invalid_vhdl_shift =
         fsim::frontend::parse_text(

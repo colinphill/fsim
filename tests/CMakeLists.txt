@@ -402,6 +402,26 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_vhdl_integer_shift_application_tests
+    app/vhdl_integer_shift_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_vhdl_integer_shift_application_tests
+  )
+  target_link_libraries(
+    fsim_vhdl_integer_shift_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.vhdl_integer_shifts
+    COMMAND fsim_vhdl_integer_shift_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vhdl_integer_shifts
+    PROPERTIES LABELS "fast;vhdl;integer;expressions"
+  )
+
+  add_executable(
     fsim_vhdl_projected_application_tests
     app/vhdl_projected_application_test.cpp
   )

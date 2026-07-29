@@ -108,8 +108,27 @@ using runtime::simir::Yield;
 
 using NativeProcess = fsim_jit_process_v1;
 
+[[nodiscard]] constexpr ShiftOperator reverse_shift(
+    const ShiftOperator operation) noexcept {
+  switch (operation) {
+  case ShiftOperator::logical_left:
+    return ShiftOperator::logical_right;
+  case ShiftOperator::logical_right:
+    return ShiftOperator::logical_left;
+  case ShiftOperator::arithmetic_left:
+    return ShiftOperator::arithmetic_right;
+  case ShiftOperator::arithmetic_right:
+    return ShiftOperator::arithmetic_left;
+  case ShiftOperator::rotate_left:
+    return ShiftOperator::rotate_right;
+  case ShiftOperator::rotate_right:
+    return ShiftOperator::rotate_left;
+  }
+  return operation;
+}
+
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v15";
+    "fsim-llvm-native-object-v16";
 
 static_assert(std::is_standard_layout_v<fsim_jit_runtime_v1>);
 static_assert(std::is_standard_layout_v<fsim_jit_frame_v1>);
@@ -1696,6 +1715,8 @@ void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "value", value.value);
               add_key_u64(builder, "amount", value.amount);
+              add_key_u64(
+                  builder, "signed-amount", value.signed_amount ? 1U : 0U);
             },
             [&](const Extract& value) {
               builder.add("operation", "Extract");
@@ -3619,8 +3640,30 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               auto* amount_unknown = builder.CreateICmpNE(
                   builder.CreateAnd(amount.bval, amount_mask),
                   constant_i64(context, 0));
-              auto* amount_bits =
+              auto* raw_amount_bits =
                   builder.CreateAnd(amount.aval, amount_mask);
+              llvm::Value* amount_negative =
+                  llvm::ConstantInt::getFalse(context);
+              llvm::Value* amount_bits = raw_amount_bits;
+              if (operation.signed_amount) {
+                auto* sign_mask = constant_i64(
+                    context,
+                    std::uint64_t{1}
+                        << (amount.width - 1U));
+                amount_negative = builder.CreateICmpNE(
+                    builder.CreateAnd(
+                        raw_amount_bits, sign_mask),
+                    constant_i64(context, 0));
+                auto* magnitude = builder.CreateAnd(
+                    builder.CreateSub(
+                        constant_i64(context, 0),
+                        raw_amount_bits),
+                    amount_mask);
+                amount_bits = builder.CreateSelect(
+                    amount_negative,
+                    magnitude,
+                    raw_amount_bits);
+              }
               auto* amount_too_large = builder.CreateICmpUGE(
                   amount_bits, constant_i64(context, value.width));
               const auto rotating =
@@ -3636,10 +3679,12 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                             constant_i64(context, 0),
                             amount_bits);
               const auto shift_component =
-                  [&](llvm::Value* component) {
-                    if (operation.operation
+                  [&](llvm::Value* component,
+                      const ShiftOperator selected_operation)
+                      -> llvm::Value* {
+                    if (selected_operation
                             == ShiftOperator::rotate_left
-                        || operation.operation
+                        || selected_operation
                             == ShiftOperator::rotate_right) {
                       auto* inverse_amount = builder.CreateURem(
                           builder.CreateSub(
@@ -3647,12 +3692,12 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                               safe_amount),
                           constant_i64(context, value.width));
                       auto* left_amount =
-                          operation.operation
+                          selected_operation
                                   == ShiftOperator::rotate_left
                               ? safe_amount
                               : inverse_amount;
                       auto* right_amount =
-                          operation.operation
+                          selected_operation
                                   == ShiftOperator::rotate_left
                               ? inverse_amount
                               : safe_amount;
@@ -3660,13 +3705,13 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                           builder.CreateShl(component, left_amount),
                           builder.CreateLShr(component, right_amount));
                     }
-                    if (operation.operation
+                    if (selected_operation
                             == ShiftOperator::logical_left
-                        || operation.operation
+                        || selected_operation
                             == ShiftOperator::arithmetic_left) {
                       auto* shifted = builder.CreateShl(
                           component, safe_amount);
-                      if (operation.operation
+                      if (selected_operation
                           == ShiftOperator::arithmetic_left) {
                         auto* fill_mask = builder.CreateSub(
                             builder.CreateShl(
@@ -3685,7 +3730,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                       }
                       return shifted;
                     }
-                    if (operation.operation
+                    if (selected_operation
                         == ShiftOperator::logical_right) {
                       return builder.CreateLShr(
                           component, safe_amount);
@@ -3702,19 +3747,31 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                     return builder.CreateAShr(
                         sign_extended, safe_amount);
                   };
+              const auto selected_shift_component =
+                  [&](llvm::Value* component) -> llvm::Value* {
+                    auto* positive = shift_component(
+                        component, operation.operation);
+                    if (!operation.signed_amount) {
+                      return positive;
+                    }
+                    auto* negative = shift_component(
+                        component,
+                        reverse_shift(operation.operation));
+                    return builder.CreateSelect(
+                        amount_negative, negative, positive);
+                  };
               auto* shifted_aval =
-                  shift_component(value.aval);
+                  selected_shift_component(value.aval);
               auto* shifted_bval =
-                  shift_component(value.bval);
-              llvm::Value* oversized_aval =
-                  constant_i64(context, 0);
-              llvm::Value* oversized_bval =
-                  constant_i64(context, 0);
-              if (operation.operation
-                  == ShiftOperator::arithmetic_right) {
-                const auto sign_offset = value.width - 1U;
-                const auto sign_fill =
-                    [&](llvm::Value* component) {
+                  selected_shift_component(value.bval);
+              const auto oversized_component =
+                  [&](llvm::Value* component,
+                      const ShiftOperator selected_operation)
+                      -> llvm::Value* {
+                    if (selected_operation
+                        == ShiftOperator::arithmetic_right) {
+                      const auto sign_offset =
+                          value.width - 1U;
                       auto* sign = builder.CreateAnd(
                           builder.CreateLShr(
                               component,
@@ -3726,14 +3783,9 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                               sign, constant_i64(context, 0)),
                           value_mask,
                           constant_i64(context, 0));
-                    };
-                oversized_aval = sign_fill(value.aval);
-                oversized_bval = sign_fill(value.bval);
-              } else if (
-                  operation.operation
-                  == ShiftOperator::arithmetic_left) {
-                const auto right_fill =
-                    [&](llvm::Value* component) {
+                    }
+                    if (selected_operation
+                        == ShiftOperator::arithmetic_left) {
                       auto* rightmost = builder.CreateAnd(
                           component, constant_i64(context, 1));
                       return builder.CreateSelect(
@@ -3742,10 +3794,26 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                               constant_i64(context, 0)),
                           value_mask,
                           constant_i64(context, 0));
-                    };
-                oversized_aval = right_fill(value.aval);
-                oversized_bval = right_fill(value.bval);
-              }
+                    }
+                    return constant_i64(context, 0);
+                  };
+              const auto selected_oversized_component =
+                  [&](llvm::Value* component) -> llvm::Value* {
+                    auto* positive = oversized_component(
+                        component, operation.operation);
+                    if (!operation.signed_amount) {
+                      return positive;
+                    }
+                    auto* negative = oversized_component(
+                        component,
+                        reverse_shift(operation.operation));
+                    return builder.CreateSelect(
+                        amount_negative, negative, positive);
+                  };
+              auto* oversized_aval =
+                  selected_oversized_component(value.aval);
+              auto* oversized_bval =
+                  selected_oversized_component(value.bval);
               auto* known_aval = builder.CreateSelect(
                   rotating
                       ? llvm::ConstantInt::getFalse(context)

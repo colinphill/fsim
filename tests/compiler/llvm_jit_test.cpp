@@ -2219,6 +2219,85 @@ void test_reduction_and_shift_at_level(
   }
 }
 
+void test_signed_shift_counts_at_level(
+    const JitOptimizationLevel level,
+    const std::string_view symbol) {
+  LlvmJit jit{LlvmJitOptions{level, {}}};
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 8;
+  process.operations = {
+      ReadSignal{0, 0},
+      ReadSignal{1, 1},
+      Shift{
+          ShiftOperator::logical_left, 2, 0, 1, true},
+      WriteBlocking{2, 2},
+      Shift{
+          ShiftOperator::logical_right, 3, 0, 1, true},
+      WriteBlocking{3, 3},
+      Shift{
+          ShiftOperator::arithmetic_left, 4, 0, 1, true},
+      WriteBlocking{4, 4},
+      Shift{
+          ShiftOperator::arithmetic_right, 5, 0, 1, true},
+      WriteBlocking{5, 5},
+      Shift{
+          ShiftOperator::rotate_left, 6, 0, 1, true},
+      WriteBlocking{6, 6},
+      Shift{
+          ShiftOperator::rotate_right, 7, 0, 1, true},
+      WriteBlocking{7, 7},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 8> widths{
+      4, 4, 4, 4, 4, 4, 4, 4};
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+
+  struct TestCase {
+    std::string_view amount;
+    std::array<std::string_view, 6> expected;
+  };
+  const std::array cases{
+      TestCase{
+          "0001",
+          {"0X10", "010X", "0X11", "110X", "0X11", "110X"}},
+      TestCase{
+          "1111",
+          {"010X", "0X10", "110X", "0X11", "110X", "0X11"}},
+      TestCase{
+          "1011",
+          {"0000", "0000", "1111", "1111", "110X", "0X11"}},
+      TestCase{
+          "0X01",
+          {"XXXX", "XXXX", "XXXX", "XXXX", "XXXX", "XXXX"}},
+  };
+  for (const auto& test : cases) {
+    TestRuntime runtime;
+    const auto value =
+        PackedLogic4::from_msb_string("10X1").low_word();
+    const auto amount =
+        PackedLogic4::from_msb_string(test.amount).low_word();
+    runtime.signals[0] = {value.aval, value.bval};
+    runtime.signals[1] = {amount.aval, amount.bval};
+    auto descriptor = abi(runtime);
+    assert(
+        jit.execute(handle, descriptor)
+        == JitExecutionStatus::completed);
+    for (std::size_t index = 0;
+         index < test.expected.size(); ++index) {
+      const auto encoded =
+          PackedLogic4::from_msb_string(
+              test.expected[index])
+              .low_word();
+      assert((
+          runtime.signals[index + 2]
+          == EncodedSignal{encoded.aval, encoded.bval}));
+    }
+  }
+}
+
 void test_unsigned_arithmetic_at_level(
     const JitOptimizationLevel level,
     const std::string_view symbol) {
@@ -3742,6 +3821,59 @@ void test_projected_waveform_cache_identity(
   run(9, 0, ProjectedDelayMode::transport, 0, 1);
 }
 
+void test_signed_shift_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol{"cached_signed_shift"};
+  const std::array<std::uint32_t, 1> widths{4};
+  const auto run =
+      [&](const bool signed_amount,
+          const std::uint64_t hits,
+          const std::uint64_t misses,
+          const std::string_view expected) {
+        Process process;
+        process.id = 22;
+        process.name = std::string{symbol};
+        process.register_count = 3;
+        process.operations = {
+            LoadConstant{
+                0,
+                PackedLogic4::from_msb_string("1001")},
+            LoadConstant{
+                1,
+                PackedLogic4::from_msb_string("1111")},
+            Shift{
+                ShiftOperator::logical_left,
+                2,
+                0,
+                1,
+                signed_amount},
+            WriteBlocking{0, 2},
+            Halt{},
+        };
+        LlvmJit jit{
+            LlvmJitOptions{
+                JitOptimizationLevel::o2,
+                cache_directory}};
+        jit.add_process(symbol, process, widths);
+        TestRuntime runtime;
+        auto descriptor = abi(runtime);
+        assert(
+            jit.execute(jit.lookup(symbol), descriptor)
+            == JitExecutionStatus::completed);
+        const auto encoded =
+            PackedLogic4::from_msb_string(expected).low_word();
+        assert((
+            runtime.signals[0]
+            == EncodedSignal{encoded.aval, encoded.bval}));
+        expect_cache_statistics(jit, hits, misses, misses);
+      };
+
+  run(false, 0, 1, "0000");
+  run(true, 0, 1, "0100");
+  run(true, 1, 0, "0100");
+  assert(cached_object_paths(cache_directory).size() == 2);
+}
+
 void test_persistent_object_cache() {
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -3763,6 +3895,7 @@ void test_persistent_object_cache() {
   test_projected_cache_identity(root / "projected");
   test_projected_waveform_cache_identity(
       root / "projected-waveform");
+  test_signed_shift_cache_identity(root / "signed-shift");
 
   std::filesystem::remove_all(root, error);
   assert(!error);
@@ -4525,6 +4658,10 @@ int main() {
       JitOptimizationLevel::o0, "reduction_shift_o0");
   test_reduction_and_shift_at_level(
       JitOptimizationLevel::o2, "reduction_shift_o2");
+  test_signed_shift_counts_at_level(
+      JitOptimizationLevel::o0, "signed_shift_counts_o0");
+  test_signed_shift_counts_at_level(
+      JitOptimizationLevel::o2, "signed_shift_counts_o2");
   test_unsigned_arithmetic_at_level(
       JitOptimizationLevel::o0, "unsigned_arithmetic_o0");
   test_unsigned_arithmetic_at_level(

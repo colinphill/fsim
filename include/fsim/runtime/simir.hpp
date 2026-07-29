@@ -135,6 +135,10 @@ struct Shift {
   RegisterId destination{};
   RegisterId value{};
   RegisterId amount{};
+  /// Interpret amount as two's-complement and reverse the operation for a
+  /// negative value. This models VHDL's signed INTEGER shift counts without
+  /// changing the packed value representation.
+  bool signed_amount{};
 };
 
 /// Extract a contiguous normalized bit range from one packed value.

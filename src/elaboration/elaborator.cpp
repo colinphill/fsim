@@ -32,6 +32,13 @@ using namespace runtime::simir;
 using ConstantEnvironment =
     std::unordered_map<std::string, std::int64_t>;
 
+[[nodiscard]] constexpr bool is_two_state_domain(
+    const frontend::ValueDomain domain) noexcept {
+    return domain == frontend::ValueDomain::Bit2
+        || domain == frontend::ValueDomain::Boolean
+        || domain == frontend::ValueDomain::Integer;
+}
+
 std::optional<std::int64_t> evaluate_constant_expression(
     const Expression& expression,
     const ConstantEnvironment& environment,
@@ -2801,14 +2808,9 @@ private:
                         variable.span);
                     continue;
                 }
-                if ((variable.type.domain
-                         == frontend::ValueDomain::Bit2
-                     || variable.type.domain
-                         == frontend::ValueDomain::Boolean)
-                    && register_domain(*value)
-                        != frontend::ValueDomain::Bit2
-                    && register_domain(*value)
-                        != frontend::ValueDomain::Boolean) {
+                if (is_two_state_domain(variable.type.domain)
+                    && !is_two_state_domain(
+                        register_domain(*value))) {
                     report(
                         "FSIM-ELAB-058",
                         "two-state local variable initializer for '"
@@ -2821,16 +2823,23 @@ private:
                     CopyRegister{local.register_id, *value});
                 continue;
             }
-            const auto initial =
-                variable.type.domain == frontend::ValueDomain::Bit2
-                    || variable.type.domain
-                        == frontend::ValueDomain::Boolean
+            auto initial_value = PackedLogic4{
+                local.width,
+                is_two_state_domain(variable.type.domain)
                     ? Logic4::zero
-                    : Logic4::x;
+                    : Logic4::x};
+            if (variable.type.domain
+                    == frontend::ValueDomain::Integer
+                && local.width != 0) {
+                // The bounded base integer range is the portable
+                // two's-complement interval [-2^31, 2^31-1]. VHDL default
+                // initialization selects the subtype's left bound.
+                initial_value.set(local.width - 1U, Logic4::one);
+            }
             process_.operations.emplace_back(
                 LoadConstant{
                     local.register_id,
-                    PackedLogic4{local.width, initial}});
+                    std::move(initial_value)});
         }
     }
 
@@ -4024,12 +4033,9 @@ private:
             const auto target_domain =
                 selected_domain.value_or(
                     register_domain(local->second));
-            if ((target_domain == frontend::ValueDomain::Bit2
-                 || target_domain == frontend::ValueDomain::Boolean)
-                && register_domain(*value)
-                    != frontend::ValueDomain::Bit2
-                && register_domain(*value)
-                    != frontend::ValueDomain::Boolean) {
+            if (is_two_state_domain(target_domain)
+                && !is_two_state_domain(
+                    register_domain(*value))) {
                 report(
                     "FSIM-ELAB-058",
                     "assignment to two-state local variable '"
@@ -4081,13 +4087,9 @@ private:
                         element.span);
                     return;
                 }
-                if ((target_domain == frontend::ValueDomain::Bit2
-                     || target_domain
-                         == frontend::ValueDomain::Boolean)
-                    && register_domain(*value)
-                        != frontend::ValueDomain::Bit2
-                    && register_domain(*value)
-                        != frontend::ValueDomain::Boolean) {
+                if (is_two_state_domain(target_domain)
+                    && !is_two_state_domain(
+                        register_domain(*value))) {
                     report(
                         "FSIM-ELAB-050",
                         "assignment to two-state target '"
@@ -4166,10 +4168,8 @@ private:
         const auto target_domain =
             selected_domain.value_or(
                 design_.signal_info_[signal->second].source_domain);
-        if ((target_domain == frontend::ValueDomain::Bit2
-             || target_domain == frontend::ValueDomain::Boolean)
-            && register_domain(*value) != frontend::ValueDomain::Bit2
-            && register_domain(*value) != frontend::ValueDomain::Boolean) {
+        if (is_two_state_domain(target_domain)
+            && !is_two_state_domain(register_domain(*value))) {
             report(
                 "FSIM-ELAB-050",
                 "assignment to two-state target '"
@@ -6108,14 +6108,10 @@ private:
                     expression.span);
                 return std::nullopt;
             }
-            const auto is_two_state =
-                [](const frontend::ValueDomain domain) {
-                    return domain == frontend::ValueDomain::Bit2
-                        || domain == frontend::ValueDomain::Boolean;
-                };
             const auto result_domain =
-                is_two_state(register_domain(*when_true))
-                        && is_two_state(register_domain(*when_false))
+                is_two_state_domain(register_domain(*when_true))
+                        && is_two_state_domain(
+                            register_domain(*when_false))
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic4;
             const auto destination =
@@ -6145,14 +6141,9 @@ private:
             if (!lhs || !rhs) {
                 return std::nullopt;
             }
-            const auto is_two_state =
-                [](const frontend::ValueDomain domain) {
-                    return domain == frontend::ValueDomain::Bit2
-                        || domain == frontend::ValueDomain::Boolean;
-                };
             const auto result_domain =
-                is_two_state(register_domain(*lhs))
-                        && is_two_state(register_domain(*rhs))
+                is_two_state_domain(register_domain(*lhs))
+                        && is_two_state_domain(register_domain(*rhs))
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic4;
             const auto destination =
@@ -6183,16 +6174,10 @@ private:
             if (language_ == frontend::Language::Vhdl2008) {
                 const auto count =
                     constant_index(expression.operands[1]);
-                if (!count) {
-                    report(
-                        "FSIM-ELAB-070",
-                        "VHDL packed shifts and rotates currently require "
-                        "a locally static integer count",
-                        expression.operands[1].span);
-                    return std::nullopt;
+                if (count) {
+                    static_amount = index_distance(*count, 0);
                 }
-                static_amount = index_distance(*count, 0);
-                if (*count < 0) {
+                if (count && *count < 0) {
                     if (effective_operator == "sll") {
                         effective_operator = "srl";
                     } else if (effective_operator == "srl") {
@@ -6241,14 +6226,22 @@ private:
             if (!value || !amount) {
                 return std::nullopt;
             }
-            const auto is_two_state =
-                [](const frontend::ValueDomain domain) {
-                    return domain == frontend::ValueDomain::Bit2
-                        || domain == frontend::ValueDomain::Boolean;
-                };
+            const bool signed_amount =
+                language_ == frontend::Language::Vhdl2008
+                && !static_amount.has_value();
+            if (signed_amount
+                && register_domain(*amount)
+                    != frontend::ValueDomain::Integer) {
+                report(
+                    "FSIM-ELAB-070",
+                    "a dynamic VHDL packed shift or rotate count must "
+                    "have the base integer subtype",
+                    expression.operands[1].span);
+                return std::nullopt;
+            }
             const auto result_domain =
-                is_two_state(register_domain(*value))
-                        && is_two_state(register_domain(*amount))
+                is_two_state_domain(register_domain(*value))
+                        && is_two_state_domain(register_domain(*amount))
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic4;
             const auto destination =
@@ -6273,7 +6266,8 @@ private:
                         : ShiftOperator::logical_left,
                 destination,
                 *value,
-                *amount});
+                *amount,
+                signed_amount});
             return destination;
         }
         if (expression.kind == ExpressionKind::Binary && expression.operands.size() == 2) {
@@ -6488,11 +6482,6 @@ private:
             const auto result_width =
                 scalar_result ? std::size_t{1}
                               : register_width(*lhs);
-            const auto is_two_state =
-                [](const frontend::ValueDomain domain) {
-                    return domain == frontend::ValueDomain::Bit2
-                        || domain == frontend::ValueDomain::Boolean;
-                };
             auto result_domain =
                 scalar_result
                     && language_
@@ -6505,10 +6494,18 @@ private:
                         && register_domain(*rhs)
                             == frontend::ValueDomain::Boolean
                     ? frontend::ValueDomain::Boolean
-                : is_two_state(register_domain(*lhs))
-                        && is_two_state(register_domain(*rhs))
+                : is_two_state_domain(register_domain(*lhs))
+                        && is_two_state_domain(register_domain(*rhs))
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Logic4;
+            if (!scalar_result
+                && language_ == frontend::Language::Vhdl2008
+                && (register_domain(*lhs)
+                        == frontend::ValueDomain::Integer
+                    || register_domain(*rhs)
+                        == frontend::ValueDomain::Integer)) {
+                result_domain = frontend::ValueDomain::Integer;
+            }
             if (!scalar_result
                 && (register_domain(*lhs)
                         == frontend::ValueDomain::Logic9
@@ -8618,8 +8615,7 @@ private:
             existing != local.end()) {
             return existing->second;
         }
-        if (declaration.type.domain == frontend::ValueDomain::Unknown
-            || declaration.type.domain == frontend::ValueDomain::Integer) {
+        if (declaration.type.domain == frontend::ValueDomain::Unknown) {
             report(
                 "FSIM-ELAB-TYPE-001",
                 "signal '" + declaration.name
@@ -8672,9 +8668,7 @@ private:
             initial = Logic4::zero;
         } else if (declaration.type.spelling == "tri1") {
             initial = Logic4::one;
-        } else if (
-            declaration.type.domain == frontend::ValueDomain::Bit2
-            || declaration.type.domain == frontend::ValueDomain::Boolean) {
+        } else if (is_two_state_domain(declaration.type.domain)) {
             initial = Logic4::zero;
         } else if (
             declaration.type.domain == frontend::ValueDomain::Logic4
@@ -8688,9 +8682,17 @@ private:
                 || declaration.type.spelling == "uwire")) {
             initial = Logic4::z;
         }
-        design_.signals_.push_back({
-            full_name,
-            PackedLogic4(static_cast<std::size_t>(width), initial)});
+        auto initial_value =
+            PackedLogic4(static_cast<std::size_t>(width), initial);
+        if (declaration.type.domain
+                == frontend::ValueDomain::Integer
+            && width != 0) {
+            initial_value.set(
+                static_cast<std::size_t>(width - 1U),
+                Logic4::one);
+        }
+        design_.signals_.push_back(
+            {full_name, std::move(initial_value)});
         return id;
     }
 
@@ -8763,8 +8765,7 @@ private:
         const bool cross_language) {
         const auto unsupported_domain =
             [](const frontend::ValueDomain domain) {
-                return domain == frontend::ValueDomain::Unknown
-                    || domain == frontend::ValueDomain::Integer;
+                return domain == frontend::ValueDomain::Unknown;
             };
         if (unsupported_domain(port.type.domain)
             || unsupported_domain(actual.source_domain)) {
@@ -8804,10 +8805,8 @@ private:
         const auto lossy_into_two_state =
             [](const frontend::ValueDomain destination,
                const frontend::ValueDomain source_domain) {
-                return (destination == frontend::ValueDomain::Bit2
-                        || destination == frontend::ValueDomain::Boolean)
-                    && source_domain != frontend::ValueDomain::Bit2
-                    && source_domain != frontend::ValueDomain::Boolean;
+                return is_two_state_domain(destination)
+                    && !is_two_state_domain(source_domain);
             };
         const bool lossy =
             port.direction == frontend::PortDirection::Output

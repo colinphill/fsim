@@ -518,7 +518,7 @@ class VhdlParser final : private detail::ParserBase {
               "expected VHDL port mode");
       }
 
-      Type type = parse_vhdl_type();
+      Type type = parse_vhdl_type(true, true);
       if (match(TokenKind::ColonEqual)) {
         const auto initializer = previous();
         (void)parse_expression();
@@ -576,7 +576,9 @@ class VhdlParser final : private detail::ParserBase {
            "FSIM-VHDL-PARSE-008");
   }
 
-  Type parse_vhdl_type(const bool allow_integer = false) {
+  Type parse_vhdl_type(
+      const bool allow_integer = false,
+      const bool runtime_base_integer_only = false) {
     const auto first = expect_identifier("subtype indication");
     std::string spelling = vhdl_name(first.text);
     while (match(TokenKind::Dot)) {
@@ -616,12 +618,18 @@ class VhdlParser final : private detail::ParserBase {
                 "implemented in this frontend slice");
     } else if (
         type.domain == ValueDomain::Integer
-        && !allow_integer) {
+        && (!allow_integer
+            || (runtime_base_integer_only
+                && simple_name != "integer"))) {
       error(
           first,
           "FSIM-VHDL-UNSUPPORTED-014",
-          "VHDL integer-family objects are parsed but not executable in this "
-          "frontend slice");
+          !allow_integer
+              ? "VHDL integer-family objects are parsed but not executable "
+                "in this frontend slice"
+              : "only the base VHDL integer subtype is executable for "
+                "runtime objects; natural/positive range enforcement is "
+                "not implemented");
     }
 
     if (match(TokenKind::LeftParen)) {
@@ -706,7 +714,7 @@ class VhdlParser final : private detail::ParserBase {
     }
     expect(TokenKind::Colon, "':' after signal name",
            "FSIM-VHDL-PARSE-017");
-    const Type type = parse_vhdl_type();
+    const Type type = parse_vhdl_type(true, true);
     if (match(TokenKind::ColonEqual)) {
       const auto initializer = previous();
       (void)parse_expression();
@@ -1473,7 +1481,7 @@ class VhdlParser final : private detail::ParserBase {
           TokenKind::Colon,
           "':' after variable names",
           "FSIM-VHDL-PARSE-047");
-      const auto type = parse_vhdl_type();
+      const auto type = parse_vhdl_type(true, true);
       std::optional<Expression> initializer;
       if (match(TokenKind::ColonEqual)) {
         initializer = parse_expression();

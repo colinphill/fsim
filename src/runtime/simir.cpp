@@ -454,20 +454,63 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
   return result;
 }
 
+[[nodiscard]] constexpr ShiftOperator reverse_shift(
+    const ShiftOperator operation) noexcept {
+  switch (operation) {
+  case ShiftOperator::logical_left:
+    return ShiftOperator::logical_right;
+  case ShiftOperator::logical_right:
+    return ShiftOperator::logical_left;
+  case ShiftOperator::arithmetic_left:
+    return ShiftOperator::arithmetic_right;
+  case ShiftOperator::arithmetic_right:
+    return ShiftOperator::arithmetic_left;
+  case ShiftOperator::rotate_left:
+    return ShiftOperator::rotate_right;
+  case ShiftOperator::rotate_right:
+    return ShiftOperator::rotate_left;
+  }
+  return operation;
+}
+
 [[nodiscard]] PackedLogic4 shift_value(
-    const ShiftOperator operation,
+    ShiftOperator operation,
     const PackedLogic4& value,
-    const PackedLogic4& amount_value) {
-  const auto rotating =
-      operation == ShiftOperator::rotate_left
-      || operation == ShiftOperator::rotate_right;
-  std::size_t amount = 0;
-  std::size_t rotate_bit = 1U % value.width();
+    const PackedLogic4& amount_value,
+    const bool signed_amount) {
   for (std::size_t index = 0; index < amount_value.width(); ++index) {
     const auto bit = amount_value.get(index);
     if (bit == Logic4::x || bit == Logic4::z) {
       return PackedLogic4(value.width(), Logic4::x);
     }
+  }
+
+  auto magnitude = amount_value;
+  if (signed_amount
+      && amount_value.get(amount_value.width() - 1U)
+          == Logic4::one) {
+    operation = reverse_shift(operation);
+    magnitude =
+        PackedLogic4(amount_value.width(), Logic4::zero);
+    bool carry = true;
+    for (std::size_t index = 0;
+         index < amount_value.width(); ++index) {
+      const bool inverted =
+          amount_value.get(index) == Logic4::zero;
+      magnitude.set(
+          index,
+          inverted != carry ? Logic4::one : Logic4::zero);
+      carry = inverted && carry;
+    }
+  }
+
+  const auto rotating =
+      operation == ShiftOperator::rotate_left
+      || operation == ShiftOperator::rotate_right;
+  std::size_t amount = 0;
+  std::size_t rotate_bit = 1U % value.width();
+  for (std::size_t index = 0; index < magnitude.width(); ++index) {
+    const auto bit = magnitude.get(index);
     if (rotating) {
       if (bit == Logic4::one) {
         amount =
@@ -3560,7 +3603,8 @@ void Interpreter::Impl::execute(ProcessId id) {
                   shift_value(
                       op.operation,
                       get_register(process, op.value),
-                      get_register(process, op.amount));
+                      get_register(process, op.amount),
+                      op.signed_amount);
               ++process.pc;
             },
             [&](const Extract& op) {
