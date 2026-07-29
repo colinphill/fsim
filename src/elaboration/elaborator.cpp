@@ -1307,13 +1307,13 @@ void substitute_parameters(
 using QualifiedIdentifierMap =
     std::unordered_map<std::string, frontend::SourceSpan>;
 
-struct SystemVerilogTypeBinding {
+struct NamedTypeBinding {
     frontend::Type type;
     std::string owner;
 };
 
-using SystemVerilogTypeEnvironment =
-    std::unordered_map<std::string, SystemVerilogTypeBinding>;
+using NamedTypeEnvironment =
+    std::unordered_map<std::string, NamedTypeBinding>;
 
 void collect_qualified_identifiers(
     const Expression& expression,
@@ -1519,6 +1519,96 @@ QualifiedIdentifierMap qualified_identifiers(
     }
     collect_qualified_identifiers(unit.generate_regions, result);
     return result;
+}
+
+template <typename Regions, typename Visitor>
+void visit_generate_types(
+    Regions& regions, Visitor& visitor);
+
+template <typename Statements, typename Visitor>
+void visit_statement_types(
+    Statements& statements, Visitor& visitor) {
+    for (auto& statement : statements) {
+        for (auto& declaration : statement.declarations) {
+            visitor(declaration.type);
+        }
+        visit_statement_types(
+            statement.statements, visitor);
+        visit_statement_types(
+            statement.else_statements, visitor);
+        for (auto& alternative :
+             statement.case_alternatives) {
+            visit_statement_types(
+                alternative.statements, visitor);
+        }
+    }
+}
+
+template <typename Body, typename Visitor>
+void visit_generate_body_types(
+    Body& body, Visitor& visitor) {
+    for (auto& constant : body.constants) {
+        visitor(constant.type);
+    }
+    for (auto& signal : body.signals) {
+        visitor(signal.type);
+    }
+    for (auto& process : body.processes) {
+        for (auto& variable : process.variables) {
+            visitor(variable.type);
+        }
+        visit_statement_types(
+            process.statements, visitor);
+    }
+    visit_generate_types(
+        body.generate_regions, visitor);
+}
+
+template <typename Regions, typename Visitor>
+void visit_generate_types(
+    Regions& regions, Visitor& visitor) {
+    for (auto& region : regions) {
+        visit_generate_body_types(
+            region.then_body, visitor);
+        visit_generate_body_types(
+            region.else_body, visitor);
+        for (auto& alternative : region.alternatives) {
+            visit_generate_body_types(
+                alternative.body, visitor);
+        }
+    }
+}
+
+template <typename Unit, typename Visitor>
+void visit_declared_types(
+    Unit& unit,
+    Visitor visitor,
+    const bool include_aliases = false) {
+    if (include_aliases) {
+        for (auto& alias : unit.type_aliases) {
+            visitor(alias.type);
+        }
+    }
+    for (auto& parameter : unit.parameters) {
+        visitor(parameter.type);
+    }
+    for (auto& port : unit.ports) {
+        visitor(port.type);
+    }
+    for (auto& signal : unit.signals) {
+        visitor(signal.type);
+    }
+    visit_statement_types(
+        unit.concurrent_statements, visitor);
+    for (auto& process : unit.processes) {
+        for (auto& variable : process.variables) {
+            visitor(variable.type);
+        }
+        visit_statement_types(
+            process.statements, visitor);
+    }
+    visit_generate_types(
+        unit.generate_regions, visitor);
 }
 
 std::string generated_scope(
@@ -8071,7 +8161,8 @@ private:
         DesignUnit& unit,
         const std::span<const frontend::VhdlContextItem>
             context,
-        std::vector<const DesignUnit*>& import_stack) {
+        std::vector<const DesignUnit*>& import_stack,
+        NamedTypeEnvironment& imported_types) {
         std::vector<frontend::ParameterDeclaration> imports;
         std::unordered_map<std::string, std::string> bare_owners;
         std::unordered_set<std::string> dependencies;
@@ -8193,12 +8284,38 @@ private:
                         };
                     add_alias(declaration.name);
                 }
+                for (const auto& alias :
+                     specialized.unit.type_aliases) {
+                    if (!import_all
+                        && alias.name != parts[2]) {
+                        continue;
+                    }
+                    found_selected = true;
+                    const auto existing =
+                        imported_types.find(alias.name);
+                    if (existing != imported_types.end()) {
+                        if (existing->second.owner
+                            != package_owner) {
+                            report(
+                                "FSIM-ELAB-VHTYPE-003",
+                                "VHDL type '" + alias.name
+                                    + "' is directly visible from "
+                                      "multiple packages",
+                                item.span);
+                        }
+                        continue;
+                    }
+                    imported_types.emplace(
+                        alias.name,
+                        NamedTypeBinding{
+                            alias.type, package_owner});
+                }
                 if (!found_selected) {
                     report(
                         "FSIM-ELAB-PKG-003",
                         "VHDL package '" + parts[0] + "."
                             + parts[1]
-                            + "' has no constant '" + parts[2]
+                            + "' has no exported item '" + parts[2]
                             + "'",
                         item.span);
                 }
@@ -8270,12 +8387,16 @@ private:
             expanded_package_context,
             context_stack,
             package_library);
+        NamedTypeEnvironment type_environment;
         import_vhdl_package_constants(
             effective_package,
             expanded_package_context,
-            import_stack);
+            import_stack,
+            type_environment);
         import_qualified_vhdl_package_constants(
             effective_package, import_stack);
+        resolve_named_types(
+            effective_package, type_environment, true);
         auto specialized = specialize_unit(
             effective_package,
             {},
@@ -8427,6 +8548,127 @@ private:
         unit.parameters = std::move(imports);
     }
 
+    void import_qualified_vhdl_package_types(
+        DesignUnit& unit,
+        NamedTypeEnvironment& imported_types,
+        std::vector<const DesignUnit*>& import_stack) {
+        std::unordered_map<
+            std::string, frontend::SourceSpan> referenced_types;
+        visit_declared_types(
+            unit,
+            [&](const frontend::Type& type) {
+                if (!type.named_type.empty()
+                    && type.named_type.find('.')
+                        != std::string::npos) {
+                    referenced_types.try_emplace(
+                        type.named_type,
+                        type.named_type_span);
+                }
+            });
+        std::vector<std::string> ordered;
+        ordered.reserve(referenced_types.size());
+        for (const auto& [name, span] : referenced_types) {
+            (void)span;
+            ordered.push_back(name);
+        }
+        std::sort(ordered.begin(), ordered.end());
+        const auto owner_library =
+            unit.library.empty()
+                ? std::string{"work"}
+                : unit.library;
+        for (const auto& name : ordered) {
+            const auto& reference_span =
+                referenced_types.at(name);
+            const auto parts = selected_name_parts(name);
+            if (parts.size() != 2 && parts.size() != 3) {
+                report(
+                    "FSIM-ELAB-VHTYPE-004",
+                    "a selected VHDL type must be "
+                    "package.type or library.package.type",
+                    reference_span);
+                continue;
+            }
+            const auto package_name =
+                parts[parts.size() - 2];
+            const auto type_name = parts.back();
+            const auto requested_library =
+                parts.size() == 2
+                    ? owner_library
+                    : parts.front() == "work"
+                        ? owner_library
+                        : parts.front();
+            const auto package = std::find_if(
+                parsed_.units.begin(),
+                parsed_.units.end(),
+                [&](const DesignUnit& candidate) {
+                    const auto candidate_library =
+                        candidate.library.empty()
+                            ? std::string_view{"work"}
+                            : std::string_view{
+                                  candidate.library};
+                    return candidate.kind
+                            == frontend::UnitKind::VhdlPackage
+                        && candidate.name == package_name
+                        && candidate_library
+                            == requested_library;
+                });
+            if (package == parsed_.units.end()) {
+                report(
+                    "FSIM-ELAB-PKG-009",
+                    "VHDL package '" + requested_library
+                        + "." + package_name
+                        + "' was not found",
+                    reference_span);
+                continue;
+            }
+            auto specialized_package =
+                specialize_vhdl_package(
+                    *package, import_stack, reference_span);
+            if (!specialized_package) {
+                continue;
+            }
+            const auto alias = std::find_if(
+                specialized_package->unit.type_aliases.begin(),
+                specialized_package->unit.type_aliases.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == type_name;
+                });
+            if (alias
+                == specialized_package->unit.type_aliases.end()) {
+                report(
+                    "FSIM-ELAB-VHTYPE-004",
+                    "VHDL package '" + requested_library
+                        + "." + package_name
+                        + "' has no type '" + type_name + "'",
+                    reference_span);
+                continue;
+            }
+            imported_types.insert_or_assign(
+                name,
+                NamedTypeBinding{
+                    alias->type,
+                    requested_library + "."
+                        + package_name});
+            const auto append_dependency =
+                [&](const std::string& dependency) {
+                    if (std::find(
+                            unit.source_dependencies.begin(),
+                            unit.source_dependencies.end(),
+                            dependency)
+                        == unit.source_dependencies.end()) {
+                        unit.source_dependencies.push_back(
+                            dependency);
+                    }
+                };
+            append_dependency(std::string{
+                frontend::physical_source(package->span)});
+            for (const auto& dependency :
+                 specialized_package->unit.source_dependencies) {
+                append_dependency(dependency);
+            }
+        }
+    }
+
     std::optional<SpecializedUnit>
     specialize_systemverilog_package(
         const DesignUnit& package,
@@ -8454,7 +8696,7 @@ private:
         }
         import_stack.push_back(&package);
         auto effective_package = package;
-        SystemVerilogTypeEnvironment type_environment;
+        NamedTypeEnvironment type_environment;
         import_systemverilog_package_items(
             effective_package, import_stack, type_environment);
         import_qualified_systemverilog_package_items(
@@ -8520,7 +8762,7 @@ private:
     void import_systemverilog_package_items(
         DesignUnit& unit,
         std::vector<const DesignUnit*>& import_stack,
-        SystemVerilogTypeEnvironment& type_environment) {
+        NamedTypeEnvironment& type_environment) {
         std::vector<frontend::ParameterDeclaration> imports;
         std::unordered_map<std::string, std::string> owners;
         for (const auto& import_item :
@@ -8620,7 +8862,7 @@ private:
                 const auto [existing, inserted] =
                     type_environment.emplace(
                         alias.name,
-                        SystemVerilogTypeBinding{
+                        NamedTypeBinding{
                             alias.type,
                             package->name});
                 if (!inserted
@@ -8656,7 +8898,7 @@ private:
     void import_qualified_systemverilog_package_items(
         DesignUnit& unit,
         std::vector<const DesignUnit*>& import_stack,
-        SystemVerilogTypeEnvironment& type_environment) {
+        NamedTypeEnvironment& type_environment) {
         auto identifiers = qualified_identifiers(unit);
         std::vector<std::string> ordered;
         for (const auto& [identifier, span] : identifiers) {
@@ -8733,7 +8975,7 @@ private:
                 != specialized_package->unit.type_aliases.end()) {
                 type_environment.insert_or_assign(
                     identifier,
-                    SystemVerilogTypeBinding{
+                    NamedTypeBinding{
                         alias->type,
                         package->name});
                 append_package_dependencies(
@@ -8787,8 +9029,9 @@ private:
 
     void resolve_named_types(
         DesignUnit& unit,
-        const SystemVerilogTypeEnvironment& imported_types,
-        const bool vhdl = false) {
+        const NamedTypeEnvironment& imported_types,
+        const bool vhdl = false,
+        const bool resolve_ports = true) {
         std::unordered_map<std::string, std::size_t> local_types;
         for (std::size_t index = 0;
              index < unit.type_aliases.size(); ++index) {
@@ -8927,8 +9170,10 @@ private:
         for (auto& parameter : unit.parameters) {
             resolve_declaration(parameter);
         }
-        for (auto& port : unit.ports) {
-            resolve_declaration(port);
+        if (resolve_ports) {
+            for (auto& port : unit.ports) {
+                resolve_declaration(port);
+            }
         }
         for (auto& signal : unit.signals) {
             resolve_declaration(signal);
@@ -8947,7 +9192,7 @@ private:
         if (selected.kind
             == frontend::UnitKind::VerilogModule) {
             std::vector<const DesignUnit*> import_stack;
-            SystemVerilogTypeEnvironment type_environment;
+            NamedTypeEnvironment type_environment;
             import_systemverilog_package_items(
                 result, import_stack, type_environment);
             import_qualified_systemverilog_package_items(
@@ -8960,8 +9205,6 @@ private:
             != frontend::UnitKind::VhdlArchitecture) {
             return result;
         }
-        resolve_named_types(
-            result, SystemVerilogTypeEnvironment{}, true);
         const auto* entity = find_vhdl_entity(parsed_, selected);
         if (entity == nullptr) {
             return result;
@@ -9001,10 +9244,26 @@ private:
             context_stack,
             unit_library);
         std::vector<const DesignUnit*> import_stack;
+        NamedTypeEnvironment type_environment;
         import_vhdl_package_constants(
-            result, expanded_context, import_stack);
+            result,
+            expanded_context,
+            import_stack,
+            type_environment);
         import_qualified_vhdl_package_constants(
             result, import_stack);
+        import_qualified_vhdl_package_types(
+            result, type_environment, import_stack);
+
+        // Entity interfaces have their own declarative region. Resolve them
+        // without exposing architecture-local type declarations, then merge
+        // the typed ports back into the architecture specialization.
+        auto effective_entity = *entity;
+        resolve_named_types(
+            effective_entity, type_environment, true);
+        result.ports = std::move(effective_entity.ports);
+        resolve_named_types(
+            result, type_environment, true, false);
         return result;
     }
 
@@ -9355,7 +9614,7 @@ private:
                 || !actual.packed_members.empty())) {
             report(
                 "FSIM-ELAB-BIND-049",
-                "packed struct boundary '" + path + "."
+                "packed aggregate boundary '" + path + "."
                     + port.name
                     + "' requires a same-language scalar/vector wrapper",
                 source);

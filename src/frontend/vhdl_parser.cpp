@@ -278,6 +278,7 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   DesignUnit parse_package(const Token& start) {
+    vhdl_named_types_.clear();
     DesignUnit unit;
     unit.kind = UnitKind::VhdlPackage;
     unit.language = Language::Vhdl2008;
@@ -287,6 +288,8 @@ class VhdlParser final : private detail::ParserBase {
     while (!at_end() && !keyword("end", 0, true)) {
       if (match_keyword("constant", true)) {
         parse_package_constant(unit, previous());
+      } else if (match_keyword("type", true)) {
+        parse_record_type_declaration(unit, previous());
       } else {
         const auto declaration = advance();
         error(
@@ -364,6 +367,7 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   DesignUnit parse_entity(const Token& start) {
+    vhdl_named_types_.clear();
     DesignUnit unit;
     unit.kind = UnitKind::VhdlEntity;
     unit.language = Language::Vhdl2008;
@@ -621,18 +625,9 @@ class VhdlParser final : private detail::ParserBase {
           false};
     }
     if (type.domain == ValueDomain::Unknown) {
-      if (vhdl_named_types_.contains(spelling)) {
-        type.named_type = spelling;
-        type.named_type_span =
-            cover(first.span, previous().span);
-      } else {
-        error(
-            first,
-            "FSIM-VHDL-UNSUPPORTED-013",
-            "subtype '" + spelling
-                + "' requires semantic type resolution that is not "
-                  "implemented in this frontend slice");
-      }
+      type.named_type = spelling;
+      type.named_type_span =
+          cover(first.span, previous().span);
     } else if (
         type.domain == ValueDomain::Integer && !allow_integer) {
       error(
@@ -764,7 +759,8 @@ class VhdlParser final : private detail::ParserBase {
       error(
           name,
           "FSIM-VHDL-SEM-036",
-          "duplicate type declaration '" + canonical_name + "'");
+          "duplicate bounded type declaration '"
+              + canonical_name + "'");
     }
     expect_keyword(
         "is", true, "FSIM-VHDL-PARSE-127");

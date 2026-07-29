@@ -1660,6 +1660,36 @@ interpreter/LLVM O0/O2, exact-default, debug-local, VCD, and cache coverage;
 fetched Boost.Context 1.91.0 and Tcl 9.0.4; SystemC; the strict native ABI; and
 all preceding feature batches. No CI state was inspected for this local gate.
 
+### Thirty-eighth feature batch — package-visible VHDL records
+
+The planned ten implementation features are:
+
+1. Parse bounded record type declarations in VHDL package declarations while
+   preserving package/type/member source spans and case-insensitive names.
+2. Retain unresolved VHDL subtype indications as semantic named-type
+   references so entity and architecture declarations can name project types.
+3. Import package record types through `use library.package.all` and
+   `use library.package.type_name`, with stable missing-item and conflicting
+   direct-visibility diagnostics.
+4. Resolve direct `package.type_name` and `library.package.type_name`
+   selections without requiring a use clause.
+5. Specialize package record layouts before importing them and retain package
+   plus transitive context/package source provenance in each consumer.
+6. Resolve entity-port record types independently from architecture-local
+   declarations, then merge the typed interface into the architecture
+   specialization.
+7. Connect same-language VHDL record ports by whole-object alias through
+   recursive hierarchy while preserving member layout, range, and Logic9
+   metadata.
+8. Keep package record values behind same-language wrappers at VHDL/SV and
+   VHDL/SystemC boundaries with the existing targeted aggregate diagnostic.
+9. Execute package-record defaults, whole copies/equality, and selected
+   member/index/slice operations identically in the interpreter and LLVM
+   O0/O2, including debugger locals and VCD.
+10. Add focused parser/visibility/hierarchy/provenance/cache/runtime evidence,
+    update V1-VH-01/V1-VH-04/V1-VH-05 documentation, then run and push the
+    full local regression gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

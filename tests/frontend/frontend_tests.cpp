@@ -960,6 +960,68 @@ end architecture;
           && statements[3].target.text == "result.valid",
       "record element selections are canonical in reads and writes");
 
+  const auto packaged = parse_text(
+      "package_records.vhd",
+      R"(
+package Packet_Types is
+  type Packet_T is record
+    Data : std_logic_vector(3 downto 0);
+    Valid : boolean;
+  end record Packet_T;
+end package;
+
+use work.packet_types.all;
+entity Packet_Endpoint is
+  port (
+    Source : in packet_t;
+    Result : out work.packet_types.packet_t
+  );
+end entity;
+
+use work.packet_types.all;
+architecture rtl of packet_endpoint is
+  signal Direct_Value : packet_types.packet_t;
+begin
+  copy_value : process(source)
+    variable Local_Value : PACKET_T;
+  begin
+    local_value := source;
+    direct_value <= local_value;
+    result <= direct_value;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      packaged.ok(),
+      "package records and consumer named-type references must parse");
+  require(
+      packaged.design.units.size() == 3
+          && packaged.design.units[0].kind
+              == UnitKind::VhdlPackage
+          && packaged.design.units[0].type_aliases.size() == 1
+          && packaged.design.units[0].type_aliases.front().name
+              == "packet_t"
+          && packaged.design.units[0]
+                 .type_aliases.front().type.width()
+              == 5,
+      "a package retains its bounded record declaration");
+  const auto& packaged_entity = packaged.design.units[1];
+  const auto& packaged_architecture = packaged.design.units[2];
+  require(
+      packaged_entity.ports.size() == 2
+          && packaged_entity.ports[0].type.named_type
+              == "packet_t"
+          && packaged_entity.ports[1].type.named_type
+              == "work.packet_types.packet_t"
+          && packaged_architecture.signals.size() == 1
+          && packaged_architecture.signals[0].type.named_type
+              == "packet_types.packet_t"
+          && packaged_architecture.processes[0]
+                 .variables[0].type.named_type
+              == "packet_t",
+      "package record references retain bare and selected names for semantics");
+
   const auto invalid = parse_text(
       "invalid_records.vhd",
       R"(

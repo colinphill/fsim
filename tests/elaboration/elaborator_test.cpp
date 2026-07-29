@@ -9462,6 +9462,265 @@ end architecture;
             .to_msb_string()
         == "0");
 
+    const auto package_record_source =
+        fsim::frontend::parse_text(
+            "package_record_hierarchy.vhd",
+            R"(
+package Packet_Types is
+  type Packet_T is record
+    Data : std_logic_vector(3 downto 0);
+    Valid : boolean;
+  end record Packet_T;
+end package;
+
+use work.packet_types.all;
+entity Record_Child is
+  port (
+    Source : in packet_t;
+    Result : out work.packet_types.packet_t
+  );
+end entity;
+
+architecture rtl of record_child is
+begin
+  result <= source;
+end architecture;
+
+use work.packet_types.packet_t;
+entity Package_Record_Hierarchy is
+end entity;
+
+use work.packet_types.packet_t;
+architecture rtl of package_record_hierarchy is
+  signal source : packet_t;
+  signal result : packet_types.packet_t;
+  signal equal_result : boolean;
+begin
+  drive_source : process
+  begin
+    source.Data <= "ULH-";
+    source.Valid <= true;
+    wait;
+  end process;
+
+  child : entity work.record_child(rtl)
+    port map (
+      Source => source,
+      Result => result
+    );
+
+  equal_result <= result = source;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(package_record_source.ok());
+    const auto package_record_design =
+        fsim::elaboration::elaborate(
+            package_record_source.design,
+            "vhdl:work.package_record_hierarchy(rtl)");
+    if (!package_record_design.ok()) {
+        for (const auto& diagnostic :
+             package_record_design.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << " at "
+                      << diagnostic.span.begin.line << ":"
+                      << diagnostic.span.begin.column << '\n';
+        }
+    }
+    assert(package_record_design.ok());
+    assert(
+        package_record_design.design->specializations().size()
+        == 2);
+    const auto package_record_input =
+        package_record_design.design->find_signal("source");
+    const auto package_record_output =
+        package_record_design.design->find_signal("result");
+    const auto package_record_equal =
+        package_record_design.design->find_signal("equal_result");
+    assert(
+        package_record_input && package_record_output
+        && package_record_equal);
+    assert(
+        package_record_design.design
+            ->signals()
+            .at(*package_record_input)
+            .packed_members.size()
+        == 2);
+    auto package_record_interpreter =
+        package_record_design.design->create_interpreter();
+    assert(
+        package_record_interpreter
+            ->signal_value(*package_record_input)
+            .to_msb_string()
+        == "UUUU0");
+    const auto package_record_run =
+        package_record_interpreter->run();
+    assert(
+        package_record_run.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        package_record_interpreter
+            ->signal_value(*package_record_input)
+            .to_msb_string()
+        == "ULH-1");
+    assert(
+        package_record_interpreter
+            ->signal_value(*package_record_output)
+            .to_msb_string()
+        == "ULH-1");
+    assert(
+        package_record_interpreter
+            ->signal_value(*package_record_equal)
+            .to_msb_string()
+        == "1");
+
+    const auto unknown_record_type =
+        fsim::frontend::parse_text(
+            "unknown_record_type.vhd",
+            R"(
+entity unknown_record_type is
+  port (value : in missing_packet_t);
+end entity;
+architecture rtl of unknown_record_type is
+  type missing_packet_t is record
+    value : bit;
+  end record;
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(unknown_record_type.ok());
+    const auto rejected_unknown_record_type =
+        fsim::elaboration::elaborate(
+            unknown_record_type.design,
+            "vhdl:work.unknown_record_type(rtl)");
+    assert(!rejected_unknown_record_type.ok());
+    assert(has_diagnostic(
+        rejected_unknown_record_type,
+        "FSIM-ELAB-VHTYPE-001"));
+
+    const auto missing_imported_record_type =
+        fsim::frontend::parse_text(
+            "missing_imported_record_type.vhd",
+            R"(
+package Available_Types is
+  type Packet_T is record
+    value : bit;
+  end record;
+end package;
+use work.available_types.missing_t;
+entity missing_imported_record_type is
+  port (value : in missing_t);
+end entity;
+architecture rtl of missing_imported_record_type is
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(missing_imported_record_type.ok());
+    const auto rejected_missing_imported_record_type =
+        fsim::elaboration::elaborate(
+            missing_imported_record_type.design,
+            "vhdl:work.missing_imported_record_type(rtl)");
+    assert(!rejected_missing_imported_record_type.ok());
+    assert(has_diagnostic(
+        rejected_missing_imported_record_type,
+        "FSIM-ELAB-PKG-003"));
+
+    const auto missing_selected_record_type =
+        fsim::frontend::parse_text(
+            "missing_selected_record_type.vhd",
+            R"(
+package Selected_Types is
+  type Packet_T is record
+    value : bit;
+  end record;
+end package;
+entity missing_selected_record_type is
+end entity;
+architecture rtl of missing_selected_record_type is
+  signal value : selected_types.missing_t;
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(missing_selected_record_type.ok());
+    const auto rejected_missing_selected_record_type =
+        fsim::elaboration::elaborate(
+            missing_selected_record_type.design,
+            "vhdl:work.missing_selected_record_type(rtl)");
+    assert(!rejected_missing_selected_record_type.ok());
+    assert(has_diagnostic(
+        rejected_missing_selected_record_type,
+        "FSIM-ELAB-VHTYPE-004"));
+
+    const auto conflicting_record_types =
+        fsim::frontend::parse_text(
+            "conflicting_record_types.vhd",
+            R"(
+package First_Types is
+  type Packet_T is record
+    Value : bit;
+  end record;
+end package;
+package Second_Types is
+  type Packet_T is record
+    Value : bit;
+  end record;
+end package;
+use work.first_types.all;
+use work.second_types.all;
+entity conflicting_record_types is
+  port (value : in packet_t);
+end entity;
+architecture rtl of conflicting_record_types is
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(conflicting_record_types.ok());
+    const auto rejected_conflicting_record_types =
+        fsim::elaboration::elaborate(
+            conflicting_record_types.design,
+            "vhdl:work.conflicting_record_types(rtl)");
+    assert(!rejected_conflicting_record_types.ok());
+    assert(has_diagnostic(
+        rejected_conflicting_record_types,
+        "FSIM-ELAB-VHTYPE-003"));
+
+    auto package_record_boundary =
+        package_record_source.design;
+    const auto package_record_sv_parent =
+        fsim::frontend::parse_text(
+            "package_record_parent.sv",
+            R"(
+module package_record_parent;
+  logic [4:0] source;
+  record_child child(.source(source));
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(package_record_sv_parent.ok());
+    package_record_boundary.units.insert(
+        package_record_boundary.units.end(),
+        package_record_sv_parent.design.units.begin(),
+        package_record_sv_parent.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        package_record_binding{
+            {"package_record_parent.child",
+             "vhdl:work.record_child(rtl)",
+             std::nullopt},
+        };
+    const auto rejected_package_record_boundary =
+        fsim::elaboration::elaborate(
+            package_record_boundary,
+            "sv:work.package_record_parent",
+            package_record_binding);
+    assert(!rejected_package_record_boundary.ok());
+    assert(has_diagnostic(
+        rejected_package_record_boundary,
+        "FSIM-ELAB-BIND-049"));
+
     const auto invalid_monitor_source =
         fsim::frontend::parse_text(
             "invalid_monitor.sv",

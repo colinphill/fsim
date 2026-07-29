@@ -236,7 +236,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-033` | error | A VHDL `reject` clause is paired with the transport delay mechanism. |
 | `FSIM-VHDL-SEM-034` | error | VHDL waveform-element delays are not strictly ascending after exact project-time normalization. |
 | `FSIM-VHDL-SEM-035` | error | A VHDL record declares the same case-insensitive element name more than once. |
-| `FSIM-VHDL-SEM-036` | error | An architecture declares the same bounded VHDL type name more than once. |
+| `FSIM-VHDL-SEM-036` | error | A VHDL design unit declares the same bounded type name more than once. |
 | `FSIM-VHDL-SEM-037` | error | A VHDL record's optional end name does not match its declaration name. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
@@ -248,7 +248,6 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-010` | error | A port-map actual is not a simple identifier. |
 | `FSIM-VHDL-UNSUPPORTED-011` | error | Port default expressions are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
-| `FSIM-VHDL-UNSUPPORTED-013` | error | A subtype requires semantic type resolution not implemented in this slice. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family subtype appears in a declaration context that does not yet admit scalar integer objects. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
@@ -653,7 +652,7 @@ therefore excluded.
 | `FSIM-ELAB-GEN-012` | error | A generated constant/parameter violates a bounded scalar subtype or exceeds the 64-bit integral width. |
 | `FSIM-ELAB-PKG-001` | error | A bounded VHDL package import is not `library.package.all` or `library.package.constant`. |
 | `FSIM-ELAB-PKG-002` | error | A project VHDL package named by a use clause was not found in the selected library. |
-| `FSIM-ELAB-PKG-003` | error | A selected package constant named by a use clause does not exist. |
+| `FSIM-ELAB-PKG-003` | error | A selected package constant or type named by a use clause does not exist. |
 | `FSIM-ELAB-PKG-004` | error | The same bare VHDL constant name is directly visible from multiple imported packages. |
 | `FSIM-ELAB-PKG-005` | error | A package constant default cannot be evaluated in declaration order. |
 | `FSIM-ELAB-PKG-006` | error | A package constant value violates its bounded scalar subtype. |
@@ -673,8 +672,10 @@ therefore excluded.
 | `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
 | `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
-| `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the architecture where it is used. |
+| `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the design unit where it is used. |
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
+| `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |
+| `FSIM-ELAB-VHTYPE-004` | error | A selected VHDL package type name is malformed or does not exist. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
