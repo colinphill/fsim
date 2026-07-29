@@ -187,6 +187,8 @@ struct IncludeScan {
 
 [[nodiscard]] bool is_path_like_library(const std::string& library);
 
+[[nodiscard]] std::string_view msvc_runtime_option() noexcept;
+
 [[nodiscard]] std::vector<std::string> common_compile_argv(
     const HostToolchain toolchain,
     const std::string& compiler_name,

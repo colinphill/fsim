@@ -863,7 +863,7 @@ therefore excluded.
 | `FSIM-SC-C001` | error | The SystemC compiler working directory cannot be resolved. |
 | `FSIM-SC-C002` | error | A SystemC source set contains no C++ sources. |
 | `FSIM-SC-C003` | error | A SystemC source or dependency is missing, unreadable, invalid, or cannot be hashed/scanned. |
-| `FSIM-SC-C004` | error | A compiler option conflicts with fsim's shared-library output. |
+| `FSIM-SC-C004` | error | A compiler option conflicts with fsim's shared-library build contract. |
 | `FSIM-SC-C005` | error | A SystemC plug-in cache or lock directory cannot be created. |
 | `FSIM-SC-C006` | error | The per-key SystemC plug-in cache lock cannot be acquired. |
 | `FSIM-SC-C007` | error | The host compiler is unavailable, failed to start, failed, or produced no shared library. |

@@ -167,6 +167,13 @@ the compiler to emit each source's complete dependency closure, including
 headers found through implicit system include paths, and content-hashes that
 closure.
 
+On native MSVC and clang-cl builds, generated plug-ins use the same static or
+dynamic, Debug or Release CRT model as `fsim_systemc_support`. The selected
+`/MT`, `/MTd`, `/MD`, or `/MDd` option is present in every compile and link
+command and participates explicitly in cache identity. Manifest options may
+not override the CRT model because doing so would make the plug-in DLL
+incompatible with its required support archive.
+
 The cache uses process-aware per-key locks, checksum sidecars, atomic
 publication, corruption rejection, and stale-lock recovery. If fsim cannot
 prove the dependency closure—for example, because an option uses a response

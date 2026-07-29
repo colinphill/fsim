@@ -743,7 +743,8 @@ void add_compiler_identity(
     const auto folded = lowercase(option);
     if (toolchain == HostToolchain::msvc) {
         return folded == "/c" || folded == "/e" || folded == "/ep" || folded == "/p"
-            || folded == "/link"
+            || folded == "/link" || folded == "/md" || folded == "/mdd"
+            || folded == "/mt" || folded == "/mtd"
             || folded.rfind("/fe", 0) == 0 || folded.rfind("/fo", 0) == 0
             || folded.rfind("/fd", 0) == 0 || folded.rfind("/fa", 0) == 0
             || folded.rfind("/fr", 0) == 0 || folded.rfind("/out:", 0) == 0;
@@ -790,7 +791,7 @@ void add_compiler_identity(
                     diagnostics,
                     "FSIM-SC-C004",
                     "SystemC compiler option '" + option
-                        + "' conflicts with fsim's shared-library output");
+                        + "' conflicts with fsim's shared-library build contract");
                 return false;
             }
             if (compile_options
@@ -834,6 +835,29 @@ void add_compiler_identity(
         || extension == ".lib" || extension == ".dll";
 }
 
+[[nodiscard]] std::string_view msvc_runtime_option() noexcept {
+#if defined(_MSC_VER)
+#  if defined(_DLL)
+#    if defined(_DEBUG)
+    return "/MDd";
+#    else
+    return "/MD";
+#    endif
+#  else
+#    if defined(_DEBUG)
+    return "/MTd";
+#    else
+    return "/MT";
+#    endif
+#  endif
+#else
+    // Non-Windows command-planning tests model the conventional MSVC
+    // dynamic-release runtime. A native MSVC or clang-cl build derives the
+    // exact flag from the CRT macros used to compile fsim_systemc itself.
+    return "/MD";
+#endif
+}
+
 [[nodiscard]] std::vector<std::string> common_compile_argv(
     const HostToolchain toolchain,
     const std::string& compiler_name,
@@ -849,7 +873,7 @@ void add_compiler_identity(
         argv.emplace_back("/nologo");
         argv.emplace_back("/std:c++20");
         argv.emplace_back("/EHsc");
-        argv.emplace_back("/MD");
+        argv.emplace_back(msvc_runtime_option());
         for (const auto& include : includes) {
             argv.push_back("/I" + path_argument(include));
         }
@@ -909,7 +933,7 @@ void add_compiler_identity(
             resolved_compiler.empty() ? std::filesystem::path{compiler_name}
                                       : resolved_compiler));
         link_argv.emplace_back("/nologo");
-        link_argv.emplace_back("/MD");
+        link_argv.emplace_back(msvc_runtime_option());
         link_argv.emplace_back("/LD");
         for (std::size_t index = 0; index < sources.size(); ++index) {
             link_argv.push_back(path_argument(

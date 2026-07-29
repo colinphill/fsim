@@ -99,6 +99,9 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     key_builder.add("runtime-abi", std::to_string(runtime_abi_version));
     key_builder.add("systemc-abi", std::to_string(FSIM_SYSTEMC_ABI_VERSION));
     key_builder.add("toolchain", to_string(toolchain));
+    if (toolchain == HostToolchain::msvc) {
+        key_builder.add("msvc-runtime", msvc_runtime_option());
+    }
 #if defined(_WIN32)
     key_builder.add("host-format", "windows-pe-x86-64");
 #else

@@ -63,6 +63,32 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
         });
 }
 
+[[nodiscard]] std::string_view expected_msvc_runtime_option() noexcept {
+#if defined(_MSC_VER)
+#  if defined(_DLL)
+#    if defined(_DEBUG)
+    return "/MDd";
+#    else
+    return "/MD";
+#    endif
+#  else
+#    if defined(_DEBUG)
+    return "/MTd";
+#    else
+    return "/MT";
+#    endif
+#  endif
+#else
+    return "/MD";
+#endif
+}
+
+[[nodiscard]] bool is_msvc_runtime_option(
+    const std::string_view argument) noexcept {
+    return argument == "/MD" || argument == "/MDd"
+        || argument == "/MT" || argument == "/MTd";
+}
+
 [[nodiscard]] bool has_diagnostic_code(
     const fsim::diagnostic::Engine& diagnostics,
     const std::string_view code) {
@@ -646,6 +672,20 @@ int main(const int argc, char** argv) {
         *msvc_plan, "/Fo" + msvc_plan->intermediate_paths[0].string()));
     assert(has_argument(
         *msvc_plan, "/Fo" + msvc_plan->intermediate_paths[2].string()));
+    for (const auto& command : msvc_plan->commands) {
+        const auto runtime_arguments = std::count_if(
+            command.argv.begin(),
+            command.argv.end(),
+            [](const auto& argument) {
+                return is_msvc_runtime_option(argument);
+            });
+        assert(runtime_arguments == 1);
+        assert(std::find(
+                   command.argv.begin(),
+                   command.argv.end(),
+                   expected_msvc_runtime_option())
+               != command.argv.end());
+    }
 
     PluginCompileRequest unsafe = request;
     unsafe.settings.compile_options = {
@@ -659,6 +699,23 @@ int main(const int argc, char** argv) {
     assert(!fsim::systemc::plan_plugin_compile(unsafe, unsafe_diagnostics));
     assert(unsafe_diagnostics.has_error());
     assert(unsafe_diagnostics.diagnostics().front().code == "FSIM-SC-C004");
+
+    for (const auto runtime_option : {"/MD", "/MDd", "/MT", "/MTd"}) {
+        auto runtime_override = msvc_request;
+        runtime_override.settings.compile_options = {runtime_option};
+        fsim::diagnostic::Engine runtime_diagnostics;
+        assert(!fsim::systemc::plan_plugin_compile(
+            runtime_override, runtime_diagnostics));
+        assert(runtime_diagnostics.has_error());
+        assert(runtime_diagnostics.diagnostics().front().code == "FSIM-SC-C004");
+    }
+    auto runtime_link_override = msvc_request;
+    runtime_link_override.settings.link_options = {"/mTd"};
+    fsim::diagnostic::Engine runtime_link_diagnostics;
+    assert(!fsim::systemc::plan_plugin_compile(
+        runtime_link_override, runtime_link_diagnostics));
+    assert(runtime_link_diagnostics.has_error());
+    assert(runtime_link_diagnostics.diagnostics().front().code == "FSIM-SC-C004");
 
     PluginCompileRequest missing = request;
     missing.sources = {working / "missing.cpp"};

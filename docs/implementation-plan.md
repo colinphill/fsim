@@ -2484,6 +2484,23 @@ all 41 non-LLVM tests pass in 170.92 seconds. The exact LLVM 22.1.8 Release
 application target, compiled-expression test, and source-line-budget test also
 pass. No CI state was inspected.
 
+### Windows SystemC CRT linker repair
+
+The exact-LLVM Windows configurations intentionally build fsim and the
+prebuilt-compatible support libraries with the static MSVC CRT. Generated
+SystemC plug-ins previously hardcoded `/MD`, so linking them with
+`fsim_systemc_support.lib` failed with `LNK2038`, `LNK4098`, and `LNK1319`.
+
+The plug-in compiler now derives `/MT`, `/MTd`, `/MD`, or `/MDd` from the CRT
+macros used to compile `fsim_systemc`, applies that option exactly once to
+every MSVC/clang-cl compile and link command, and includes it in plug-in cache
+identity. Raw manifest CRT overrides are rejected because they cannot safely
+differ from the required support archive. Command-plan tests cover all four
+override spellings and verify consistent generated commands. Focused
+LLVM-disabled and exact LLVM 22.1.8 Release SystemC compiler and datatype
+application tests pass locally. The supplied Windows test log was analyzed;
+no CI state was queried directly.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
