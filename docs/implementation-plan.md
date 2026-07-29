@@ -1641,6 +1641,25 @@ The planned ten implementation features are:
     evidence, update V1-VH-04 documentation, then run and push the full local
     regression gate.
 
+All ten implementation features are complete in feature commit `1621736`.
+The VHDL frontend now accepts case-insensitive architecture-local, non-nested
+records containing scalar or statically ranged logic, bit, and Boolean
+elements. Elaboration resolves the local named type, computes a deterministic
+declaration-order packed layout, distinguishes selected record objects from
+package constants, preserves each element's default domain, and composes
+constant member bit/slice selections with whole-record copies and equality.
+The same typed SimIR executes with exact Logic9 values in the interpreter and
+LLVM O0/O2, while debugger local reads, committed VCD changes, and cold/warm
+native-cache behavior remain identical. Records are explicitly retained
+behind same-language wrappers at mixed-language boundaries.
+
+After feature commit `1621736`, the exact LLVM 22.1.8 warnings-as-errors
+Release regression passed all 36 tests in 90.13 seconds on 2026-07-28. The
+gate includes the new focused record parser, diagnostic, elaboration,
+interpreter/LLVM O0/O2, exact-default, debug-local, VCD, and cache coverage;
+fetched Boost.Context 1.91.0 and Tcl 9.0.4; SystemC; the strict native ABI; and
+all preceding feature batches. No CI state was inspected for this local gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
