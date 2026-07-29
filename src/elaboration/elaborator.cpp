@@ -2759,6 +2759,7 @@ public:
         local_ranges_.clear();
         local_integer_ranges_.clear();
         local_members_.clear();
+        local_types_.clear();
         declaration_registers_.clear();
         debug_local_names_.clear();
         local_scope_.clear();
@@ -2888,6 +2889,7 @@ public:
         local_ranges_.clear();
         local_integer_ranges_.clear();
         local_members_.clear();
+        local_types_.clear();
         declaration_registers_.clear();
         debug_local_names_.clear();
         local_scope_.clear();
@@ -2910,6 +2912,7 @@ public:
         local_ranges_.clear();
         local_integer_ranges_.clear();
         local_members_.clear();
+        local_types_.clear();
         declaration_registers_.clear();
         debug_local_names_.clear();
         local_scope_.clear();
@@ -2950,6 +2953,7 @@ public:
         local_ranges_.clear();
         local_integer_ranges_.clear();
         local_members_.clear();
+        local_types_.clear();
         declaration_registers_.clear();
         debug_local_names_.clear();
         local_scope_.clear();
@@ -2964,6 +2968,16 @@ private:
         return found == visible_types_.end()
             ? nullptr
             : found->second;
+    }
+
+    [[nodiscard]] const frontend::Type* object_type(
+        const std::string_view name) const {
+        if (const auto local =
+                local_types_.find(std::string{name});
+            local != local_types_.end()) {
+            return local->second;
+        }
+        return visible_type(name);
     }
 
     [[nodiscard]] static std::pair<std::int32_t, std::int32_t>
@@ -3113,6 +3127,8 @@ private:
                 variable.name, variable.type.integer_range);
             local_members_.insert_or_assign(
                 variable.name, variable.type.packed_members);
+            local_types_.insert_or_assign(
+                variable.name, &variable.type);
             pending.push_back(Pending{&variable, register_id, *width});
         }
         for (const auto& local : pending) {
@@ -3138,7 +3154,10 @@ private:
                     continue;
                 }
                 const auto value =
-                    lower_expression(*variable.initializer, local.width);
+                    lower_expression(
+                        *variable.initializer,
+                        local.width,
+                        &variable.type);
                 if (!value) {
                     continue;
                 }
@@ -3219,6 +3238,7 @@ private:
         auto outer_ranges = local_ranges_;
         auto outer_integer_ranges = local_integer_ranges_;
         auto outer_members = local_members_;
+        auto outer_types = local_types_;
         local_scope_.push_back(block_scope_name(statement));
         initialize_variables(statement.declarations);
         lower_statements(statement.statements);
@@ -3229,6 +3249,7 @@ private:
         local_integer_ranges_ =
             std::move(outer_integer_ranges);
         local_members_ = std::move(outer_members);
+        local_types_ = std::move(outer_types);
     }
 
     void lower_event_trigger(const Statement& statement) {
@@ -4286,6 +4307,10 @@ private:
 
         const auto target_width =
             selected_width.value_or(whole_width);
+        const auto* contextual_target_type =
+            selected_offset
+                ? nullptr
+                : object_type(target_name);
         const auto assignment_control =
             statement.procedural_assignment_control;
         const bool procedural_delay =
@@ -4357,7 +4382,10 @@ private:
                 return;
             }
             const auto value =
-                lower_expression(statement.value, target_width);
+                lower_expression(
+                    statement.value,
+                    target_width,
+                    contextual_target_type);
             if (!value) {
                 return;
             }
@@ -4442,7 +4470,10 @@ private:
             std::optional<runtime::SimulationTick> previous_delay;
             for (const auto& element : statement.vhdl_waveform) {
                 const auto value =
-                    lower_expression(element.value, target_width);
+                    lower_expression(
+                        element.value,
+                        target_width,
+                        contextual_target_type);
                 if (!value) {
                     return;
                 }
@@ -4541,7 +4572,10 @@ private:
             }
             return;
         }
-        const auto value = lower_expression(statement.value, target_width);
+        const auto value = lower_expression(
+            statement.value,
+            target_width,
+            contextual_target_type);
         if (!value) {
             return;
         }
@@ -5216,7 +5250,9 @@ private:
     }
 
     std::optional<RegisterId> lower_expression(
-        const Expression& expression, const std::size_t expected_width) {
+        const Expression& expression,
+        const std::size_t expected_width,
+        const frontend::Type* expected_type = nullptr) {
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
                 local != locals_.end()) {
@@ -5288,6 +5324,201 @@ private:
                     expression.span);
                 return std::nullopt;
             }
+        }
+        if (expression.kind == ExpressionKind::Aggregate) {
+            if (language_ != frontend::Language::Vhdl2008
+                || expected_type == nullptr
+                || expected_type->packed_members.empty()) {
+                report(
+                    "FSIM-ELAB-VHAGG-001",
+                    "a VHDL record aggregate requires a contextual "
+                    "record target type",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto aggregate_width = expected_type->width();
+            if (!aggregate_width
+                || *aggregate_width != expected_width
+                || *aggregate_width == 0
+                || *aggregate_width
+                    > std::numeric_limits<std::size_t>::max()
+                || expression.aggregate_choices.size()
+                    != expression.operands.size()) {
+                report(
+                    "FSIM-ELAB-VHAGG-002",
+                    "record aggregate association metadata or contextual "
+                    "layout is inconsistent",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                expected_width, expected_type->domain);
+            process_.operations.emplace_back(LoadConstant{
+                destination,
+                default_packed_value(
+                    *expected_type, expected_width)});
+            std::vector<bool> assigned(
+                expected_type->packed_members.size(), false);
+            std::optional<std::size_t> others_index;
+            std::size_t positional_index = 0;
+            bool valid = true;
+            const auto insert_member =
+                [&](const std::size_t member_index,
+                    const Expression& value,
+                    const frontend::SourceSpan& span) {
+                  if (member_index
+                          >= expected_type->packed_members.size()
+                      || assigned[member_index]) {
+                    report(
+                        "FSIM-ELAB-VHAGG-004",
+                        member_index
+                                < expected_type->packed_members.size()
+                            ? "record aggregate element '"
+                                  + expected_type
+                                        ->packed_members[member_index]
+                                        .name
+                                  + "' is assigned more than once"
+                            : "record aggregate has too many positional "
+                              "associations",
+                        span);
+                    valid = false;
+                    return;
+                  }
+                  const auto& member =
+                      expected_type->packed_members[member_index];
+                  const auto member_width = member.width();
+                  if (!member_width || *member_width == 0
+                      || *member_width
+                          > std::numeric_limits<std::size_t>::max()
+                      || member.lsb_offset
+                          > std::numeric_limits<std::uint32_t>::max()) {
+                    report(
+                        "FSIM-ELAB-VHAGG-002",
+                        "record aggregate element '" + member.name
+                            + "' has no executable flattened layout",
+                        span);
+                    valid = false;
+                    return;
+                  }
+                  const auto lowered = lower_expression(
+                      value,
+                      static_cast<std::size_t>(*member_width));
+                  if (!lowered) {
+                    valid = false;
+                    return;
+                  }
+                  if (register_width(*lowered) != *member_width) {
+                    report(
+                        "FSIM-ELAB-VHAGG-006",
+                        "record aggregate element '" + member.name
+                            + "' expects "
+                            + std::to_string(*member_width)
+                            + " bits but its value has "
+                            + std::to_string(
+                                register_width(*lowered))
+                            + " bits",
+                        span);
+                    valid = false;
+                    return;
+                  }
+                  if (is_two_state_domain(member.domain)
+                      && !is_two_state_domain(
+                          register_domain(*lowered))) {
+                    report(
+                        "FSIM-ELAB-VHAGG-007",
+                        "two-state record aggregate element '"
+                            + member.name
+                            + "' requires an explicit conversion",
+                        span);
+                    valid = false;
+                    return;
+                  }
+                  process_.operations.emplace_back(Insert{
+                      destination,
+                      destination,
+                      *lowered,
+                      static_cast<std::uint32_t>(
+                          member.lsb_offset)});
+                  assigned[member_index] = true;
+                };
+            for (std::size_t index = 0;
+                 index < expression.operands.size();
+                 ++index) {
+                const auto& choice =
+                    expression.aggregate_choices[index];
+                if (choice.empty()) {
+                    insert_member(
+                        positional_index++,
+                        expression.operands[index],
+                        expression.operands[index].span);
+                    continue;
+                }
+                if (choice == "others") {
+                    if (others_index) {
+                        report(
+                            "FSIM-ELAB-VHAGG-004",
+                            "record aggregate has more than one others "
+                            "association",
+                            expression.operands[index].span);
+                        valid = false;
+                    } else {
+                        others_index = index;
+                    }
+                    continue;
+                }
+                const auto member = std::find_if(
+                    expected_type->packed_members.begin(),
+                    expected_type->packed_members.end(),
+                    [&](const frontend::PackedMember& candidate) {
+                        return candidate.name == choice;
+                    });
+                if (member
+                    == expected_type->packed_members.end()) {
+                    report(
+                        "FSIM-ELAB-VHAGG-003",
+                        "record aggregate type '"
+                            + expected_type->spelling
+                            + "' has no element '" + choice + "'",
+                        expression.operands[index].span);
+                    valid = false;
+                    continue;
+                }
+                insert_member(
+                    static_cast<std::size_t>(std::distance(
+                        expected_type->packed_members.begin(),
+                        member)),
+                    expression.operands[index],
+                    expression.operands[index].span);
+            }
+            if (others_index) {
+                for (std::size_t member = 0;
+                     member < assigned.size();
+                     ++member) {
+                    if (!assigned[member]) {
+                        insert_member(
+                            member,
+                            expression.operands[*others_index],
+                            expression.operands[*others_index].span);
+                    }
+                }
+            }
+            for (std::size_t member = 0;
+                 member < assigned.size();
+                 ++member) {
+                if (assigned[member]) {
+                    continue;
+                }
+                report(
+                    "FSIM-ELAB-VHAGG-005",
+                    "record aggregate is missing element '"
+                        + expected_type->packed_members[member].name
+                        + "'",
+                    expression.span);
+                valid = false;
+            }
+            return valid
+                ? std::optional<RegisterId>{destination}
+                : std::nullopt;
         }
         if (expression.kind == ExpressionKind::IntegerLiteral
             || expression.kind == ExpressionKind::BooleanLiteral
@@ -6555,9 +6786,15 @@ private:
                         infer_width(expression.operands[2])
                             .value_or(expected_width));
             const auto when_true =
-                lower_expression(expression.operands[1], value_width);
+                lower_expression(
+                    expression.operands[1],
+                    value_width,
+                    expected_type);
             const auto when_false =
-                lower_expression(expression.operands[2], value_width);
+                lower_expression(
+                    expression.operands[2],
+                    value_width,
+                    expected_type);
             if (!when_true || !when_false) {
                 return std::nullopt;
             }
@@ -6581,10 +6818,18 @@ private:
                         && is_integer_expression(
                             expression.operands[2])
                     ? frontend::ValueDomain::Integer
+                : register_domain(*when_true)
+                        == register_domain(*when_false)
+                    ? register_domain(*when_true)
                 : is_two_state_domain(register_domain(*when_true))
                         && is_two_state_domain(
                             register_domain(*when_false))
                     ? frontend::ValueDomain::Bit2
+                : register_domain(*when_true)
+                            == frontend::ValueDomain::Logic9
+                        || register_domain(*when_false)
+                            == frontend::ValueDomain::Logic9
+                    ? frontend::ValueDomain::Logic9
                     : frontend::ValueDomain::Logic4;
             const auto destination =
                 allocate_register(
@@ -6746,7 +6991,39 @@ private:
             return destination;
         }
         if (expression.kind == ExpressionKind::Binary && expression.operands.size() == 2) {
-            const auto width = infer_width(expression).value_or(expected_width);
+            const frontend::Type* binary_context_type = nullptr;
+            if (language_ == frontend::Language::Vhdl2008
+                && (expression.text == "="
+                    || expression.text == "/=")) {
+                if (expression.operands[0].kind
+                        == ExpressionKind::Aggregate
+                    && expression.operands[1].kind
+                        == ExpressionKind::Identifier) {
+                    binary_context_type = object_type(
+                        expression.operands[1].text);
+                } else if (
+                    expression.operands[1].kind
+                        == ExpressionKind::Aggregate
+                    && expression.operands[0].kind
+                        == ExpressionKind::Identifier) {
+                    binary_context_type = object_type(
+                        expression.operands[0].text);
+                }
+                if (binary_context_type != nullptr
+                    && binary_context_type
+                        ->packed_members.empty()) {
+                    binary_context_type = nullptr;
+                }
+            }
+            const auto contextual_width =
+                binary_context_type != nullptr
+                    ? binary_context_type->width()
+                    : std::nullopt;
+            const auto width =
+                contextual_width
+                    ? static_cast<std::size_t>(*contextual_width)
+                    : infer_width(expression)
+                          .value_or(expected_width);
             if (language_ == frontend::Language::Vhdl2008
                 && expression.text == "**") {
                 const auto exponent =
@@ -6760,8 +7037,14 @@ private:
                     return std::nullopt;
                 }
             }
-            const auto lhs = lower_expression(expression.operands[0], width);
-            const auto rhs = lower_expression(expression.operands[1], width);
+            const auto lhs = lower_expression(
+                expression.operands[0],
+                width,
+                binary_context_type);
+            const auto rhs = lower_expression(
+                expression.operands[1],
+                width,
+                binary_context_type);
             if (!lhs || !rhs) {
                 return std::nullopt;
             }
@@ -7070,6 +7353,9 @@ private:
     std::optional<std::size_t> infer_width(const Expression& expression) const {
         if (expression.kind == ExpressionKind::BooleanLiteral) {
             return std::size_t{1};
+        }
+        if (expression.kind == ExpressionKind::Aggregate) {
+            return std::nullopt;
         }
         if (language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
@@ -7399,6 +7685,7 @@ private:
             return expression.text.find("'s") != std::string::npos
                 || expression.text.find("'S") != std::string::npos;
         case ExpressionKind::StringLiteral:
+        case ExpressionKind::Aggregate:
         case ExpressionKind::Concatenation:
         case ExpressionKind::Replication:
         case ExpressionKind::Invalid:
@@ -7613,6 +7900,7 @@ private:
         case ExpressionKind::StringLiteral:
         case ExpressionKind::Index:
         case ExpressionKind::Slice:
+        case ExpressionKind::Aggregate:
         case ExpressionKind::Concatenation:
         case ExpressionKind::Replication:
         case ExpressionKind::Invalid:
@@ -7765,6 +8053,8 @@ private:
     std::unordered_map<
         std::string, std::vector<frontend::PackedMember>>
         local_members_;
+    std::unordered_map<std::string, const frontend::Type*>
+        local_types_;
     std::unordered_map<std::string, RegisterId>
         declaration_registers_;
     std::unordered_set<std::string> debug_local_names_;

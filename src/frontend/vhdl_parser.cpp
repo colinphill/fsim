@@ -2728,11 +2728,96 @@ class VhdlParser final : private detail::ParserBase {
     }
     if (match(TokenKind::LeftParen)) {
       const auto open = previous();
-      Expression expression = parse_expression();
+      auto first = parse_expression();
+      if (!at(TokenKind::Arrow)
+          && !at(TokenKind::Comma)) {
+        expect(TokenKind::RightParen, "')' after expression",
+               "FSIM-VHDL-PARSE-034");
+        first.span = span_from(open, previous());
+        return first;
+      }
+
+      Expression aggregate;
+      aggregate.kind = ExpressionKind::Aggregate;
+      bool named_association = false;
+      bool saw_others = false;
+      const auto append_association =
+          [&](Expression head) {
+            if (match(TokenKind::Arrow)) {
+              named_association = true;
+              std::string choice;
+              if (head.kind == ExpressionKind::Identifier) {
+                choice = vhdl_name(head.text);
+              } else {
+                error(
+                    previous(),
+                    "FSIM-VHDL-PARSE-132",
+                    "a bounded record aggregate choice must be an "
+                    "element name or others");
+              }
+              if (choice == "others") {
+                if (saw_others) {
+                  error(
+                      previous(),
+                      "FSIM-VHDL-SEM-039",
+                      "a record aggregate has more than one others "
+                      "association");
+                }
+                saw_others = true;
+              }
+              Expression value;
+              if (at(TokenKind::Comma)
+                  || at(TokenKind::RightParen)
+                  || at_end()) {
+                error(
+                    current(),
+                    "FSIM-VHDL-PARSE-133",
+                    "expected a value after record aggregate =>");
+                value = Expression{
+                    ExpressionKind::Invalid,
+                    {},
+                    {},
+                    current().span};
+              } else {
+                value = parse_expression();
+              }
+              aggregate.aggregate_choices.push_back(
+                  std::move(choice));
+              aggregate.operands.push_back(
+                  std::move(value));
+              return;
+            }
+            if (named_association) {
+              error(
+                  current(),
+                  "FSIM-VHDL-SEM-038",
+                  "a positional record aggregate association cannot "
+                  "follow a named association");
+            }
+            aggregate.aggregate_choices.emplace_back();
+            aggregate.operands.push_back(std::move(head));
+          };
+      append_association(std::move(first));
+      while (match(TokenKind::Comma)) {
+        if (saw_others) {
+          error(
+              previous(),
+              "FSIM-VHDL-SEM-039",
+              "the others record aggregate association must be last");
+        }
+        if (at(TokenKind::RightParen) || at_end()) {
+          error(
+              current(),
+              "FSIM-VHDL-PARSE-133",
+              "expected a record aggregate association after ','");
+          break;
+        }
+        append_association(parse_expression());
+      }
       expect(TokenKind::RightParen, "')' after expression",
              "FSIM-VHDL-PARSE-034");
-      expression.span = span_from(open, previous());
-      return expression;
+      aggregate.span = span_from(open, previous());
+      return aggregate;
     }
 
     const auto invalid = advance();

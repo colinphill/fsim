@@ -1711,6 +1711,46 @@ fetched Boost.Context 1.91.0 and Tcl 9.0.4, SystemC, the strict native ABI,
 and all preceding feature batches. No CI state was inspected for this local
 gate.
 
+### Thirty-ninth feature batch — VHDL record aggregate literals
+
+The planned ten implementation features are:
+
+1. Add an explicit aggregate expression kind to typed HIR with source-ordered
+   association values and retained positional/named/`others` choices.
+2. Parse parenthesized VHDL positional and named record aggregates without
+   changing ordinary parenthesized expressions or call/index ambiguity.
+3. Canonicalize named element choices and diagnose malformed association
+   order, duplicate `others`, and nonfinal `others` with stable codes.
+4. Contextually type record aggregates from whole signal/local assignment and
+   process-variable initializer targets.
+5. Map positional associations by declaration order and named associations by
+   case-insensitive element name, independent of source association order.
+6. Expand a final `others` association over every unassigned member and reject
+   duplicate, unknown, missing, or multiply assigned elements.
+7. Enforce each member's exact width and 2-/4-/9-state assignment domain while
+   composing the flattened result through typed SimIR inserts.
+8. Contextually type aggregate operands of whole-record equality/inequality
+   and propagate record context through conditional assignment alternatives.
+9. Preserve aggregate-built Logic9 values through interpreter and LLVM O0/O2,
+   debugger locals, committed VCD changes, and cold/warm native caching.
+10. Add focused positive/negative/parser/elaboration/runtime evidence, update
+    V1-VH-04/V1-VH-05 documentation, then run and push the full local
+    regression gate.
+
+All ten implementation features are complete in the checkpoint 39 worktree.
+Typed HIR now distinguishes aggregates from grouping and retains a
+source-ordered choice alongside every operand. The VHDL parser accepts
+positional, case-insensitive named, and final `others` associations with
+targeted recovery diagnostics. Elaboration obtains the bounded record type
+from variable initializers, whole signal/local assignments, record
+equality/inequality, and conditional alternatives, maps associations onto the
+declaration-order flattened layout, and composes an exact typed value through
+SimIR `Insert` operations. Missing, duplicate, excessive, unknown,
+wrong-width, and lossy two-state associations are rejected. The focused
+application differential proves exact Logic9 values, persistent debugger
+locals, VCD mapping, LLVM O0/O2 behavior, cold/warm native cache reuse, and
+transitive package-edit invalidation against the interpreter.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

@@ -203,6 +203,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-129` | error | Expected `;` after a VHDL record element declaration. |
 | `FSIM-VHDL-PARSE-130` | error | A bounded VHDL record declaration has no supported elements. |
 | `FSIM-VHDL-PARSE-131` | error | A VHDL record declaration has a malformed `end record` clause. |
+| `FSIM-VHDL-PARSE-132` | error | A bounded record-aggregate choice is not an element name or `others`. |
+| `FSIM-VHDL-PARSE-133` | error | A record aggregate association has no value or a trailing comma has no following association. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -238,6 +240,8 @@ therefore excluded.
 | `FSIM-VHDL-SEM-035` | error | A VHDL record declares the same case-insensitive element name more than once. |
 | `FSIM-VHDL-SEM-036` | error | A VHDL design unit declares the same bounded type name more than once. |
 | `FSIM-VHDL-SEM-037` | error | A VHDL record's optional end name does not match its declaration name. |
+| `FSIM-VHDL-SEM-038` | error | A positional record-aggregate association follows a named association. |
+| `FSIM-VHDL-SEM-039` | error | A record aggregate contains multiple `others` associations or does not place `others` last. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -676,6 +680,13 @@ therefore excluded.
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |
 | `FSIM-ELAB-VHTYPE-004` | error | A selected VHDL package type name is malformed or does not exist. |
+| `FSIM-ELAB-VHAGG-001` | error | A VHDL record aggregate appears without a contextual bounded record target type. |
+| `FSIM-ELAB-VHAGG-002` | error | A contextual record layout or aggregate-association HIR payload is internally inconsistent. |
+| `FSIM-ELAB-VHAGG-003` | error | A named aggregate association does not name an element of the contextual record type. |
+| `FSIM-ELAB-VHAGG-004` | error | A record aggregate assigns an element more than once, has too many positional associations, or repeats `others`. |
+| `FSIM-ELAB-VHAGG-005` | error | A record aggregate omits an element without supplying `others`. |
+| `FSIM-ELAB-VHAGG-006` | error | A record aggregate element value does not have the element's exact packed width. |
+| `FSIM-ELAB-VHAGG-007` | error | A record aggregate would implicitly lose four- or nine-state information in a two-state element. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |

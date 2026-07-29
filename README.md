@@ -41,7 +41,9 @@ The current tree contains:
   case-insensitive scalar/packed logic, bit, and Boolean elements;
   use-clause or selected-name visibility; reusable same-language entity ports;
   declaration-order flattened layouts; exact element defaults; whole-record
-  copies/equality; constant member/index/slice reads and writes;
+  copies/equality; contextually typed positional, named, and final-`others`
+  aggregate literals in initializers, assignments, comparisons, and
+  conditional alternatives; constant member/index/slice reads and writes;
   debugger-local visibility; and interpreter/LLVM O0/O2, transitive cache,
   and VCD equivalence;
 - bounded SystemVerilog packages with immutable integral

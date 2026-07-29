@@ -1022,6 +1022,124 @@ end architecture;
               == "packet_t",
       "package record references retain bare and selected names for semantics");
 
+  const auto aggregates = parse_text(
+      "record_aggregates.vhd",
+      R"(
+entity record_aggregates is
+end entity;
+
+architecture rtl of record_aggregates is
+  type Packet_T is record
+    Data : std_logic_vector(3 downto 0);
+    Valid : boolean;
+  end record Packet_T;
+  signal Result : packet_t;
+  signal Grouped : boolean;
+begin
+  aggregate_forms : process
+    variable Named_Value : packet_t :=
+      (Valid => true, Data => "ULH-");
+    variable Positional_Value : packet_t :=
+      ("10Z-", false);
+  begin
+    named_value := (Data => "01LH", others => false);
+    positional_value := ("ZZZZ", true);
+    result <= (Data => "1010", Valid => true);
+    grouped <= (true);
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      aggregates.ok(),
+      "VHDL positional, named, and others record aggregates must parse");
+  const auto& aggregate_process =
+      aggregates.design.units.back().processes.front();
+  require(
+      aggregate_process.variables.size() == 2
+          && aggregate_process.variables[0].initializer
+          && aggregate_process.variables[1].initializer,
+      "record aggregate variable initializers are retained");
+  const auto& named_initializer =
+      *aggregate_process.variables[0].initializer;
+  const auto& positional_initializer =
+      *aggregate_process.variables[1].initializer;
+  require(
+      named_initializer.kind == ExpressionKind::Aggregate
+          && named_initializer.operands.size() == 2
+          && named_initializer.aggregate_choices
+              == std::vector<std::string>({"valid", "data"})
+          && named_initializer.operands[0].kind
+              == ExpressionKind::BooleanLiteral
+          && named_initializer.operands[1].kind
+              == ExpressionKind::StringLiteral,
+      "named record aggregate associations preserve canonical choices and "
+      "source order");
+  require(
+      positional_initializer.kind == ExpressionKind::Aggregate
+          && positional_initializer.operands.size() == 2
+          && positional_initializer.aggregate_choices
+              == std::vector<std::string>({"", ""}),
+      "positional record aggregate associations remain distinct from named "
+      "choices");
+  const auto& aggregate_statements = aggregate_process.statements;
+  require(
+      aggregate_statements.size() == 5
+          && aggregate_statements[0].value.kind
+              == ExpressionKind::Aggregate
+          && aggregate_statements[0].value.aggregate_choices
+              == std::vector<std::string>({"data", "others"})
+          && aggregate_statements[1].value.kind
+              == ExpressionKind::Aggregate
+          && aggregate_statements[2].value.kind
+              == ExpressionKind::Aggregate
+          && aggregate_statements[3].value.kind
+              == ExpressionKind::BooleanLiteral,
+      "aggregate assignments retain choices while single parentheses remain "
+      "ordinary grouping");
+
+  const auto invalid_aggregates = parse_text(
+      "invalid_record_aggregates.vhd",
+      R"(
+entity invalid_record_aggregates is
+end entity;
+architecture rtl of invalid_record_aggregates is
+  type Packet_T is record
+    Data : bit_vector(1 downto 0);
+    Valid : boolean;
+  end record Packet_T;
+  signal Result : packet_t;
+begin
+  invalid_forms : process
+  begin
+    result <= (Data => "00", false);
+    result <= (others => false, Data => "00");
+    result <= (others => false, others => true);
+    result <= (true => false, Data => "00");
+    result <= (Data => , Valid => true);
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_aggregate_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            invalid_aggregates.diagnostics,
+            [&](const auto& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      !invalid_aggregates.ok()
+          && has_aggregate_code("FSIM-VHDL-PARSE-132")
+          && has_aggregate_code("FSIM-VHDL-PARSE-133")
+          && has_aggregate_code("FSIM-VHDL-SEM-038")
+          && has_aggregate_code("FSIM-VHDL-SEM-039"),
+      "record aggregate association syntax failures have stable targeted "
+      "diagnostics");
+
   const auto invalid = parse_text(
       "invalid_records.vhd",
       R"(

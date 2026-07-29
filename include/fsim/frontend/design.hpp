@@ -59,6 +59,7 @@ enum class ExpressionKind {
   Call,
   Index,
   Slice,
+  Aggregate,
   Concatenation,
   Replication,
 };
@@ -71,6 +72,10 @@ struct Expression {
   std::string text;
   std::vector<Expression> operands;
   SourceSpan span;
+  // VHDL aggregate choices parallel operands. Empty denotes a positional
+  // association; otherwise the canonical element name or `others` is
+  // retained. Non-aggregate expressions leave this vector empty.
+  std::vector<std::string> aggregate_choices{};
 
   [[nodiscard]] bool valid() const noexcept {
     return kind != ExpressionKind::Invalid;

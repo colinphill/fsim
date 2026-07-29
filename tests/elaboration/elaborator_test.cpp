@@ -9462,6 +9462,218 @@ end architecture;
             .to_msb_string()
         == "0");
 
+    const auto vhdl_record_aggregate_source =
+        fsim::frontend::parse_text(
+            "record_aggregate_execution.vhd",
+            R"(
+entity record_aggregate_execution is
+end entity;
+
+architecture rtl of record_aggregate_execution is
+  type Packet_T is record
+    Data : std_logic_vector(3 downto 0);
+    Valid : boolean;
+  end record Packet_T;
+  signal source : Packet_T;
+  signal result : Packet_T;
+  signal conditional_result : Packet_T;
+  signal equal_result : boolean;
+  signal different_result : boolean;
+begin
+  drive_source : process
+    variable local : Packet_T :=
+      (Valid => true, Data => "ULH-");
+  begin
+    local := ("10Z-", false);
+    source <= local;
+    wait;
+  end process;
+
+  result <= (Data => "ULH-", others => true);
+  conditional_result <=
+    (Data => "01LH", Valid => true) when true else
+    ("0000", false);
+  equal_result <=
+    result = (Valid => true, Data => "ULH-");
+  different_result <=
+    (Data => "ULH-", Valid => true) /= source;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_record_aggregate_source.ok());
+    const auto vhdl_record_aggregate_design =
+        fsim::elaboration::elaborate(
+            vhdl_record_aggregate_source.design,
+            "vhdl:work.record_aggregate_execution(rtl)");
+    if (!vhdl_record_aggregate_design.ok()) {
+        for (const auto& diagnostic :
+             vhdl_record_aggregate_design.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << " at "
+                      << diagnostic.span.begin.line << ":"
+                      << diagnostic.span.begin.column << '\n';
+        }
+    }
+    assert(vhdl_record_aggregate_design.ok());
+    const auto aggregate_source_signal =
+        vhdl_record_aggregate_design.design->find_signal("source");
+    const auto aggregate_result_signal =
+        vhdl_record_aggregate_design.design->find_signal("result");
+    const auto aggregate_conditional_signal =
+        vhdl_record_aggregate_design.design->find_signal(
+            "conditional_result");
+    const auto aggregate_equal_signal =
+        vhdl_record_aggregate_design.design->find_signal(
+            "equal_result");
+    const auto aggregate_different_signal =
+        vhdl_record_aggregate_design.design->find_signal(
+            "different_result");
+    assert(
+        aggregate_source_signal
+        && aggregate_result_signal
+        && aggregate_conditional_signal
+        && aggregate_equal_signal
+        && aggregate_different_signal);
+    std::size_t aggregate_insert_count = 0;
+    for (const auto& process :
+         vhdl_record_aggregate_design.design->processes()) {
+        aggregate_insert_count += static_cast<std::size_t>(
+            std::count_if(
+                process.operations.begin(),
+                process.operations.end(),
+                [](const auto& operation) {
+                    return std::holds_alternative<
+                        fsim::runtime::simir::Insert>(operation);
+                }));
+    }
+    assert(aggregate_insert_count == 14);
+    auto aggregate_interpreter =
+        vhdl_record_aggregate_design.design->create_interpreter();
+    assert(
+        aggregate_interpreter
+            ->signal_value(*aggregate_source_signal)
+            .to_msb_string()
+        == "UUUU0");
+    const auto aggregate_run = aggregate_interpreter->run();
+    assert(
+        aggregate_run.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        aggregate_interpreter
+            ->signal_value(*aggregate_source_signal)
+            .to_msb_string()
+        == "10Z-0");
+    assert(
+        aggregate_interpreter
+            ->signal_value(*aggregate_result_signal)
+            .to_msb_string()
+        == "ULH-1");
+    assert(
+        aggregate_interpreter
+            ->signal_value(*aggregate_conditional_signal)
+            .to_msb_string()
+        == "01LH1");
+    assert(
+        aggregate_interpreter
+            ->signal_value(*aggregate_equal_signal)
+            .to_msb_string()
+        == "1");
+    assert(
+        aggregate_interpreter
+            ->signal_value(*aggregate_different_signal)
+            .to_msb_string()
+        == "1");
+
+    const auto invalid_vhdl_record_aggregates =
+        fsim::frontend::parse_text(
+            "invalid_record_aggregate_execution.vhd",
+            R"(
+entity invalid_record_aggregate_execution is
+end entity;
+
+architecture rtl of invalid_record_aggregate_execution is
+  type Packet_T is record
+    Data : std_logic_vector(3 downto 0);
+    Valid : boolean;
+  end record Packet_T;
+  signal result : Packet_T;
+  signal flag : boolean;
+begin
+  invalid_forms : process
+  begin
+    flag <= (true, false);
+    result <=
+      (Unknown => "0000", Data => "0000", Valid => true);
+    result <=
+      (Data => "0000", DATA => "1111", Valid => true);
+    result <= ("0000", true, false);
+    result <= (Data => "0000");
+    result <= (Data => "00", Valid => true);
+    result <= (Data => "0000", Valid => 'X');
+    wait;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_record_aggregates.ok());
+    const auto invalid_aggregate_design =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_record_aggregates.design,
+            "vhdl:work.invalid_record_aggregate_execution(rtl)");
+    const auto has_aggregate_diagnostic =
+        [&](const std::string_view code) {
+            return std::ranges::any_of(
+                invalid_aggregate_design.diagnostics,
+                [&](const auto& diagnostic) {
+                    return diagnostic.code == code;
+                });
+        };
+    assert(
+        !invalid_aggregate_design.ok()
+        && has_aggregate_diagnostic("FSIM-ELAB-VHAGG-001")
+        && has_aggregate_diagnostic("FSIM-ELAB-VHAGG-003")
+        && has_aggregate_diagnostic("FSIM-ELAB-VHAGG-004")
+        && has_aggregate_diagnostic("FSIM-ELAB-VHAGG-005")
+        && has_aggregate_diagnostic("FSIM-ELAB-VHAGG-006")
+        && has_aggregate_diagnostic("FSIM-ELAB-VHAGG-007"));
+
+    auto malformed_aggregate_source =
+        fsim::frontend::parse_text(
+            "malformed_record_aggregate_metadata.vhd",
+            R"(
+entity malformed_record_aggregate_metadata is
+end entity;
+architecture rtl of malformed_record_aggregate_metadata is
+  type Pair_T is record
+    Left, Right : bit;
+  end record Pair_T;
+  signal value : Pair_T;
+begin
+  value <= ('0', '1');
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(malformed_aggregate_source.ok());
+    auto& malformed_expression =
+        malformed_aggregate_source.design.units.back()
+            .concurrent_statements.front().value;
+    assert(
+        malformed_expression.kind
+        == fsim::frontend::ExpressionKind::Aggregate);
+    malformed_expression.aggregate_choices.pop_back();
+    const auto malformed_aggregate_design =
+        fsim::elaboration::elaborate(
+            malformed_aggregate_source.design,
+            "vhdl:work.malformed_record_aggregate_metadata(rtl)");
+    assert(
+        !malformed_aggregate_design.ok()
+        && std::ranges::any_of(
+            malformed_aggregate_design.diagnostics,
+            [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-ELAB-VHAGG-002";
+            }));
+
     const auto package_record_source =
         fsim::frontend::parse_text(
             "package_record_hierarchy.vhd",
