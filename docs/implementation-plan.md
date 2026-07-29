@@ -1273,7 +1273,8 @@ advances to v15. After correcting one stale elaboration negative-test
 assumption exposed by the first run, the exact LLVM 22.1.8 warnings-as-errors
 Release regression passed all 30 tests in 72.63 seconds on 2026-07-28,
 including Boost.Context fibers, fetched Tcl 9.0.4, and the fetched-Tcl
-relocation test. No CI state was inspected for this local gate.
+relocation test. The batch ends at feature commit `81191ab`; no CI state was
+inspected for this local gate.
 
 ## v1 release condition
 
