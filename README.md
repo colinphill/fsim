@@ -37,6 +37,11 @@ The current tree contains:
 - bounded VHDL context declarations/references with recursive reusable
   library/use visibility, cycle diagnostics, and transitive context-source
   cache provenance;
+- architecture-local, non-nested VHDL record types with case-insensitive
+  scalar/packed logic, bit, and Boolean elements; declaration-order flattened
+  layouts; exact element defaults; whole-record copies/equality; constant
+  member/index/slice reads and writes; debugger-local visibility; and
+  interpreter/LLVM O0/O2, cache, and VCD equivalence;
 - bounded SystemVerilog packages with immutable integral
   parameters/localparams, packed integral typedef aliases, and packed enum
   types/enumerators plus non-nested packed struct and equal-width packed union

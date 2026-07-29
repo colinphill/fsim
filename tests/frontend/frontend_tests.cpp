@@ -880,6 +880,121 @@ end architecture;
       "VHDL generic diagnostics are stable and targeted");
 }
 
+void test_vhdl_record_types() {
+  const auto parsed = parse_text(
+      "record_types.vhd",
+      R"(
+entity record_types is
+end entity;
+
+architecture rtl of record_types is
+  type Packet_T is record
+    Data, Shadow : std_logic_vector(7 downto 0);
+    Valid : boolean;
+    Parity : bit;
+  end record packet_t;
+  signal source, result : PACKET_T;
+begin
+  copy_fields : process
+    variable Local_Value : packet_t;
+  begin
+    local_value.data := source.DATA;
+    local_value.shadow(3 downto 0) :=
+      source.shadow(7 downto 4);
+    result.data <= local_value.data;
+    result.valid <= local_value.valid;
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "bounded VHDL record declarations must parse");
+  require(
+      parsed.design.units.size() == 2,
+      "record fixture has an entity and architecture");
+  const auto& architecture = parsed.design.units.back();
+  require(
+      architecture.type_aliases.size() == 1,
+      "architecture retains its record type declaration");
+  const auto& alias = architecture.type_aliases.front();
+  require(
+      alias.name == "packet_t"
+          && alias.type.packed_aggregate
+              == PackedAggregateKind::Struct
+          && alias.type.domain == ValueDomain::Logic9
+          && alias.type.width() == 18
+          && alias.type.packed_members.size() == 4,
+      "record type retains flattened width, domain, and elements");
+  require(
+      alias.type.packed_members[0].name == "data"
+          && alias.type.packed_members[0].lsb_offset == 10
+          && alias.type.packed_members[1].name == "shadow"
+          && alias.type.packed_members[1].lsb_offset == 2
+          && alias.type.packed_members[2].name == "valid"
+          && alias.type.packed_members[2].lsb_offset == 1
+          && alias.type.packed_members[3].name == "parity"
+          && alias.type.packed_members[3].lsb_offset == 0,
+      "record elements use declaration-order flattened offsets");
+  require(
+      architecture.signals.size() == 2
+          && architecture.signals[0].type.named_type == "packet_t"
+          && architecture.processes.size() == 1
+          && architecture.processes.front().variables.size() == 1
+          && architecture.processes.front()
+                 .variables.front().type.named_type
+              == "packet_t",
+      "record-typed signals and variables retain the local named type");
+  const auto& statements =
+      architecture.processes.front().statements;
+  require(
+      statements.size() == 5
+          && statements[0].target.text == "local_value.data"
+          && statements[0].value.text == "source.data"
+          && statements[1].target.kind == ExpressionKind::Slice
+          && statements[1].target.operands.front().text
+              == "local_value.shadow"
+          && statements[1].value.kind == ExpressionKind::Slice
+          && statements[1].value.operands.front().text
+              == "source.shadow"
+          && statements[2].target.text == "result.data"
+          && statements[3].target.text == "result.valid",
+      "record element selections are canonical in reads and writes");
+
+  const auto invalid = parse_text(
+      "invalid_records.vhd",
+      R"(
+entity invalid_records is
+end entity;
+architecture rtl of invalid_records is
+  type empty_t is record
+  end record empty_t;
+  type duplicate_t is record
+    Item, ITEM : bit;
+  end record wrong_name;
+  type duplicate_t is record
+    nested : empty_t;
+  end record duplicate_t;
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const auto& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      has_code("FSIM-VHDL-PARSE-130")
+          && has_code("FSIM-VHDL-SEM-035")
+          && has_code("FSIM-VHDL-SEM-036")
+          && has_code("FSIM-VHDL-SEM-037")
+          && has_code("FSIM-VHDL-UNSUPPORTED-026"),
+      "record declaration failures have targeted stable diagnostics");
+}
+
 void test_vhdl_select_and_concatenation_expressions() {
   const auto result = parse_text(
       "select_concat.vhd",
@@ -7079,6 +7194,7 @@ int main() {
     test_vhdl_falling_edge_guard();
     test_vhdl_instance_diagnostics();
     test_vhdl_generics();
+    test_vhdl_record_types();
     test_vhdl_select_and_concatenation_expressions();
     test_signed_type_and_expression_nodes();
     test_vhdl_runtime_integer_nodes();

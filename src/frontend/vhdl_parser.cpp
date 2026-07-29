@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -620,12 +621,18 @@ class VhdlParser final : private detail::ParserBase {
           false};
     }
     if (type.domain == ValueDomain::Unknown) {
-      error(
-          first,
-          "FSIM-VHDL-UNSUPPORTED-013",
-          "subtype '" + spelling
-              + "' requires semantic type resolution that is not "
-                "implemented in this frontend slice");
+      if (vhdl_named_types_.contains(spelling)) {
+        type.named_type = spelling;
+        type.named_type_span =
+            cover(first.span, previous().span);
+      } else {
+        error(
+            first,
+            "FSIM-VHDL-UNSUPPORTED-013",
+            "subtype '" + spelling
+                + "' requires semantic type resolution that is not "
+                  "implemented in this frontend slice");
+      }
     } else if (
         type.domain == ValueDomain::Integer && !allow_integer) {
       error(
@@ -709,6 +716,7 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   DesignUnit parse_architecture(const Token& start) {
+    vhdl_named_types_.clear();
     DesignUnit unit;
     unit.kind = UnitKind::VhdlArchitecture;
     unit.language = Language::Vhdl2008;
@@ -722,6 +730,8 @@ class VhdlParser final : private detail::ParserBase {
     while (!at_end() && !keyword("begin", 0, true)) {
       if (match_keyword("signal", true)) {
         parse_signal_declaration(unit.signals);
+      } else if (match_keyword("type", true)) {
+        parse_record_type_declaration(unit, previous());
       } else {
         const auto declaration = advance();
         error(declaration, "FSIM-VHDL-UNSUPPORTED-004",
@@ -738,6 +748,167 @@ class VhdlParser final : private detail::ParserBase {
     parse_vhdl_end("architecture");
     unit.span = span_from(start, previous());
     return unit;
+  }
+
+  void parse_record_type_declaration(
+      DesignUnit& unit, const Token& start) {
+    const auto name = expect_identifier("record type name");
+    const auto canonical_name = vhdl_name(name.text);
+    if (vhdl_named_types_.contains(canonical_name)
+        || std::any_of(
+            unit.type_aliases.begin(),
+            unit.type_aliases.end(),
+            [&](const TypeAliasDeclaration& declaration) {
+              return declaration.name == canonical_name;
+            })) {
+      error(
+          name,
+          "FSIM-VHDL-SEM-036",
+          "duplicate type declaration '" + canonical_name + "'");
+    }
+    expect_keyword(
+        "is", true, "FSIM-VHDL-PARSE-127");
+    if (!match_keyword("record", true)) {
+      error(
+          current(),
+          "FSIM-VHDL-UNSUPPORTED-026",
+          "bounded VHDL type declarations require a record definition");
+      skip_to_semicolon();
+      return;
+    }
+
+    Type type;
+    type.spelling = canonical_name;
+    type.domain = ValueDomain::Bit2;
+    type.packed_aggregate = PackedAggregateKind::Struct;
+    std::unordered_set<std::string> member_names;
+    while (!at_end()
+           && !(keyword("end", 0, true)
+                && keyword("record", 1, true))) {
+      const auto member_start = current();
+      std::vector<Token> names;
+      names.push_back(
+          expect_identifier("record element name"));
+      while (match(TokenKind::Comma)) {
+        names.push_back(
+            expect_identifier("record element name"));
+      }
+      expect(
+          TokenKind::Colon,
+          "':' after record element names",
+          "FSIM-VHDL-PARSE-128");
+      const auto member_type = parse_vhdl_type(true, true);
+      const bool supported =
+          member_type.named_type.empty()
+          && member_type.domain != ValueDomain::Unknown
+          && member_type.domain != ValueDomain::Integer;
+      if (!supported) {
+        error(
+            member_start,
+            "FSIM-VHDL-UNSUPPORTED-026",
+            "bounded VHDL record elements require scalar or statically "
+            "ranged bit, bit_vector, Boolean, std_logic, "
+            "std_ulogic, std_logic_vector, std_ulogic_vector, signed, "
+            "or unsigned types; nested records are not implemented");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after record element declaration",
+          "FSIM-VHDL-PARSE-129");
+      for (const auto& member_name : names) {
+        const auto canonical_member =
+            vhdl_name(member_name.text);
+        if (!member_names.insert(canonical_member).second) {
+          error(
+              member_name,
+              "FSIM-VHDL-SEM-035",
+              "duplicate record element '" + canonical_member + "'");
+          continue;
+        }
+        if (!supported) {
+          continue;
+        }
+        type.packed_members.push_back(PackedMember{
+            canonical_member,
+            member_type.domain,
+            member_type.spelling,
+            member_type.packed_range,
+            member_type.is_signed,
+            member_type.packed_range_expression,
+            0,
+            cover(member_start.span, previous().span)});
+        if (member_type.domain == ValueDomain::Logic9) {
+          type.domain = ValueDomain::Logic9;
+        } else if (
+            member_type.domain == ValueDomain::Logic4
+            && type.domain != ValueDomain::Logic9) {
+          type.domain = ValueDomain::Logic4;
+        }
+      }
+    }
+    if (type.packed_members.empty()) {
+      error(
+          name,
+          "FSIM-VHDL-PARSE-130",
+          "a bounded VHDL record type requires at least one supported "
+          "element");
+    }
+    expect_keyword(
+        "end", true, "FSIM-VHDL-PARSE-131");
+    expect_keyword(
+        "record", true, "FSIM-VHDL-PARSE-131");
+    if (at(TokenKind::Identifier)) {
+      const auto end_name = advance();
+      if (vhdl_name(end_name.text) != canonical_name) {
+        error(
+            end_name,
+            "FSIM-VHDL-SEM-037",
+            "record end name '" + vhdl_name(end_name.text)
+                + "' does not match type name '" + canonical_name + "'");
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after record type declaration",
+        "FSIM-VHDL-PARSE-131");
+
+    std::uint64_t total_width = 0;
+    bool concrete = !type.packed_members.empty();
+    for (const auto& member : type.packed_members) {
+      const auto width = member.width();
+      if (!width || *width == 0
+          || *width
+              > std::numeric_limits<std::uint64_t>::max()
+                    - total_width) {
+        concrete = false;
+        break;
+      }
+      total_width += *width;
+    }
+    if (concrete
+        && total_width != 0
+        && total_width - 1U
+            <= static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max())) {
+      auto offset = total_width;
+      for (auto& member : type.packed_members) {
+        offset -= *member.width();
+        member.lsb_offset = offset;
+      }
+      type.packed_range = PackedRange{
+          static_cast<std::int64_t>(total_width - 1U),
+          0,
+          true};
+    }
+
+    if (!vhdl_named_types_.contains(canonical_name)) {
+      vhdl_named_types_.insert(canonical_name);
+      unit.type_aliases.push_back(TypeAliasDeclaration{
+          canonical_name,
+          std::move(type),
+          span_from(start, previous()),
+          {}});
+    }
   }
 
   void parse_signal_declaration(
@@ -2333,6 +2504,13 @@ class VhdlParser final : private detail::ParserBase {
     const auto name = expect_identifier("assignment target");
     Expression expression{ExpressionKind::Identifier, vhdl_name(name.text),
                           {}, name.span};
+    while (match(TokenKind::Dot)) {
+      expression.text += '.';
+      expression.text += vhdl_name(
+          expect_identifier("selected record element").text);
+      expression.span = cover(
+          expression.span, previous().span);
+    }
     while (match(TokenKind::LeftParen)) {
       const auto open = previous();
       Expression first = parse_expression();
@@ -2596,6 +2774,7 @@ class VhdlParser final : private detail::ParserBase {
   }
 
   std::size_t sequential_loop_depth_{};
+  std::unordered_set<std::string> vhdl_named_types_;
   std::vector<std::string> sequential_loop_labels_;
   std::vector<std::string> sequential_loop_labels_seen_;
 };

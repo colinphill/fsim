@@ -1611,6 +1611,36 @@ tests, exact locals, resolution, shifts, projected waveforms, mixed-language
 boundaries, VCD, fetched Boost.Context 1.91.0, fetched Tcl 9.0.4, SystemC, and
 all preceding feature batches. No CI state was inspected for this local gate.
 
+### Thirty-seventh feature batch — bounded VHDL record execution
+
+The planned ten implementation features are:
+
+1. Parse architecture-local VHDL `type NAME is record ... end record`
+   declarations with retained declaration/member source spans.
+2. Support comma-grouped, case-insensitive record element names with stable
+   diagnostics for empty records, duplicates, malformed terminators, and
+   mismatched optional end names.
+3. Admit bounded scalar and statically ranged packed logic/bit/Boolean record
+   elements, compute deterministic declaration-order flattened layouts, and
+   preserve the strongest element value domain.
+4. Resolve local named record types after parsing, with targeted unknown-type,
+   duplicate-type, unsupported nested-record, and cyclic-alias diagnostics.
+5. Execute record-typed architecture signals and process variables with exact
+   VHDL default initialization and persistent debugger-visible local frames.
+6. Parse and execute case-insensitive selected record-element reads and
+   signal/variable writes.
+7. Compose constant bit and slice selection after a record-element selection
+   for both reads and writes, retaining declared element direction.
+8. Execute width/type-compatible whole-record copies plus exact equality and
+   inequality through typed common SimIR without permitting record values
+   across mixed-language boundaries.
+9. Preserve Logic9 record elements through interpreter and LLVM O0/O2
+   execution, native-object caching, committed-change VCD, and debug-local
+   reads.
+10. Add focused positive, negative, elaboration, interpreter/LLVM/cache/VCD
+    evidence, update V1-VH-04 documentation, then run and push the full local
+    regression gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

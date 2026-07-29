@@ -9358,6 +9358,110 @@ endmodule
     assert(
         monitor_controls == std::vector<bool>({false, true}));
 
+    const auto vhdl_record_source =
+        fsim::frontend::parse_text(
+            "record_execution.vhd",
+            R"(
+entity record_execution is
+end entity;
+
+architecture rtl of record_execution is
+  type Packet_T is record
+    Upper : std_logic_vector(3 downto 0);
+    Lower : bit_vector(0 to 3);
+    Flag  : boolean;
+  end record Packet_T;
+  signal source : Packet_T;
+  signal result : Packet_T;
+  signal equal_result : boolean;
+begin
+  drive_source : process
+  begin
+    source.Upper <= "ULH-";
+    source.Lower <= "1010";
+    source.Flag <= true;
+    wait;
+  end process;
+
+  copy_record : process(source)
+    variable local : Packet_T;
+  begin
+    local := source;
+    local.Upper(1 downto 0) := source.Upper(3 downto 2);
+    local.Lower(0) := source.Lower(3);
+    result <= local;
+  end process;
+
+  equal_result <= result = source;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_record_source.ok());
+    const auto vhdl_record_design =
+        fsim::elaboration::elaborate(
+            vhdl_record_source.design,
+            "vhdl:work.record_execution(rtl)");
+    if (!vhdl_record_design.ok()) {
+        for (const auto& diagnostic :
+             vhdl_record_design.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << " at "
+                      << diagnostic.span.begin.line << ":"
+                      << diagnostic.span.begin.column << '\n';
+        }
+    }
+    assert(vhdl_record_design.ok());
+    const auto record_source_signal =
+        vhdl_record_design.design->find_signal("source");
+    const auto record_result_signal =
+        vhdl_record_design.design->find_signal("result");
+    const auto record_equal_signal =
+        vhdl_record_design.design->find_signal("equal_result");
+    assert(
+        record_source_signal && record_result_signal
+        && record_equal_signal);
+    const auto& record_source_info =
+        vhdl_record_design.design->signals().at(
+            *record_source_signal);
+    assert(
+        record_source_info.width == 9
+        && record_source_info.source_domain
+            == fsim::frontend::ValueDomain::Logic9
+        && record_source_info.packed_members.size() == 3
+        && record_source_info.packed_members[0].name == "upper"
+        && record_source_info.packed_members[0].lsb_offset == 5
+        && record_source_info.packed_members[1].name == "lower"
+        && record_source_info.packed_members[1].lsb_offset == 1
+        && record_source_info.packed_members[2].name == "flag"
+        && record_source_info.packed_members[2].lsb_offset == 0);
+    auto vhdl_record_interpreter =
+        vhdl_record_design.design->create_interpreter();
+    assert(
+        vhdl_record_interpreter
+            ->signal_value(*record_source_signal)
+            .to_msb_string()
+        == "UUUU00000");
+    const auto vhdl_record_result =
+        vhdl_record_interpreter->run();
+    assert(
+        vhdl_record_result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        vhdl_record_interpreter
+            ->signal_value(*record_source_signal)
+            .to_msb_string()
+        == "ULH-10101");
+    assert(
+        vhdl_record_interpreter
+            ->signal_value(*record_result_signal)
+            .to_msb_string()
+        == "ULUL00101");
+    assert(
+        vhdl_record_interpreter
+            ->signal_value(*record_equal_signal)
+            .to_msb_string()
+        == "0");
+
     const auto invalid_monitor_source =
         fsim::frontend::parse_text(
             "invalid_monitor.sv",

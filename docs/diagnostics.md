@@ -198,6 +198,11 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-124` | error | A VHDL delay mechanism appears anywhere other than immediately after `<=`. |
 | `FSIM-VHDL-PARSE-125` | error | `unaffected` is mixed with other elements instead of forming a complete waveform alternative. |
 | `FSIM-VHDL-PARSE-126` | error | A VHDL waveform is empty or lacks a value. |
+| `FSIM-VHDL-PARSE-127` | error | Expected `is` in a VHDL record type declaration. |
+| `FSIM-VHDL-PARSE-128` | error | Expected `:` after VHDL record element names. |
+| `FSIM-VHDL-PARSE-129` | error | Expected `;` after a VHDL record element declaration. |
+| `FSIM-VHDL-PARSE-130` | error | A bounded VHDL record declaration has no supported elements. |
+| `FSIM-VHDL-PARSE-131` | error | A VHDL record declaration has a malformed `end record` clause. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -230,6 +235,9 @@ therefore excluded.
 | `FSIM-VHDL-SEM-032` | error | A VHDL rejection limit exceeds the first waveform-element delay. |
 | `FSIM-VHDL-SEM-033` | error | A VHDL `reject` clause is paired with the transport delay mechanism. |
 | `FSIM-VHDL-SEM-034` | error | VHDL waveform-element delays are not strictly ascending after exact project-time normalization. |
+| `FSIM-VHDL-SEM-035` | error | A VHDL record declares the same case-insensitive element name more than once. |
+| `FSIM-VHDL-SEM-036` | error | An architecture declares the same bounded VHDL type name more than once. |
+| `FSIM-VHDL-SEM-037` | error | A VHDL record's optional end name does not match its declaration name. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -252,6 +260,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
 | `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element requires guarded-signal driver disconnection, which is not executable yet. |
+| `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -664,6 +673,8 @@ therefore excluded.
 | `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
 | `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
+| `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the architecture where it is used. |
+| `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |

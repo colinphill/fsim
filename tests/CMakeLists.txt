@@ -442,6 +442,26 @@ if(TARGET fsim_application)
   )
 
   add_executable(
+    fsim_vhdl_record_application_tests
+    app/vhdl_record_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_vhdl_record_application_tests
+  )
+  target_link_libraries(
+    fsim_vhdl_record_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.vhdl_records
+    COMMAND fsim_vhdl_record_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vhdl_records
+    PROPERTIES LABELS "fast;vhdl;records;logic9"
+  )
+
+  add_executable(
     fsim_vhdl_projected_application_tests
     app/vhdl_projected_application_test.cpp
   )

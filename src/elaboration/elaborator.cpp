@@ -145,6 +145,53 @@ PackedLogic4 integer_value(const std::int64_t value) {
     return unsigned_value(bits, 32);
 }
 
+PackedLogic4 default_packed_value(
+    const frontend::Type& type,
+    const std::size_t width) {
+    auto result = PackedLogic4(
+        width,
+        is_two_state_domain(type.domain)
+            ? Logic4::zero
+            : Logic4::x);
+    if (type.domain == frontend::ValueDomain::Logic9) {
+        result.fill(runtime::Logic9::u);
+    }
+    if (type.domain == frontend::ValueDomain::Integer && width != 0) {
+        return integer_value(
+            type.integer_range
+                ? type.integer_range->left
+                : std::numeric_limits<std::int32_t>::min());
+    }
+    for (const auto& member : type.packed_members) {
+        const auto member_width = member.width();
+        if (!member_width
+            || member.lsb_offset > width
+            || *member_width > width - member.lsb_offset) {
+            continue;
+        }
+        for (std::uint64_t bit = 0; bit < *member_width; ++bit) {
+            const auto index =
+                static_cast<std::size_t>(member.lsb_offset + bit);
+            if (result.is_logic9()) {
+                result.set_logic9(
+                    index,
+                    member.domain == frontend::ValueDomain::Logic9
+                        ? runtime::Logic9::u
+                        : member.domain == frontend::ValueDomain::Logic4
+                            ? runtime::Logic9::x
+                            : runtime::Logic9::zero);
+            } else {
+                result.set(
+                    index,
+                    is_two_state_domain(member.domain)
+                        ? Logic4::zero
+                        : Logic4::x);
+            }
+        }
+    }
+    return result;
+}
+
 std::optional<LoweredLiteral> literal_value(
     const Expression& expression,
     const std::size_t expected_width,
@@ -3033,23 +3080,8 @@ private:
                     CopyRegister{local.register_id, *value});
                 continue;
             }
-            auto initial_value = PackedLogic4{
-                local.width,
-                is_two_state_domain(variable.type.domain)
-                    ? Logic4::zero
-                    : Logic4::x};
-            if (variable.type.domain
-                    == frontend::ValueDomain::Logic9) {
-                initial_value.fill(runtime::Logic9::u);
-            }
-            if (variable.type.domain
-                    == frontend::ValueDomain::Integer
-                && local.width != 0) {
-                initial_value = integer_value(
-                    variable.type.integer_range
-                        ? variable.type.integer_range->left
-                        : std::numeric_limits<std::int32_t>::min());
-            }
+            auto initial_value =
+                default_packed_value(variable.type, local.width);
             process_.operations.emplace_back(
                 LoadConstant{
                     local.register_id,
@@ -5190,7 +5222,8 @@ private:
             && expression.kind == ExpressionKind::Call
             && expression.operands.size() == 1
             && (locals_.contains(expression.text)
-                || signals_.contains(expression.text))) {
+                || signals_.contains(expression.text)
+                || packed_member_reference(expression.text))) {
             return lower_expression(
                 Expression{
                     ExpressionKind::Index,
@@ -6952,7 +6985,8 @@ private:
             && expression.kind == ExpressionKind::Call
             && expression.operands.size() == 1
             && (locals_.contains(expression.text)
-                || signals_.contains(expression.text))) {
+                || signals_.contains(expression.text)
+                || packed_member_reference(expression.text))) {
             return std::size_t{1};
         }
         if (expression.kind == ExpressionKind::Index
@@ -7382,7 +7416,8 @@ private:
             if (language_ == frontend::Language::Vhdl2008
                 && expression.operands.size() == 1
                 && (locals_.contains(expression.text)
-                    || signals_.contains(expression.text))) {
+                    || signals_.contains(expression.text)
+                    || packed_member_reference(expression.text))) {
                 return false;
             }
             if (expression.text == "?:"
@@ -7509,10 +7544,15 @@ private:
         } else if (
             language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
-            && expression.operands.size() == 1
-            && (signals_.contains(expression.text)
-                || locals_.contains(expression.text))) {
-            output.insert(expression.text);
+            && expression.operands.size() == 1) {
+            if (const auto selected =
+                    packed_member_reference(expression.text)) {
+                output.insert(selected->base);
+            } else if (
+                signals_.contains(expression.text)
+                || locals_.contains(expression.text)) {
+                output.insert(expression.text);
+            }
         }
         for (const auto& operand : expression.operands) {
             collect_identifiers(operand, output);
@@ -8250,6 +8290,18 @@ private:
         DesignUnit& unit,
         std::vector<const DesignUnit*>& import_stack) {
         auto identifiers = qualified_identifiers(unit);
+        std::unordered_set<std::string> local_objects;
+        for (const auto& port : unit.ports) {
+            local_objects.emplace(port.name);
+        }
+        for (const auto& signal : unit.signals) {
+            local_objects.emplace(signal.name);
+        }
+        for (const auto& process : unit.processes) {
+            for (const auto& variable : process.variables) {
+                local_objects.emplace(variable.name);
+            }
+        }
         std::vector<std::string> ordered;
         ordered.reserve(identifiers.size());
         for (const auto& [identifier, span] : identifiers) {
@@ -8267,6 +8319,13 @@ private:
             const auto& reference_span =
                 identifiers.at(identifier);
             const auto parts = selected_name_parts(identifier);
+            if (!parts.empty()
+                && local_objects.contains(parts.front())) {
+                // A selected record element has the same lexical shape as
+                // package.constant. Local object declarations take
+                // precedence in VHDL name resolution.
+                continue;
+            }
             if (parts.size() != 2 && parts.size() != 3) {
                 report(
                     "FSIM-ELAB-PKG-008",
@@ -8400,7 +8459,7 @@ private:
             effective_package, import_stack, type_environment);
         import_qualified_systemverilog_package_items(
             effective_package, import_stack, type_environment);
-        resolve_systemverilog_named_types(
+        resolve_named_types(
             effective_package, type_environment);
         auto specialized = specialize_unit(
             effective_package,
@@ -8726,9 +8785,10 @@ private:
         unit.parameters = std::move(imports);
     }
 
-    void resolve_systemverilog_named_types(
+    void resolve_named_types(
         DesignUnit& unit,
-        const SystemVerilogTypeEnvironment& imported_types) {
+        const SystemVerilogTypeEnvironment& imported_types,
+        const bool vhdl = false) {
         std::unordered_map<std::string, std::size_t> local_types;
         for (std::size_t index = 0;
              index < unit.type_aliases.size(); ++index) {
@@ -8748,8 +8808,13 @@ private:
             }
             if (states[index] == 1) {
                 report(
-                    "FSIM-ELAB-SVTYPE-003",
-                    "cyclic SystemVerilog typedef involving '"
+                    vhdl
+                        ? "FSIM-ELAB-VHTYPE-002"
+                        : "FSIM-ELAB-SVTYPE-003",
+                    std::string{
+                        vhdl
+                            ? "cyclic VHDL type declaration involving '"
+                            : "cyclic SystemVerilog typedef involving '"}
                         + unit.type_aliases[index].name + "'",
                     unit.type_aliases[index].span);
                 return false;
@@ -8780,9 +8845,14 @@ private:
             const auto imported = imported_types.find(name);
             if (imported == imported_types.end()) {
                 report(
-                    "FSIM-ELAB-SVTYPE-001",
-                    "SystemVerilog type alias '" + name
-                        + "' is not visible in this unit",
+                    vhdl
+                        ? "FSIM-ELAB-VHTYPE-001"
+                        : "FSIM-ELAB-SVTYPE-001",
+                    std::string{
+                        vhdl
+                            ? "VHDL type '"
+                            : "SystemVerilog type alias '"}
+                        + name + "' is not visible in this unit",
                     use_span);
                 return false;
             }
@@ -8882,7 +8952,7 @@ private:
                 result, import_stack, type_environment);
             import_qualified_systemverilog_package_items(
                 result, import_stack, type_environment);
-            resolve_systemverilog_named_types(
+            resolve_named_types(
                 result, type_environment);
             return result;
         }
@@ -8890,6 +8960,8 @@ private:
             != frontend::UnitKind::VhdlArchitecture) {
             return result;
         }
+        resolve_named_types(
+            result, SystemVerilogTypeEnvironment{}, true);
         const auto* entity = find_vhdl_entity(parsed_, selected);
         if (entity == nullptr) {
             return result;
@@ -9181,17 +9253,13 @@ private:
         }
         auto initial_value =
             PackedLogic4(static_cast<std::size_t>(width), initial);
-        if (declaration.type.domain
-                == frontend::ValueDomain::Logic9) {
-            initial_value.fill(runtime::Logic9::u);
-        }
-        if (declaration.type.domain
-                == frontend::ValueDomain::Integer
-            && width != 0) {
-            initial_value = integer_value(
-                declaration.type.integer_range
-                    ? declaration.type.integer_range->left
-                    : std::numeric_limits<std::int32_t>::min());
+        if (!declaration.type.packed_members.empty()
+            || declaration.type.domain
+                == frontend::ValueDomain::Logic9
+            || declaration.type.domain
+                == frontend::ValueDomain::Integer) {
+            initial_value = default_packed_value(
+                declaration.type, static_cast<std::size_t>(width));
         }
         design_.signals_.push_back(
             {
