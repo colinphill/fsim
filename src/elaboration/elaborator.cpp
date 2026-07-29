@@ -148,6 +148,13 @@ PackedLogic4 integer_value(const std::int64_t value) {
 PackedLogic4 default_packed_value(
     const frontend::Type& type,
     const std::size_t width) {
+    if (!type.enumeration_literals.empty()
+        && type.enumeration_range) {
+        return unsigned_value(
+            static_cast<std::uint64_t>(
+                type.enumeration_range->left),
+            width);
+    }
     auto result = PackedLogic4(
         width,
         is_two_state_domain(type.domain)
@@ -340,6 +347,47 @@ evaluate_vhdl_enumeration_attribute(
         error = "enumeration attribute prefix has no representable range";
         return std::nullopt;
     }
+    auto range =
+        type->enumeration_range.value_or(
+            frontend::EnumerationRange{
+                0,
+                static_cast<std::int64_t>(count - 1U),
+                false});
+    if (type->enumeration_range_expression) {
+        const auto evaluate_bound =
+            [&](const Expression& bound)
+                -> std::optional<std::int64_t> {
+              if (const auto ordinal =
+                      vhdl_enumeration_ordinal(
+                          bound, *type)) {
+                  return ordinal;
+              }
+              if (bound.kind == ExpressionKind::Identifier) {
+                  if (const auto found =
+                          environment.find(bound.text);
+                      found != environment.end()) {
+                      return found->second;
+                  }
+              }
+              return std::nullopt;
+            };
+        const auto left = evaluate_bound(
+            type->enumeration_range_expression->left);
+        const auto right = evaluate_bound(
+            type->enumeration_range_expression->right);
+        if (!left || !right) {
+            error =
+                "enumeration attribute subtype bounds are not locally "
+                "static in this specialization";
+            return std::nullopt;
+        }
+        range = frontend::EnumerationRange{
+            *left,
+            *right,
+            type->enumeration_range_expression->descending};
+    }
+    const auto lower = std::min(range.left, range.right);
+    const auto upper = std::max(range.left, range.right);
     const auto require_arity =
         [&](const std::size_t expected) {
           if (expression.operands.size() != expected + 1U) {
@@ -350,42 +398,58 @@ evaluate_vhdl_enumeration_attribute(
           }
           return true;
         };
-    if (expression.text == "'left"
-        || expression.text == "'low") {
+    if (expression.text == "'left") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{0, true, false};
+        return FoldedEnumerationAttribute{
+            range.left, true, false};
     }
-    if (expression.text == "'right"
+    if (expression.text == "'right") {
+        if (!require_arity(0)) {
+            return std::nullopt;
+        }
+        return FoldedEnumerationAttribute{
+            range.right, true, false};
+    }
+    if (expression.text == "'low"
         || expression.text == "'high") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
         return FoldedEnumerationAttribute{
-            static_cast<std::int64_t>(count - 1U), true, false};
+            expression.text == "'low" ? lower : upper,
+            true,
+            false};
     }
     if (expression.text == "'length") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
         return FoldedEnumerationAttribute{
-            static_cast<std::int64_t>(count), false, false};
+            upper - lower + 1, false, false};
     }
     if (expression.text == "'ascending") {
         if (!require_arity(0)) {
             return std::nullopt;
         }
-        return FoldedEnumerationAttribute{1, false, true};
+        return FoldedEnumerationAttribute{
+            range.descending ? 0 : 1, false, true};
     }
     const bool position = expression.text == "'pos";
     const bool value = expression.text == "'val";
     const bool successor =
         expression.text == "'succ"
-        || expression.text == "'rightof";
+        || (expression.text == "'leftof"
+            && range.descending)
+        || (expression.text == "'rightof"
+            && !range.descending);
     const bool predecessor =
         expression.text == "'pred"
-        || expression.text == "'leftof";
+        || (expression.text == "'leftof"
+            && !range.descending)
+        || (expression.text == "'rightof"
+            && range.descending);
     if (!position && !value && !successor && !predecessor) {
         return std::nullopt;
     }
@@ -439,8 +503,7 @@ evaluate_vhdl_enumeration_attribute(
         return std::nullopt;
     }
     if (position) {
-        if (*argument < 0
-            || static_cast<std::uint64_t>(*argument) >= count) {
+        if (*argument < lower || *argument > upper) {
             range_error = true;
             error = "'pos argument is outside the enumeration range";
             return std::nullopt;
@@ -449,8 +512,7 @@ evaluate_vhdl_enumeration_attribute(
             *argument, false, false};
     }
     if (value) {
-        if (*argument < 0
-            || static_cast<std::uint64_t>(*argument) >= count) {
+        if (*argument < lower || *argument > upper) {
             range_error = true;
             error = "'val argument is outside the enumeration range";
             return std::nullopt;
@@ -458,8 +520,7 @@ evaluate_vhdl_enumeration_attribute(
         return FoldedEnumerationAttribute{
             *argument, true, false};
     }
-    if (*argument < 0
-        || static_cast<std::uint64_t>(*argument) >= count) {
+    if (*argument < lower || *argument > upper) {
         range_error = true;
         error = expression.text
             + " argument is outside the enumeration range";
@@ -467,8 +528,7 @@ evaluate_vhdl_enumeration_attribute(
     }
     const auto adjusted =
         successor ? *argument + 1 : *argument - 1;
-    if (adjusted < 0
-        || static_cast<std::uint64_t>(adjusted) >= count) {
+    if (adjusted < lower || adjusted > upper) {
         range_error = true;
         error = expression.text
             + " argument has no result inside the enumeration range";
@@ -650,15 +710,18 @@ std::optional<LoweredLiteral> literal_value(
 struct ConstantTypeInfo {
     frontend::ValueDomain domain{frontend::ValueDomain::Unknown};
     bool vhdl_enumeration{};
+    std::string nominal_type;
 
     ConstantTypeInfo() = default;
     ConstantTypeInfo(const frontend::ValueDomain value)
         : domain(value) {}
     ConstantTypeInfo(
         const frontend::ValueDomain value,
-        const bool enumeration)
+        const bool enumeration,
+        std::string nominal = {})
         : domain(value),
-          vhdl_enumeration(enumeration) {}
+          vhdl_enumeration(enumeration),
+          nominal_type(std::move(nominal)) {}
 };
 
 using ConstantDomainEnvironment =
@@ -1106,14 +1169,17 @@ Expression constant_expression(
     const frontend::SourceSpan& span,
     const frontend::ValueDomain domain,
     const frontend::Language language,
-    const bool vhdl_enumeration = false) {
+    const bool vhdl_enumeration = false,
+    std::string nominal_type = {}) {
     if (vhdl_enumeration
         && language == frontend::Language::Vhdl2008) {
-        return {
+        Expression result{
             ExpressionKind::LogicLiteral,
             "@fsim-enum:" + std::to_string(value),
             {},
             span};
+        result.nominal_type = std::move(nominal_type);
+        return result;
     }
     if (domain == frontend::ValueDomain::Boolean) {
         return {
@@ -1175,10 +1241,13 @@ bool fold_vhdl_enumeration_attributes(
     if (!expression.text.starts_with('\'')
         || expression.operands.empty()
         || expression.operands.front().kind
-            != ExpressionKind::Identifier
-        || vhdl_enumeration_type_mark(
-               unit, expression.operands.front().text)
-            == nullptr) {
+            != ExpressionKind::Identifier) {
+        return true;
+    }
+    const auto* type_mark =
+        vhdl_enumeration_type_mark(
+            unit, expression.operands.front().text);
+    if (type_mark == nullptr) {
         return true;
     }
     const auto folded =
@@ -1201,7 +1270,10 @@ bool fold_vhdl_enumeration_attributes(
                 ? frontend::ValueDomain::Bit2
                 : frontend::ValueDomain::Integer,
         frontend::Language::Vhdl2008,
-        folded->enumeration_result);
+        folded->enumeration_result,
+        folded->enumeration_result
+            ? type_mark->nominal_type
+            : std::string{});
     return true;
 }
 
@@ -1223,6 +1295,11 @@ void substitute_parameters(
                 language,
                 domain != domains.end()
                     && domain->second.vhdl_enumeration);
+            if (domain != domains.end()
+                && domain->second.vhdl_enumeration) {
+                expression.nominal_type =
+                    domain->second.nominal_type;
+            }
             return;
         }
     }
@@ -1235,6 +1312,7 @@ void substitute_parameters(
 void substitute_parameters(
     frontend::Type& type,
     const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
     const auto evaluate_integer_range =
@@ -1358,6 +1436,147 @@ void substitute_parameters(
                         : integer_base_range_span});
                 type.integer_range.reset();
             }
+        }
+    }
+    const auto evaluate_enumeration_range =
+        [&](std::optional<
+                frontend::DiscreteRangeExpression>& expression,
+            std::optional<frontend::EnumerationRange>& range,
+            const std::string_view description) {
+          auto span = frontend::SourceSpan{};
+          if (!expression) {
+              return span;
+          }
+          span = expression->span;
+          const auto evaluate_bound =
+              [&](const Expression& bound,
+                  std::string& error)
+                  -> std::optional<std::int64_t> {
+                if (const auto ordinal =
+                        vhdl_enumeration_ordinal(
+                            bound, type)) {
+                    return ordinal;
+                }
+                if (bound.kind != ExpressionKind::Identifier) {
+                    error =
+                        "enumeration range bound is not a literal, "
+                        "constant, or prior generic";
+                    return std::nullopt;
+                }
+                const auto value =
+                    environment.find(bound.text);
+                const auto domain =
+                    domains.find(bound.text);
+                if (value == environment.end()
+                    || domain == domains.end()) {
+                    error = "unknown enumeration range bound '"
+                        + bound.text + "'";
+                    return std::nullopt;
+                }
+                if (!domain->second.vhdl_enumeration
+                    || domain->second.nominal_type
+                        != type.nominal_type) {
+                    error = "enumeration range bound '"
+                        + bound.text
+                        + "' does not have nominal type '"
+                        + type.spelling + "'";
+                    return std::nullopt;
+                }
+                return value->second;
+              };
+          std::string error;
+          const auto left =
+              evaluate_bound(expression->left, error);
+          const auto right =
+              left
+                  ? evaluate_bound(
+                        expression->right, error)
+                  : std::nullopt;
+          if (!left || !right) {
+              diagnostics.push_back({
+                  "FSIM-ELAB-VHENUMRANGE-001",
+                  "cannot evaluate VHDL " + std::string{description}
+                      + " constraint: " + error,
+                  expression->span});
+              range.reset();
+          } else {
+              range = frontend::EnumerationRange{
+                  *left,
+                  *right,
+                  expression->descending};
+          }
+          expression.reset();
+          return span;
+        };
+    const auto enumeration_base_range_span =
+        evaluate_enumeration_range(
+            type.enumeration_base_range_expression,
+            type.enumeration_base_range,
+            "base enumeration subtype");
+    const auto enumeration_range_span =
+        evaluate_enumeration_range(
+            type.enumeration_range_expression,
+            type.enumeration_range,
+            "enumeration subtype");
+    if (!type.enumeration_literals.empty()
+        && !type.enumeration_range
+        && !type.enumeration_range_expression) {
+        type.enumeration_range =
+            frontend::EnumerationRange{
+                0,
+                static_cast<std::int64_t>(
+                    type.enumeration_literals.size() - 1U),
+                false};
+    }
+    if (type.enumeration_range) {
+        const auto& range = *type.enumeration_range;
+        const auto count =
+            type.enumeration_literals.size();
+        const bool representable =
+            range.left >= 0 && range.right >= 0
+            && static_cast<std::uint64_t>(range.left) < count
+            && static_cast<std::uint64_t>(range.right) < count;
+        const bool null =
+            range.descending ? range.left < range.right
+                             : range.left > range.right;
+        if (!representable || null) {
+            diagnostics.push_back({
+                "FSIM-ELAB-VHENUMRANGE-002",
+                null
+                    ? "null VHDL enumeration subtype constraints are "
+                      "not executable in this bounded runtime"
+                    : "VHDL enumeration subtype constraint lies outside "
+                      "the base enumeration literal range",
+                enumeration_range_span});
+            type.enumeration_range.reset();
+        }
+    }
+    if (type.enumeration_range
+        && type.enumeration_base_range) {
+        const auto& base =
+            *type.enumeration_base_range;
+        const auto base_lower =
+            std::min(base.left, base.right);
+        const auto base_upper =
+            std::max(base.left, base.right);
+        const auto derived_lower =
+            std::min(
+                type.enumeration_range->left,
+                type.enumeration_range->right);
+        const auto derived_upper =
+            std::max(
+                type.enumeration_range->left,
+                type.enumeration_range->right);
+        if (derived_lower < base_lower
+            || derived_upper > base_upper) {
+            diagnostics.push_back({
+                "FSIM-ELAB-VHENUMRANGE-003",
+                "derived VHDL enumeration subtype constraint lies "
+                "outside its resolved base subtype range",
+                enumeration_range_span.begin.offset != 0
+                    ? enumeration_range_span
+                    : enumeration_base_range_span});
+            type.enumeration_range.reset();
         }
     }
     if (!type.packed_members.empty()) {
@@ -1510,7 +1729,11 @@ void substitute_parameters(
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
     substitute_parameters(
-        declaration.type, environment, diagnostics, language);
+        declaration.type,
+        environment,
+        domains,
+        diagnostics,
+        language);
     if (declaration.initializer) {
         substitute_parameters(
             *declaration.initializer,
@@ -1614,7 +1837,11 @@ void substitute_parameters(
     std::vector<Diagnostic>& diagnostics) {
     for (auto& constant : body.constants) {
         substitute_parameters(
-            constant.type, environment, diagnostics, language);
+            constant.type,
+            environment,
+            domains,
+            diagnostics,
+            language);
         substitute_parameters(
             constant.default_value,
             environment,
@@ -1623,7 +1850,11 @@ void substitute_parameters(
     }
     for (auto& signal : body.signals) {
         substitute_parameters(
-            signal.type, environment, diagnostics, language);
+            signal.type,
+            environment,
+            domains,
+            diagnostics,
+            language);
     }
     substitute_parameters(
         body.concurrent_statements,
@@ -1778,6 +2009,21 @@ void collect_qualified_identifiers(
             type.integer_base_range_expression->right,
             identifiers);
     }
+    const auto collect_discrete_range =
+        [&](const std::optional<
+                frontend::DiscreteRangeExpression>& range) {
+          if (!range) {
+              return;
+          }
+          collect_qualified_identifiers(
+              range->left, identifiers);
+          collect_qualified_identifiers(
+              range->right, identifiers);
+        };
+    collect_discrete_range(type.discrete_range_expression);
+    collect_discrete_range(type.enumeration_range_expression);
+    collect_discrete_range(
+        type.enumeration_base_range_expression);
     if (!type.packed_range_expression) {
         return;
     }
@@ -2161,7 +2407,11 @@ void evaluate_generated_constants(
     std::vector<Diagnostic>& diagnostics) {
     for (auto& constant : body.constants) {
         substitute_parameters(
-            constant.type, environment, diagnostics, language);
+            constant.type,
+            environment,
+            domains,
+            diagnostics,
+            language);
         substitute_parameters(
             constant.default_value,
             environment,
@@ -2222,7 +2472,8 @@ void evaluate_generated_constants(
         domains[constant.name] = ConstantTypeInfo{
             constant.type.domain,
             language == frontend::Language::Vhdl2008
-                && !constant.type.enumeration_literals.empty()};
+                && !constant.type.enumeration_literals.empty(),
+            constant.type.nominal_type};
     }
 }
 
@@ -2827,7 +3078,21 @@ SpecializedUnit specialize_unit(
 
     std::size_t overridable_index = 0;
     ConstantDomainEnvironment domains;
-    for (const auto& parameter : source.parameters) {
+    for (std::size_t parameter_index = 0;
+         parameter_index < source.parameters.size();
+         ++parameter_index) {
+        const auto& parameter =
+            source.parameters[parameter_index];
+        auto& specialized_parameter =
+            result.unit.parameters[parameter_index];
+        substitute_parameters(
+            specialized_parameter.type,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+        const auto& parameter_type =
+            specialized_parameter.type;
         std::optional<std::int64_t> value;
         if (!parameter.local) {
             value = actuals.at(overridable_index++);
@@ -2869,7 +3134,7 @@ SpecializedUnit specialize_unit(
                         is_vhdl
                             ? vhdl_enumeration_ordinal(
                                   default_expression,
-                                  parameter.type)
+                                  parameter_type)
                             : std::optional<std::int64_t>{};
                     if (!value) {
                         value = evaluate_constant_expression(
@@ -2892,48 +3157,54 @@ SpecializedUnit specialize_unit(
             }
         }
         if (is_vhdl) {
-            const auto spelling = parameter.type.spelling;
+            const auto spelling = parameter_type.spelling;
             const bool enumeration =
-                !parameter.type.enumeration_literals.empty();
+                !parameter_type.enumeration_literals.empty();
             const bool violates_supported_type =
                 (!enumeration
-                 && parameter.type.packed_range.has_value())
-                || !parameter.type.packed_members.empty()
-                || (parameter.type.domain
+                 && parameter_type.packed_range.has_value())
+                || !parameter_type.packed_members.empty()
+                || (parameter_type.domain
                         != frontend::ValueDomain::Integer
-                    && parameter.type.domain
+                    && parameter_type.domain
                         != frontend::ValueDomain::Boolean
-                    && parameter.type.domain
+                    && parameter_type.domain
                         != frontend::ValueDomain::Bit2);
             const bool violates_natural =
                 spelling == "natural" && *value < 0;
             const bool violates_positive =
                 spelling == "positive" && *value <= 0;
             const bool violates_boolean =
-                parameter.type.domain == frontend::ValueDomain::Boolean
+                parameter_type.domain
+                    == frontend::ValueDomain::Boolean
                 && *value != 0 && *value != 1;
             const bool violates_bit =
-                parameter.type.domain == frontend::ValueDomain::Bit2
+                parameter_type.domain == frontend::ValueDomain::Bit2
                 && !enumeration
                 && *value != 0 && *value != 1;
             const bool violates_enumeration =
                 enumeration
                 && (*value < 0
                     || static_cast<std::uint64_t>(*value)
-                        >= parameter.type
+                        >= parameter_type
                                .enumeration_literals.size());
+            const bool violates_enumeration_range =
+                enumeration
+                && parameter_type.enumeration_range
+                && !parameter_type.enumeration_range
+                        ->contains(*value);
             const bool violates_integer_range =
-                parameter.type.domain
+                parameter_type.domain
                     == frontend::ValueDomain::Integer
-                && parameter.type.integer_range
+                && parameter_type.integer_range
                 && (*value
                         < std::min(
-                            parameter.type.integer_range->left,
-                            parameter.type.integer_range->right)
+                            parameter_type.integer_range->left,
+                            parameter_type.integer_range->right)
                     || *value
                         > std::max(
-                            parameter.type.integer_range->left,
-                            parameter.type.integer_range->right));
+                            parameter_type.integer_range->left,
+                            parameter_type.integer_range->right));
             if (violates_supported_type) {
                 diagnostics.push_back({
                     code(
@@ -2948,7 +3219,8 @@ SpecializedUnit specialize_unit(
             if (violates_natural || violates_positive
                 || violates_boolean || violates_bit
                 || violates_integer_range
-                || violates_enumeration) {
+                || violates_enumeration
+                || violates_enumeration_range) {
                 diagnostics.push_back({
                     code(
                         SpecializationDiagnostic::
@@ -2956,29 +3228,30 @@ SpecializedUnit specialize_unit(
                     std::string{object_kind} + " '"
                         + parameter.name
                         + "' value is outside subtype '"
-                        + parameter.type.spelling + "'",
+                        + parameter_type.spelling + "'",
                     parameter.span});
             }
         }
         result.environment[parameter.name] = *value;
         domains[parameter.name] = ConstantTypeInfo{
-            parameter.type.domain,
+            parameter_type.domain,
             is_vhdl
-                && !parameter.type.enumeration_literals.empty()};
+                && !parameter_type.enumeration_literals.empty(),
+            parameter_type.nominal_type};
         result.values.emplace_back(
             parameter.name,
             is_vhdl
-                    && parameter.type.domain
+                    && parameter_type.domain
                         == frontend::ValueDomain::Boolean
                 ? (*value == 0 ? "false" : "true")
                 : is_vhdl
-                        && !parameter.type
+                        && !parameter_type
                                 .enumeration_literals.empty()
                         && *value >= 0
                         && static_cast<std::uint64_t>(*value)
-                            < parameter.type
+                            < parameter_type
                                   .enumeration_literals.size()
-                    ? parameter.type.enumeration_literals[
+                    ? parameter_type.enumeration_literals[
                           static_cast<std::size_t>(*value)]
                 : std::to_string(*value));
     }
@@ -2987,6 +3260,7 @@ SpecializedUnit specialize_unit(
         substitute_parameters(
             parameter.type,
             result.environment,
+            domains,
             diagnostics,
             source.language);
         substitute_parameters(
@@ -2999,6 +3273,7 @@ SpecializedUnit specialize_unit(
         substitute_parameters(
             alias.type,
             result.environment,
+            domains,
             diagnostics,
             source.language);
         if (alias.enum_literals.empty()
@@ -3067,6 +3342,7 @@ SpecializedUnit specialize_unit(
         substitute_parameters(
             port.type,
             result.environment,
+            domains,
             diagnostics,
             source.language);
     }
@@ -3074,6 +3350,7 @@ SpecializedUnit specialize_unit(
         substitute_parameters(
             signal.type,
             result.environment,
+            domains,
             diagnostics,
             source.language);
     }
@@ -3539,6 +3816,21 @@ private:
     [[nodiscard]] const frontend::Type*
     enumeration_expression_type(
         const Expression& expression) const {
+        if (expression.kind == ExpressionKind::LogicLiteral
+            && expression.text.starts_with("@fsim-enum:")
+            && !expression.nominal_type.empty()) {
+            const auto found = std::find_if(
+                visible_type_marks_.begin(),
+                visible_type_marks_.end(),
+                [&](const auto& entry) {
+                  return entry.second != nullptr
+                      && entry.second->nominal_type
+                          == expression.nominal_type;
+                });
+            return found == visible_type_marks_.end()
+                ? nullptr
+                : found->second;
+        }
         if (expression.kind == ExpressionKind::Identifier) {
             const auto* type = object_type(expression.text);
             return type != nullptr
@@ -3594,6 +3886,66 @@ private:
         const auto [lower, upper] = integer_bounds(range);
         process_.operations.emplace_back(
             IntegerCheck{source, lower, upper});
+    }
+
+    [[nodiscard]] static std::pair<std::int32_t, std::int32_t>
+    enumeration_bounds(const frontend::Type& type) {
+        if (type.enumeration_range) {
+            return {
+                static_cast<std::int32_t>(
+                    std::min(
+                        type.enumeration_range->left,
+                        type.enumeration_range->right)),
+                static_cast<std::int32_t>(
+                    std::max(
+                        type.enumeration_range->left,
+                        type.enumeration_range->right))};
+        }
+        return {
+            0,
+            static_cast<std::int32_t>(
+                type.enumeration_literals.size() - 1U)};
+    }
+
+    void emit_enumeration_check(
+        const RegisterId source,
+        const frontend::Type& type) {
+        const auto ordinal =
+            widen_enumeration_ordinal(source);
+        const auto [lower, upper] =
+            enumeration_bounds(type);
+        process_.operations.emplace_back(
+            IntegerCheck{ordinal, lower, upper});
+    }
+
+    [[nodiscard]] bool
+    validate_static_enumeration_assignment(
+        const Expression& expression,
+        const frontend::Type& type,
+        const frontend::SourceSpan& span) {
+        const auto ordinal =
+            vhdl_enumeration_ordinal(expression, type);
+        if (!ordinal) {
+            return true;
+        }
+        const auto [lower, upper] =
+            enumeration_bounds(type);
+        if (*ordinal < lower || *ordinal > upper) {
+            report(
+                "FSIM-ELAB-VHENUMRANGE-004",
+                "locally static VHDL enumeration value '"
+                    + expression.text
+                    + "' is outside subtype range '"
+                    + type.enumeration_literals[
+                        static_cast<std::size_t>(lower)]
+                    + "' to '"
+                    + type.enumeration_literals[
+                        static_cast<std::size_t>(upper)]
+                    + "'",
+                span);
+            return false;
+        }
+        return true;
     }
 
     [[nodiscard]] bool validate_static_integer_assignment(
@@ -3749,6 +4101,13 @@ private:
                         variable.span)) {
                     continue;
                 }
+                if (!variable.type.enumeration_literals.empty()
+                    && !validate_static_enumeration_assignment(
+                        *variable.initializer,
+                        variable.type,
+                        variable.span)) {
+                    continue;
+                }
                 const auto value =
                     lower_expression(
                         *variable.initializer,
@@ -3780,6 +4139,10 @@ private:
                         == frontend::ValueDomain::Integer) {
                     emit_integer_check(
                         *value, variable.type.integer_range);
+                }
+                if (!variable.type.enumeration_literals.empty()) {
+                    emit_enumeration_check(
+                        *value, variable.type);
                 }
                 process_.operations.emplace_back(
                     CopyRegister{local.register_id, *value});
@@ -5030,6 +5393,20 @@ private:
                 }
                 emit_integer_check(*value, range);
             }
+            if (language_ == frontend::Language::Vhdl2008
+                && !selected_offset
+                && contextual_target_type != nullptr
+                && !contextual_target_type
+                        ->enumeration_literals.empty()) {
+                if (!validate_static_enumeration_assignment(
+                        statement.value,
+                        *contextual_target_type,
+                        statement.span)) {
+                    return;
+                }
+                emit_enumeration_check(
+                    *value, *contextual_target_type);
+            }
             if (procedural_delay) {
                 emit_debug_point(
                     DebugPointKind::wait, statement.span);
@@ -5116,6 +5493,21 @@ private:
                         return;
                     }
                     emit_integer_check(*value, range);
+                }
+                if (language_
+                        == frontend::Language::Vhdl2008
+                    && !selected_offset
+                    && contextual_target_type != nullptr
+                    && !contextual_target_type
+                            ->enumeration_literals.empty()) {
+                    if (!validate_static_enumeration_assignment(
+                            element.value,
+                            *contextual_target_type,
+                            element.span)) {
+                        return;
+                    }
+                    emit_enumeration_check(
+                        *value, *contextual_target_type);
                 }
                 const auto delay =
                     element.delay ? element.delay->magnitude : 0;
@@ -5227,6 +5619,20 @@ private:
                 return;
             }
             emit_integer_check(*value, range);
+        }
+        if (language_ == frontend::Language::Vhdl2008
+            && !selected_offset
+            && contextual_target_type != nullptr
+            && !contextual_target_type
+                    ->enumeration_literals.empty()) {
+            if (!validate_static_enumeration_assignment(
+                    statement.value,
+                    *contextual_target_type,
+                    statement.span)) {
+                return;
+            }
+            emit_enumeration_check(
+                *value, *contextual_target_type);
         }
         if (procedural_delay
             && statement.assignment_kind == AssignmentKind::Blocking) {
@@ -5928,6 +6334,20 @@ private:
             static_cast<std::size_t>(*width_value);
         const auto count = static_cast<std::int32_t>(
             type.enumeration_literals.size());
+        const auto range =
+            type.enumeration_range.value_or(
+                frontend::EnumerationRange{
+                    0,
+                    static_cast<std::int64_t>(count - 1),
+                    false});
+        const auto range_left =
+            static_cast<std::int32_t>(range.left);
+        const auto range_right =
+            static_cast<std::int32_t>(range.right);
+        const auto range_low =
+            std::min(range_left, range_right);
+        const auto range_high =
+            std::max(range_left, range_right);
         const auto require_arity =
             [&](const std::size_t expected) {
               if (expression.operands.size() != expected + 1U) {
@@ -5951,18 +6371,21 @@ private:
             if (!require_arity(0)) {
                 return std::nullopt;
             }
-            const auto upper =
-                expression.text == "'right"
-                    || expression.text == "'high";
+            const auto ordinal =
+                expression.text == "'left"
+                    ? range_left
+                : expression.text == "'right"
+                    ? range_right
+                : expression.text == "'low"
+                    ? range_low
+                    : range_high;
             const auto destination =
                 allocate_register(
                     width, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(LoadConstant{
                 destination,
                 unsigned_value(
-                    upper
-                        ? static_cast<std::uint64_t>(count - 1)
-                        : 0,
+                    static_cast<std::uint64_t>(ordinal),
                     width)});
             return destination;
         }
@@ -5975,7 +6398,8 @@ private:
                     32, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(LoadConstant{
                 destination,
-                integer_value(count)});
+                integer_value(
+                    range_high - range_low + 1)});
             return destination;
         }
         if (expression.text == "'ascending") {
@@ -5987,7 +6411,11 @@ private:
                     1, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(LoadConstant{
                 destination,
-                PackedLogic4(1, Logic4::one)});
+                PackedLogic4(
+                    1,
+                    range.descending
+                        ? Logic4::zero
+                        : Logic4::one)});
             return destination;
         }
 
@@ -5995,10 +6423,16 @@ private:
         const bool value = expression.text == "'val";
         const bool successor =
             expression.text == "'succ"
-            || expression.text == "'rightof";
+            || (expression.text == "'leftof"
+                && range.descending)
+            || (expression.text == "'rightof"
+                && !range.descending);
         const bool predecessor =
             expression.text == "'pred"
-            || expression.text == "'leftof";
+            || (expression.text == "'leftof"
+                && !range.descending)
+            || (expression.text == "'rightof"
+                && range.descending);
         if (!position && !value && !successor && !predecessor) {
             report(
                 "FSIM-ELAB-VHENUMATTR-001",
@@ -6015,8 +6449,8 @@ private:
             if (const auto static_value =
                     constant_index(expression.operands[1]);
                 static_value
-                && (*static_value < 0
-                    || *static_value >= count)) {
+                && (*static_value < range_low
+                    || *static_value > range_high)) {
                 report(
                     "FSIM-ELAB-VHENUMATTR-002",
                     "'val argument "
@@ -6046,7 +6480,7 @@ private:
                 return std::nullopt;
             }
             process_.operations.emplace_back(IntegerCheck{
-                *argument, 0, count - 1});
+                *argument, range_low, range_high});
             return narrow_enumeration_ordinal(
                 *argument, type);
         }
@@ -6097,16 +6531,16 @@ private:
             widen_enumeration_ordinal(*argument);
         if (position) {
             process_.operations.emplace_back(IntegerCheck{
-                ordinal, 0, count - 1});
+                ordinal, range_low, range_high});
             return ordinal;
         }
         const auto static_ordinal =
             vhdl_enumeration_ordinal(
                 expression.operands[1], type);
         const auto lower =
-            successor ? 0 : 1;
+            successor ? range_low : range_low + 1;
         const auto upper =
-            successor ? count - 2 : count - 1;
+            successor ? range_high - 1 : range_high;
         if (lower > upper
             || (static_ordinal
                 && (*static_ordinal < lower
@@ -10565,6 +10999,12 @@ private:
             };
         const auto constraint_span =
             [](const frontend::Type& type) {
+                if (type.discrete_range_expression) {
+                    return type.discrete_range_expression->span;
+                }
+                if (type.enumeration_range_expression) {
+                    return type.enumeration_range_expression->span;
+                }
                 if (type.integer_range_expression) {
                     return type.integer_range_expression->span;
                 }
@@ -10576,6 +11016,14 @@ private:
         const auto validate_direct_constraints =
             [&](const frontend::Type& type) {
                 bool valid = true;
+                if (type.discrete_range_expression) {
+                    report(
+                        "FSIM-ELAB-VHSUBTYPE-001",
+                        "a VHDL discrete range constraint requires a "
+                        "named integer-family or enumeration base subtype",
+                        constraint_span(type));
+                    valid = false;
+                }
                 if (type.integer_range_expression
                     && type.domain
                         != frontend::ValueDomain::Integer) {
@@ -10604,6 +11052,8 @@ private:
                 -> std::optional<frontend::Type> {
                 const bool has_integer_constraint =
                     derived.integer_range_expression.has_value();
+                const bool has_discrete_constraint =
+                    derived.discrete_range_expression.has_value();
                 const bool has_packed_constraint =
                     derived.packed_range_expression.has_value();
                 if (has_integer_constraint) {
@@ -10624,6 +11074,42 @@ private:
                         derived.integer_range;
                     base.integer_range_expression =
                         derived.integer_range_expression;
+                }
+                if (has_discrete_constraint) {
+                    const auto& range =
+                        *derived.discrete_range_expression;
+                    if (base.domain
+                        == frontend::ValueDomain::Integer) {
+                        base.integer_base_range =
+                            base.integer_range;
+                        base.integer_base_range_expression =
+                            base.integer_range_expression;
+                        base.integer_range.reset();
+                        base.integer_range_expression =
+                            frontend::IntegerRangeExpression{
+                                range.left,
+                                range.right,
+                                range.span,
+                                range.descending};
+                    } else if (
+                        !base.enumeration_literals.empty()) {
+                        base.enumeration_base_range =
+                            base.enumeration_range;
+                        base.enumeration_base_range_expression =
+                            base.enumeration_range_expression;
+                        base.enumeration_range.reset();
+                        base.enumeration_range_expression =
+                            range;
+                    } else {
+                        report(
+                            "FSIM-ELAB-VHSUBTYPE-001",
+                            "a derived VHDL discrete range constraint "
+                            "requires an integer-family or enumeration "
+                            "base subtype",
+                            constraint_span(derived));
+                        return std::nullopt;
+                    }
+                    base.discrete_range_expression.reset();
                 }
                 if (has_packed_constraint) {
                     if (!is_packed_array_type(base)
@@ -11187,6 +11673,7 @@ private:
             declaration.type.integer_range,
             declaration.type.nominal_type,
             declaration.type.enumeration_literals,
+            declaration.type.enumeration_range,
             declaration.is_port,
             declaration.direction,
             declaration.span});
@@ -11214,6 +11701,7 @@ private:
         auto initial_value =
             PackedLogic4(static_cast<std::size_t>(width), initial);
         if (!declaration.type.packed_members.empty()
+            || !declaration.type.enumeration_literals.empty()
             || declaration.type.domain
                 == frontend::ValueDomain::Logic9
             || declaration.type.domain
@@ -11348,6 +11836,52 @@ private:
                     + "' requires the same nominal enumeration type",
                 source);
             return;
+        }
+        if (!cross_language
+            && port_enumeration && actual_enumeration) {
+            const auto bounds =
+                [](const std::optional<
+                       frontend::EnumerationRange>& range,
+                   const std::size_t literal_count) {
+                  if (!range) {
+                      return std::pair{
+                          std::int64_t{0},
+                          static_cast<std::int64_t>(
+                              literal_count - 1U)};
+                  }
+                  return std::pair{
+                      std::min(range->left, range->right),
+                      std::max(range->left, range->right)};
+                };
+            const auto port_bounds =
+                bounds(
+                    port.type.enumeration_range,
+                    port.type.enumeration_literals.size());
+            const auto actual_bounds =
+                bounds(
+                    actual.enumeration_range,
+                    actual.enumeration_literals.size());
+            const auto contains =
+                [](const auto& outer, const auto& inner) {
+                  return outer.first <= inner.first
+                      && outer.second >= inner.second;
+                };
+            const bool compatible =
+                port.direction
+                        == frontend::PortDirection::Input
+                    ? contains(port_bounds, actual_bounds)
+                : port.direction
+                          == frontend::PortDirection::Output
+                    ? contains(actual_bounds, port_bounds)
+                    : port_bounds == actual_bounds;
+            if (!compatible) {
+                report(
+                    "FSIM-ELAB-BIND-054",
+                    "enumeration subtype ranges on boundary '"
+                        + path + "." + port.name
+                        + "' cannot guarantee a range-safe alias",
+                    source);
+            }
         }
         const auto width = port.type.width().value_or(1);
         if (width != actual.width) {

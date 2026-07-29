@@ -1634,7 +1634,7 @@ end architecture;
           && package.parameters.size() == 1
           && package.parameters[0].type.named_type
               == "count_t"
-          && package.type_aliases[6].type.integer_range_expression
+          && package.type_aliases[6].type.discrete_range_expression
           && package.type_aliases[7].declaration_kind
               == TypeDeclarationKind::VhdlRecord
           && package.type_aliases[8].type.named_type
@@ -1862,6 +1862,110 @@ end architecture;
                     == "FSIM-VHDL-PARSE-142";
               }),
       "missing enumeration attribute arguments have a stable diagnostic");
+}
+
+void test_vhdl_enumeration_subtype_ranges() {
+  const auto result = parse_text(
+      "enumeration_subtype_ranges.vhd",
+      R"(
+package State_Types is
+  type State_T is (Idle, Load, Running, Done);
+  subtype Active_T is State_T range Load to Done;
+  subtype Reverse_T is State_T range Done downto Load;
+  subtype Narrow_T is Active_T range Running to Done;
+  constant First_Active : Active_T := Load;
+end package;
+
+use work.state_types.all;
+entity Enumeration_Range_Endpoint is
+  port (
+    source : in State_T range Load to Running;
+    result : out Reverse_T
+  );
+end entity;
+
+use work.state_types.all;
+architecture rtl of enumeration_range_endpoint is
+  subtype Local_T is Reverse_T range Running downto Load;
+  signal local_value : Local_T;
+begin
+  result <= local_value;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      result.ok() && result.design.units.size() == 3,
+      "constrained enumeration subtype indications parse in package, "
+      "interface, and architecture regions");
+  const auto& package = result.design.units[0];
+  require(
+      package.type_aliases.size() == 4
+          && package.type_aliases[0].type.enumeration_range
+          && package.type_aliases[0].type.enumeration_range->left == 0
+          && package.type_aliases[0].type.enumeration_range->right == 3
+          && !package.type_aliases[0]
+                  .type.enumeration_range->descending,
+      "base enumeration declarations retain their complete ascending "
+      "ordinal range");
+  for (std::size_t index = 1; index < 4; ++index) {
+    const auto& subtype = package.type_aliases[index];
+    require(
+        subtype.declaration_kind
+                == TypeDeclarationKind::VhdlSubtype
+            && subtype.type.discrete_range_expression
+            && subtype.type.discrete_range_expression->left.kind
+                == ExpressionKind::Identifier
+            && subtype.type.discrete_range_expression->right.kind
+                == ExpressionKind::Identifier,
+        "named enumeration subtype ranges retain typed bound expressions");
+  }
+  require(
+      package.type_aliases[1]
+              .type.discrete_range_expression->left.text
+              == "load"
+          && package.type_aliases[1]
+                 .type.discrete_range_expression->right.text
+              == "done"
+          && !package.type_aliases[1]
+                  .type.discrete_range_expression->descending
+          && package.type_aliases[2]
+                 .type.discrete_range_expression->descending,
+      "enumeration subtype range direction and literal spelling are "
+      "preserved");
+  require(
+      result.design.units[1].ports[0].type.discrete_range_expression
+          && result.design.units[2]
+                 .type_aliases[0]
+                 .type.discrete_range_expression
+          && result.design.units[2]
+                 .signals[0]
+                 .type.named_type
+              == "local_t",
+      "direct object constraints and local constrained subtype references "
+      "remain explicit");
+
+  const auto invalid = parse_text(
+      "invalid_enumeration_subtype_ranges.vhd",
+      R"(
+entity invalid_enumeration_subtype_ranges is
+end entity;
+architecture rtl of invalid_enumeration_subtype_ranges is
+  type State_T is (Idle, Done);
+  subtype Missing_Direction_T is State_T range Idle Done;
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid.ok()
+          && std::ranges::any_of(
+              invalid.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-PARSE-009";
+              }),
+      "malformed enumeration subtype ranges have a stable parser "
+      "diagnostic");
 }
 
 void test_exponentiation_expression_nodes() {
@@ -7701,6 +7805,7 @@ int main() {
     test_vhdl_subtype_declarations();
     test_vhdl_enumeration_declarations();
     test_vhdl_enumeration_attributes();
+    test_vhdl_enumeration_subtype_ranges();
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
     test_systemverilog_final_procedures();

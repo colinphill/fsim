@@ -655,7 +655,7 @@ class VhdlParser final : private detail::ParserBase {
         error(
             current(),
             "FSIM-VHDL-PARSE-009",
-            "expected 'to' or 'downto' in integer subtype constraint");
+            "expected 'to' or 'downto' in discrete subtype constraint");
       }
       auto right_expression = parse_expression();
       const auto left = simple_integer_constant(left_expression);
@@ -664,18 +664,25 @@ class VhdlParser final : private detail::ParserBase {
         type.integer_base_range = type.integer_range;
         type.integer_base_range_expression =
             type.integer_range_expression;
-      }
-      if (left && right) {
-        type.integer_range =
-            IntegerRange{*left, *right, descending};
+        if (left && right) {
+          type.integer_range =
+              IntegerRange{*left, *right, descending};
+        } else {
+          type.integer_range.reset();
+        }
+        type.integer_range_expression = IntegerRangeExpression{
+            std::move(left_expression),
+            std::move(right_expression),
+            cover(range_start.span, previous().span),
+            descending};
       } else {
-        type.integer_range.reset();
+        type.discrete_range_expression =
+            DiscreteRangeExpression{
+                std::move(left_expression),
+                std::move(right_expression),
+                cover(range_start.span, previous().span),
+                descending};
       }
-      type.integer_range_expression = IntegerRangeExpression{
-          std::move(left_expression),
-          std::move(right_expression),
-          cover(range_start.span, previous().span),
-          descending};
     } else if (match(TokenKind::LeftParen)) {
       const auto range_start = previous();
       if (type.domain == ValueDomain::Integer) {
@@ -872,6 +879,13 @@ class VhdlParser final : private detail::ParserBase {
       }
       type.packed_range = PackedRange{
           static_cast<std::int64_t>(width - 1U), 0, true};
+      if (!type.enumeration_literals.empty()) {
+        type.enumeration_range = EnumerationRange{
+            0,
+            static_cast<std::int64_t>(
+                type.enumeration_literals.size() - 1U),
+            false};
+      }
       if (!duplicate && !type.enumeration_literals.empty()) {
         vhdl_named_types_.insert(canonical_name);
         unit.type_aliases.push_back(TypeAliasDeclaration{

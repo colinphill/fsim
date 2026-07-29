@@ -7856,6 +7856,310 @@ end architecture;
                     != std::string::npos;
         }));
 
+    const auto constrained_vhdl_enumerations =
+        fsim::frontend::parse_text(
+            "constrained_vhdl_enumerations.vhd",
+            R"(
+package Constrained_State_Types is
+  type State_T is (Idle, Load, Running, Done);
+  subtype Active_T is State_T range Load to Done;
+  subtype Reverse_T is State_T range Done downto Load;
+  subtype Narrow_T is Active_T range Running to Done;
+  constant Active_Default : Active_T := Load;
+end package;
+
+use work.constrained_state_types.all;
+entity constrained_enumeration_execution is
+  generic (Reset_State : Active_T := Active_Default);
+end entity;
+
+use work.constrained_state_types.all;
+architecture rtl of constrained_enumeration_execution is
+  signal active_default : Active_T;
+  signal reverse_default : Reverse_T;
+  signal next_value : Active_T;
+  signal right_value : Reverse_T;
+  signal left_value : Reverse_T;
+  signal low_value : Reverse_T;
+  signal high_value : Reverse_T;
+  signal length_value : integer;
+  signal ascending_value : boolean;
+  signal position_value : integer;
+  signal converted_value : Reverse_T;
+begin
+  next_value <= Active_T'succ(active_default);
+  right_value <= Reverse_T'rightof(reverse_default);
+  left_value <= Reverse_T'leftof(Load);
+  low_value <= Reverse_T'low;
+  high_value <= Reverse_T'high;
+  length_value <= Reverse_T'length;
+  ascending_value <= Reverse_T'ascending;
+  position_value <= Reverse_T'pos(Load);
+  converted_value <= Reverse_T'val(2);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(constrained_vhdl_enumerations.ok());
+    const auto constrained_enumeration_design =
+        fsim::elaboration::elaborate(
+            constrained_vhdl_enumerations.design,
+            "vhdl:work.constrained_enumeration_execution(rtl)");
+    if (!constrained_enumeration_design.ok()) {
+      for (const auto& diagnostic :
+           constrained_enumeration_design.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(constrained_enumeration_design.ok());
+    const auto active_default =
+        constrained_enumeration_design.design->find_signal(
+            "active_default");
+    const auto reverse_default =
+        constrained_enumeration_design.design->find_signal(
+            "reverse_default");
+    const auto next_value =
+        constrained_enumeration_design.design->find_signal(
+            "next_value");
+    const auto right_value =
+        constrained_enumeration_design.design->find_signal(
+            "right_value");
+    const auto left_value =
+        constrained_enumeration_design.design->find_signal(
+            "left_value");
+    const auto low_value =
+        constrained_enumeration_design.design->find_signal(
+            "low_value");
+    const auto high_value =
+        constrained_enumeration_design.design->find_signal(
+            "high_value");
+    const auto length_value =
+        constrained_enumeration_design.design->find_signal(
+            "length_value");
+    const auto ascending_value =
+        constrained_enumeration_design.design->find_signal(
+            "ascending_value");
+    const auto position_value =
+        constrained_enumeration_design.design->find_signal(
+            "position_value");
+    const auto converted_value =
+        constrained_enumeration_design.design->find_signal(
+            "converted_value");
+    assert(
+        active_default && reverse_default && next_value
+        && right_value && left_value && low_value && high_value
+        && length_value && ascending_value && position_value
+        && converted_value);
+    const auto& active_info =
+        constrained_enumeration_design.design->signals().at(
+            *active_default);
+    const auto& reverse_enum_info =
+        constrained_enumeration_design.design->signals().at(
+            *reverse_default);
+    assert(
+        active_info.enumeration_range
+        && active_info.enumeration_range->left == 1
+        && active_info.enumeration_range->right == 3
+        && !active_info.enumeration_range->descending
+        && reverse_enum_info.enumeration_range
+        && reverse_enum_info.enumeration_range->left == 3
+        && reverse_enum_info.enumeration_range->right == 1
+        && reverse_enum_info.enumeration_range->descending);
+    auto constrained_enumeration_interpreter =
+        constrained_enumeration_design.design->create_interpreter();
+    assert(
+        constrained_enumeration_interpreter
+                ->signal_value(*active_default)
+                .to_msb_string()
+            == "01"
+        && constrained_enumeration_interpreter
+                ->signal_value(*reverse_default)
+                .to_msb_string()
+            == "11");
+    const auto constrained_enumeration_run =
+        constrained_enumeration_interpreter->run();
+    assert(
+        constrained_enumeration_run.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        constrained_enumeration_interpreter
+                ->signal_value(*next_value)
+                .to_msb_string()
+            == "10"
+        && constrained_enumeration_interpreter
+                ->signal_value(*right_value)
+                .to_msb_string()
+            == "10"
+        && constrained_enumeration_interpreter
+                ->signal_value(*left_value)
+                .to_msb_string()
+            == "10"
+        && constrained_enumeration_interpreter
+                ->signal_value(*low_value)
+                .to_msb_string()
+            == "01"
+        && constrained_enumeration_interpreter
+                ->signal_value(*high_value)
+                .to_msb_string()
+            == "11"
+        && constrained_enumeration_interpreter
+                ->signal_value(*length_value)
+                .to_msb_string()
+            == "00000000000000000000000000000011"
+        && constrained_enumeration_interpreter
+                ->signal_value(*ascending_value)
+                .to_msb_string()
+            == "0"
+        && constrained_enumeration_interpreter
+                ->signal_value(*position_value)
+                .to_msb_string()
+            == "00000000000000000000000000000001"
+        && constrained_enumeration_interpreter
+                ->signal_value(*converted_value)
+                .to_msb_string()
+            == "10");
+    assert(std::ranges::any_of(
+        constrained_enumeration_design.design->processes(),
+        [](const auto& process) {
+            return std::ranges::any_of(
+                process.operations,
+                [](const auto& operation) {
+                    return std::holds_alternative<
+                        fsim::runtime::simir::IntegerCheck>(
+                        operation);
+                });
+        }));
+
+    const auto invalid_constrained_vhdl_enumerations =
+        fsim::frontend::parse_text(
+            "invalid_constrained_vhdl_enumerations.vhd",
+            R"(
+package Invalid_Constrained_State_Types is
+  type State_T is (Idle, Load, Running, Done);
+  type Other_T is (Cold, Hot);
+  subtype Active_T is State_T range Load to Done;
+  subtype Missing_T is State_T range Missing to Done;
+  subtype Wrong_T is State_T range Cold to Done;
+  subtype Null_T is State_T range Done to Load;
+  subtype Outside_T is Active_T range Idle to Running;
+  constant Bad_Constant : Active_T := Idle;
+end package;
+
+use work.invalid_constrained_state_types.all;
+entity invalid_constrained_enumeration_execution is
+end entity;
+architecture rtl of invalid_constrained_enumeration_execution is
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(invalid_constrained_vhdl_enumerations.ok());
+    const auto rejected_constrained_vhdl_enumerations =
+        fsim::elaboration::elaborate(
+            invalid_constrained_vhdl_enumerations.design,
+            "vhdl:work.invalid_constrained_enumeration_execution(rtl)");
+    assert(
+        !rejected_constrained_vhdl_enumerations.ok()
+        && has_diagnostic(
+            rejected_constrained_vhdl_enumerations,
+            "FSIM-ELAB-VHENUMRANGE-001")
+        && has_diagnostic(
+            rejected_constrained_vhdl_enumerations,
+            "FSIM-ELAB-VHENUMRANGE-002")
+        && has_diagnostic(
+            rejected_constrained_vhdl_enumerations,
+            "FSIM-ELAB-VHENUMRANGE-003")
+        && has_diagnostic(
+            rejected_constrained_vhdl_enumerations,
+            "FSIM-ELAB-PKG-006"));
+
+    const auto invalid_constrained_enumeration_values =
+        fsim::frontend::parse_text(
+            "invalid_constrained_enumeration_values.vhd",
+            R"(
+package Constrained_Value_Types is
+  type State_T is (Idle, Load, Running, Done);
+  subtype Active_T is State_T range Load to Done;
+end package;
+
+use work.constrained_value_types.all;
+entity invalid_constrained_store is
+end entity;
+use work.constrained_value_types.all;
+architecture rtl of invalid_constrained_store is
+  signal target : Active_T;
+begin
+  target <= Idle;
+end architecture;
+
+use work.constrained_value_types.all;
+entity constrained_generic_child is
+  generic (Reset_State : Active_T := Load);
+  port (Value : in Active_T);
+end entity;
+architecture rtl of constrained_generic_child is
+begin
+end architecture;
+
+use work.constrained_value_types.all;
+entity invalid_constrained_generic_default is
+  generic (Reset_State : Active_T := Idle);
+end entity;
+architecture rtl of invalid_constrained_generic_default is
+begin
+end architecture;
+
+use work.constrained_value_types.all;
+entity invalid_constrained_generic_parent is
+end entity;
+use work.constrained_value_types.all;
+architecture rtl of invalid_constrained_generic_parent is
+  signal Actual : Active_T;
+begin
+  Child : entity work.constrained_generic_child(rtl)
+    generic map (Reset_State => Idle)
+    port map (Value => Actual);
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    if (!invalid_constrained_enumeration_values.ok()) {
+      for (const auto& diagnostic :
+           invalid_constrained_enumeration_values.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << " at "
+                  << diagnostic.span.begin.line << ":"
+                  << diagnostic.span.begin.column << '\n';
+      }
+    }
+    assert(invalid_constrained_enumeration_values.ok());
+    const auto rejected_constrained_enumeration_store =
+        fsim::elaboration::elaborate(
+            invalid_constrained_enumeration_values.design,
+            "vhdl:work.invalid_constrained_store(rtl)");
+    assert(
+        !rejected_constrained_enumeration_store.ok()
+        && has_diagnostic(
+            rejected_constrained_enumeration_store,
+            "FSIM-ELAB-VHENUMRANGE-004"));
+    const auto rejected_constrained_enumeration_generic =
+        fsim::elaboration::elaborate(
+            invalid_constrained_enumeration_values.design,
+            "vhdl:work.invalid_constrained_generic_parent(rtl)");
+    assert(
+        !rejected_constrained_enumeration_generic.ok()
+        && has_diagnostic(
+            rejected_constrained_enumeration_generic,
+            "FSIM-ELAB-GENERIC-008"));
+    const auto rejected_constrained_enumeration_default =
+        fsim::elaboration::elaborate(
+            invalid_constrained_enumeration_values.design,
+            "vhdl:work.invalid_constrained_generic_default(rtl)");
+    assert(
+        !rejected_constrained_enumeration_default.ok()
+        && has_diagnostic(
+            rejected_constrained_enumeration_default,
+            "FSIM-ELAB-GENERIC-008"));
+
     const auto enumeration_boundary_vhdl =
         fsim::frontend::parse_text(
             "enumeration_boundaries.vhd",
@@ -7863,6 +8167,7 @@ end architecture;
 package Enumeration_Boundary_Types is
   type First_T is (Low, High);
   type Second_T is (Low, High);
+  subtype High_Only_T is First_T range High to High;
 end package;
 
 use work.enumeration_boundary_types.all;
@@ -7881,6 +8186,74 @@ architecture rtl of enumeration_native_parent is
   signal Actual : Second_T;
 begin
   Child : entity work.Enumeration_Child(rtl)
+    port map (Value => Actual);
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Range_Child is
+  port (Value : in High_Only_T);
+end entity;
+architecture rtl of enumeration_range_child is
+begin
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Range_Parent is
+end entity;
+use work.enumeration_boundary_types.all;
+architecture rtl of enumeration_range_parent is
+  signal Actual : First_T;
+begin
+  Child : entity work.Enumeration_Range_Child(rtl)
+    port map (Value => Actual);
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Output_Range_Child is
+  port (Value : out First_T);
+end entity;
+architecture rtl of enumeration_output_range_child is
+begin
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Output_Range_Parent is
+end entity;
+use work.enumeration_boundary_types.all;
+architecture rtl of enumeration_output_range_parent is
+  signal Actual : High_Only_T;
+begin
+  Child : entity work.Enumeration_Output_Range_Child(rtl)
+    port map (Value => Actual);
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Inout_Child is
+  port (Value : inout High_Only_T);
+end entity;
+architecture rtl of enumeration_inout_child is
+begin
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Inout_Parent is
+end entity;
+use work.enumeration_boundary_types.all;
+architecture rtl of enumeration_inout_parent is
+  signal Actual : High_Only_T;
+begin
+  Child : entity work.Enumeration_Inout_Child(rtl)
+    port map (Value => Actual);
+end architecture;
+
+use work.enumeration_boundary_types.all;
+entity Enumeration_Inout_Range_Parent is
+end entity;
+use work.enumeration_boundary_types.all;
+architecture rtl of enumeration_inout_range_parent is
+  signal Actual : First_T;
+begin
+  Child : entity work.Enumeration_Inout_Child(rtl)
     port map (Value => Actual);
 end architecture;
 
@@ -7906,6 +8279,38 @@ end architecture;
         && has_diagnostic(
             rejected_native_enumeration_boundary,
             "FSIM-ELAB-BIND-053"));
+    const auto rejected_range_enumeration_boundary =
+        fsim::elaboration::elaborate(
+            enumeration_boundary_vhdl.design,
+            "vhdl:work.enumeration_range_parent(rtl)");
+    assert(
+        !rejected_range_enumeration_boundary.ok()
+        && has_diagnostic(
+            rejected_range_enumeration_boundary,
+            "FSIM-ELAB-BIND-054"));
+    const auto rejected_output_range_enumeration_boundary =
+        fsim::elaboration::elaborate(
+            enumeration_boundary_vhdl.design,
+            "vhdl:work.enumeration_output_range_parent(rtl)");
+    assert(
+        !rejected_output_range_enumeration_boundary.ok()
+        && has_diagnostic(
+            rejected_output_range_enumeration_boundary,
+            "FSIM-ELAB-BIND-054"));
+    const auto accepted_inout_enumeration_boundary =
+        fsim::elaboration::elaborate(
+            enumeration_boundary_vhdl.design,
+            "vhdl:work.enumeration_inout_parent(rtl)");
+    assert(accepted_inout_enumeration_boundary.ok());
+    const auto rejected_inout_range_enumeration_boundary =
+        fsim::elaboration::elaborate(
+            enumeration_boundary_vhdl.design,
+            "vhdl:work.enumeration_inout_range_parent(rtl)");
+    assert(
+        !rejected_inout_range_enumeration_boundary.ok()
+        && has_diagnostic(
+            rejected_inout_range_enumeration_boundary,
+            "FSIM-ELAB-BIND-054"));
 
     const auto enumeration_boundary_sv =
         fsim::frontend::parse_text(

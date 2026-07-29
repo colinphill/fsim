@@ -1934,6 +1934,41 @@ failure behavior, debugger/VCD/cache evidence, fetched Boost.Context 1.91.0
 and Tcl 9.0.4, SystemC, the strict native ABI, and every preceding feature
 batch. No CI state was inspected for this local gate.
 
+### Forty-third feature batch — constrained VHDL enumeration subtypes
+
+The planned ten implementation features are:
+
+1. Represent a resolved VHDL enumeration subtype constraint independently
+   from its nominal base type, retaining left/right ordinals, direction,
+   locally static bound expressions, base constraint, and source spans.
+2. Parse `subtype S is T range L to R` and `downto` forms for local,
+   entity, package-visible, and directly selected enumeration base types
+   without treating enumeration literals as integers.
+3. Resolve chained and imported constrained enumeration subtypes, including
+   bounds supplied by literals, enumeration constants, and prior generics,
+   while preserving the base declaration's storage width and literal table.
+4. Diagnose unknown or wrong-nominal bounds, null executable ranges,
+   out-of-base derived constraints, invalid scalar bases, and illegal values
+   with stable parser/elaboration diagnostic codes.
+5. Default constrained enumeration signals and locals to the subtype's left
+   bound and enforce membership for constants, generic defaults, and generic
+   actuals before specialization proceeds.
+6. Enforce static and dynamic subtype membership before every whole local,
+   signal, delayed, inertial, transport, and multi-element waveform store,
+   reusing the checked portable runtime path without ordinal wraparound.
+7. Validate same-language hierarchy aliases directionally for input, output,
+   and inout ports so every possible driver value is admitted by its reader's
+   constrained enumeration subtype.
+8. Make `left`, `right`, `low`, `high`, `length`, `ascending`, `val`, `pos`,
+   `succ`, `pred`, `leftof`, and `rightof` honor the constrained subtype;
+   keep base-type `pos`/`val` ordinals while making adjacency direction-aware.
+9. Preserve interpreter/LLVM O0/O2 success and range-failure equivalence,
+   debugger literal rendering, VCD ordinals, hierarchy specialization,
+   cold/warm native reuse, and package-edit invalidation.
+10. Add focused positive, negative, frontend, elaboration, and application
+    evidence; update the VHDL feature matrix; then run, record, and push the
+    full local regression gate.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

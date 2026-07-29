@@ -173,6 +173,7 @@ struct SignalInfo {
     std::optional<frontend::IntegerRange> integer_range;
     std::string nominal_type;
     std::vector<std::string> enumeration_literals;
+    std::optional<frontend::EnumerationRange> enumeration_range;
     bool is_port{};
     frontend::PortDirection direction{frontend::PortDirection::Unknown};
     frontend::SourceSpan declaration_span;

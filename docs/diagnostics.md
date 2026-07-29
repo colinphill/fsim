@@ -706,6 +706,10 @@ therefore excluded.
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |
 | `FSIM-ELAB-VHENUMATTR-001` | error | A VHDL enumeration scalar attribute has an invalid prefix, arity, argument type, result context, or executable ordinal range. |
 | `FSIM-ELAB-VHENUMATTR-002` | error | A locally static or executable VHDL enumeration scalar attribute argument is outside the type's declaration range or has no predecessor/successor. |
+| `FSIM-ELAB-VHENUMRANGE-001` | error | A VHDL enumeration subtype constraint bound is not locally static, is unknown, or belongs to a different nominal enumeration type. |
+| `FSIM-ELAB-VHENUMRANGE-002` | error | A VHDL enumeration subtype constraint is null or lies outside the base enumeration's literal table. |
+| `FSIM-ELAB-VHENUMRANGE-003` | error | A derived VHDL enumeration subtype constraint is not contained by its resolved base subtype. |
+| `FSIM-ELAB-VHENUMRANGE-004` | error | A locally static value assigned to a constrained VHDL enumeration object lies outside the subtype range. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
@@ -788,6 +792,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-051` | error | Integer subtype ranges on a hierarchy boundary cannot guarantee a range-safe alias in the port's data-flow direction. |
 | `FSIM-ELAB-BIND-052` | error | A VHDL enumeration crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-053` | error | A same-language VHDL hierarchy boundary connects different nominal enumeration types. |
+| `FSIM-ELAB-BIND-054` | error | Same-language VHDL enumeration subtype ranges cannot guarantee a range-safe alias in the port's data-flow direction. |
 
 ## Time, runtime, trace, and design cache
 

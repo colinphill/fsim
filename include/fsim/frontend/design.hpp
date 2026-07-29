@@ -76,6 +76,23 @@ struct Expression {
   // association; otherwise the canonical element name or `others` is
   // retained. Non-aggregate expressions leave this vector empty.
   std::vector<std::string> aggregate_choices{};
+  // Set only on elaboration-internal folded VHDL enumeration constants so
+  // contextual nominal typing survives substitution into comparisons and
+  // conditional expressions.
+  std::string nominal_type;
+
+  Expression() = default;
+
+  Expression(ExpressionKind expression_kind, std::string expression_text,
+             std::vector<Expression> expression_operands,
+             SourceSpan expression_span,
+             std::vector<std::string> expression_aggregate_choices = {},
+             std::string expression_nominal_type = {})
+      : kind(expression_kind), text(std::move(expression_text)),
+        operands(std::move(expression_operands)),
+        span(std::move(expression_span)),
+        aggregate_choices(std::move(expression_aggregate_choices)),
+        nominal_type(std::move(expression_nominal_type)) {}
 
   [[nodiscard]] bool valid() const noexcept {
     return kind != ExpressionKind::Invalid;
@@ -109,6 +126,34 @@ struct IntegerRange {
 };
 
 struct IntegerRangeExpression {
+  Expression left;
+  Expression right;
+  SourceSpan span;
+  bool descending{};
+};
+
+/// A concrete constraint over declaration-order VHDL enumeration ordinals.
+///
+/// The base enumeration's literal table and nominal identity remain on Type.
+/// Direction affects left/right adjacency and default initialization, while
+/// membership is the inclusive interval between the two ordinals.
+struct EnumerationRange {
+  std::int64_t left{};
+  std::int64_t right{};
+  bool descending{};
+
+  [[nodiscard]] bool contains(const std::int64_t value) const noexcept {
+    const auto lower = descending ? right : left;
+    const auto upper = descending ? left : right;
+    return value >= lower && value <= upper;
+  }
+};
+
+/// A not-yet-resolved scalar range on a named VHDL subtype indication.
+///
+/// Elaboration determines whether the named base is integer-family or an
+/// enumeration, then moves the expression into the corresponding typed range.
+struct DiscreteRangeExpression {
   Expression left;
   Expression right;
   SourceSpan span;
@@ -158,6 +203,16 @@ struct Type {
   // literals are canonicalized case-insensitively; character literals retain
   // their quoted spelling. The ordinal is the vector index.
   std::vector<std::string> enumeration_literals;
+  // Concrete or specialization-dependent constraint over the declaration
+  // ordinals above. A base enumeration covers its complete ascending range;
+  // derived subtypes retain their own direction and inclusive bounds.
+  std::optional<EnumerationRange> enumeration_range;
+  std::optional<DiscreteRangeExpression> enumeration_range_expression;
+  // A derived enumeration constraint retains its resolved base independently
+  // so specialization can prove containment after folding bound constants.
+  std::optional<EnumerationRange> enumeration_base_range;
+  std::optional<DiscreteRangeExpression>
+      enumeration_base_range_expression;
   // Non-empty for a bounded SystemVerilog packed struct or union. Nested
   // aggregates are intentionally excluded from the current representation.
   std::vector<PackedMember> packed_members;
@@ -171,6 +226,9 @@ struct Type {
   // derived constraint remains inside it.
   std::optional<IntegerRange> integer_base_range;
   std::optional<IntegerRangeExpression> integer_base_range_expression;
+  // A range parsed on an unresolved named VHDL type. Type resolution moves
+  // this to integer_range_expression or enumeration_range_expression.
+  std::optional<DiscreteRangeExpression> discrete_range_expression;
 
   Type() = default;
   Type(
