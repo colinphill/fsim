@@ -567,14 +567,15 @@ Remaining before the architecture gate passes:
 - extend the bounded mixed-language differential to O0 and mixed-language
   assertion failures, broaden normalized trace coverage across semantic
   fixtures, and validate it on LLVM 22.1.8 Windows; and
-- complete VHDL generic types and the remaining SystemVerilog parameter
-  type/sizing rules; bounded scalar VHDL and integral SystemVerilog values
-  already participate in per-specialization native-cache identity and cross
-  explicit VHDL/SystemVerilog bindings. Conditional, bounded iterative, and
-  bounded selection generate plus local signals, assignments, processes, and
-  instances are implemented. Unguarded VHDL blocks, all three bounded implicit
-  SV generate forms, direct/named static SV generate contents, and bounded
-  generated constants/parameters also execute;
+- complete VHDL generic types and the remaining SystemVerilog type/string,
+  wider-than-64-bit, and full expression-typing rules; bounded scalar VHDL and
+  typed integral SystemVerilog values already participate in
+  per-specialization native-cache identity and cross explicit
+  VHDL/SystemVerilog bindings. Conditional, bounded iterative, and bounded
+  selection generate plus local signals, assignments, processes, and
+  instances are implemented. Unguarded VHDL blocks, all three bounded
+  implicit SV generate forms, direct/named static SV generate contents, and
+  bounded generated constants/parameters also execute;
   guarded VHDL blocks, noncanonical SV loop-update expressions, nonintegral
   VHDL choices, and additional generated declarative/module items remain.
 
@@ -2625,6 +2626,66 @@ built from the final source state, passed all 44 configured tests in 52.28
 seconds. An LLVM-disabled focused gate passed all five affected tests, and the
 permanent source-size test passed again after the three new translation/test
 units became tracked. No CI state was inspected.
+
+### Fiftieth feature batch — SystemVerilog constant-expression sizing
+
+The completed ten-feature architecture-gate slice is:
+
+1. Introduce a typed constant value carrying exact bits, X/Z masks, width,
+   signedness, unsized status, and source span independently from checked
+   legacy integer consumers.
+2. Preserve sized, unsized decimal, unsized based, and unbased unsized literal
+   sizing and four-state metadata through constant-expression analysis.
+3. Implement explicit self-determined sizing for the bounded unary,
+   reduction, concatenation, replication, cast, and shift forms.
+4. Implement context propagation for bounded arithmetic, bitwise, logical,
+   relational, equality, case-equality, power, and conditional expressions
+   without using host-C++ promotion rules.
+5. Apply the typed evaluator to defaults, localparams, named and positional
+   overrides, non-iterative generated parameters, packed ranges, and
+   conditional/case generate choices.
+6. Represent and display the complete unsigned 64-bit `longint` and `time`
+   range without signed overflow or implementation-defined conversion.
+7. Preserve X/Z bits for four-state declarations and reject lossy conversion
+   into two-state atom or packed declarations.
+8. Preserve enum fit/duplicate legality and stable cycle, division,
+   remainder, shift, replication, and integer-consumer diagnostics.
+9. Serialize typed constants into a versioned `svconst-v1` identity that
+   retains semantic distinctions and drives selective native-cache
+   invalidation.
+10. Add atomic elaboration/generate/boundary tests plus
+    interpreter/LLVM O0/O2, cold/warm, and edited-source cache differentials.
+
+The new evaluator and generate-choice coordinator are independent compilation
+units. Their internal header contains declarations and semantic data only;
+executable implementation did not migrate into headers. Typed values are
+converted back to exact source expressions only at existing substitution
+boundaries, while consumers that require ordinary integers use explicit
+checked conversion. This keeps the LLVM/runtime C ABI unchanged.
+
+Assignment and expression lowering now make the bounded SystemVerilog width
+conversion explicit with existing SimIR extract, concatenate, and
+load-constant operations. Unsized integer literals infer 32 bits; mixed-width
+binary operands and assignment RHS values are sign- or zero-extended and
+truncated according to retained signedness. The application fixture observes
+the exact maximum unsigned-64 value, mixed widths, and unknown-state values in
+the interpreter and LLVM O0/O2. Its file-scoped cache fixture edits only the
+top unsigned parameter and requires two affected specialization misses while
+two unrelated children reuse their native objects.
+
+The bounded path covers integral widths from 1 through 64. Widths above 64,
+complete SystemVerilog LRM expression typing, type parameters, string
+parameters, and genvar-dependent typed constants inside iterative generate
+bodies remain release-gate work. The existing signed-64 iterative-generate
+path remains supported and tested.
+
+The implementation is recorded in feature commit `cb2da43`.
+The exact LLVM 22.1.8 warnings-as-errors Debug build completed cleanly and all
+43 configured tests passed in 294.59 seconds. The exact Release build
+completed cleanly and all 44 configured tests passed in 111.55 seconds.
+Focused LLVM Debug, LLVM Release, and LLVM-disabled gates passed all four
+affected tests. The application differential demonstrated exact cold/warm
+reuse and two-hit/two-miss selective invalidation. No CI state was inspected.
 
 ## v1 release condition
 

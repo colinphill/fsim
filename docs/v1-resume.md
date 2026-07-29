@@ -9,18 +9,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-29.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: `2185f34` (`feat: add VHDL interface type
-  generics`).
+- Implementation baseline: `cb2da43` (`feat: add
+  SystemVerilog typed constants`).
 - The feature baseline and batch documentation are synchronized with
   `origin/codex/resumable-jit`.
-- The source-size refactor is complete: all 218 authored C/C++ source, header,
+- The source-size refactor is complete: all 221 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 1,998 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 43
-  configured tests in 183.94 seconds, and Release passed all 44 configured
-  tests in 52.28 seconds on 2026-07-29. The rebuilt final-source focused gate
-  and LLVM-disabled focused gate each passed all five affected tests.
-- No CI state was inspected during feature batch 49 or this handoff.
+  configured tests in 294.59 seconds, and Release passed all 44 configured
+  tests in 111.55 seconds on 2026-07-29. Focused LLVM Debug, LLVM Release, and
+  LLVM-disabled gates each passed all four affected tests.
+- No CI state was inspected during feature batch 50 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -32,7 +32,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Declared integral SystemVerilog parameter conversion and the bounded entity-level VHDL-2008 interface-type-generic slice now have interpreter/O0/O2/cache evidence; remaining generic-type semantics, SV sizing, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constant sizing, full unsigned-64 parameter values, and entity-level VHDL-2008 interface type generics now have interpreter/O0/O2/cache evidence; wider/complete SV typing, remaining generic-type semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -80,9 +80,9 @@ document merely because the parser accepts a related form.
 - Complete VHDL generic-type semantics beyond the implemented entity-level
   VHDL-2008 unclassified `type T` slice, including remaining classified,
   package/subprogram, dependent element-type, and unconstrained-object cases.
-- Complete remaining SystemVerilog unsigned-64, type/string parameter, and
-  self-determined expression sizing rules beyond the declared integral
-  parameter conversion slice.
+- Complete SystemVerilog type/string parameters, widths above 64 bits,
+  genvar-dependent typed constants, and remaining LRM expression typing beyond
+  the bounded typed integral constant slice.
 - Retain source/debug metadata for every remaining executable construct.
 - Make the semantic differential harness compare interpreter, O0, and O2
   final state, assertions, scheduling observations, failures, and normalized
@@ -155,35 +155,34 @@ opaque native session/object model already used by Tcl.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 50: SystemVerilog constant-expression sizing**:
+Resume with **feature batch 51: SystemVerilog type parameters**:
 
-1. Introduce a typed constant value carrying width, signedness, state domain,
-   and bits independently from the legacy signed `int64_t` convenience path.
-2. Retain sized, unsized decimal, and unsized based literal sizing metadata
-   through constant-expression analysis.
-3. Implement self-determined unary, concatenation, replication, cast, and
-   shift operand/result widths for the bounded constant subset.
-4. Implement context-determined arithmetic, bitwise, relational,
-   equality, and conditional sizing and signedness for parameter expressions.
-5. Apply the typed evaluator consistently to defaults, localparams, named and
-   positional overrides, generated parameters, ranges, and generate choices.
-6. Represent the complete unsigned 64-bit `longint`/`time` value range
-   canonically without signed overflow or implementation-defined conversion.
-7. Preserve four-state unknown bits where legal and reject a constant in a
-   two-state or integer-only elaboration context when conversion would be
-   lossy.
-8. Keep enum fit/duplicate checks, division/shift failures, cycles, and
-   overflow diagnostics stable under the typed evaluator.
-9. Version typed constant specialization/cache identity and preserve exact
-   source/expansion provenance.
-10. Add atomic positive/negative, elaboration, generated/dependent-range,
-    interpreter/O0/O2, cold/warm/invalidation, and mixed-boundary evidence,
-    then run and push the scheduled regression gate.
+1. Represent value and type parameters as distinct HIR formal kinds while
+   retaining declaration order, locality, and source spans.
+2. Parse bounded `parameter type T = type_mark` declarations in module
+   parameter-port lists and module/package bodies.
+3. Parse named and positional type actuals without treating an ordinary value
+   identifier as a type before formal matching.
+4. Resolve builtin, local typedef, imported package, and directly selected
+   package type marks at the association site.
+5. Preserve unresolved formal type references through independent frontend
+   analysis and replace them in each elaborated specialization.
+6. Specialize dependent packed ports, signals, typedefs, value parameters,
+   localparams, and bounded enum/aggregate declarations.
+7. Forward a type formal through nested same-language hierarchy with checked
+   named/positional association ordering and duplicate/missing diagnostics.
+8. Reject value/type namespace mismatches, invisible marks, unsupported
+   actual categories, and mixed-language type-parameter crossings with stable
+   targeted diagnostics.
+9. Serialize resolved type kind, width/range, signedness, state domain, and
+   nominal metadata into a versioned specialization/cache identity.
+10. Add frontend, elaboration, source-provenance, interpreter/LLVM O0/O2,
+    cold/warm, and changed-type selective-invalidation evidence, then run and
+    push the scheduled regression gate.
 
-Keep this batch bounded to constant/elaboration semantics. Do not silently
-reuse host C++ promotion rules or widen the runtime ABI; add independently
-compiled typed semantic services and explicit checked conversions at existing
-integer-only consumers.
+Keep the batch bounded to same-language SystemVerilog type parameters.
+String parameters, interfaces, unpacked types, anonymous composite actuals,
+and widths above 64 bits remain separate release-gate work.
 
 ## Working cadence
 
