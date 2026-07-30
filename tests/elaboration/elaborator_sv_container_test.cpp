@@ -23,6 +23,9 @@ module container_lowering #(
   bit [3:0] fixed_up[-1:1];
 
   function automatic int count(input byte source[$:2]);
+    byte copy[$:2];
+    copy = '{5, 6};
+    assert (copy[1] == 6);
     return source.size();
   endfunction
 
@@ -62,13 +65,23 @@ module container_lowering #(
 
   initial begin
     key_t key;
-    values = new[2];
-    values[0] = 7;
-    pending.push_back(1);
-    pending.push_back(2);
-    lookup[3] = 30;
-    lookup[-1] = 10;
-    assert ($isunknown(fixed_down[2]));
+    values = '{};
+    assert ($size(values) == 0);
+    values = '{7, 8};
+    pending = '{1, 2};
+    lookup = '{-1: 10, 3: 30};
+    fixed_down = '{8'h31, 8'h21, 8'h11};
+    fixed_up = '{4'ha, 4'hb, 4'hc};
+    assert (values[1] == 8);
+    assert (pending[0] == 1);
+    assert (lookup[-1] == 10);
+    assert (fixed_down[STATIC_LEFT] == 8'h31);
+    assert (fixed_down[1] == 8'h11);
+    assert (fixed_up[-1] == 4'ha);
+    assert (fixed_up[0] == 4'hb);
+    assert (fixed_up[1] == 4'hc);
+    fixed_up[0] = 0;
+    assert (fixed_down[2] == 8'h21);
     fixed_down[3] = 8'h33;
     fixed_up[-1] = 4'ha;
     fixed_up[1] = 4'hc;
@@ -87,7 +100,7 @@ module container_lowering #(
     assert ($size(fixed_up) == 3);
     assert ($bits(fixed_up) == 12);
     assert (copied_static(fixed_down) == 8'h33);
-    assert ($isunknown(fixed_down[2]));
+    assert (fixed_down[2] == 8'h21);
     assert (fixed_up[-1] == 4'ha);
     assert (fixed_up[0] == 0);
     assert (lookup.size() == 2);
@@ -646,6 +659,8 @@ module bad_dynamic_port_top;
   int queue_value[$];
   int bounded_value[$:2];
   int associative_value[logic signed [4:0]];
+  int narrow_associative[logic signed [3:0]];
+  int fixed_value[1:0];
   logic [7:0] four_state_value[];
   int query_result;
   dynamic_accept expression_actual(
@@ -668,6 +683,15 @@ module bad_dynamic_port_top;
     query_result = $bits(dynamic_value, 1);
     query_result = $dimensions(dynamic_value, 1);
     query_result = $size(item_t);
+    fixed_value = '{1};
+    bounded_value = '{1, 2, 3, 4};
+    associative_value = '{1, 2};
+    dynamic_value = '{0: 1};
+    narrow_associative = '{-1: 1, 15: 2};
+    dynamic_value = '{1, 2: 3};
+    dynamic_value = '{default: 1};
+    dynamic_value[0] = '{1};
+    query_result = '{1};
   end
 endmodule
 )",
@@ -696,6 +720,14 @@ endmodule
       rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-003"));
   assert(has_diagnostic(
       rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-004"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-001"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-002"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-003"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-004"));
 
   const auto mixed_parent = fsim::frontend::parse_text(
       "mixed-container-port.vhd",

@@ -530,53 +530,80 @@ using namespace elaboration_detail;
             }
             if (statement.target.kind
                 == ExpressionKind::Identifier) {
-                const bool is_new =
-                    statement.value.kind
-                            == ExpressionKind::Index
-                    && statement.value.operands.size() == 2
-                    && statement.value.operands.front().kind
-                            == ExpressionKind::Identifier
-                    && statement.value.operands.front().text
-                            == "new";
-                if (is_new) {
-                    if (runtime_type->associative
-                        || runtime_type->fixed) {
-                        report(
-                            "FSIM-ELAB-SVCONTAINER-014",
-                            runtime_type->fixed
-                                ? "new[size] cannot resize a static array"
-                                : "new[size] cannot resize an associative "
-                                  "array",
-                            statement.value.span);
-                        return;
-                    }
-                    const auto size_width =
-                        infer_width(statement.value.operands[1])
-                            .value_or(std::size_t{32});
-                    const auto size = lower_expression(
-                        statement.value.operands[1], size_width);
-                    if (!size) {
-                        return;
-                    }
-                    process_.operations.emplace_back(
-                        ResizeContainer{target, *size});
-                } else {
-                    const auto value =
-                        lower_container_expression(statement.value);
+                if (statement.value.kind
+                        == ExpressionKind::Aggregate
+                    && statement.value.text == "sv-pattern") {
+                    const auto value = lower_container_pattern(
+                        statement.value,
+                        *source_type,
+                        *runtime_type);
                     if (!value) {
-                        report(
-                            "FSIM-ELAB-SVCONTAINER-010",
-                            "whole-container assignment requires new[size] "
-                            "or a compatible container value",
-                            statement.value.span);
                         return;
                     }
                     process_.operations.emplace_back(
                         CopyContainerRegister{target, *value});
+                } else {
+                    const bool is_new =
+                        statement.value.kind
+                                == ExpressionKind::Index
+                        && statement.value.operands.size() == 2
+                        && statement.value.operands.front().kind
+                                == ExpressionKind::Identifier
+                        && statement.value.operands.front().text
+                                == "new";
+                    if (is_new) {
+                        if (runtime_type->associative
+                            || runtime_type->fixed) {
+                            report(
+                                "FSIM-ELAB-SVCONTAINER-014",
+                                runtime_type->fixed
+                                    ? "new[size] cannot resize a static "
+                                      "array"
+                                    : "new[size] cannot resize an "
+                                      "associative array",
+                                statement.value.span);
+                            return;
+                        }
+                        const auto size_width =
+                            infer_width(statement.value.operands[1])
+                                .value_or(std::size_t{32});
+                        const auto size = lower_expression(
+                            statement.value.operands[1], size_width);
+                        if (!size) {
+                            return;
+                        }
+                        process_.operations.emplace_back(
+                            ResizeContainer{target, *size});
+                    } else {
+                        const auto value =
+                            lower_container_expression(
+                                statement.value);
+                        if (!value) {
+                            report(
+                                "FSIM-ELAB-SVCONTAINER-010",
+                                "whole-container assignment requires "
+                                "new[size] or a compatible container "
+                                "value",
+                                statement.value.span);
+                            return;
+                        }
+                        process_.operations.emplace_back(
+                            CopyContainerRegister{target, *value});
+                    }
                 }
             } else if (
                 statement.target.kind == ExpressionKind::Index
                 && statement.target.operands.size() == 2) {
+                if (statement.value.kind
+                        == ExpressionKind::Aggregate
+                    && statement.value.text == "sv-pattern") {
+                    report(
+                        "FSIM-ELAB-SVPATTERN-001",
+                        "a container assignment pattern requires a "
+                        "direct whole-container target",
+                        statement.target.span);
+                    return;
+                }
                 const auto index_width =
                     runtime_type->associative
                         ? static_cast<std::size_t>(

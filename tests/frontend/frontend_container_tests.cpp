@@ -60,6 +60,10 @@ module containers;
   initial begin
     $readmemh("image.hex", image);
     $readmemb("image.bin", image, 6, 4);
+    image = '{8'h11, 8'h22, 8'h33, 8'h44};
+    values = '{1, 2, 3};
+    pending = '{8'haa, 8'hbb};
+    lookup = '{-1: 16'h1234, 3: 16'h5678};
     values = new[3];
     pending.push_front(8'h11);
     bounded.delete();
@@ -217,6 +221,34 @@ endmodule
           && has_query("$unpacked_dimensions"),
       "container query system functions remain explicit typed calls");
   require(
+      std::ranges::count_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.value.kind
+                == ExpressionKind::Aggregate;
+          })
+          == 4,
+      "static, dynamic, queue, and associative assignment patterns "
+      "remain aggregate HIR");
+  const auto keyed_pattern =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.value.kind
+                    == ExpressionKind::Aggregate
+                && std::ranges::all_of(
+                    statement.value.aggregate_choices,
+                    [](const auto& choice) {
+                      return choice == "@key";
+                    });
+          });
+  require(
+      keyed_pattern != query_statements.end()
+          && keyed_pattern->value.operands.size() == 2
+          && keyed_pattern->value.aggregate_choice_expressions.size()
+              == 2,
+      "associative assignment-pattern keys remain explicit HIR");
+  require(
       unit->tasks.size() == 1
           && unit->tasks[0].arguments.size() == 3
           && unit->tasks[0].arguments[0]
@@ -352,12 +384,24 @@ endmodule
 
   const auto verilog = parse_text(
       "container-verilog.v",
-      "module m; integer values[]; endmodule",
+      "module m; integer values[]; integer value; "
+      "initial value = '{1}; endmodule",
       Language::Verilog2005);
   require(
       !verilog.ok()
-          && has_code(verilog, "FSIM-SV-SEM-077"),
-      "containers require SystemVerilog-2017");
+          && has_code(verilog, "FSIM-SV-SEM-077")
+          && has_code(verilog, "FSIM-SV-SEM-084"),
+      "containers and assignment patterns require SystemVerilog-2017");
+
+  const auto malformed_pattern = parse_text(
+      "container-pattern-invalid.sv",
+      "module m; int values[]; initial values = ' (1); endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_pattern.ok()
+          && has_code(
+              malformed_pattern, "FSIM-SV-PARSE-163"),
+      "assignment-pattern opening-brace recovery is stable");
 }
 
 }  // namespace fsim::tests::frontend

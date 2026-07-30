@@ -650,6 +650,18 @@ empty right/high is therefore `-1`. Associative arrays expose entry-count
 `$size`, entry-width `$bits`, and `2`/`1` dimension counts while finite-bound
 queries diagnose. Type-only, indirect, and multidimensional container queries
 remain pending.
+
+SystemVerilog apostrophe-brace assignment patterns are retained as aggregate
+HIR with positional or keyed association metadata, distinct from packed
+concatenation. A direct whole-container assignment allocates a temporary
+register of the exact specialized target type. Static members write declared
+indices in left-to-right order; dynamic arrays resize before indexed writes;
+queues append through `PushContainer`; associative members convert and
+deduplicate locally constant keys before `ContainerWrite`. Only after the
+temporary is complete does `CopyContainerRegister` replace the local or
+module-object value. No new SimIR operation, native callback, allocator
+identity, or address-bearing ABI is required.
+
 `$onehot` and `$onehot0` lower to dedicated common reduction operators. They
 count exact `1` elements of the packed operand, ignore `X` and `Z` elements,
 and return a two-state bit indicating exactly one or at most one set element.

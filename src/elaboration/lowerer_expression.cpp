@@ -517,6 +517,16 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             }
         }
         if (expression.kind == ExpressionKind::Aggregate) {
+            if (language_
+                    == frontend::Language::SystemVerilog2017
+                && expression.text == "sv-pattern") {
+                report(
+                    "FSIM-ELAB-SVPATTERN-001",
+                    "a SystemVerilog assignment pattern requires a "
+                    "supported contextual whole-container target",
+                    expression.span);
+                return std::nullopt;
+            }
             if (language_ == frontend::Language::Vhdl2008
                 && expected_type != nullptr
                 && expected_type->vhdl_array) {

@@ -925,6 +925,10 @@ private:
         const frontend::SourceSpan& span);
     ExpressionAttempt lower_container_query(
         const Expression& expression);
+    std::optional<ContainerRegisterId> lower_container_pattern(
+        const Expression& expression,
+        const frontend::Type& source_type,
+        const ContainerType& runtime_type);
     ContainerRegisterId allocate_container_register(
         const ContainerType& type);
     void lower_container_method(const Statement& statement);

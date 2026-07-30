@@ -379,6 +379,205 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
   return destination;
 }
 
+std::optional<ContainerRegisterId>
+Lowerer::lower_container_pattern(
+    const Expression& expression,
+    const frontend::Type& source_type,
+    const ContainerType& runtime_type) {
+  if (language_ != frontend::Language::SystemVerilog2017
+      || expression.kind != ExpressionKind::Aggregate
+      || expression.text != "sv-pattern"
+      || expression.aggregate_choices.size()
+          != expression.operands.size()
+      || expression.aggregate_choice_expressions.size()
+          != expression.operands.size()) {
+    report(
+        "FSIM-ELAB-SVPATTERN-001",
+        "a container assignment pattern requires consistent "
+        "SystemVerilog aggregate metadata",
+        expression.span);
+    return std::nullopt;
+  }
+  bool has_positional = false;
+  bool has_keyed = false;
+  bool has_default = false;
+  for (const auto& choice : expression.aggregate_choices) {
+    has_positional |= choice.empty();
+    has_keyed |= choice == "@key";
+    has_default |= choice == "default";
+    if (!choice.empty() && choice != "@key"
+        && choice != "default") {
+      report(
+          "FSIM-ELAB-SVPATTERN-001",
+          "unknown container assignment-pattern association",
+          expression.span);
+      return std::nullopt;
+    }
+  }
+  if (has_default || (has_positional && has_keyed)) {
+    report(
+        "FSIM-ELAB-SVPATTERN-004",
+        has_default
+            ? "default container assignment-pattern members are "
+              "outside the bounded subset"
+            : "container assignment patterns cannot mix positional "
+              "and keyed members",
+        expression.span);
+    return std::nullopt;
+  }
+  if (runtime_type.associative != has_keyed
+      && !expression.operands.empty()) {
+    report(
+        "FSIM-ELAB-SVPATTERN-001",
+        runtime_type.associative
+            ? "associative-array assignment patterns require keyed "
+              "members"
+            : "non-associative container patterns require positional "
+              "members",
+        expression.span);
+    return std::nullopt;
+  }
+  const auto count = expression.operands.size();
+  const auto fixed_count =
+      static_cast<std::uint64_t>(
+          runtime_type.index_left >= runtime_type.index_right
+              ? static_cast<std::int64_t>(runtime_type.index_left)
+                    - runtime_type.index_right
+              : static_cast<std::int64_t>(runtime_type.index_right)
+                    - runtime_type.index_left)
+      + 1U;
+  if ((runtime_type.fixed
+       && count != fixed_count)
+      || count > maximum_container_elements
+      || (runtime_type.maximum_elements
+          && count > *runtime_type.maximum_elements)) {
+    report(
+        "FSIM-ELAB-SVPATTERN-002",
+        runtime_type.fixed
+            ? "a static-array assignment pattern must match the "
+              "specialized element count"
+            : "an assignment pattern exceeds the bounded container "
+              "capacity",
+        expression.span);
+    return std::nullopt;
+  }
+  const auto destination =
+      allocate_container_register(runtime_type);
+  if (!runtime_type.fixed && !runtime_type.associative
+      && !runtime_type.queue) {
+    const auto size =
+        allocate_register(32, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant{
+        size, unsigned_value(count, 32)});
+    process_.operations.emplace_back(
+        ResizeContainer{destination, size});
+  }
+  std::set<std::uint64_t> keys;
+  for (std::size_t element = 0; element < count; ++element) {
+    if (runtime_type.queue) {
+      const auto value = lower_expression(
+          expression.operands[element],
+          runtime_type.element_width,
+          &source_type);
+      if (!value) {
+        return std::nullopt;
+      }
+      process_.operations.emplace_back(
+          PushContainer{destination, *value, false});
+      continue;
+    }
+    RegisterId index{};
+    bool signed_index = false;
+    if (runtime_type.associative) {
+      const auto& choices =
+          expression.aggregate_choice_expressions[element];
+      if (choices.size() != 1) {
+        report(
+            "FSIM-ELAB-SVPATTERN-003",
+            "an associative assignment-pattern member requires one "
+            "locally constant key",
+            expression.span);
+        return std::nullopt;
+      }
+      auto key = constant_index(choices.front());
+      if (!key) {
+        std::string error;
+        if (const auto value =
+                evaluate_systemverilog_constant_expression(
+                    choices.front(), {}, {}, error)) {
+          key = value->integer_value();
+        }
+      }
+      if (!key) {
+        report(
+            "FSIM-ELAB-SVPATTERN-003",
+            "associative assignment-pattern keys must be locally "
+            "constant known integral values",
+            choices.front().span);
+        return std::nullopt;
+      }
+      const auto mask =
+          runtime_type.index_width == 64
+              ? std::numeric_limits<std::uint64_t>::max()
+              : (UINT64_C(1) << runtime_type.index_width) - 1U;
+      if (!keys.insert(
+              static_cast<std::uint64_t>(*key) & mask).second) {
+        report(
+            "FSIM-ELAB-SVPATTERN-003",
+            "associative assignment-pattern keys must be unique "
+            "after index-type conversion",
+            choices.front().span);
+        return std::nullopt;
+      }
+      const auto* index_type =
+          source_type.systemverilog_container
+              ->associative_index_type.get();
+      const auto lowered = lower_expression(
+          choices.front(), runtime_type.index_width, index_type);
+      if (!lowered) {
+        return std::nullopt;
+      }
+      index = register_width(*lowered)
+                      == runtime_type.index_width
+                  ? *lowered
+                  : resize_register(
+                        *lowered,
+                        runtime_type.index_width,
+                        runtime_type.signed_indices);
+      signed_index = runtime_type.signed_indices;
+    } else {
+      std::int64_t declared_index =
+          static_cast<std::int64_t>(element);
+      if (runtime_type.fixed) {
+        const auto step =
+            runtime_type.index_left >= runtime_type.index_right
+                ? -static_cast<std::int64_t>(element)
+                : static_cast<std::int64_t>(element);
+        declared_index =
+            static_cast<std::int64_t>(runtime_type.index_left)
+            + step;
+        signed_index = true;
+      }
+      index =
+          allocate_register(32, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(LoadConstant{
+          index,
+          unsigned_value(
+              static_cast<std::uint32_t>(declared_index), 32)});
+    }
+    const auto value = lower_expression(
+        expression.operands[element],
+        runtime_type.element_width,
+        &source_type);
+    if (!value) {
+      return std::nullopt;
+    }
+    process_.operations.emplace_back(ContainerWrite{
+        destination, index, *value, signed_index});
+  }
+  return destination;
+}
+
 void Lowerer::lower_container_method(
     const Statement& statement) {
   const auto& call = statement.value;

@@ -282,6 +282,59 @@ Expression VerilogParser::parse_unary() {
 }
 
 Expression VerilogParser::parse_primary() {
+  if (match(TokenKind::Apostrophe)) {
+    const auto apostrophe = previous();
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          apostrophe,
+          "FSIM-SV-SEM-084",
+          "assignment patterns require SystemVerilog-2017");
+    }
+    expect(
+        TokenKind::LeftBrace,
+        "'{' after assignment-pattern apostrophe",
+        "FSIM-SV-PARSE-163");
+    Expression pattern{
+        ExpressionKind::Aggregate,
+        "sv-pattern",
+        {},
+        apostrophe.span};
+    while (!at(TokenKind::RightBrace)
+           && !at(TokenKind::EndOfFile)) {
+      const bool default_choice =
+          current().text == "default";
+      auto first =
+          default_choice
+              ? Expression{
+                    ExpressionKind::Identifier,
+                    advance().text,
+                    {},
+                    previous().span}
+              : parse_expression();
+      if (match(TokenKind::Colon)) {
+        pattern.aggregate_choices.push_back(
+            default_choice ? "default" : "@key");
+        pattern.aggregate_choice_expressions.push_back(
+            default_choice
+                ? std::vector<Expression>{}
+                : std::vector<Expression>{std::move(first)});
+        pattern.operands.push_back(parse_expression());
+      } else {
+        pattern.aggregate_choices.emplace_back();
+        pattern.aggregate_choice_expressions.emplace_back();
+        pattern.operands.push_back(std::move(first));
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::RightBrace,
+        "'}' after assignment pattern",
+        "FSIM-SV-PARSE-164");
+    pattern.span = span_from(apostrophe, previous());
+    return pattern;
+  }
   if (at(TokenKind::Number)) {
     const auto token = advance();
     const auto kind = token.text.find('\'') == std::string::npos

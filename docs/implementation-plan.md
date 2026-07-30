@@ -4137,6 +4137,62 @@ in 86.99 seconds, and Release passed all 59 tests in 34.74 seconds on
 2026-07-30. Batch 75 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Seventy-sixth feature batch — bounded SystemVerilog container assignment patterns
+
+SystemVerilog-2017 apostrophe-brace expressions now retain ordered positional
+or keyed association metadata as aggregate HIR rather than being parsed as
+packed concatenations. The bounded executable form is contextual: it appears
+on the right side of a blocking assignment to a direct whole
+one-dimensional integral static array, dynamic array, queue, bounded queue, or
+integral-key associative array.
+
+Static patterns require exactly the specialized element count and map members
+from the declared left bound toward the right bound, preserving ascending and
+descending signed indices. Dynamic arrays resize to the positional member
+count. Queues append members in source order and reject counts above the
+specialized bounded-queue maximum or common 4,096-element limit.
+Associative patterns require keyed members whose expressions fold to known
+integral values; keys convert to the exact specialized index width and are
+rejected when conversion makes two keys equal.
+
+Every element lowers with the target's exact width, signedness, and
+two-/four-state domain. Empty patterns deterministically clear dynamic arrays,
+queues, bounded queues, and associative arrays. Positive evidence includes
+signed integral members, exact X/Z preservation, static arrays in both
+directions, dynamic and bounded queue sizing, canonical associative ordering,
+static and dynamic port aliases, automatic function/task values, and a task
+local populated after suspension.
+
+Pattern construction is atomic with respect to the destination. The lowerer
+allocates a temporary container register of the exact target type, fills it
+with existing `ResizeContainer`, `PushContainer`, and `ContainerWrite`
+operations, then applies one `CopyContainerRegister` and optional
+`WriteContainerObject`. No new SimIR operation or native callback was needed,
+and no vector, allocator, element address, or host identity enters generated
+code.
+
+Stable frontend or elaboration diagnostics cover malformed braces,
+Verilog-2005 use, missing context, keyed members for non-associative targets,
+positional members for associative targets, mixed associations, unsupported
+`default`, converted duplicate or nonconstant keys, static count and queue
+capacity mismatch, and indirect targets. Existing container declaration
+checks continue to reject multidimensional, aggregate/string-element, and
+unsupported index forms.
+
+Native-object schema 29 records assignment-pattern semantics while existing
+canonical operation/type/object/callable/source/specialization serialization
+drives cache identity. The standalone container application exercises
+patterns through assertions, formatted state, debugger-visible objects,
+interpreter, LLVM O0/O2, suspended tasks, nested/generated port aliases, and
+cold/warm cache reuse without fallback.
+
+The diagnostic catalog covers 1,161 production codes and the source gate
+covers 285 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 87.04 seconds, and Release passed all 59 tests in 34.08 seconds on
+2026-07-30. Batch 76 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

@@ -533,6 +533,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-160` | error | Expected `,` after a read-memory file name. |
 | `FSIM-SV-PARSE-161` | error | Expected `)` after read-memory arguments. |
 | `FSIM-SV-PARSE-162` | error | Expected `;` after a read-memory task. |
+| `FSIM-SV-PARSE-163` | error | Expected `{` after a SystemVerilog assignment-pattern apostrophe. |
+| `FSIM-SV-PARSE-164` | error | Expected `}` after a SystemVerilog assignment pattern. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -725,6 +727,7 @@ therefore excluded.
 | `FSIM-SV-SEM-081` | error | A supported container method has the wrong argument count. |
 | `FSIM-SV-SEM-082` | error | An associative array uses a string index type. |
 | `FSIM-SV-SEM-083` | error | `$readmemb` or `$readmemh` is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-084` | error | An assignment pattern is used outside SystemVerilog-2017. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -1063,6 +1066,10 @@ therefore excluded.
 | `FSIM-ELAB-SVQUERY-002` | error | A bounded unpacked-container query dimension is not the locally constant dimension `1`. |
 | `FSIM-ELAB-SVQUERY-003` | error | A finite-bound query is applied to an associative array. |
 | `FSIM-ELAB-SVQUERY-004` | error | A type-only SystemVerilog query is outside the bounded container-query subset. |
+| `FSIM-ELAB-SVPATTERN-001` | error | A container assignment pattern has inconsistent metadata or uses keyed versus positional members with the wrong container kind. |
+| `FSIM-ELAB-SVPATTERN-002` | error | A static pattern has the wrong element count or a dynamic pattern exceeds its container capacity. |
+| `FSIM-ELAB-SVPATTERN-003` | error | An associative pattern key is not locally constant and known or duplicates another converted key. |
+| `FSIM-ELAB-SVPATTERN-004` | error | A container assignment pattern mixes keyed and positional members or uses an unsupported `default` member. |
 | `FSIM-ELAB-SVMEMORY-001` | error | `$readmemb` or `$readmemh` is lowered outside SystemVerilog-2017. |
 | `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
 | `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |
