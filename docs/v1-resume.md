@@ -294,9 +294,8 @@ git status --short --branch
 git log -5 --oneline --decorate
 ```
 
-History must contain Batch 66 commit `8822c79` (`feat: add VHDL non-value
-component generics`) followed by the Batch 67 component-default/open handoff.
-Treat a newer pushed commit on the same branch as the authoritative
+History must contain Batch 67 commit `2923a1e` (`feat: add VHDL component port
+defaults`). Treat a newer pushed commit on the same branch as the authoritative
 continuation and read this file from that checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
