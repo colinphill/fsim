@@ -18,7 +18,9 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   configured tests in 69.02 seconds, and Release passed all 59 configured
   tests in 30.53 seconds on 2026-07-30.
 - The diagnostic catalog covers all 1,121 production codes.
-- No CI state was inspected during feature batch 70 or this handoff.
+- The feature-batch-70 GitHub Actions boundary inspection is pending: the
+  local `gh` credential was invalid when checked on 2026-07-30, and the
+  batch-69/70 handoff commits are not yet on the remote branch.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -281,11 +283,19 @@ containers, and unrestricted heap behavior remain separate release-gate work.
 - Implement ten related features before the next full regression.
 - Use focused warnings-as-errors builds and targeted tests after each coherent
   change; do not run the full suite for every individual feature.
+- Use at least eight parallel workers for every project, test-support, and
+  fetched-dependency build, including interim builds. Prefer
+  `cmake --build <tree> --parallel 8` (or a larger value) and never reduce an
+  interim build to one or two workers.
 - At the tenth feature, run the exact LLVM 22.1.8 Debug and Release regression
   appropriate to the batch, update the plan/support/matrix documents, commit,
   and push the branch. A feature batch is not handed off as complete until its
   commit is present on `origin/codex/resumable-jit`.
-- Do not inspect GitHub Actions runs unless explicitly requested.
+- At every tenth numbered feature batch (70, 80, 90, and so on), inspect the
+  GitHub Actions runs for the pushed handoff, diagnose and fix every actionable
+  failure, rerun the affected local gates with at least eight build workers,
+  push the repair, and confirm the replacement checks. Between those
+  boundaries, inspect CI only when explicitly requested.
 - Preserve the 2,000-line hard limit, prefer approximately 1,600 lines, split
   compilation units by responsibility, and do not move executable
   implementation into `_internal.hpp` files.

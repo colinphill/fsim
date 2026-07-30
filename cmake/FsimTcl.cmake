@@ -97,7 +97,7 @@ function(fsim_add_fetched_tcl)
         "--prefix=<INSTALL_DIR>"
         --disable-shared
         --enable-64bit
-      BUILD_COMMAND "${FSIM_MAKE_EXECUTABLE}" -j4 binaries
+      BUILD_COMMAND "${FSIM_MAKE_EXECUTABLE}" -j8 binaries
       INSTALL_COMMAND
         "${FSIM_MAKE_EXECUTABLE}"
         install-binaries install-libraries install-headers

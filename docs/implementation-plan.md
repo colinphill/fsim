@@ -447,7 +447,12 @@ and test:
   command quoting; and
 - run the smallest affected Windows-sensitive test during development, then
   require the full Linux/Windows matrix at the ten-feature regression boundary
-  and for CI/workflow changes.
+  and for CI/workflow changes;
+- use at least eight parallel workers for every project, test-support, and
+  fetched-dependency build, including focused interim builds; and
+- at every tenth numbered feature batch, inspect the pushed GitHub Actions
+  handoff, fix all actionable failures, rerun the affected local gates, push
+  the repair, and confirm the replacement checks before continuing.
 
 ## Milestone progress
 
