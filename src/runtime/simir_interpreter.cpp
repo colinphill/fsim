@@ -55,6 +55,23 @@ StringObjectId Interpreter::add_string_object(StringObject object) {
   return id;
 }
 
+ContainerObjectId Interpreter::add_container_object(
+    ContainerObject object) {
+  if (impl_->started) {
+    throw std::logic_error{
+        "cannot add a SimIR container object after start"};
+  }
+  validate_container_value(object.initial_value);
+  const auto id = static_cast<ContainerObjectId>(
+      impl_->container_objects.size());
+  if (static_cast<std::size_t>(id)
+      != impl_->container_objects.size()) {
+    throw std::length_error{"too many SimIR container objects"};
+  }
+  impl_->container_objects.push_back(std::move(object));
+  return id;
+}
+
 ProcessId Interpreter::add_process(Process process) {
   if (impl_->started) {
     throw std::logic_error("cannot add a SimIR process after start");
@@ -110,6 +127,27 @@ ProcessId Interpreter::add_process(Process process) {
           "duplicate SimIR debug-local name"};
     }
   }
+  if (process.container_register_types.size()
+      != process.container_register_count) {
+    throw std::invalid_argument{
+        "SimIR container register type count does not match register count"};
+  }
+  std::set<std::string> container_local_names;
+  for (const auto& local : process.debug_container_locals) {
+    if (local.name.empty()
+        || local.register_id >= process.container_register_count
+        || local.type != process.container_register_types.at(
+            local.register_id)) {
+      throw std::invalid_argument{
+          "invalid SimIR container debug-local metadata"};
+    }
+    if (!container_local_names.insert(local.name).second
+        || local_names.contains(local.name)
+        || string_local_names.contains(local.name)) {
+      throw std::invalid_argument{
+          "duplicate SimIR debug-local name"};
+    }
+  }
   std::set<SignalId> outputs;
   for (const auto& operation : process.operations) {
     const auto signal = output_signal(operation);
@@ -129,6 +167,14 @@ ProcessId Interpreter::add_process(Process process) {
   Impl::ProcessState state;
   state.registers.assign(process.register_count, PackedLogic4{});
   state.string_registers.assign(process.string_register_count, {});
+  state.container_registers.reserve(
+      process.container_register_count);
+  for (const auto& type : process.container_register_types) {
+    ContainerValue value;
+    value.type = type;
+    validate_container_value(value);
+    state.container_registers.push_back(std::move(value));
+  }
   state.random_state = Impl::initial_random_state(
       impl_->root_seed, id);
   state.waiting_on_static = !process.initialize;
@@ -282,6 +328,23 @@ void Interpreter::deposit_string_object(
   impl_->get_string_object(object).initial_value = value;
 }
 
+const ContainerValue& Interpreter::container_object_value(
+    const ContainerObjectId object) const {
+  return impl_->get_container_object(object).initial_value;
+}
+
+void Interpreter::deposit_container_object(
+    const ContainerObjectId object,
+    ContainerValue value) {
+  validate_container_value(value);
+  auto& target = impl_->get_container_object(object).initial_value;
+  if (target.type != value.type) {
+    throw std::invalid_argument{
+        "SimIR container deposit type does not match object type"};
+  }
+  target = std::move(value);
+}
+
 const PackedLogic4& Interpreter::driver_value(
     const ProcessId process,
     const SignalId signal) const {
@@ -321,6 +384,22 @@ std::string Interpreter::read_debug_string_local(
     return state.executor->read_string_register(local.register_id);
   }
   return state.string_registers.at(local.register_id);
+}
+
+ContainerValue Interpreter::read_debug_container_local(
+    const ProcessId process,
+    const std::size_t local_index) const {
+  auto& state = impl_->get_process(process);
+  if (local_index >= state.program.debug_container_locals.size()) {
+    throw std::out_of_range{
+        "invalid SimIR container debug-local index"};
+  }
+  const auto& local =
+      state.program.debug_container_locals[local_index];
+  if (state.executor) {
+    return state.executor->read_container_register(local.register_id);
+  }
+  return state.container_registers.at(local.register_id);
 }
 
 bool Interpreter::stopped_by_design() const noexcept {

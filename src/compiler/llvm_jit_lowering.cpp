@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_internal.hpp"
 #include "llvm_jit_lowering_internal.hpp"
-
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -13,7 +12,6 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/raw_ostream.h>
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -23,7 +21,6 @@
 #include <utility>
 #include <variant>
 #include <vector>
-
 namespace fsim::compiler::llvm_detail {
 
 using runtime::Logic9;
@@ -105,12 +102,10 @@ using runtime::simir::WriteUpdate;
 using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
-
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
 };
 template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
-
 void lower_process(llvm::Module &module, const std::string &symbol,
                    const Process &process,
                    const std::span<const std::uint32_t> signal_widths,
@@ -131,7 +126,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -408,7 +403,6 @@ void lower_process(llvm::Module &module, const std::string &symbol,
     write_formatted_logic9_callback =
         load_callback(45, "write_formatted_logic9");
   }
-
   auto *read_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
   auto *write_type =
@@ -560,7 +554,6 @@ void lower_process(llvm::Module &module, const std::string &symbol,
           llvm::Type::getVoidTy(context),
           {pointer, i32, i32, i32, pointer},
           false);
-
   auto *register_aval = builder.CreateLoad(
       pointer, builder.CreateStructGEP(frame_type, frame_argument, 8),
       "register.aval.base");
@@ -989,6 +982,10 @@ void lower_process(llvm::Module &module, const std::string &symbol,
     FileOperationLowerer file_lowerer{
         builder, registers, context, i32, i64, context_pointer, process.id,
         instruction, runtime_type, runtime_argument,
+        runtime_error_if, branch_to_next};
+    ContainerOperationLowerer container_lowerer{
+        builder, registers, context, i32, i64, context_pointer,
+        process.id, instruction, runtime_type, runtime_argument,
         runtime_error_if, branch_to_next};
     SignalOperationLowerer signal_lowerer{
         builder,
@@ -1989,6 +1986,9 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               } else if constexpr (
                   requires { string_lowerer.lower(operation); }) {
                 string_lowerer.lower(operation);
+              } else if constexpr (
+                  requires { container_lowerer.lower(operation); }) {
+                container_lowerer.lower(operation);
               } else {
                 llvm_unreachable(
                     "unsupported operations were rejected before lowering");

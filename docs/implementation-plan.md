@@ -3784,6 +3784,57 @@ warnings-as-errors Debug regression passed all 57 configured tests in 68.89
 seconds, and Release passed all 57 configured tests in 30.72 seconds on
 2026-07-30. No CI state was inspected.
 
+### Seventieth feature batch — bounded SystemVerilog dynamic arrays and queues
+
+Same-language SystemVerilog-2017 now retains one-dimensional integral dynamic
+arrays `[]`, unbounded queues `[$]`, and bounded queues `[$:N]` as typed HIR,
+elaborated objects, and automatic callable values distinct from packed vectors.
+Supported element types include the existing packed `bit`/`logic`/`reg`
+family and integer-family types, preserving width, signedness, and two- or
+four-state domain. Multidimensional, static unpacked, associative, nonintegral,
+parameter, ref, and static-lifetime forms receive bounded diagnostics.
+
+Dynamic arrays initialize empty and support `new[size]`, whole-value copy,
+replacement, element reads and writes, `size()`, and `delete()`. Queues add
+`push_front`, `push_back`, `pop_front`, and `pop_back`. Every index must be
+known and in range, empty pops fail deterministically, and every container is
+limited to 4,096 elements. On insertion into a full bounded queue, the back
+element is discarded after insertion, so an over-capacity `push_back` leaves
+the prior queue unchanged while `push_front` retains the new front.
+
+Stable elaborated object IDs and SimIR register IDs keep owned vectors,
+allocators, and element addresses outside generated code. Immutable operations
+cover resize, copy, object/register transfer, size, indexed reads and writes,
+delete, and queue insertion/removal. One append-only plain-C callback follows
+the file ABI tail and delegates every operation to common runtime storage;
+native callback failures are contained at the current source instruction.
+
+Automatic containers copy by value through nonrecursive functions and
+input/output/inout task formals. Deferred task copy-out remains ordered, and
+container registers remain live across delay suspension, debugger stop/read,
+and resume. Debugger `show` renders module containers and `locals` renders
+suspended automatic values through shared interpreter/native accessors.
+
+Native-object schema 23 records exact container register types, queue bounds,
+the 4,096-element limit, object identities, every operation field, and
+transitive callable/source provenance. The standalone application differential
+proves interpreter, LLVM O0, and LLVM O2 output/final-object equivalence,
+native execution without fallback, task suspension and copy-out, debugger
+observation, and safe-point resumption.
+
+Associative arrays, general static unpacked arrays and memories,
+multidimensional containers, arrays of strings or aggregates, additional array
+methods, mixed-language transfer, and unrestricted heap behavior remain
+outside this bounded slice.
+
+The focused warnings-as-errors frontend, runtime, elaboration, LLVM,
+application, diagnostic-catalog, and source-budget gates passed. The catalog
+covers 1,121 production codes and the source gate covers 284 authored files
+with an empty allowlist and a maximum of 2,000 lines. The exact LLVM 22.1.8
+warnings-as-errors Debug regression passed all 59 configured tests in 69.02
+seconds, and Release passed all 59 configured tests in 30.53 seconds on
+2026-07-30. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

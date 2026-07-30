@@ -525,6 +525,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-152` | error | Expected `,` after a file-output handle. |
 | `FSIM-SV-PARSE-153` | error | Expected `)` after file-output arguments. |
 | `FSIM-SV-PARSE-154` | error | Expected `;` after `$fdisplay` or `$fwrite`. |
+| `FSIM-SV-PARSE-155` | error | Expected `]` after a SystemVerilog queue dimension. |
+| `FSIM-SV-PARSE-156` | error | Expected `;` after a dynamic-array or queue method call. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -710,6 +712,11 @@ therefore excluded.
 | `FSIM-SV-SEM-074` | error | A bounded text-file system function or task appears outside SystemVerilog-2017 input. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
+| `FSIM-SV-SEM-077` | error | Dynamic arrays and queues are used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-078` | error | An unpacked declaration is not a supported one-dimensional dynamic array or queue. |
+| `FSIM-SV-SEM-079` | error | A dynamic array or queue has an unsupported nonintegral element type. |
+| `FSIM-SV-SEM-080` | error | A dynamic array or queue declares more than one unpacked dimension. |
+| `FSIM-SV-SEM-081` | error | A supported dynamic-array or queue method has the wrong argument count. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -1024,6 +1031,18 @@ therefore excluded.
 | `FSIM-ELAB-SVFILE-006` | error | `$ferror` does not have an integer handle and mutable string target. |
 | `FSIM-ELAB-SVFILE-007` | error | A bounded formatted file-output value cannot be lowered. |
 | `FSIM-ELAB-SVFILE-008` | error | A module integer initializer is not a known 32-bit constant. |
+| `FSIM-ELAB-SVCONTAINER-001` | error | A dynamic-array or queue local is duplicated in one automatic scope. |
+| `FSIM-ELAB-SVCONTAINER-002` | error | A container element expression has no resolvable element type. |
+| `FSIM-ELAB-SVCONTAINER-003` | error | A container element width is outside the executable 1-to-64-bit range. |
+| `FSIM-ELAB-SVCONTAINER-004` | error | A bounded queue maximum index is unknown or outside 0 through 4,095. |
+| `FSIM-ELAB-SVCONTAINER-005` | error | A container value is not a direct supported object reference. |
+| `FSIM-ELAB-SVCONTAINER-006` | error | A dynamic-array or queue expression references an unknown container object. |
+| `FSIM-ELAB-SVCONTAINER-007` | error | A container method receiver is not a direct supported object. |
+| `FSIM-ELAB-SVCONTAINER-008` | error | A dynamic-array or queue uses an unsupported method. |
+| `FSIM-ELAB-SVCONTAINER-009` | error | A container assignment is nonblocking or has a timing/event control. |
+| `FSIM-ELAB-SVCONTAINER-010` | error | A whole-container assignment is neither `new[size]` nor a compatible container value. |
+| `FSIM-ELAB-SVCONTAINER-011` | error | A container target is neither a whole object nor one element index. |
+| `FSIM-ELAB-SVCONTAINER-012` | error | A module container uses a declaration initializer instead of an initial block. |
 | `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
 | `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
 | `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |

@@ -25,6 +25,11 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     }
     register_initialized_.resize(layout.register_count);
     string_registers_.resize(layout.string_register_count);
+    container_registers_.reserve(process.container_register_types.size());
+    for (const auto& type : process.container_register_types) {
+      container_registers_.push_back(
+          runtime::simir::ContainerValue{type, {}});
+    }
     jit_.initialize_frame(
         handle_,
         frame_,
@@ -124,6 +129,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     runtime.file_read_line = file_read_line;
     runtime.file_end_of_file = file_end_of_file;
     runtime.file_error = file_error;
+    runtime.container_operation = container_operation;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -222,6 +228,12 @@ LlvmProcessExecutor::LlvmProcessExecutor(
                 process_.id,
                 error.instruction(),
                 "text file runtime callback failed");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              container_callback_failure:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "bounded container runtime callback failed");
         }
         throw;
       } catch (...) {
@@ -394,26 +406,6 @@ void LlvmProcessExecutor::write_register(
     }
     register_initialized_[id] = 1;
   }
-
-[[nodiscard]] std::string LlvmProcessExecutor::read_string_register(
-    const runtime::simir::StringRegisterId id) const {
-  if (id >= string_registers_.size()) {
-    throw compiler::LlvmJitError{
-        "compiled process string-register request is out of range"};
-  }
-  return string_registers_[id];
-}
-
-void LlvmProcessExecutor::write_string_register(
-    const runtime::simir::StringRegisterId id,
-    const std::string_view value) {
-  if (id >= string_registers_.size()
-      || value.size() > runtime::simir::maximum_string_bytes) {
-    throw compiler::LlvmJitError{
-        "compiled process string-register write is out of range"};
-  }
-  string_registers_[id] = value;
-}
 
 template <typename Boundary>
 void LlvmProcessExecutor::require_boundary(

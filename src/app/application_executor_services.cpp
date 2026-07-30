@@ -73,6 +73,43 @@ std::uint64_t entropy_seed() {
 
 #if defined(FSIM_HAS_LLVM)
 
+[[nodiscard]] std::string LlvmProcessExecutor::read_string_register(
+    const runtime::simir::StringRegisterId id) const {
+  if (id >= string_registers_.size()) {
+    throw compiler::LlvmJitError{
+        "compiled process string-register request is out of range"};
+  }
+  return string_registers_[id];
+}
+
+void LlvmProcessExecutor::write_string_register(
+    const runtime::simir::StringRegisterId id,
+    const std::string_view value) {
+  if (id >= string_registers_.size()
+      || value.size() > runtime::simir::maximum_string_bytes) {
+    throw compiler::LlvmJitError{
+        "compiled process string-register write is out of range"};
+  }
+  string_registers_[id] = value;
+}
+
+runtime::simir::ContainerValue
+LlvmProcessExecutor::read_container_register(
+    const runtime::simir::ContainerRegisterId id) const {
+  return container_registers_.at(id);
+}
+
+void LlvmProcessExecutor::write_container_register(
+    const runtime::simir::ContainerRegisterId id,
+    const runtime::simir::ContainerValue& value) {
+  if (id >= container_registers_.size()
+      || container_registers_[id].type != value.type) {
+    throw compiler::LlvmJitError{
+        "compiled process container-register write is out of range"};
+  }
+  container_registers_[id] = value;
+}
+
 runtime::simir::FileHandle LlvmProcessExecutor::checked_file_handle(
     const std::uint64_t aval,
     const std::uint64_t bval) {
@@ -336,6 +373,209 @@ std::uint32_t LlvmProcessExecutor::file_error(
     return 0;
   } catch (...) {
     capture_file_failure(state, process, instruction);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::container_operation(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint64_t input0_aval,
+    const std::uint64_t input0_bval,
+    const std::uint64_t input1_aval,
+    const std::uint64_t input1_bval,
+    std::uint64_t* result_aval,
+    std::uint64_t* result_bval) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    if (state.executor == nullptr || state.context == nullptr
+        || result_aval == nullptr || result_bval == nullptr) {
+      throw compiler::LlvmJitError{
+          "invalid generated container callback"};
+    }
+    *result_aval = 0;
+    *result_bval = 0;
+    auto& registers = state.executor->container_registers_;
+    const auto& operation =
+        callback_operation(state, process, instruction);
+    const auto index =
+        [&](const std::uint64_t aval,
+            const std::uint64_t bval,
+            const bool signed_index,
+            const std::string_view role) {
+          if (bval != 0
+              || (signed_index
+                  && static_cast<std::int32_t>(
+                         static_cast<std::uint32_t>(aval))
+                      < 0)) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                std::string{role}
+                    + (bval != 0
+                           ? " must be a known integral value"
+                           : " cannot be negative")};
+          }
+          return static_cast<std::size_t>(aval);
+        };
+    const auto require_same =
+        [&](const runtime::simir::ContainerValue& left,
+            const runtime::simir::ContainerValue& right) {
+          if (left.type != right.type) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "container value type mismatch"};
+          }
+        };
+    const auto element =
+        [&](const runtime::simir::ContainerValue& target,
+            const std::uint64_t aval,
+            const std::uint64_t bval) {
+          if (target.type.two_state && bval != 0) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "container element write type mismatch"};
+          }
+          return PackedLogic4::from_aval_bval(
+              target.type.element_width, aval, bval);
+        };
+    if (const auto* resize =
+            std::get_if<runtime::simir::ResizeContainer>(
+                &operation)) {
+      auto& target = registers.at(resize->target);
+      if (target.type.queue) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "new[size] cannot resize a queue"};
+      }
+      const auto size = index(
+          input0_aval, input0_bval, false,
+          "dynamic-array size");
+      if (size > runtime::simir::maximum_container_elements) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "dynamic-array size exceeds the 4096-element limit"};
+      }
+      target.elements.assign(
+          size,
+          PackedLogic4::from_aval_bval(
+              target.type.element_width, 0, 0));
+    } else if (const auto* copy =
+                   std::get_if<
+                       runtime::simir::CopyContainerRegister>(
+                       &operation)) {
+      auto& target = registers.at(copy->destination);
+      const auto& source = registers.at(copy->source);
+      require_same(target, source);
+      target.elements = source.elements;
+    } else if (const auto* read_object =
+                   std::get_if<
+                       runtime::simir::ReadContainerObject>(
+                       &operation)) {
+      auto& target = registers.at(read_object->destination);
+      const auto source =
+          state.context->read_container_object(read_object->object);
+      require_same(target, source);
+      target.elements = source.elements;
+    } else if (const auto* write_object =
+                   std::get_if<
+                       runtime::simir::WriteContainerObject>(
+                       &operation)) {
+      state.context->write_container_object(
+          write_object->object,
+          registers.at(write_object->source));
+    } else if (const auto* size =
+                   std::get_if<runtime::simir::ContainerSize>(
+                       &operation)) {
+      *result_aval = registers.at(size->source).elements.size();
+    } else if (const auto* read =
+                   std::get_if<runtime::simir::ContainerRead>(
+                       &operation)) {
+      const auto& source = registers.at(read->source);
+      const auto at = index(
+          input0_aval, input0_bval, read->signed_index,
+          "container index");
+      if (at >= source.elements.size()) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "container index is out of range"};
+      }
+      const auto word = source.elements[at].low_word();
+      *result_aval = word.aval;
+      *result_bval = word.bval;
+    } else if (const auto* write =
+                   std::get_if<runtime::simir::ContainerWrite>(
+                       &operation)) {
+      auto& target = registers.at(write->target);
+      const auto at = index(
+          input0_aval, input0_bval, write->signed_index,
+          "container index");
+      if (at >= target.elements.size()) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "container index is out of range"};
+      }
+      target.elements[at] =
+          element(target, input1_aval, input1_bval);
+    } else if (const auto* erase =
+                   std::get_if<runtime::simir::DeleteContainer>(
+                       &operation)) {
+      registers.at(erase->target).elements.clear();
+    } else if (const auto* push =
+                   std::get_if<runtime::simir::PushContainer>(
+                       &operation)) {
+      auto& target = registers.at(push->target);
+      if (!target.type.queue) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "queue method used on a dynamic array"};
+      }
+      const auto source =
+          element(target, input0_aval, input0_bval);
+      if (push->front) {
+        target.elements.insert(target.elements.begin(), source);
+      } else {
+        target.elements.push_back(source);
+      }
+      const auto maximum =
+          target.type.maximum_elements.value_or(
+              static_cast<std::uint32_t>(
+                  runtime::simir::maximum_container_elements));
+      if (target.elements.size() > maximum) {
+        target.elements.pop_back();
+      }
+    } else if (const auto* pop =
+                   std::get_if<runtime::simir::PopContainer>(
+                       &operation)) {
+      auto& target = registers.at(pop->target);
+      if (!target.type.queue || target.elements.empty()) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            target.type.queue
+                ? "cannot pop an empty queue"
+                : "queue method used on a dynamic array"};
+      }
+      const auto source = pop->front
+          ? target.elements.front()
+          : target.elements.back();
+      const auto word = source.low_word();
+      *result_aval = word.aval;
+      *result_bval = word.bval;
+      if (pop->front) {
+        target.elements.erase(target.elements.begin());
+      } else {
+        target.elements.pop_back();
+      }
+    } else {
+      throw compiler::LlvmJitError{
+          "compiled container callback has the wrong operation"};
+    }
+    return 0;
+  } catch (...) {
+    capture_failure(state);
     return 1;
   }
 }

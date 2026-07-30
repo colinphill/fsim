@@ -100,7 +100,9 @@ static_assert(
     offsetof(fsim_jit_runtime_v1, write_string_output) == 424);
 static_assert(offsetof(fsim_jit_runtime_v1, file_open) == 432);
 static_assert(offsetof(fsim_jit_runtime_v1, file_error) == 472);
-static_assert(sizeof(fsim_jit_runtime_v1) == 480);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, container_operation) == 480);
+static_assert(sizeof(fsim_jit_runtime_v1) == 488);
 static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
 static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
 static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
@@ -126,6 +128,9 @@ constexpr auto kJitRuntimeLogic9Size =
 constexpr auto kJitRuntimeStringSize =
     static_cast<std::uint32_t>(
         offsetof(fsim_jit_runtime_v1, file_open));
+constexpr auto kJitRuntimeFileSize =
+    static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, container_operation));
 
 class PersistentLlvmObjectCache final : public llvm::ObjectCache {
 public:
@@ -337,6 +342,7 @@ struct LlvmJit::Impl {
     bool uses_random_value{};
     bool uses_strings{};
     bool uses_files{};
+    bool uses_containers{};
   };
 
   struct NativeEntry {
@@ -504,6 +510,7 @@ void LlvmJit::add_process_module(
         validated.uses_random_value,
         validated.uses_strings,
         validated.uses_files,
+        validated.uses_containers,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -1041,7 +1048,7 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_files) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size < kJitRuntimeFileSize) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include text-file callbacks");
     }
@@ -1053,6 +1060,14 @@ LlvmJit::resume(const JitProcessHandle process,
         || runtime.file_error == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires text-file callbacks for this process");
+    }
+  }
+  if (entry.info.uses_containers) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)
+        || runtime.container_operation == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires bounded-container callbacks for this "
+          "process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {

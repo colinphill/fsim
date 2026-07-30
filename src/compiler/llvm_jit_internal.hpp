@@ -49,6 +49,7 @@ struct ValidatedProcess {
   bool uses_random_value{};
   bool uses_strings{};
   bool uses_files{};
+  bool uses_containers{};
 };
 
 [[nodiscard]] bool valid_symbol(std::string_view symbol) noexcept;

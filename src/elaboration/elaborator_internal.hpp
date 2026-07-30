@@ -717,6 +717,8 @@ public:
         const std::unordered_map<std::string, SignalId>& signals,
         const std::unordered_map<std::string, StringObjectId>&
             string_objects,
+        const std::unordered_map<std::string, ContainerObjectId>&
+            container_objects,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_types,
         const std::unordered_map<
@@ -912,6 +914,16 @@ private:
 
     std::optional<StringRegisterId> lower_string_expression(
         const Expression& expression);
+    std::optional<ContainerRegisterId> lower_container_expression(
+        const Expression& expression);
+    [[nodiscard]] bool is_container_expression(
+        const Expression& expression) const;
+    [[nodiscard]] std::optional<ContainerType> container_type(
+        const frontend::Type& type,
+        const frontend::SourceSpan& span);
+    ContainerRegisterId allocate_container_register(
+        const ContainerType& type);
+    void lower_container_method(const Statement& statement);
 
     [[nodiscard]] bool is_string_expression(
         const Expression& expression) const;
@@ -1021,6 +1033,8 @@ private:
     const std::unordered_map<std::string, SignalId>& signals_;
     const std::unordered_map<std::string, StringObjectId>&
         string_objects_;
+    const std::unordered_map<std::string, ContainerObjectId>&
+        container_objects_;
     const std::unordered_map<
         std::string, const frontend::Type*>& visible_types_;
     const std::unordered_map<
@@ -1032,11 +1046,14 @@ private:
     Process process_;
     RegisterId next_register_{};
     StringRegisterId next_string_register_{};
+    ContainerRegisterId next_container_register_{};
     std::vector<std::size_t> register_widths_;
     std::vector<frontend::ValueDomain> register_domains_;
     std::unordered_map<std::string, RegisterId> locals_;
     std::unordered_map<std::string, StringRegisterId>
         string_locals_;
+    std::unordered_map<std::string, ContainerRegisterId>
+        container_locals_;
     std::unordered_map<std::string, bool> local_signed_;
     std::unordered_map<
         std::string, std::optional<frontend::PackedRange>>
@@ -1067,7 +1084,9 @@ private:
         bool result_is_string{};
         std::vector<RegisterId> arguments;
         std::vector<StringRegisterId> string_arguments;
+        std::vector<ContainerRegisterId> container_arguments;
         std::vector<bool> argument_is_string;
+        std::vector<bool> argument_is_container;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};
@@ -1088,7 +1107,9 @@ private:
         const frontend::TaskDeclaration* source{};
         std::vector<RegisterId> arguments;
         std::vector<StringRegisterId> string_arguments;
+        std::vector<ContainerRegisterId> container_arguments;
         std::vector<bool> argument_is_string;
+        std::vector<bool> argument_is_container;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};

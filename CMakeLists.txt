@@ -321,8 +321,9 @@ add_library(
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
     src/runtime/simir.cpp
-    src/runtime/simir_arithmetic.cpp
-    src/runtime/simir_execution.cpp
+  src/runtime/simir_arithmetic.cpp
+  src/runtime/simir_containers.cpp
+  src/runtime/simir_execution.cpp
     src/runtime/simir_files.cpp
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
@@ -370,6 +371,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_tasks.cpp
       src/elaboration/lowerer_types.cpp
       src/elaboration/lowerer_sv_strings.cpp
+      src/elaboration/lowerer_sv_containers.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)
@@ -512,6 +514,7 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit_operations_output.cpp
       src/compiler/llvm_jit_operations_signal.cpp
       src/compiler/llvm_jit_operations_string.cpp
+      src/compiler/llvm_jit_operations_container.cpp
       src/compiler/llvm_jit_operations_value.cpp
       src/compiler/llvm_jit_validation.cpp
       src/compiler/llvm_jit_value_lowering.cpp

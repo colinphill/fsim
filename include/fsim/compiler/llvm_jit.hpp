@@ -127,6 +127,7 @@ enum class JitGeneratedRuntimeErrorReason : std::uint8_t {
   call_stack_target,
   string_callback_failure,
   file_callback_failure,
+  container_callback_failure,
 };
 
 /// A failure deliberately reported by generated SimIR code.

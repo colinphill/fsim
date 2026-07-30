@@ -120,14 +120,32 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             function.return_type.domain);
         frame.arguments.reserve(function.arguments.size());
         frame.string_arguments.reserve(function.arguments.size());
+        frame.container_arguments.reserve(function.arguments.size());
         frame.argument_is_string.reserve(function.arguments.size());
+        frame.argument_is_container.reserve(function.arguments.size());
         for (const auto& argument : function.arguments) {
+            if (argument.type.systemverilog_container) {
+                const auto type =
+                    container_type(argument.type, argument.span);
+                if (!type) {
+                    return std::nullopt;
+                }
+                frame.arguments.push_back({});
+                frame.string_arguments.push_back({});
+                frame.container_arguments.push_back(
+                    allocate_container_register(*type));
+                frame.argument_is_string.push_back(false);
+                frame.argument_is_container.push_back(true);
+                continue;
+            }
             if (argument.type.domain
                 == frontend::ValueDomain::String) {
                 frame.arguments.push_back({});
                 frame.string_arguments.push_back(
                     allocate_string_register());
+                frame.container_arguments.push_back({});
                 frame.argument_is_string.push_back(true);
+                frame.argument_is_container.push_back(false);
                 continue;
             }
             const auto width = argument.type.width();
@@ -143,7 +161,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
                 static_cast<std::size_t>(*width),
                 argument.type.domain));
             frame.string_arguments.push_back({});
+            frame.container_arguments.push_back({});
             frame.argument_is_string.push_back(false);
+            frame.argument_is_container.push_back(false);
         }
         frame.allocated = true;
     }
@@ -151,6 +171,18 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     for (std::size_t index = 0;
          index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
+        if (frame.argument_is_container[index]) {
+            const auto actual =
+                lower_container_expression(
+                    expression.operands[index]);
+            if (!actual) {
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(
+                CopyContainerRegister{
+                    frame.container_arguments[index], *actual});
+            continue;
+        }
         if (frame.argument_is_string[index]) {
             const auto actual =
                 lower_string_expression(
@@ -289,6 +321,8 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
 
     auto saved_locals = std::move(locals_);
     auto saved_string_locals = std::move(string_locals_);
+    auto saved_container_locals =
+        std::move(container_locals_);
     auto saved_signed = std::move(local_signed_);
     auto saved_ranges = std::move(local_ranges_);
     auto saved_integer_ranges = std::move(local_integer_ranges_);
@@ -300,6 +334,7 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
     const auto saved_active = active_function_;
     locals_.clear();
     string_locals_.clear();
+    container_locals_.clear();
     local_signed_.clear();
     local_ranges_.clear();
     local_integer_ranges_.clear();
@@ -350,7 +385,14 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
     }
     for (std::size_t index = 0;
          index < frame.source->arguments.size(); ++index) {
-        if (frame.argument_is_string[index]) {
+        if (frame.argument_is_container[index]) {
+            container_locals_.insert_or_assign(
+                frame.source->arguments[index].name,
+                frame.container_arguments[index]);
+            local_types_.insert_or_assign(
+                frame.source->arguments[index].name,
+                &frame.source->arguments[index].type);
+        } else if (frame.argument_is_string[index]) {
             string_locals_.insert_or_assign(
                 frame.source->arguments[index].name,
                 frame.string_arguments[index]);
@@ -386,6 +428,8 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
     local_signed_ = std::move(saved_signed);
     locals_ = std::move(saved_locals);
     string_locals_ = std::move(saved_string_locals);
+    container_locals_ =
+        std::move(saved_container_locals);
 }
 
 void Lowerer::diagnose_function_cycles() {

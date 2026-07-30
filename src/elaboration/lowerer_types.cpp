@@ -723,6 +723,9 @@ using namespace elaboration_detail;
                     collect_identifiers(argument, output);
                 }
                 break;
+            case StatementKind::ContainerMethod:
+                collect_identifiers(statement.value, output);
+                break;
             case StatementKind::ProcedureCall:
                 for (const auto& association :
                      statement.procedure_arguments) {

@@ -102,6 +102,7 @@ int main() {
     test_verilog_literal_display();
     test_systemverilog_random_functions();
     test_systemverilog_text_files();
+    test_systemverilog_containers();
     std::cout << "frontend tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << "frontend test failure: " << error.what() << '\n';

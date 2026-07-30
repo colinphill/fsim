@@ -47,6 +47,85 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
 
+        if ((expression.kind == ExpressionKind::Call
+             && (expression.text == ".size"
+                 || expression.text == ".pop_front"
+                 || expression.text == ".pop_back")
+             && !expression.operands.empty()
+             && is_container_expression(
+                 expression.operands.front()))
+            || (expression.kind == ExpressionKind::Index
+                && expression.operands.size() == 2
+                && is_container_expression(
+                    expression.operands.front()))) {
+            const auto source_expression =
+                expression.operands.front();
+            const auto source =
+                lower_container_expression(source_expression);
+            if (!source) {
+                return std::nullopt;
+            }
+            if (expression.kind == ExpressionKind::Call
+                && expression.text == ".size") {
+                const auto destination =
+                    allocate_register(
+                        32, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(
+                    ContainerSize{destination, *source});
+                return destination;
+            }
+            const auto* type =
+                source_expression.kind
+                        == ExpressionKind::Identifier
+                    ? object_type(source_expression.text)
+                    : nullptr;
+            if (type == nullptr) {
+                report(
+                    "FSIM-ELAB-SVCONTAINER-002",
+                    "container element type cannot be resolved",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto width = type->width();
+            if (!width) {
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(*width, type->domain);
+            if (expression.kind == ExpressionKind::Call) {
+                process_.operations.emplace_back(
+                    PopContainer{
+                        destination,
+                        *source,
+                        expression.text == ".pop_front"});
+                if (const auto object =
+                        container_objects_.find(
+                            source_expression.text);
+                    object != container_objects_.end()) {
+                    process_.operations.emplace_back(
+                        WriteContainerObject{
+                            object->second, *source});
+                }
+                return destination;
+            }
+            const auto index_width =
+                infer_width(expression.operands[1])
+                    .value_or(std::size_t{32});
+            const auto index = lower_expression(
+                expression.operands[1], index_width);
+            if (!index) {
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(
+                ContainerRead{
+                    destination,
+                    *source,
+                    *index,
+                    is_signed_expression(
+                        expression.operands[1])});
+            return destination;
+        }
+
         if (expression.kind == ExpressionKind::Call
             && expression.text == ".len"
             && expression.operands.size() == 1

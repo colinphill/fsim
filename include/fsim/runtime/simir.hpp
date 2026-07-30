@@ -23,6 +23,8 @@ namespace fsim::runtime::simir {
 using RegisterId = std::uint32_t;
 using StringRegisterId = std::uint32_t;
 using StringObjectId = std::uint32_t;
+using ContainerRegisterId = std::uint32_t;
+using ContainerObjectId = std::uint32_t;
 using FileHandle = std::uint32_t;
 using SignalId = std::uint32_t;
 using ProcessId = std::uint32_t;
@@ -70,6 +72,26 @@ struct CopyRegister {
 };
 
 inline constexpr std::size_t maximum_string_bytes = 4096;
+inline constexpr std::size_t maximum_container_elements = 4096;
+
+struct ContainerType {
+  std::uint32_t element_width{1};
+  bool two_state{};
+  bool signed_elements{};
+  bool queue{};
+  std::optional<std::uint32_t> maximum_elements;
+
+  friend bool operator==(const ContainerType&,
+                         const ContainerType&) = default;
+};
+
+struct ContainerValue {
+  ContainerType type;
+  std::vector<PackedLogic4> elements;
+
+  friend bool operator==(const ContainerValue&,
+                         const ContainerValue&) = default;
+};
 
 /// Construct a process-local byte string from immutable SimIR literal bytes.
 struct LoadStringConstant {
@@ -127,6 +149,61 @@ struct StringReplaceByte {
   RegisterId index{};
   RegisterId source{};
   bool signed_index{true};
+};
+
+struct ResizeContainer {
+  ContainerRegisterId target{};
+  RegisterId size{};
+};
+
+struct CopyContainerRegister {
+  ContainerRegisterId destination{};
+  ContainerRegisterId source{};
+};
+
+struct ReadContainerObject {
+  ContainerRegisterId destination{};
+  ContainerObjectId object{};
+};
+
+struct WriteContainerObject {
+  ContainerObjectId object{};
+  ContainerRegisterId source{};
+};
+
+struct ContainerSize {
+  RegisterId destination{};
+  ContainerRegisterId source{};
+};
+
+struct ContainerRead {
+  RegisterId destination{};
+  ContainerRegisterId source{};
+  RegisterId index{};
+  bool signed_index{true};
+};
+
+struct ContainerWrite {
+  ContainerRegisterId target{};
+  RegisterId index{};
+  RegisterId source{};
+  bool signed_index{true};
+};
+
+struct DeleteContainer {
+  ContainerRegisterId target{};
+};
+
+struct PushContainer {
+  ContainerRegisterId target{};
+  RegisterId source{};
+  bool front{};
+};
+
+struct PopContainer {
+  RegisterId destination{};
+  ContainerRegisterId target{};
+  bool front{};
 };
 
 /// Open one manifest-root-relative text file. Host stream and descriptor
@@ -827,7 +904,11 @@ using Operation =
                  SignalLastEvent, SignalActive, CopyRegister,
                  LoadStringConstant, CopyStringRegister, ReadStringObject,
                  WriteStringObject, ConcatenateStrings, CompareStrings,
-                 StringLength, StringIndex, StringReplaceByte, FileOpen,
+                 StringLength, StringIndex, StringReplaceByte,
+                 ResizeContainer, CopyContainerRegister,
+                 ReadContainerObject, WriteContainerObject,
+                 ContainerSize, ContainerRead, ContainerWrite,
+                 DeleteContainer, PushContainer, PopContainer, FileOpen,
                  FileClose, FileWriteLiteral, FileWriteFormatted,
                  FileWriteString, FileReadLine, FileEndOfFile,
                  FileErrorStatus, UnaryNot,
@@ -876,6 +957,11 @@ struct StringObject {
   std::string initial_value;
 };
 
+struct ContainerObject {
+  std::string name;
+  ContainerValue initial_value;
+};
+
 struct Sensitivity {
   SignalId signal{};
   EdgeKind edge = EdgeKind::any;
@@ -901,13 +987,23 @@ struct DebugStringLocal {
   SourceLocation source;
 };
 
+struct DebugContainerLocal {
+  std::string name;
+  ContainerRegisterId register_id{};
+  ContainerType type;
+  SourceLocation source;
+};
+
 struct Process {
   ProcessId id{};
   std::string name;
   std::size_t register_count{};
   std::size_t string_register_count{};
+  std::size_t container_register_count{};
   std::vector<DebugLocal> debug_locals;
   std::vector<DebugStringLocal> debug_string_locals;
+  std::vector<DebugContainerLocal> debug_container_locals;
+  std::vector<ContainerType> container_register_types;
   std::vector<Sensitivity> static_sensitivity;
   std::vector<Operation> operations;
   std::vector<ValueKind> register_value_kinds;
@@ -946,6 +1042,16 @@ public:
   virtual void write_string_object(StringObjectId, std::string_view) {
     throw std::logic_error{
         "alternate process executor cannot write string objects"};
+  }
+  [[nodiscard]] virtual ContainerValue
+  read_container_object(ContainerObjectId) const {
+    throw std::logic_error{
+        "alternate process executor does not support container objects"};
+  }
+  virtual void write_container_object(
+      ContainerObjectId, const ContainerValue&) {
+    throw std::logic_error{
+        "alternate process executor does not support container objects"};
   }
 
   [[nodiscard]] virtual FileHandle open_file(
@@ -1398,6 +1504,19 @@ public:
         "alternate process executor does not expose writable string "
         "registers"};
   }
+
+  [[nodiscard]] virtual ContainerValue
+  read_container_register(ContainerRegisterId) const {
+    throw std::logic_error{
+        "alternate process executor does not expose container registers"};
+  }
+
+  virtual void write_container_register(
+      ContainerRegisterId, const ContainerValue&) {
+    throw std::logic_error{
+        "alternate process executor does not expose writable container "
+        "registers"};
+  }
 };
 
 class InterpreterError : public std::runtime_error {
@@ -1469,6 +1588,8 @@ public:
 
   [[nodiscard]] SignalId add_signal(Signal signal);
   [[nodiscard]] StringObjectId add_string_object(StringObject object);
+  [[nodiscard]] ContainerObjectId add_container_object(
+      ContainerObject object);
   [[nodiscard]] ProcessId add_process(Process process);
 
   /// Restrict all HDL file operations to paths below this root. Must be set
@@ -1508,6 +1629,10 @@ public:
   string_object_value(StringObjectId object) const;
   void deposit_string_object(
       StringObjectId object, std::string_view value);
+  [[nodiscard]] const ContainerValue&
+  container_object_value(ContainerObjectId object) const;
+  void deposit_container_object(
+      ContainerObjectId object, ContainerValue value);
   /// Return one process-owned driver slot. For an unresolved signal this is
   /// the single underlying driven value.
   [[nodiscard]] const PackedLogic4& driver_value(
@@ -1515,6 +1640,8 @@ public:
   [[nodiscard]] PackedLogic4 read_debug_local(
       ProcessId process, std::size_t local_index) const;
   [[nodiscard]] std::string read_debug_string_local(
+      ProcessId process, std::size_t local_index) const;
+  [[nodiscard]] ContainerValue read_debug_container_local(
       ProcessId process, std::size_t local_index) const;
   /// True once a language-level Stop operation (`$finish` or equivalent) has
   /// executed. External scheduler stop requests do not set this flag.

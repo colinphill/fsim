@@ -78,8 +78,23 @@ String locals survive suspending automatic tasks and remain visible at
 debugger safe points; module strings support escaped `show` and bounded
 `deposit`, while `force` is rejected. Values are limited to 4,096 bytes and
 string operation/layout/provenance semantics participate in versioned
-native-cache identity. Files, Unicode code-point semantics, dynamic
-containers, general methods, and cross-language string boundaries remain
+native-cache identity. Unicode code-point semantics, general string methods,
+and cross-language string boundaries remain unsupported.
+
+SystemVerilog container status update: one-dimensional integral dynamic arrays
+`[]`, unbounded queues `[$]`, and bounded queues `[$:N]` execute as distinct
+module objects and automatic block/function/task values. The bounded subset
+supports empty initialization, dynamic-array `new[size]`, whole-value copy,
+`delete()`, known in-range element reads and writes, `size()`, and queue
+`push_front`, `push_back`, `pop_front`, and `pop_back`. Values preserve exact
+element width, signedness, and two-/four-state domain; queues additionally
+preserve kind and optional maximum. A full bounded queue discards its back
+element after insertion, and every container is limited to 4,096 elements.
+Automatic values copy through nonrecursive calls, survive suspended tasks,
+remain debugger-readable, and execute identically through the interpreter and
+native LLVM O0/O2 callback boundary. Associative arrays, static or
+multidimensional unpacked arrays, nonintegral elements, additional array
+methods, mixed-language transfer, and unrestricted allocation remain
 unsupported.
 
 VHDL array-aggregate status update: constrained one-dimensional

@@ -188,6 +188,13 @@ struct StringObjectInfo {
     frontend::SourceSpan declaration_span;
 };
 
+struct ContainerObjectInfo {
+    runtime::simir::ContainerObjectId id{};
+    std::string name;
+    runtime::simir::ContainerType type;
+    frontend::SourceSpan declaration_span;
+};
+
 using SpecializationId = std::uint32_t;
 
 /// One elaborated design-unit occurrence and its directly owned processes.
@@ -274,6 +281,8 @@ public:
     [[nodiscard]] const std::vector<SignalInfo>& signals() const noexcept;
     [[nodiscard]] const std::vector<StringObjectInfo>&
     string_objects() const noexcept;
+    [[nodiscard]] const std::vector<ContainerObjectInfo>&
+    container_objects() const noexcept;
     [[nodiscard]] const std::vector<runtime::simir::Process>& processes() const noexcept;
     [[nodiscard]] const std::vector<SpecializationInfo>&
     specializations() const noexcept;
@@ -320,6 +329,8 @@ private:
     std::vector<runtime::simir::Signal> signals_;
     std::vector<StringObjectInfo> string_object_info_;
     std::vector<runtime::simir::StringObject> string_objects_;
+    std::vector<ContainerObjectInfo> container_object_info_;
+    std::vector<runtime::simir::ContainerObject> container_objects_;
     std::vector<runtime::simir::Process> processes_;
     std::vector<SpecializationInfo> specializations_;
     std::vector<SystemCInstanceInfo> systemc_instances_;

@@ -92,6 +92,35 @@ Interpreter::Impl::get_process(ProcessId id) {
   return string_objects[id];
 }
 
+[[nodiscard]] ContainerValue&
+Interpreter::Impl::get_container_register(
+    ProcessState& process,
+    const ContainerRegisterId id) {
+  if (id >= process.container_registers.size()) {
+    throw InterpreterError(
+        process.program.id, process.pc,
+        "invalid container register ID");
+  }
+  return process.container_registers[id];
+}
+
+[[nodiscard]] ContainerObject& Interpreter::Impl::get_container_object(
+    const ContainerObjectId id) {
+  if (id >= container_objects.size()) {
+    throw std::out_of_range{"invalid SimIR container object ID"};
+  }
+  return container_objects[id];
+}
+
+[[nodiscard]] const ContainerObject&
+Interpreter::Impl::get_container_object(
+    const ContainerObjectId id) const {
+  if (id >= container_objects.size()) {
+    throw std::out_of_range{"invalid SimIR container object ID"};
+  }
+  return container_objects[id];
+}
+
 [[nodiscard]] ValueKind Interpreter::Impl::register_value_kind(
     const ProcessState& process,
     const RegisterId id)  {

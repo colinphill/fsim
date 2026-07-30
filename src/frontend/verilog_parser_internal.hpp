@@ -607,6 +607,8 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_optional_range(Type& type);
 
+  bool parse_optional_container_dimension(Type& type);
+
   [[nodiscard]] bool is_declaration_start() const;
 
   void parse_event_declaration(

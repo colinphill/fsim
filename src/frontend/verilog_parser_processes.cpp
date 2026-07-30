@@ -1244,6 +1244,26 @@ std::optional<Statement> VerilogParser::parse_statement() {
     return statement;
   }
 
+  if (at(TokenKind::Identifier)
+      && at(TokenKind::Dot, 1)
+      && at(TokenKind::Identifier, 2)
+      && at(TokenKind::LeftParen, 3)
+      && contains_word(
+          {"delete", "push_front", "push_back",
+           "pop_front", "pop_back"},
+          current(2).text)) {
+    const auto start = current();
+    Statement statement;
+    statement.kind = StatementKind::ContainerMethod;
+    statement.value = parse_expression();
+    expect(
+        TokenKind::Semicolon,
+        "';' after container method call",
+        "FSIM-SV-PARSE-156");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   if (at(TokenKind::Identifier)) {
     std::size_t lookahead = 1;
     while (at(TokenKind::Scope, lookahead) &&

@@ -720,6 +720,9 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   for (const auto& signal : unit.signals) {
     known.insert(signal.name);
   }
+  for (const auto& variable : unit.variables) {
+    known.insert(variable.name);
+  }
   std::unordered_set<std::string> rejected;
   for (const auto& reference : implicit_net_references_) {
     if (known.contains(reference.name)

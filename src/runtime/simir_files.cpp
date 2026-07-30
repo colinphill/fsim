@@ -283,4 +283,185 @@ std::string Interpreter::Impl::file_error(
   return file.last_error;
 }
 
+FileHandle Interpreter::Impl::known_file_handle(
+    ProcessState& process,
+    const RegisterId handle_register) {
+  const auto word =
+      get_register(process, handle_register).low_word();
+  if (word.width == 0 || word.width > 32
+      || word.bval != 0
+      || word.aval
+          > std::numeric_limits<FileHandle>::max()) {
+    throw InterpreterError{
+        process.program.id,
+        process.pc,
+        "file handle must be a known 32-bit integral value"};
+  }
+  return static_cast<FileHandle>(word.aval);
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileOpen& operation) {
+  try {
+    const auto handle = open_file(
+        process.program.id,
+        get_string_register(process, operation.path),
+        get_string_register(process, operation.mode));
+    get_register(process, operation.destination) =
+        PackedLogic4::from_aval_bval(32, handle, 0);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{
+        process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileClose& operation) {
+  try {
+    close_file(
+        process.program.id,
+        known_file_handle(process, operation.handle));
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{
+        process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileWriteLiteral& operation) {
+  try {
+    write_file(
+        process.program.id,
+        known_file_handle(process, operation.handle),
+        operation.text,
+        operation.newline);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{
+        process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileWriteFormatted& operation) {
+  try {
+    write_file(
+        process.program.id,
+        known_file_handle(process, operation.handle),
+        make_formatted_output(
+            operation.prefix,
+            operation.suffix,
+            operation.format,
+            get_register(process, operation.source),
+            operation.signed_decimal,
+            operation.suppress_leading_zero,
+            operation.minimum_width,
+            operation.left_justify,
+            operation.zero_pad),
+        operation.newline);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{
+        process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileWriteString& operation) {
+  try {
+    write_file(
+        process.program.id,
+        known_file_handle(process, operation.handle),
+        operation.prefix
+            + get_string_register(process, operation.source)
+            + operation.suffix,
+        operation.newline);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{
+        process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileReadLine& operation) {
+  try {
+    std::uint32_t count{};
+    auto line = read_file_line(
+        process.program.id,
+        known_file_handle(process, operation.handle),
+        count);
+    get_string_register(process, operation.target) =
+        std::move(line);
+    get_register(process, operation.destination) =
+        PackedLogic4::from_aval_bval(32, count, 0);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{
+        process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileEndOfFile& operation) {
+  try {
+    const bool eof = file_end_of_file(
+        process.program.id,
+        known_file_handle(process, operation.handle));
+    get_register(process, operation.destination) =
+        PackedLogic4::from_aval_bval(
+            32, eof ? 1U : 0U, 0);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{
+        process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileErrorStatus& operation) {
+  try {
+    bool has_error{};
+    auto message = file_error(
+        process.program.id,
+        known_file_handle(process, operation.handle),
+        has_error);
+    get_string_register(process, operation.target) =
+        std::move(message);
+    get_register(process, operation.destination) =
+        PackedLogic4::from_aval_bval(
+            32, has_error ? 1U : 0U, 0);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{
+        process.program.id, process.pc, error.what()};
+  }
+}
+
 }  // namespace fsim::runtime::simir

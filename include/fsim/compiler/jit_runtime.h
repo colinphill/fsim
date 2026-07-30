@@ -506,6 +506,23 @@ typedef struct fsim_jit_runtime_v1 {
       uint64_t handle_aval,
       uint64_t handle_bval,
       uint32_t* result);
+
+  /*
+   * Append-only bounded-container helper. instruction identifies immutable
+   * SimIR operation metadata. Dynamic storage and container registers remain
+   * embedding-owned; only scalar operands and an optional scalar result cross
+   * the ABI.
+   */
+  uint32_t (*container_operation)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint64_t input0_aval,
+      uint64_t input0_bval,
+      uint64_t input1_aval,
+      uint64_t input1_bval,
+      uint64_t* result_aval,
+      uint64_t* result_bval);
 } fsim_jit_runtime_v1;
 
 /*

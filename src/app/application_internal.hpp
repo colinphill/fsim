@@ -109,6 +109,12 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
   void write_string_register(
       runtime::simir::StringRegisterId id,
       std::string_view value) override;
+  [[nodiscard]] runtime::simir::ContainerValue
+  read_container_register(
+      runtime::simir::ContainerRegisterId id) const override;
+  void write_container_register(
+      runtime::simir::ContainerRegisterId id,
+      const runtime::simir::ContainerValue& value) override;
 
  private:
   struct CallbackState {
@@ -173,6 +179,11 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
   static std::uint32_t file_error(
       void*, std::uint32_t, std::uint32_t,
       std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
+  static std::uint32_t container_operation(
+      void*, std::uint32_t, std::uint32_t,
+      std::uint64_t, std::uint64_t,
+      std::uint64_t, std::uint64_t,
+      std::uint64_t*, std::uint64_t*) noexcept;
   static runtime::simir::FileHandle checked_file_handle(
       std::uint64_t aval, std::uint64_t bval);
   static const runtime::simir::Operation& callback_operation(
@@ -521,6 +532,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
   std::vector<std::uint64_t> register_logic9_plane3_;
   std::vector<std::uint8_t> register_initialized_;
   std::vector<std::string> string_registers_;
+  std::vector<runtime::simir::ContainerValue> container_registers_;
 };
 
 [[nodiscard]] compiler::JitOptimizationLevel jit_optimization(
@@ -819,6 +831,9 @@ class DebuggerSession final {
   [[nodiscard]] std::optional<std::pair<
       std::string, runtime::simir::StringObjectId>>
   resolve_string_object(std::string_view name) const;
+  [[nodiscard]] std::optional<std::pair<
+      std::string, runtime::simir::ContainerObjectId>>
+  resolve_container_object(std::string_view name) const;
 
   [[nodiscard]] std::optional<SimulationTick> command_time(
       const std::string_view text);

@@ -23,6 +23,11 @@ ElaboratedDesign::string_objects() const noexcept {
   return string_object_info_;
 }
 
+const std::vector<ContainerObjectInfo>&
+ElaboratedDesign::container_objects() const noexcept {
+  return container_object_info_;
+}
+
 const std::vector<runtime::simir::Process>&
 ElaboratedDesign::processes() const noexcept {
   return processes_;
@@ -83,6 +88,9 @@ ElaboratedDesign::create_interpreter(
   }
   for (const auto& object : string_objects_) {
     (void)interpreter->add_string_object(object);
+  }
+  for (const auto& object : container_objects_) {
+    (void)interpreter->add_container_object(object);
   }
   for (const auto& process : processes_) {
     (void)interpreter->add_process(process);

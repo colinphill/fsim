@@ -88,19 +88,12 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
                 + argument_name.text + "'");
       }
       current_procedural_names_.insert(argument_name.text);
+      (void)parse_optional_container_dimension(type);
       function.arguments.push_back(FunctionArgument{
           argument_name.text,
           std::move(type),
           direction,
           argument_name.span});
-      if (at(TokenKind::LeftBracket)) {
-        error(
-            current(),
-            "FSIM-SV-UNSUPPORTED-036",
-            "unpacked function arguments are not implemented");
-        skip_balanced(
-            TokenKind::LeftBracket, TokenKind::RightBracket);
-      }
       if (match(TokenKind::Assign)) {
         error(
             previous(),
@@ -349,13 +342,9 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
         error(argument_name, "FSIM-SV-SEM-067",
               "duplicate task argument '" + argument_name.text + "'");
       }
+      (void)parse_optional_container_dimension(type);
       task.arguments.push_back(TaskArgument{argument_name.text, std::move(type),
                                             direction, argument_name.span});
-      if (at(TokenKind::LeftBracket)) {
-        error(current(), "FSIM-SV-UNSUPPORTED-040",
-              "unpacked task arguments are not implemented");
-        skip_balanced(TokenKind::LeftBracket, TokenKind::RightBracket);
-      }
       if (match(TokenKind::Assign)) {
         error(previous(), "FSIM-SV-UNSUPPORTED-040",
               "default task arguments are not implemented");

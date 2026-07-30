@@ -176,6 +176,9 @@ void check_integer_range(
     const PackedLogic4& when_true,
     const PackedLogic4& when_false);
 
+void validate_container_value(const ContainerValue& value);
+[[nodiscard]] PackedLogic4 default_container_element(
+    const ContainerType& type);
 
 struct Interpreter::Impl {
   struct ExecutionContext;
@@ -185,6 +188,7 @@ struct Interpreter::Impl {
     InstructionIndex pc{};
     std::vector<PackedLogic4> registers;
     std::vector<std::string> string_registers;
+    std::vector<ContainerValue> container_registers;
     std::unique_ptr<ProcessExecutor> executor;
     std::vector<Sensitivity> dynamic_sensitivity;
     std::vector<bool> dynamic_triggered;
@@ -291,6 +295,7 @@ struct Interpreter::Impl {
   std::uint64_t root_seed{1};
   std::vector<Signal> signals;
   std::vector<StringObject> string_objects;
+  std::vector<ContainerObject> container_objects;
   std::filesystem::path file_root;
   std::map<FileHandle, FileState> files;
   FileHandle next_file_handle{1};
@@ -351,6 +356,13 @@ struct Interpreter::Impl {
   [[nodiscard]] const StringObject&
   get_string_object(StringObjectId id) const;
 
+  [[nodiscard]] ContainerValue& get_container_register(
+      ProcessState& process, ContainerRegisterId id);
+  [[nodiscard]] ContainerObject& get_container_object(
+      ContainerObjectId id);
+  [[nodiscard]] const ContainerObject& get_container_object(
+      ContainerObjectId id) const;
+
   void set_file_root(std::filesystem::path root);
   [[nodiscard]] FileHandle open_file(
       ProcessId process,
@@ -372,6 +384,27 @@ struct Interpreter::Impl {
       ProcessId process, FileHandle handle);
   [[nodiscard]] std::string file_error(
       ProcessId process, FileHandle handle, bool& has_error);
+  [[nodiscard]] FileHandle known_file_handle(
+      ProcessState&, RegisterId);
+  void execute_file(ProcessState&, const FileOpen&);
+  void execute_file(ProcessState&, const FileClose&);
+  void execute_file(ProcessState&, const FileWriteLiteral&);
+  void execute_file(ProcessState&, const FileWriteFormatted&);
+  void execute_file(ProcessState&, const FileWriteString&);
+  void execute_file(ProcessState&, const FileReadLine&);
+  void execute_file(ProcessState&, const FileEndOfFile&);
+  void execute_file(ProcessState&, const FileErrorStatus&);
+
+  void execute_container(ProcessState&, const ResizeContainer&);
+  void execute_container(ProcessState&, const CopyContainerRegister&);
+  void execute_container(ProcessState&, const ReadContainerObject&);
+  void execute_container(ProcessState&, const WriteContainerObject&);
+  void execute_container(ProcessState&, const ContainerSize&);
+  void execute_container(ProcessState&, const ContainerRead&);
+  void execute_container(ProcessState&, const ContainerWrite&);
+  void execute_container(ProcessState&, const DeleteContainer&);
+  void execute_container(ProcessState&, const PushContainer&);
+  void execute_container(ProcessState&, const PopContainer&);
 
   [[nodiscard]] static ValueKind register_value_kind(
       const ProcessState& process,

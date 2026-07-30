@@ -74,5 +74,6 @@ void test_systemverilog_named_events();
 void test_verilog_literal_display();
 void test_systemverilog_random_functions();
 void test_systemverilog_text_files();
+void test_systemverilog_containers();
 
 } // namespace fsim::tests::frontend

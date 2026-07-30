@@ -234,7 +234,9 @@ void VerilogParser::require_default_port_net_type(
 }
 
 [[nodiscard]] bool VerilogParser::is_net_type_keyword() const  {
-  return any_keyword({"wire", "reg", "logic", "bit", "integer"});
+  return any_keyword({
+      "wire", "reg", "logic", "bit", "byte", "shortint",
+      "int", "longint", "integer", "time"});
 }
 
 [[nodiscard]] bool VerilogParser::is_named_type_reference_start(
@@ -607,9 +609,28 @@ void VerilogParser::parse_optional_net_type(Type& type) {
   type.spelling = keyword_token.text;
   if (keyword_token.text == "bit") {
     type.domain = ValueDomain::Bit2;
-  } else if (keyword_token.text == "integer") {
+  } else if (
+      keyword_token.text == "byte"
+      || keyword_token.text == "shortint"
+      || keyword_token.text == "int"
+      || keyword_token.text == "longint"
+      || keyword_token.text == "integer") {
     type.domain = ValueDomain::Integer;
     type.is_signed = true;
+    const auto width =
+        keyword_token.text == "byte"
+            ? std::int64_t{8}
+        : keyword_token.text == "shortint"
+            ? std::int64_t{16}
+        : keyword_token.text == "longint"
+            ? std::int64_t{64}
+            : std::int64_t{32};
+    type.packed_range = PackedRange{
+        width - 1, 0, true};
+  } else if (keyword_token.text == "time") {
+    type.domain = ValueDomain::Bit2;
+    type.is_signed = false;
+    type.packed_range = PackedRange{63, 0, true};
   } else {
     type.domain = ValueDomain::Logic4;
   }
@@ -643,6 +664,72 @@ void VerilogParser::parse_optional_range(Type& type) {
       std::move(right_expression),
       cover(start.span, previous().span),
       std::nullopt};
+}
+
+bool VerilogParser::parse_optional_container_dimension(Type& type) {
+  if (!match(TokenKind::LeftBracket)) {
+    return false;
+  }
+  const auto start = previous();
+  SystemVerilogContainerInfo container;
+  if (match(TokenKind::RightBracket)) {
+    container.kind =
+        SystemVerilogContainerKind::DynamicArray;
+  } else if (
+      at(TokenKind::Identifier)
+      && current().text == "$") {
+    (void)advance();
+    container.kind = SystemVerilogContainerKind::Queue;
+    if (match(TokenKind::Colon)) {
+      container.queue_maximum = parse_expression();
+    }
+    expect(
+        TokenKind::RightBracket,
+        "']' after queue dimension",
+        "FSIM-SV-PARSE-155");
+  } else {
+    error(
+        start,
+        "FSIM-SV-SEM-078",
+        "only one-dimensional dynamic [] and queue [$] or [$:N] "
+        "containers are supported");
+    while (!at_end() && !at(TokenKind::RightBracket)) {
+      (void)advance();
+    }
+    (void)match(TokenKind::RightBracket);
+    return true;
+  }
+  container.span = cover(start.span, previous().span);
+  type.systemverilog_container = std::move(container);
+  if (language_ != Language::SystemVerilog2017) {
+    error(
+        start,
+        "FSIM-SV-SEM-077",
+        "dynamic arrays and queues require SystemVerilog-2017");
+  }
+  if (type.spelling == "wire"
+      || type.domain == ValueDomain::String
+      || (type.domain == ValueDomain::Unknown
+          && type.named_type.empty())) {
+    error(
+        start,
+        "FSIM-SV-SEM-079",
+        "bounded containers require a packed integral variable element "
+        "type");
+  }
+  if (at(TokenKind::LeftBracket)) {
+    error(
+        current(),
+        "FSIM-SV-SEM-080",
+        "multidimensional SystemVerilog containers are not supported");
+    while (match(TokenKind::LeftBracket)) {
+      while (!at_end() && !at(TokenKind::RightBracket)) {
+        (void)advance();
+      }
+      (void)match(TokenKind::RightBracket);
+    }
+  }
+  return true;
 }
 
 [[nodiscard]] bool VerilogParser::is_declaration_start() const  {
@@ -727,18 +814,15 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 
   for (;;) {
     const auto name = expect_identifier("declared name");
-    if (at(TokenKind::LeftBracket)) {
-      const auto dimension = current();
-      error(dimension, "FSIM-SV-UNSUPPORTED-007",
-            "unpacked arrays are not implemented in this frontend slice");
-      skip_balanced(TokenKind::LeftBracket, TokenKind::RightBracket);
-    }
+    auto declaration_type = spec.type;
+    (void)parse_optional_container_dimension(declaration_type);
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
     }
     if (initializer
-        && spec.type.domain != ValueDomain::String) {
+        && declaration_type.domain != ValueDomain::String
+        && !declaration_type.systemverilog_container) {
       error(
           name,
           "FSIM-SV-UNSUPPORTED-011",
@@ -747,7 +831,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       initializer.reset();
     }
 
-    if (spec.type.domain == ValueDomain::String) {
+    if (declaration_type.domain == ValueDomain::String
+        || declaration_type.systemverilog_container) {
       const auto duplicate_variable = std::ranges::any_of(
           unit.variables,
           [&](const VariableDeclaration& variable) {
@@ -777,7 +862,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       } else {
         unit.variables.push_back(VariableDeclaration{
             name.text,
-            spec.type,
+            std::move(declaration_type),
             std::move(initializer),
             span_from(start, previous())});
       }
@@ -788,7 +873,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     }
 
     SignalDeclaration declaration{
-        name.text, spec.type, spec.direction,
+        name.text, std::move(declaration_type), spec.direction,
         spec.direction != PortDirection::Unknown,
         span_from(start, previous())};
     const auto parameter_conflict = std::any_of(
@@ -894,13 +979,15 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
 
   for (;;) {
     const auto name = expect_identifier("local variable name");
+    auto declaration_type = type;
+    (void)parse_optional_container_dimension(declaration_type);
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
     }
     block.declarations.push_back(VariableDeclaration{
         name.text,
-        type,
+        std::move(declaration_type),
         std::move(initializer),
         span_from(name, previous())});
     current_procedural_names_.insert(name.text);

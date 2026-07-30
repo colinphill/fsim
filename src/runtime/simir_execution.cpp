@@ -42,6 +42,21 @@ struct Interpreter::Impl::ExecutionContext final
     }
     owner.get_string_object(object).initial_value = value;
   }
+  [[nodiscard]] ContainerValue read_container_object(
+      const ContainerObjectId object) const override {
+    return owner.get_container_object(object).initial_value;
+  }
+  void write_container_object(
+      const ContainerObjectId object,
+      const ContainerValue& value) override {
+    validate_container_value(value);
+    auto& target = owner.get_container_object(object).initial_value;
+    if (target.type != value.type) {
+      throw std::invalid_argument{
+          "container object write type mismatch"};
+    }
+    target = value;
+  }
 
   [[nodiscard]] FileHandle open_file(
       const std::string_view path,
@@ -992,20 +1007,6 @@ void Interpreter::Impl::execute(ProcessId id) {
           }
           return static_cast<std::size_t>(word.aval);
         };
-    const auto known_file_handle =
-        [&](const RegisterId handle_register) {
-          const auto word =
-              get_register(process, handle_register).low_word();
-          if (word.width == 0 || word.width > 32
-              || word.bval != 0
-              || word.aval
-                  > std::numeric_limits<FileHandle>::max()) {
-            fail(
-                process,
-                "file handle must be a known 32-bit integral value");
-          }
-          return static_cast<FileHandle>(word.aval);
-        };
     std::visit(
         Overloaded{
             [&](const LoadConstant &op) {
@@ -1162,104 +1163,6 @@ void Interpreter::Impl::execute(ProcessId id) {
               target[index] =
                   static_cast<char>(byte.aval & UINT64_C(0xff));
               ++process.pc;
-            },
-            [&](const FileOpen& op) {
-              try {
-                const auto handle = open_file(
-                    id, get_string_register(process, op.path),
-                    get_string_register(process, op.mode));
-                get_register(process, op.destination) =
-                    PackedLogic4::from_aval_bval(32, handle, 0);
-                ++process.pc;
-              } catch (const std::exception& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const FileClose& op) {
-              try {
-                close_file(id, known_file_handle(op.handle));
-                ++process.pc;
-              } catch (const std::exception& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const FileWriteLiteral& op) {
-              try {
-                write_file(id, known_file_handle(op.handle),
-                           op.text, op.newline);
-                ++process.pc;
-              } catch (const std::exception& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const FileWriteFormatted& op) {
-              try {
-                write_file(
-                    id, known_file_handle(op.handle),
-                    make_formatted_output(
-                        op.prefix, op.suffix, op.format,
-                        get_register(process, op.source),
-                        op.signed_decimal, op.suppress_leading_zero,
-                        op.minimum_width, op.left_justify, op.zero_pad),
-                    op.newline);
-                ++process.pc;
-              } catch (const std::exception& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const FileWriteString& op) {
-              try {
-                write_file(
-                    id, known_file_handle(op.handle),
-                    op.prefix
-                        + get_string_register(process, op.source)
-                        + op.suffix,
-                    op.newline);
-                ++process.pc;
-              } catch (const std::exception& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const FileReadLine& op) {
-              try {
-                std::uint32_t count{};
-                auto line = read_file_line(
-                    id, known_file_handle(op.handle), count);
-                get_string_register(process, op.target) =
-                    std::move(line);
-                get_register(process, op.destination) =
-                    PackedLogic4::from_aval_bval(32, count, 0);
-                ++process.pc;
-              } catch (const std::exception& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const FileEndOfFile& op) {
-              try {
-                const bool eof = file_end_of_file(
-                    id, known_file_handle(op.handle));
-                get_register(process, op.destination) =
-                    PackedLogic4::from_aval_bval(
-                        32, eof ? 1U : 0U, 0);
-                ++process.pc;
-              } catch (const std::exception& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const FileErrorStatus& op) {
-              try {
-                bool has_error{};
-                auto message = file_error(
-                    id, known_file_handle(op.handle), has_error);
-                get_string_register(process, op.target) =
-                    std::move(message);
-                get_register(process, op.destination) =
-                    PackedLogic4::from_aval_bval(
-                        32, has_error ? 1U : 0U, 0);
-                ++process.pc;
-              } catch (const std::exception& error) {
-                fail(process, error.what());
-              }
             },
             [&](const UnaryNot &op) {
               get_register(process, op.destination) =
@@ -1979,6 +1882,21 @@ void Interpreter::Impl::execute(ProcessId id) {
             },
             [&](const Halt &) {
               boundary = true;
+            },
+            [&](const auto& op) {
+              if constexpr (requires {
+                              execute_file(process, op);
+                            }) {
+                execute_file(process, op);
+              } else if constexpr (requires {
+                                     execute_container(process, op);
+                                   }) {
+                execute_container(process, op);
+              } else {
+                static_assert(
+                    sizeof(op) == 0,
+                    "unhandled SimIR operation");
+              }
             }},
         operation);
 

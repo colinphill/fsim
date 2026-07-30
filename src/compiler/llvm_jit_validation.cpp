@@ -30,6 +30,11 @@ using runtime::simir::CountOnes;
 using runtime::simir::CountBits;
 using runtime::simir::CopyRegister;
 using runtime::simir::CopyStringRegister;
+using runtime::simir::CopyContainerRegister;
+using runtime::simir::ContainerRead;
+using runtime::simir::ContainerSize;
+using runtime::simir::ContainerWrite;
+using runtime::simir::DeleteContainer;
 using runtime::simir::DebugPoint;
 using runtime::simir::Display;
 using runtime::simir::DynamicExtract;
@@ -68,10 +73,13 @@ using runtime::simir::Pause;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
 using runtime::simir::ReadStringObject;
+using runtime::simir::ReadContainerObject;
+using runtime::simir::ResizeContainer;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
 using runtime::simir::StringRegisterId;
+using runtime::simir::ContainerRegisterId;
 using runtime::simir::StringIndex;
 using runtime::simir::StringLength;
 using runtime::simir::StringDisplay;
@@ -113,6 +121,9 @@ using runtime::simir::WriteUpdate;
 using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::WriteStringObject;
+using runtime::simir::WriteContainerObject;
+using runtime::simir::PushContainer;
+using runtime::simir::PopContainer;
 using runtime::simir::Yield;
 using runtime::simir::maximum_string_bytes;
 
@@ -178,6 +189,8 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     return "mutable string runtime callback failed";
   case JitGeneratedRuntimeErrorReason::file_callback_failure:
     return "text file runtime callback failed";
+  case JitGeneratedRuntimeErrorReason::container_callback_failure:
+    return "bounded container runtime callback failed";
   }
   return "unknown generated runtime error";
 }
@@ -209,6 +222,7 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept {
   case JitGeneratedRuntimeErrorReason::call_stack_target:
   case JitGeneratedRuntimeErrorReason::string_callback_failure:
   case JitGeneratedRuntimeErrorReason::file_callback_failure:
+  case JitGeneratedRuntimeErrorReason::container_callback_failure:
     return reason;
   }
   return std::nullopt;
@@ -334,6 +348,19 @@ validate_process(const Process &process,
               instruction,
               std::string{role}
                   + " string register ID is out of range");
+        }
+      };
+  const auto validate_container_register =
+      [&](const ContainerRegisterId id,
+          const std::size_t instruction,
+          const std::string_view role) {
+        if (id >= process.container_register_count
+            || process.container_register_types.size()
+                != process.container_register_count) {
+          reject(
+              process, instruction,
+              std::string{role}
+                  + " container register is out of range");
         }
       };
 
@@ -655,6 +682,90 @@ validate_process(const Process &process,
               record_use(operation.source, index);
               constrain_width(operation.index, 32U, index);
               constrain_width(operation.source, 8U, index);
+            },
+            [&](const ResizeContainer& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.target, index, "target");
+              record_use(operation.size, index);
+              constrain_width(operation.size, 32U, index);
+            },
+            [&](const CopyContainerRegister& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.destination, index, "destination");
+              validate_container_register(
+                  operation.source, index, "source");
+            },
+            [&](const ReadContainerObject& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.destination, index, "destination");
+              (void)operation.object;
+            },
+            [&](const WriteContainerObject& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.source, index, "source");
+              (void)operation.object;
+            },
+            [&](const ContainerSize& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.source, index, "source");
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+            },
+            [&](const ContainerRead& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.source, index, "source");
+              record_use(operation.index, index);
+              record_definition(operation.destination, index);
+              constrain_width(
+                  operation.destination,
+                  process.container_register_types[
+                      operation.source].element_width,
+                  index);
+            },
+            [&](const ContainerWrite& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.target, index, "target");
+              record_use(operation.index, index);
+              record_use(operation.source, index);
+              constrain_width(
+                  operation.source,
+                  process.container_register_types[
+                      operation.target].element_width,
+                  index);
+            },
+            [&](const DeleteContainer& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.target, index, "target");
+            },
+            [&](const PushContainer& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.target, index, "target");
+              record_use(operation.source, index);
+              constrain_width(
+                  operation.source,
+                  process.container_register_types[
+                      operation.target].element_width,
+                  index);
+            },
+            [&](const PopContainer& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.target, index, "target");
+              record_definition(operation.destination, index);
+              constrain_width(
+                  operation.destination,
+                  process.container_register_types[
+                      operation.target].element_width,
+                  index);
             },
             [&](const FileOpen& operation) {
               result.uses_files = true;

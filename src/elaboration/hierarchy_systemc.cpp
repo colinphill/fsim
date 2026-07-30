@@ -727,12 +727,94 @@ using namespace elaboration_detail;
         }
         std::unordered_map<std::string, StringObjectId>
             local_string_objects;
+        std::unordered_map<std::string, ContainerObjectId>
+            local_container_objects;
         SystemVerilogStringEnvironment string_values;
         for (const auto& variable : unit.variables) {
             visible_types.emplace(
                 variable.name, &variable.type);
             visible_types.emplace(
                 path + "." + variable.name, &variable.type);
+            if (variable.type.systemverilog_container) {
+                const auto width = variable.type.width();
+                if (!width || *width == 0 || *width > 64) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-003",
+                        "container elements must have an executable width "
+                        "in 1..64",
+                        variable.span);
+                    continue;
+                }
+                ContainerType type;
+                type.element_width =
+                    static_cast<std::uint32_t>(*width);
+                type.two_state =
+                    is_two_state_domain(variable.type.domain);
+                type.signed_elements = variable.type.is_signed;
+                type.queue =
+                    variable.type.systemverilog_container->kind
+                    == frontend::SystemVerilogContainerKind::Queue;
+                if (variable.type.systemverilog_container
+                        ->queue_maximum) {
+                    std::string error;
+                    const auto maximum =
+                        evaluate_systemverilog_constant_expression(
+                            *variable.type.systemverilog_container
+                                 ->queue_maximum,
+                            {},
+                            parameter_environment,
+                            error);
+                    const auto maximum_index =
+                        maximum
+                            ? maximum->integer_value()
+                            : std::nullopt;
+                    if (!maximum_index
+                        || *maximum_index < 0
+                        || *maximum_index
+                            >= static_cast<std::int64_t>(
+                                maximum_container_elements)) {
+                        report(
+                            "FSIM-ELAB-SVCONTAINER-004",
+                            "bounded queue maximum index must specialize "
+                            "to a known value in 0..4095",
+                            variable.type.systemverilog_container
+                                ->queue_maximum->span);
+                        continue;
+                    }
+                    type.maximum_elements =
+                        static_cast<std::uint32_t>(
+                            *maximum_index + 1);
+                }
+                if (variable.initializer) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-012",
+                        "module container declaration initializers are not "
+                        "executable; use an initial block",
+                        variable.initializer->span);
+                    continue;
+                }
+                const auto index =
+                    design_.container_objects_.size();
+                const auto id =
+                    static_cast<ContainerObjectId>(index);
+                if (static_cast<std::size_t>(id) != index) {
+                    throw std::length_error{
+                        "too many elaborated container objects"};
+                }
+                const auto full_name =
+                    path + "." + variable.name;
+                design_.container_object_info_.push_back(
+                    ContainerObjectInfo{
+                        id, full_name, type, variable.span});
+                design_.container_objects_.push_back(
+                    ContainerObject{
+                        full_name, ContainerValue{type, {}}});
+                local_container_objects.emplace(
+                    variable.name, id);
+                local_container_objects.emplace(
+                    full_name, id);
+                continue;
+            }
             if (variable.type.domain
                 == frontend::ValueDomain::Integer) {
                 const frontend::SignalDeclaration declaration{
@@ -883,6 +965,7 @@ using namespace elaboration_detail;
             design_,
             local,
             local_string_objects,
+            local_container_objects,
             visible_types,
             visible_type_marks,
             unit.functions,

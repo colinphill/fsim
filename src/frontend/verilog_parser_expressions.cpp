@@ -436,6 +436,26 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             TokenKind::RightParen,
             "')' after method arguments",
             "FSIM-SV-PARSE-028");
+        const auto argument_count = operands.size() - 1U;
+        const auto expected_arguments =
+            member.text == "push_front"
+                    || member.text == "push_back"
+                ? std::optional<std::size_t>{1}
+            : member.text == "size"
+                    || member.text == "delete"
+                    || member.text == "pop_front"
+                    || member.text == "pop_back"
+                ? std::optional<std::size_t>{0}
+                : std::nullopt;
+        if (expected_arguments
+            && argument_count != *expected_arguments) {
+          error(
+              member,
+              "FSIM-SV-SEM-081",
+              "container method '" + member.text + "' requires "
+                  + std::to_string(*expected_arguments)
+                  + " argument(s)");
+        }
         expression = Expression{
             ExpressionKind::Call,
             "." + member.text,

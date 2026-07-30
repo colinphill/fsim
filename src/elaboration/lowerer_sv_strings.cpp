@@ -136,14 +136,32 @@ Lowerer::lower_string_expression(
       frame.string_result = allocate_string_register();
       frame.arguments.reserve(function.arguments.size());
       frame.string_arguments.reserve(function.arguments.size());
+      frame.container_arguments.reserve(function.arguments.size());
       frame.argument_is_string.reserve(function.arguments.size());
+      frame.argument_is_container.reserve(function.arguments.size());
       for (const auto& argument : function.arguments) {
+        if (argument.type.systemverilog_container) {
+          const auto type =
+              container_type(argument.type, argument.span);
+          if (!type) {
+            return std::nullopt;
+          }
+          frame.arguments.push_back({});
+          frame.string_arguments.push_back({});
+          frame.container_arguments.push_back(
+              allocate_container_register(*type));
+          frame.argument_is_string.push_back(false);
+          frame.argument_is_container.push_back(true);
+          continue;
+        }
         if (argument.type.domain
             == frontend::ValueDomain::String) {
           frame.arguments.push_back({});
           frame.string_arguments.push_back(
               allocate_string_register());
+          frame.container_arguments.push_back({});
           frame.argument_is_string.push_back(true);
+          frame.argument_is_container.push_back(false);
           continue;
         }
         const auto width = argument.type.width();
@@ -159,13 +177,27 @@ Lowerer::lower_string_expression(
         frame.arguments.push_back(
             allocate_register(*width, argument.type.domain));
         frame.string_arguments.push_back({});
+        frame.container_arguments.push_back({});
         frame.argument_is_string.push_back(false);
+        frame.argument_is_container.push_back(false);
       }
       frame.allocated = true;
     }
     for (std::size_t index = 0;
          index < function.arguments.size(); ++index) {
       const auto& formal = function.arguments[index];
+      if (frame.argument_is_container[index]) {
+        const auto actual =
+            lower_container_expression(
+                expression.operands[index]);
+        if (!actual) {
+          return std::nullopt;
+        }
+        process_.operations.emplace_back(
+            CopyContainerRegister{
+                frame.container_arguments[index], *actual});
+        continue;
+      }
       if (frame.argument_is_string[index]) {
         const auto actual =
             lower_string_expression(expression.operands[index]);

@@ -326,15 +326,36 @@ std::string Simulation::read_process_string_local(
       process, local_index);
 }
 
+runtime::simir::ContainerValue
+Simulation::read_process_container_local(
+    const runtime::simir::ProcessId process,
+    const std::size_t local_index) const {
+  return impl_->interpreter->read_debug_container_local(
+      process, local_index);
+}
+
 const std::string& Simulation::read_string_object(
     const runtime::simir::StringObjectId object) const {
   return impl_->interpreter->string_object_value(object);
+}
+
+const runtime::simir::ContainerValue&
+Simulation::read_container_object(
+    const runtime::simir::ContainerObjectId object) const {
+  return impl_->interpreter->container_object_value(object);
 }
 
 void Simulation::deposit_string_object(
     const runtime::simir::StringObjectId object,
     const std::string_view value) {
   impl_->interpreter->deposit_string_object(object, value);
+}
+
+void Simulation::deposit_container_object(
+    const runtime::simir::ContainerObjectId object,
+    runtime::simir::ContainerValue value) {
+  impl_->interpreter->deposit_container_object(
+      object, std::move(value));
 }
 
 void Simulation::deposit_signal(

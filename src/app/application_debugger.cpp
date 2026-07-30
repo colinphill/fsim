@@ -32,6 +32,19 @@ namespace {
   return result;
 }
 
+[[nodiscard]] std::string format_container(
+    const runtime::simir::ContainerValue& value) {
+  std::string result{"["};
+  for (std::size_t index = 0; index < value.elements.size(); ++index) {
+    if (index != 0) {
+      result += ", ";
+    }
+    result += value.elements[index].to_msb_string();
+  }
+  result += "]";
+  return result;
+}
+
 }  // namespace
 
 DebuggerSession::ExecutionGuard::~ExecutionGuard() {
@@ -113,6 +126,14 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       return;
     }
     if (command[0] == "show" && command.size() == 2) {
+      if (const auto object = resolve_container_object(command[1])) {
+        output_ << object->first << " = "
+                << format_container(
+                       simulation_.read_container_object(
+                           object->second))
+                << '\n';
+        return;
+      }
       if (const auto object = resolve_string_object(command[1])) {
         output_ << object->first << " = "
                 << escaped_string(
@@ -336,6 +357,19 @@ DebuggerSession::resolve_string_object(
   return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::pair<
+    std::string, runtime::simir::ContainerObjectId>>
+DebuggerSession::resolve_container_object(
+    const std::string_view name) const {
+  const auto relative = scope_ + "." + std::string{name};
+  for (const auto& object : simulation_.design().container_objects()) {
+    if (object.name == name || object.name == relative) {
+      return std::pair{object.name, object.id};
+    }
+  }
+  return std::nullopt;
+}
+
 [[nodiscard]] std::optional<SimulationTick> DebuggerSession::command_time(
     const std::string_view text)  {
     std::string time_error;
@@ -460,7 +494,8 @@ void DebuggerSession::show_locals()  {
     const auto& process =
         simulation_.design().processes().at(process_id);
     if (process.debug_locals.empty()
-        && process.debug_string_locals.empty()) {
+        && process.debug_string_locals.empty()
+        && process.debug_container_locals.empty()) {
       output_ << "(no locals)\n";
       return;
     }
@@ -481,6 +516,16 @@ void DebuggerSession::show_locals()  {
       output_ << local.name << " = "
               << escaped_string(
                      simulation_.read_process_string_local(
+                         process_id, index))
+              << '\n';
+    }
+    for (std::size_t index = 0;
+         index < process.debug_container_locals.size();
+         ++index) {
+      const auto& local = process.debug_container_locals[index];
+      output_ << local.name << " = "
+              << format_container(
+                     simulation_.read_process_container_local(
                          process_id, index))
               << '\n';
     }

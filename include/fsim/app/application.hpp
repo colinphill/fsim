@@ -143,10 +143,19 @@ class Simulation final {
       runtime::simir::ProcessId process, std::size_t local_index) const;
   [[nodiscard]] std::string read_process_string_local(
       runtime::simir::ProcessId process, std::size_t local_index) const;
+  [[nodiscard]] runtime::simir::ContainerValue
+  read_process_container_local(
+      runtime::simir::ProcessId process, std::size_t local_index) const;
   [[nodiscard]] const std::string& read_string_object(
       runtime::simir::StringObjectId object) const;
+  [[nodiscard]] const runtime::simir::ContainerValue&
+  read_container_object(
+      runtime::simir::ContainerObjectId object) const;
   void deposit_string_object(
       runtime::simir::StringObjectId object, std::string_view value);
+  void deposit_container_object(
+      runtime::simir::ContainerObjectId object,
+      runtime::simir::ContainerValue value);
   void deposit_signal(
       runtime::simir::SignalId signal,
       runtime::PackedLogic4 value);

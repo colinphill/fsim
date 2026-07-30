@@ -251,6 +251,59 @@ private:
   void check(llvm::Value* status, std::string_view label);
 };
 
+struct ContainerOperationLowerer {
+  llvm::IRBuilder<>& builder;
+  std::vector<RegisterSlot>& registers;
+  llvm::LLVMContext& context;
+  llvm::Type* i32;
+  llvm::Type* i64;
+  llvm::Value* context_pointer;
+  std::uint32_t process;
+  std::uint32_t instruction;
+  llvm::Value* callback;
+  llvm::FunctionType* callback_type;
+  std::function<void(
+      llvm::Value*,
+      JitGeneratedRuntimeErrorReason,
+      std::string_view)> runtime_error_if;
+  std::function<void()> branch_to_next;
+
+  ContainerOperationLowerer(
+      llvm::IRBuilder<>&,
+      std::vector<RegisterSlot>&,
+      llvm::LLVMContext&,
+      llvm::Type*,
+      llvm::Type*,
+      llvm::Value*,
+      std::uint32_t,
+      std::uint32_t,
+      llvm::StructType*,
+      llvm::Value*,
+      std::function<void(
+          llvm::Value*,
+          JitGeneratedRuntimeErrorReason,
+          std::string_view)>,
+      std::function<void()>);
+
+  void lower(const runtime::simir::ResizeContainer&);
+  void lower(const runtime::simir::CopyContainerRegister&);
+  void lower(const runtime::simir::ReadContainerObject&);
+  void lower(const runtime::simir::WriteContainerObject&);
+  void lower(const runtime::simir::ContainerSize&);
+  void lower(const runtime::simir::ContainerRead&);
+  void lower(const runtime::simir::ContainerWrite&);
+  void lower(const runtime::simir::DeleteContainer&);
+  void lower(const runtime::simir::PushContainer&);
+  void lower(const runtime::simir::PopContainer&);
+
+private:
+  void invoke(
+      std::optional<runtime::simir::RegisterId>,
+      std::optional<runtime::simir::RegisterId>,
+      std::optional<runtime::simir::RegisterId>,
+      std::string_view);
+};
+
 struct ControlFlowOperationLowerer {
   llvm::IRBuilder<>& builder;
   std::vector<RegisterSlot>& registers;

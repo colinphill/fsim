@@ -484,6 +484,111 @@ using namespace elaboration_detail;
         }
 
         auto target_name = base->text;
+        const auto container_local =
+            container_locals_.find(target_name);
+        const auto container_object =
+            container_objects_.find(target_name);
+        if (container_local != container_locals_.end()
+            || container_object != container_objects_.end()) {
+            if (statement.assignment_kind
+                    != AssignmentKind::Blocking
+                || statement.procedural_assignment_control
+                    != frontend::ProceduralAssignmentControl::None) {
+                report(
+                    "FSIM-ELAB-SVCONTAINER-009",
+                    "container assignments must be blocking and time-free",
+                    statement.span);
+                return;
+            }
+            const auto* source_type = object_type(target_name);
+            if (source_type == nullptr) {
+                return;
+            }
+            const auto runtime_type =
+                container_type(*source_type, statement.target.span);
+            const auto element_width = source_type->width();
+            if (!runtime_type || !element_width) {
+                return;
+            }
+            ContainerRegisterId target{};
+            if (container_local != container_locals_.end()) {
+                target = container_local->second;
+            } else {
+                target = allocate_container_register(*runtime_type);
+                process_.operations.emplace_back(
+                    ReadContainerObject{
+                        target, container_object->second});
+            }
+            if (statement.target.kind
+                == ExpressionKind::Identifier) {
+                const bool is_new =
+                    statement.value.kind
+                            == ExpressionKind::Index
+                    && statement.value.operands.size() == 2
+                    && statement.value.operands.front().kind
+                            == ExpressionKind::Identifier
+                    && statement.value.operands.front().text
+                            == "new";
+                if (is_new) {
+                    const auto size_width =
+                        infer_width(statement.value.operands[1])
+                            .value_or(std::size_t{32});
+                    const auto size = lower_expression(
+                        statement.value.operands[1], size_width);
+                    if (!size) {
+                        return;
+                    }
+                    process_.operations.emplace_back(
+                        ResizeContainer{target, *size});
+                } else {
+                    const auto value =
+                        lower_container_expression(statement.value);
+                    if (!value) {
+                        report(
+                            "FSIM-ELAB-SVCONTAINER-010",
+                            "whole-container assignment requires new[size] "
+                            "or a compatible container value",
+                            statement.value.span);
+                        return;
+                    }
+                    process_.operations.emplace_back(
+                        CopyContainerRegister{target, *value});
+                }
+            } else if (
+                statement.target.kind == ExpressionKind::Index
+                && statement.target.operands.size() == 2) {
+                const auto index_width =
+                    infer_width(statement.target.operands[1])
+                        .value_or(std::size_t{32});
+                const auto index = lower_expression(
+                    statement.target.operands[1], index_width);
+                const auto value = lower_expression(
+                    statement.value, *element_width, source_type);
+                if (!index || !value) {
+                    return;
+                }
+                process_.operations.emplace_back(
+                    ContainerWrite{
+                        target,
+                        *index,
+                        *value,
+                        is_signed_expression(
+                            statement.target.operands[1])});
+            } else {
+                report(
+                    "FSIM-ELAB-SVCONTAINER-011",
+                    "container targets support only whole-value or "
+                    "element-index blocking assignment",
+                    statement.target.span);
+                return;
+            }
+            if (container_object != container_objects_.end()) {
+                process_.operations.emplace_back(
+                    WriteContainerObject{
+                        container_object->second, target});
+            }
+            return;
+        }
         const auto string_local =
             string_locals_.find(target_name);
         const auto string_object =

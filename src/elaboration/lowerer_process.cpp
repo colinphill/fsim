@@ -36,6 +36,8 @@ Lowerer::Lowerer(
         const std::unordered_map<std::string, SignalId>& signals,
         const std::unordered_map<std::string, StringObjectId>&
             string_objects,
+        const std::unordered_map<std::string, ContainerObjectId>&
+            container_objects,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_types,
         const std::unordered_map<
@@ -47,6 +49,7 @@ Lowerer::Lowerer(
         : design_(design),
           signals_(signals),
           string_objects_(string_objects),
+          container_objects_(container_objects),
           visible_types_(visible_types),
           visible_type_marks_(visible_type_marks),
           functions_(functions),
@@ -66,10 +69,12 @@ Lowerer::Lowerer(
         hierarchy_ = std::string{hierarchy};
         next_register_ = 0;
         next_string_register_ = 0;
+        next_container_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
         string_locals_.clear();
+        container_locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();
@@ -198,6 +203,7 @@ Lowerer::Lowerer(
         lower_pending_functions();
         process_.register_count = next_register_;
         process_.string_register_count = next_string_register_;
+        process_.container_register_count = next_container_register_;
         process_.register_value_kinds.reserve(register_domains_.size());
         for (const auto domain : register_domains_) {
             process_.register_value_kinds.push_back(
@@ -205,10 +211,12 @@ Lowerer::Lowerer(
         }
         next_register_ = 0;
         next_string_register_ = 0;
+        next_container_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
         string_locals_.clear();
+        container_locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();
@@ -233,10 +241,12 @@ Lowerer::Lowerer(
         process_kind_ = ProcessKind::VhdlProcess;
         next_register_ = 0;
         next_string_register_ = 0;
+        next_container_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
         string_locals_.clear();
+        container_locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();
@@ -277,6 +287,7 @@ Lowerer::Lowerer(
         lower_pending_functions();
         process_.register_count = next_register_;
         process_.string_register_count = next_string_register_;
+        process_.container_register_count = next_container_register_;
         process_.register_value_kinds.reserve(register_domains_.size());
         for (const auto domain : register_domains_) {
             process_.register_value_kinds.push_back(
@@ -284,10 +295,12 @@ Lowerer::Lowerer(
         }
         next_register_ = 0;
         next_string_register_ = 0;
+        next_container_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
         string_locals_.clear();
+        container_locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();
@@ -542,6 +555,49 @@ Lowerer::Lowerer(
         pending.reserve(variables.size());
         std::unordered_set<std::string> declared_here;
         for (const auto& variable : variables) {
+            if (variable.type.systemverilog_container) {
+                if (!declared_here.emplace(variable.name).second) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-001",
+                        "duplicate container variable in the same scope '"
+                            + variable.name + "'",
+                        variable.span);
+                    continue;
+                }
+                const auto type =
+                    container_type(variable.type, variable.span);
+                if (!type) {
+                    continue;
+                }
+                const auto register_id =
+                    allocate_container_register(*type);
+                container_locals_.insert_or_assign(
+                    variable.name, register_id);
+                local_types_.insert_or_assign(
+                    variable.name, &variable.type);
+                process_.debug_container_locals.push_back(
+                    DebugContainerLocal{
+                        scoped_local_name(variable.name),
+                        register_id,
+                        *type,
+                        SourceLocation{
+                            variable.span.source_name,
+                            static_cast<std::uint32_t>(
+                                variable.span.begin.line),
+                            static_cast<std::uint32_t>(
+                                variable.span.begin.column)}});
+                if (variable.initializer) {
+                    const auto value =
+                        lower_container_expression(
+                            *variable.initializer);
+                    if (value) {
+                        process_.operations.emplace_back(
+                            CopyContainerRegister{
+                                register_id, *value});
+                    }
+                }
+                continue;
+            }
             if (variable.type.domain
                 == frontend::ValueDomain::String) {
                 if (!declared_here.emplace(variable.name).second) {
@@ -788,6 +844,7 @@ Lowerer::Lowerer(
     void Lowerer::lower_block(const Statement& statement) {
         auto outer_locals = locals_;
         auto outer_string_locals = string_locals_;
+        auto outer_container_locals = container_locals_;
         auto outer_signed = local_signed_;
         auto outer_ranges = local_ranges_;
         auto outer_integer_ranges = local_integer_ranges_;
@@ -799,6 +856,7 @@ Lowerer::Lowerer(
         local_scope_.pop_back();
         locals_ = std::move(outer_locals);
         string_locals_ = std::move(outer_string_locals);
+        container_locals_ = std::move(outer_container_locals);
         local_signed_ = std::move(outer_signed);
         local_ranges_ = std::move(outer_ranges);
         local_integer_ranges_ =
@@ -932,6 +990,9 @@ Lowerer::Lowerer(
         switch (statement.kind) {
         case StatementKind::Assignment:
             lower_assignment(statement);
+            break;
+        case StatementKind::ContainerMethod:
+            lower_container_method(statement);
             break;
         case StatementKind::If:
             lower_if(statement);

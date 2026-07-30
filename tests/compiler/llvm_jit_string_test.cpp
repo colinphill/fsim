@@ -11,8 +11,11 @@ void test_strings_at_level(
       .name = "strings",
       .register_count = 4,
       .string_register_count = 4,
+      .container_register_count = 0,
       .debug_locals = {},
       .debug_string_locals = {},
+      .debug_container_locals = {},
+      .container_register_types = {},
       .static_sensitivity = {},
       .operations = {
           LoadStringConstant{0, "fsim"},

@@ -115,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v22";
+    "fsim-llvm-native-object-v23";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -188,6 +188,22 @@ void add_dynamic_index_key(
   add_key_u64(builder, "register-count", process.register_count);
   add_key_u64(
       builder, "string-register-count", process.string_register_count);
+  add_key_u64(
+      builder, "container-register-count",
+      process.container_register_count);
+  for (const auto& type : process.container_register_types) {
+    add_key_u64(builder, "container-element-width", type.element_width);
+    add_key_u64(builder, "container-two-state", type.two_state ? 1U : 0U);
+    add_key_u64(
+        builder, "container-signed", type.signed_elements ? 1U : 0U);
+    add_key_u64(builder, "container-queue", type.queue ? 1U : 0U);
+    add_key_u64(
+        builder, "container-has-maximum",
+        type.maximum_elements ? 1U : 0U);
+    add_key_u64(
+        builder, "container-maximum",
+        type.maximum_elements.value_or(0));
+  }
   builder.add("mutable-string-semantics", "simir-string-layout-v1");
   builder.add("text-file-semantics", "simir-text-file-v1");
   add_key_u64(
@@ -356,6 +372,65 @@ void add_dynamic_index_key(
                   builder,
                   "signed-index",
                   value.signed_index ? 1U : 0U);
+            },
+            [&](const runtime::simir::ResizeContainer& value) {
+              builder.add("operation", "ResizeContainer");
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "size", value.size);
+            },
+            [&](const runtime::simir::CopyContainerRegister& value) {
+              builder.add("operation", "CopyContainerRegister");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const runtime::simir::ReadContainerObject& value) {
+              builder.add("operation", "ReadContainerObject");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "object", value.object);
+            },
+            [&](const runtime::simir::WriteContainerObject& value) {
+              builder.add("operation", "WriteContainerObject");
+              add_key_u64(builder, "object", value.object);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const runtime::simir::ContainerSize& value) {
+              builder.add("operation", "ContainerSize");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const runtime::simir::ContainerRead& value) {
+              builder.add("operation", "ContainerRead");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "index", value.index);
+              add_key_u64(
+                  builder, "signed-index",
+                  value.signed_index ? 1U : 0U);
+            },
+            [&](const runtime::simir::ContainerWrite& value) {
+              builder.add("operation", "ContainerWrite");
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "index", value.index);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder, "signed-index",
+                  value.signed_index ? 1U : 0U);
+            },
+            [&](const runtime::simir::DeleteContainer& value) {
+              builder.add("operation", "DeleteContainer");
+              add_key_u64(builder, "target", value.target);
+            },
+            [&](const runtime::simir::PushContainer& value) {
+              builder.add("operation", "PushContainer");
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "front", value.front ? 1U : 0U);
+            },
+            [&](const runtime::simir::PopContainer& value) {
+              builder.add("operation", "PopContainer");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "front", value.front ? 1U : 0U);
             },
             [&](const FileOpen& value) {
               builder.add("operation", "FileOpen");

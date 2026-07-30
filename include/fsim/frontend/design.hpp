@@ -211,6 +211,25 @@ struct VhdlArrayInfo {
   bool unconstrained{};
 };
 
+enum class SystemVerilogContainerKind {
+  DynamicArray,
+  Queue,
+};
+
+/// Source-level metadata for one bounded SystemVerilog unpacked container.
+///
+/// The surrounding Type continues to describe one packed integral element.
+/// Keeping the container kind and optional queue maximum separate prevents an
+/// unpacked object from being mistaken for a wider packed vector.
+struct SystemVerilogContainerInfo {
+  SystemVerilogContainerKind kind{
+      SystemVerilogContainerKind::DynamicArray};
+  // Present for `[$:N]`. The expression remains specialization-aware until
+  // elaboration converts the maximum index to a maximum element count.
+  std::optional<Expression> queue_maximum;
+  SourceSpan span;
+};
+
 enum class PackedAggregateKind {
   None,
   Struct,
@@ -274,6 +293,9 @@ struct Type {
   // resolved from one. The packed range above is the concrete object
   // constraint; this metadata preserves nominal array semantics.
   std::optional<VhdlArrayInfo> vhdl_array;
+  // Present only for a SystemVerilog dynamic array or queue. All scalar fields
+  // above describe one element, not the container as a whole.
+  std::optional<SystemVerilogContainerInfo> systemverilog_container;
 
   Type() = default;
   Type(
@@ -682,6 +704,7 @@ enum class StatementKind {
   Display,
   FileClose,
   FileDisplay,
+  ContainerMethod,
   MonitorControl,
   Report,
   Pause,
