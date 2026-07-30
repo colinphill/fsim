@@ -115,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v23";
+    "fsim-llvm-native-object-v24";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -198,12 +198,30 @@ void add_dynamic_index_key(
         builder, "container-signed", type.signed_elements ? 1U : 0U);
     add_key_u64(builder, "container-queue", type.queue ? 1U : 0U);
     add_key_u64(
+        builder, "container-associative",
+        type.associative ? 1U : 0U);
+    add_key_u64(
+        builder, "container-index-width", type.index_width);
+    add_key_u64(
+        builder, "container-index-two-state",
+        type.two_state_indices ? 1U : 0U);
+    add_key_u64(
+        builder, "container-index-signed",
+        type.signed_indices ? 1U : 0U);
+    add_key_u64(
         builder, "container-has-maximum",
         type.maximum_elements ? 1U : 0U);
     add_key_u64(
         builder, "container-maximum",
         type.maximum_elements.value_or(0));
   }
+  builder.add(
+      "container-semantics",
+      "bounded-associative-v1-canonical-numeric-order");
+  add_key_u64(
+      builder,
+      "container-entry-limit",
+      runtime::simir::maximum_container_elements);
   builder.add("mutable-string-semantics", "simir-string-layout-v1");
   builder.add("text-file-semantics", "simir-text-file-v1");
   add_key_u64(
@@ -419,6 +437,27 @@ void add_dynamic_index_key(
             [&](const runtime::simir::DeleteContainer& value) {
               builder.add("operation", "DeleteContainer");
               add_key_u64(builder, "target", value.target);
+              add_key_u64(
+                  builder, "has-index", value.index ? 1U : 0U);
+              add_key_u64(
+                  builder, "index", value.index.value_or(0));
+            },
+            [&](const runtime::simir::ContainerExists& value) {
+              builder.add("operation", "ContainerExists");
+              add_key_u64(
+                  builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "index", value.index);
+            },
+            [&](const runtime::simir::TraverseContainer& value) {
+              builder.add("operation", "TraverseContainer");
+              add_key_u64(
+                  builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "index", value.index);
+              add_key_u64(
+                  builder, "traversal",
+                  static_cast<std::uint64_t>(value.traversal));
             },
             [&](const runtime::simir::PushContainer& value) {
               builder.add("operation", "PushContainer");

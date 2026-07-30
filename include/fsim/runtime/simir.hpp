@@ -79,6 +79,10 @@ struct ContainerType {
   bool two_state{};
   bool signed_elements{};
   bool queue{};
+  bool associative{};
+  std::uint32_t index_width{32};
+  bool two_state_indices{};
+  bool signed_indices{true};
   std::optional<std::uint32_t> maximum_elements;
 
   friend bool operator==(const ContainerType&,
@@ -88,6 +92,9 @@ struct ContainerType {
 struct ContainerValue {
   ContainerType type;
   std::vector<PackedLogic4> elements;
+  // Associative-array keys are kept in canonical numeric order and are
+  // positionally paired with elements. Other container kinds keep this empty.
+  std::vector<PackedLogic4> keys;
 
   friend bool operator==(const ContainerValue&,
                          const ContainerValue&) = default;
@@ -192,6 +199,27 @@ struct ContainerWrite {
 
 struct DeleteContainer {
   ContainerRegisterId target{};
+  std::optional<RegisterId> index;
+};
+
+struct ContainerExists {
+  RegisterId destination{};
+  ContainerRegisterId source{};
+  RegisterId index{};
+};
+
+enum class ContainerTraversal : std::uint8_t {
+  first,
+  last,
+  next,
+  previous,
+};
+
+struct TraverseContainer {
+  RegisterId destination{};
+  ContainerRegisterId source{};
+  RegisterId index{};
+  ContainerTraversal traversal{ContainerTraversal::first};
 };
 
 struct PushContainer {
@@ -908,7 +936,8 @@ using Operation =
                  ResizeContainer, CopyContainerRegister,
                  ReadContainerObject, WriteContainerObject,
                  ContainerSize, ContainerRead, ContainerWrite,
-                 DeleteContainer, PushContainer, PopContainer, FileOpen,
+                 DeleteContainer, ContainerExists, TraverseContainer,
+                 PushContainer, PopContainer, FileOpen,
                  FileClose, FileWriteLiteral, FileWriteFormatted,
                  FileWriteString, FileReadLine, FileEndOfFile,
                  FileErrorStatus, UnaryNot,

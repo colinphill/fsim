@@ -737,11 +737,14 @@ using namespace elaboration_detail;
                 path + "." + variable.name, &variable.type);
             if (variable.type.systemverilog_container) {
                 const auto width = variable.type.width();
-                if (!width || *width == 0 || *width > 64) {
+                if (!width || *width == 0 || *width > 64
+                    || !variable.type.packed_members.empty()
+                    || variable.type.domain
+                        == frontend::ValueDomain::String) {
                     report(
                         "FSIM-ELAB-SVCONTAINER-003",
-                        "container elements must have an executable width "
-                        "in 1..64",
+                        "container elements must be non-aggregate integral "
+                        "values with an executable width in 1..64",
                         variable.span);
                     continue;
                 }
@@ -754,6 +757,39 @@ using namespace elaboration_detail;
                 type.queue =
                     variable.type.systemverilog_container->kind
                     == frontend::SystemVerilogContainerKind::Queue;
+                type.associative =
+                    variable.type.systemverilog_container->kind
+                    == frontend::SystemVerilogContainerKind::
+                        AssociativeArray;
+                if (type.associative) {
+                    const auto& index_type =
+                        variable.type.systemverilog_container
+                            ->associative_index_type;
+                    const auto index_width =
+                        index_type ? index_type->width()
+                                   : std::nullopt;
+                    if (!index_type || !index_width
+                        || *index_width == 0
+                        || *index_width > 64
+                        || index_type->domain
+                            == frontend::ValueDomain::String
+                        || index_type->domain
+                            == frontend::ValueDomain::Unknown
+                        || !index_type->packed_members.empty()
+                        || index_type->vhdl_array) {
+                        report(
+                            "FSIM-ELAB-SVCONTAINER-013",
+                            "associative-array indices require a resolved "
+                            "integral scalar type with width in 1..64",
+                            variable.type.systemverilog_container->span);
+                        continue;
+                    }
+                    type.index_width =
+                        static_cast<std::uint32_t>(*index_width);
+                    type.two_state_indices =
+                        is_two_state_domain(index_type->domain);
+                    type.signed_indices = index_type->is_signed;
+                }
                 if (variable.type.systemverilog_container
                         ->queue_maximum) {
                     std::string error;
@@ -808,7 +844,7 @@ using namespace elaboration_detail;
                         id, full_name, type, variable.span});
                 design_.container_objects_.push_back(
                     ContainerObject{
-                        full_name, ContainerValue{type, {}}});
+                        full_name, ContainerValue{type, {}, {}}});
                 local_container_objects.emplace(
                     variable.name, id);
                 local_container_objects.emplace(

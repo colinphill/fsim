@@ -125,8 +125,78 @@ void ContainerOperationLowerer::lower(
   invoke(value.index, value.source, std::nullopt, "container.write");
 }
 void ContainerOperationLowerer::lower(
-    const runtime::simir::DeleteContainer&) {
-  invoke(std::nullopt, std::nullopt, std::nullopt, "container.delete");
+    const runtime::simir::DeleteContainer& value) {
+  invoke(value.index, std::nullopt, std::nullopt, "container.delete");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerExists& value) {
+  invoke(value.index, std::nullopt, value.destination, "container.exists");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::TraverseContainer& value) {
+  const auto input =
+      load_register(builder, registers, value.index);
+  auto* zero = constant_i64(context, 0);
+  auto* result_aval =
+      builder.CreateAlloca(i64, nullptr, "container.key.aval");
+  auto* result_bval =
+      builder.CreateAlloca(i64, nullptr, "container.key.bval");
+  builder.CreateStore(zero, result_aval);
+  builder.CreateStore(zero, result_bval);
+  auto* key_status = builder.CreateCall(
+      callback_type,
+      callback,
+      {context_pointer,
+       id(i32, process),
+       id(i32, instruction),
+       input.aval,
+       input.bval,
+       zero,
+       zero,
+       result_aval,
+       result_bval});
+  runtime_error_if(
+      builder.CreateICmpNE(key_status, id(i32, 0)),
+      JitGeneratedRuntimeErrorReason::container_callback_failure,
+      "container.traverse-key");
+  store_register(
+      builder,
+      registers,
+      value.index,
+      {builder.CreateLoad(i64, result_aval),
+       builder.CreateLoad(i64, result_bval),
+       registers[value.index].width});
+
+  auto* status_aval =
+      builder.CreateAlloca(i64, nullptr, "container.status.aval");
+  auto* status_bval =
+      builder.CreateAlloca(i64, nullptr, "container.status.bval");
+  builder.CreateStore(zero, status_aval);
+  builder.CreateStore(zero, status_bval);
+  auto* status = builder.CreateCall(
+      callback_type,
+      callback,
+      {context_pointer,
+       id(i32, process),
+       id(i32, instruction),
+       input.aval,
+       input.bval,
+       constant_i64(context, 1),
+       zero,
+       status_aval,
+       status_bval});
+  runtime_error_if(
+      builder.CreateICmpNE(status, id(i32, 0)),
+      JitGeneratedRuntimeErrorReason::container_callback_failure,
+      "container.traverse-status");
+  store_register(
+      builder,
+      registers,
+      value.destination,
+      {builder.CreateLoad(i64, status_aval),
+       builder.CreateLoad(i64, status_bval),
+       registers[value.destination].width});
+  branch_to_next();
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::PushContainer& value) {

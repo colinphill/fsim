@@ -25,6 +25,7 @@ struct Capture {
   fsim::runtime::RunResult result;
   fsim::runtime::simir::ContainerValue values;
   fsim::runtime::simir::ContainerValue pending;
+  fsim::runtime::simir::ContainerValue lookup;
   std::vector<std::string> output;
   std::size_t compiled{};
 };
@@ -75,11 +76,13 @@ Capture run_once(
       });
   capture.result = simulation.run();
   const auto& objects = simulation.design().container_objects();
-  assert(objects.size() == 2);
+  assert(objects.size() == 3);
   capture.values =
       simulation.read_container_object(objects[0].id);
   capture.pending =
       simulation.read_container_object(objects[1].id);
+  capture.lookup =
+      simulation.read_container_object(objects[2].id);
   return capture;
 }
 
@@ -97,7 +100,7 @@ void inspect_suspended(
     for (std::size_t index = 0;
          index < process.debug_container_locals.size(); ++index) {
       if (process.debug_container_locals[index].name
-          == "mutate.target") {
+          == "mutate_lookup.target") {
         process_id = process.id;
         target_index = index;
       }
@@ -133,14 +136,21 @@ void inspect_suspended(
   const auto local = simulation.read_process_container_local(
       *process_id, *target_index);
   assert(
-      local.elements.size() == 3
-      && local.elements[0].low_word().aval == 1
-      && local.elements[2].low_word().aval == 4);
+      local.keys.size() == 2
+      && local.keys[0].low_word().aval
+          == UINT64_C(0xffffffff)
+      && local.keys[1].low_word().aval == 3
+      && local.elements[0].low_word().aval == 9
+      && local.elements[1].low_word().aval == 30);
+  debugger.execute({"show", "lookup"});
+  assert(
+      debugger_output.str().find("=>")
+      != std::string::npos);
   simulation.clear_stop();
   const auto resumed = simulation.run();
   assert(
       resumed.status == fsim::runtime::RunStatus::completed
-      && resumed.time == 1);
+      && resumed.time == 2);
 }
 
 }  // namespace
@@ -157,19 +167,52 @@ int main() {
     std::ofstream output(source, std::ios::binary);
     output << R"(
 module container_top;
+  typedef logic signed [31:0] key_t;
   int values[];
   byte pending[$:2];
+  byte lookup[key_t];
   function automatic int count(input byte source[$:2]);
     return source.size();
+  endfunction
+  function automatic int lookup_count(input byte source[key_t]);
+    return source.size();
+  endfunction
+  function automatic int isolated_count(input byte source[key_t]);
+    byte copy[key_t];
+    copy = source;
+    copy.delete(3);
+    return copy.size();
   endfunction
   task automatic mutate(inout byte target[$:2]);
     target.push_back(4);
     #1;
     target.pop_front();
   endtask
+  task automatic mutate_lookup(inout byte target[key_t]);
+    target[-1] = 9;
+    #1;
+    target.delete(3);
+  endtask
   initial begin
+    key_t key;
     values = new[2];
     values[0] = 7;
+    lookup[3] = 30;
+    lookup[-1] = 10;
+    assert (lookup_count(lookup) == 2);
+    assert (isolated_count(lookup) == 1);
+    assert (lookup.size() == 2);
+    assert (lookup.exists(3) == 1);
+    assert (lookup[4] == 0);
+    assert (lookup.first(key) == 1);
+    assert (key == -1);
+    assert (lookup.next(key) == 1);
+    assert (key == 3);
+    assert (lookup.last(key) == 1);
+    assert (key == 3);
+    assert (lookup.prev(key) == 1);
+    assert (key == -1);
+    mutate_lookup(lookup);
     pending.push_back(1);
     pending.push_back(2);
     mutate(pending);
@@ -192,16 +235,22 @@ endmodule
     assert(
         reference.result.status
             == fsim::runtime::RunStatus::completed
-        && reference.result.time == 1
+        && reference.result.time == 2
         && reference.output
             == (std::vector<std::string>{"7", ":2", ":2"}));
     assert(reference.output == compiled.output);
     assert(reference.values == compiled.values);
     assert(reference.pending == compiled.pending);
+    assert(reference.lookup == compiled.lookup);
     assert(
         compiled.pending.elements.size() == 2
         && compiled.pending.elements[0].low_word().aval == 2
         && compiled.pending.elements[1].low_word().aval == 4);
+    assert(
+        compiled.lookup.keys.size() == 1
+        && compiled.lookup.keys[0].low_word().aval
+            == UINT64_C(0xffffffff)
+        && compiled.lookup.elements[0].low_word().aval == 9);
 #if defined(FSIM_HAS_LLVM)
     assert(compiled.compiled == 1);
 #endif

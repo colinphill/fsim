@@ -218,6 +218,14 @@ using namespace elaboration_detail;
             return resolved;
         };
         resolve_type = [&](frontend::Type& type) {
+            if (type.systemverilog_container
+                && type.systemverilog_container
+                       ->associative_index_type
+                && !resolve_type(
+                    *type.systemverilog_container
+                         ->associative_index_type)) {
+                return false;
+            }
             if (type.vhdl_array
                 && !type.vhdl_array->element_named_type.empty()) {
                 frontend::Type element;
@@ -316,7 +324,12 @@ using namespace elaboration_detail;
                 base = imported->second.type;
             }
             if (!vhdl) {
+                const auto container =
+                    type.systemverilog_container;
                 type = std::move(*base);
+                if (container) {
+                    type.systemverilog_container = container;
+                }
                 return true;
             }
             auto constrained =
@@ -486,6 +499,9 @@ using namespace elaboration_detail;
         for (auto& signal : unit.signals) {
             resolve_declaration(signal);
         }
+        for (auto& variable : unit.variables) {
+            resolve_declaration(variable);
+        }
         for (auto& component :
              unit.vhdl_component_declarations) {
             resolve_component(component);
@@ -499,6 +515,15 @@ using namespace elaboration_detail;
                 resolve_declaration(variable);
             }
             resolve_statements(function.statements);
+        }
+        for (auto& task : unit.tasks) {
+            for (auto& argument : task.arguments) {
+                (void)resolve_type(argument.type);
+            }
+            for (auto& variable : task.variables) {
+                resolve_declaration(variable);
+            }
+            resolve_statements(task.statements);
         }
         for (auto& procedure : unit.procedures) {
             for (auto& argument : procedure.arguments) {

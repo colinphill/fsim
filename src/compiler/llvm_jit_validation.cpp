@@ -16,116 +16,7 @@ namespace fsim::compiler::llvm_detail {
 
 
 using runtime::Logic9;
-using runtime::simir::Assert;
-using runtime::simir::Binary;
-using runtime::simir::BinaryOperator;
-using runtime::simir::Branch;
-using runtime::simir::Call;
-using runtime::simir::CallStack;
-using runtime::simir::Concatenate;
-using runtime::simir::ConcatenateStrings;
-using runtime::simir::CompareStrings;
-using runtime::simir::ConditionalSelect;
-using runtime::simir::CountOnes;
-using runtime::simir::CountBits;
-using runtime::simir::CopyRegister;
-using runtime::simir::CopyStringRegister;
-using runtime::simir::CopyContainerRegister;
-using runtime::simir::ContainerRead;
-using runtime::simir::ContainerSize;
-using runtime::simir::ContainerWrite;
-using runtime::simir::DeleteContainer;
-using runtime::simir::DebugPoint;
-using runtime::simir::Display;
-using runtime::simir::DynamicExtract;
-using runtime::simir::DynamicIndex;
-using runtime::simir::DynamicInsert;
-using runtime::simir::EdgeKind;
-using runtime::simir::Extract;
-using runtime::simir::FileClose;
-using runtime::simir::FileEndOfFile;
-using runtime::simir::FileErrorStatus;
-using runtime::simir::FileOpen;
-using runtime::simir::FileReadLine;
-using runtime::simir::FileWriteFormatted;
-using runtime::simir::FileWriteLiteral;
-using runtime::simir::FileWriteString;
-using runtime::simir::FormatDisplay;
-using runtime::simir::Halt;
-using runtime::simir::InstructionIndex;
-using runtime::simir::Insert;
-using runtime::simir::IntegerBinary;
-using runtime::simir::IntegerBinaryOperator;
-using runtime::simir::IntegerCheck;
-using runtime::simir::IntegerUnary;
-using runtime::simir::IntegerUnaryOperator;
-using runtime::simir::Jump;
-using runtime::simir::LoadConstant;
-using runtime::simir::LoadStringConstant;
-using runtime::simir::LogicalBinary;
-using runtime::simir::LogicalBinaryOperator;
-using runtime::simir::LogicalNot;
-using runtime::simir::MonitorControl;
-using runtime::simir::MonitorInstall;
-using runtime::simir::MonitorValueKind;
-using runtime::simir::Operation;
-using runtime::simir::Pause;
-using runtime::simir::Process;
-using runtime::simir::ReadSignal;
-using runtime::simir::ReadStringObject;
-using runtime::simir::ReadContainerObject;
-using runtime::simir::ResizeContainer;
-using runtime::simir::Reduction;
-using runtime::simir::ReductionOperator;
-using runtime::simir::RegisterId;
-using runtime::simir::StringRegisterId;
-using runtime::simir::ContainerRegisterId;
-using runtime::simir::StringIndex;
-using runtime::simir::StringLength;
-using runtime::simir::StringDisplay;
-using runtime::simir::StringReplaceByte;
-using runtime::simir::RandomValue;
-using runtime::simir::Report;
-using runtime::simir::Return;
-using runtime::simir::Shift;
-using runtime::simir::ShiftOperator;
-using runtime::simir::SignalActive;
-using runtime::simir::SignalEvent;
-using runtime::simir::SignalLastEvent;
-using runtime::simir::SignalLastValue;
-using runtime::simir::Stop;
-using runtime::simir::TimeDisplay;
-using runtime::simir::UnaryNot;
-using runtime::simir::UnknownBranchPolicy;
-using runtime::simir::ValueKind;
-using runtime::simir::WaitFor;
-using runtime::simir::WaitOn;
-using runtime::simir::WaitSensitivity;
-using runtime::simir::WaitForever;
-using runtime::simir::WriteAfter;
-using runtime::simir::WriteAfterDynamicSlice;
-using runtime::simir::WriteAfterSlice;
-using runtime::simir::WriteBlocking;
-using runtime::simir::WriteBlockingDynamicSlice;
-using runtime::simir::WriteBlockingSlice;
-using runtime::simir::WriteInertial;
-using runtime::simir::WriteInertialDynamicSlice;
-using runtime::simir::WriteInertialSlice;
-using runtime::simir::WriteProjected;
-using runtime::simir::WriteProjectedDynamicSlice;
-using runtime::simir::WriteProjectedWaveform;
-using runtime::simir::WriteProjectedWaveformDynamicSlice;
-using runtime::simir::WriteProjectedSlice;
-using runtime::simir::WriteProjectedWaveformSlice;
-using runtime::simir::WriteUpdate;
-using runtime::simir::WriteUpdateDynamicSlice;
-using runtime::simir::WriteUpdateSlice;
-using runtime::simir::WriteStringObject;
-using runtime::simir::WriteContainerObject;
-using runtime::simir::PushContainer;
-using runtime::simir::PopContainer;
-using runtime::simir::Yield;
-using runtime::simir::maximum_string_bytes;
+using namespace runtime::simir;
 
 
 template <class... Ts> struct Overloaded : Ts... {
@@ -287,7 +178,7 @@ validate_process(const Process &process,
     parents[index] = static_cast<RegisterId>(index);
   }
   std::vector<bool> defined(process.register_count);
-  std::vector<std::optional<RegisterId>> instruction_definitions(
+  std::vector<std::vector<RegisterId>> instruction_definitions(
       process.operations.size());
   std::vector<std::vector<RegisterId>> instruction_uses(
       process.operations.size());
@@ -428,11 +319,7 @@ validate_process(const Process &process,
   const auto record_definition = [&](const RegisterId id,
                                      const std::size_t instruction) {
     validate_register(id, instruction, "destination");
-    if (instruction_definitions[instruction]) {
-      reject(process, instruction,
-             "an instruction cannot define more than one register");
-    }
-    instruction_definitions[instruction] = id;
+    instruction_definitions[instruction].push_back(id);
     defined[id] = true;
   };
 
@@ -721,6 +608,16 @@ validate_process(const Process &process,
               validate_container_register(
                   operation.source, index, "source");
               record_use(operation.index, index);
+              if (operation.source
+                  < process.container_register_types.size()
+                  && process.container_register_types[
+                         operation.source].associative) {
+                constrain_width(
+                    operation.index,
+                    process.container_register_types[
+                        operation.source].index_width,
+                    index);
+              }
               record_definition(operation.destination, index);
               constrain_width(
                   operation.destination,
@@ -733,6 +630,16 @@ validate_process(const Process &process,
               validate_container_register(
                   operation.target, index, "target");
               record_use(operation.index, index);
+              if (operation.target
+                  < process.container_register_types.size()
+                  && process.container_register_types[
+                         operation.target].associative) {
+                constrain_width(
+                    operation.index,
+                    process.container_register_types[
+                        operation.target].index_width,
+                    index);
+              }
               record_use(operation.source, index);
               constrain_width(
                   operation.source,
@@ -744,6 +651,50 @@ validate_process(const Process &process,
               result.uses_containers = true;
               validate_container_register(
                   operation.target, index, "target");
+              if (operation.index) {
+                record_use(*operation.index, index);
+                if (operation.target
+                    < process.container_register_types.size()) {
+                  constrain_width(
+                      *operation.index,
+                      process.container_register_types[
+                          operation.target].index_width,
+                      index);
+                }
+              }
+            },
+            [&](const ContainerExists& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.source, index, "source");
+              record_use(operation.index, index);
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+              if (operation.source
+                  < process.container_register_types.size()) {
+                constrain_width(
+                    operation.index,
+                    process.container_register_types[
+                        operation.source].index_width,
+                    index);
+              }
+            },
+            [&](const TraverseContainer& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.source, index, "source");
+              record_use(operation.index, index);
+              record_definition(operation.index, index);
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+              if (operation.source
+                  < process.container_register_types.size()) {
+                constrain_width(
+                    operation.index,
+                    process.container_register_types[
+                        operation.source].index_width,
+                    index);
+              }
             },
             [&](const PushContainer& operation) {
               result.uses_containers = true;
@@ -1667,9 +1618,10 @@ validate_process(const Process &process,
     }
   }
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
-    if (instruction_definitions[index] &&
-        result.register_widths[*instruction_definitions[index]] == 0) {
-      reject(process, index, "register width cannot be inferred");
+    for (const auto definition : instruction_definitions[index]) {
+      if (result.register_widths[definition] == 0) {
+        reject(process, index, "register width cannot be inferred");
+      }
     }
     for (const auto used : instruction_uses[index]) {
       if (!defined[used]) {
@@ -1948,8 +1900,8 @@ validate_process(const Process &process,
         }
       }
       auto outgoing = incoming;
-      if (instruction_definitions[index]) {
-        outgoing[*instruction_definitions[index]] = true;
+      for (const auto definition : instruction_definitions[index]) {
+        outgoing[definition] = true;
       }
       if (incoming != definitely_defined_in[index] ||
           outgoing != definitely_defined_out[index]) {

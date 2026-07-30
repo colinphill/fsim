@@ -39,6 +39,10 @@ namespace {
     if (index != 0) {
       result += ", ";
     }
+    if (value.type.associative) {
+      result += value.keys[index].to_msb_string();
+      result += "=>";
+    }
     result += value.elements[index].to_msb_string();
   }
   result += "]";

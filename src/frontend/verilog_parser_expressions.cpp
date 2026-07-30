@@ -440,12 +440,20 @@ Expression VerilogParser::parse_postfix(Expression expression) {
         const auto expected_arguments =
             member.text == "push_front"
                     || member.text == "push_back"
+                    || member.text == "exists"
+                    || member.text == "first"
+                    || member.text == "last"
+                    || member.text == "next"
+                    || member.text == "prev"
                 ? std::optional<std::size_t>{1}
             : member.text == "size"
-                    || member.text == "delete"
                     || member.text == "pop_front"
                     || member.text == "pop_back"
                 ? std::optional<std::size_t>{0}
+            : member.text == "delete"
+                ? (argument_count <= 1
+                       ? std::optional<std::size_t>{argument_count}
+                       : std::optional<std::size_t>{1})
                 : std::nullopt;
         if (expected_arguments
             && argument_count != *expected_arguments) {

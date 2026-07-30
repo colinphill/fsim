@@ -39,14 +39,20 @@ module containers;
   int values[];
   logic [7:0] pending[$];
   bit bounded[$:3];
+  logic [15:0] scores[int];
+  bit flags[logic signed [3:0]];
 
   task automatic mutate(
       input int source[],
-      inout logic [7:0] target[$]);
+      inout logic [7:0] target[$],
+      inout logic [15:0] lookup[int]);
     int copy[];
+    int key;
     copy = new[4];
     target.push_back(8'h2a);
     target.pop_front();
+    lookup.delete(2);
+    lookup.first(key);
   endtask
 
   initial begin
@@ -63,7 +69,7 @@ endmodule
   const auto* unit =
       parsed.design.find(UnitKind::VerilogModule, "containers");
   require(
-      unit != nullptr && unit->variables.size() == 3,
+      unit != nullptr && unit->variables.size() == 5,
       "module containers remain unpacked variable objects");
   require(
       unit->variables[0].type.systemverilog_container
@@ -85,20 +91,48 @@ endmodule
                  .type.systemverilog_container->queue_maximum->text
               == "3",
       "bounded queue retains its maximum-index expression");
+  const auto& scores =
+      *unit->variables[3].type.systemverilog_container;
+  require(
+      scores.kind
+              == SystemVerilogContainerKind::AssociativeArray
+          && scores.associative_index_type
+          && scores.associative_index_type->domain
+              == ValueDomain::Integer
+          && scores.associative_index_type->is_signed
+          && scores.associative_index_type->width() == 32,
+      "integral associative-array index metadata is retained");
+  const auto& flags =
+      *unit->variables[4].type.systemverilog_container;
+  require(
+      flags.kind
+              == SystemVerilogContainerKind::AssociativeArray
+          && flags.associative_index_type
+          && flags.associative_index_type->domain
+              == ValueDomain::Logic4
+          && flags.associative_index_type->is_signed
+          && flags.associative_index_type->width() == 4,
+      "packed index width, state domain, and signedness are retained");
   require(
       unit->tasks.size() == 1
-          && unit->tasks[0].arguments.size() == 2
+          && unit->tasks[0].arguments.size() == 3
           && unit->tasks[0].arguments[0]
                  .type.systemverilog_container
           && unit->tasks[0].arguments[1]
                  .type.systemverilog_container
-          && unit->tasks[0].variables.size() == 1,
+          && unit->tasks[0].arguments[2]
+                 .type.systemverilog_container
+          && unit->tasks[0].variables.size() == 2,
       "automatic task formals and locals retain container types");
   require(
-      unit->tasks[0].statements.size() == 3
+      unit->tasks[0].statements.size() == 5
           && unit->tasks[0].statements[1].kind
               == StatementKind::ContainerMethod
           && unit->tasks[0].statements[2].kind
+              == StatementKind::ContainerMethod
+          && unit->tasks[0].statements[3].kind
+              == StatementKind::ContainerMethod
+          && unit->tasks[0].statements[4].kind
               == StatementKind::ContainerMethod,
       "mutating queue methods remain explicit statements");
 
@@ -109,10 +143,14 @@ module container_invalid;
   int fixed[3];
   int nested[][];
   string strings[];
+  int wildcard[*];
+  int string_key[string];
   int queue[$];
+  task static bad_lifetime(ref byte values[int]);
+  endtask
   initial begin
     queue.push_back();
-    queue.delete(1);
+    queue.delete(1, 2);
   end
 endmodule
 )",
@@ -122,8 +160,13 @@ endmodule
           && has_code(invalid, "FSIM-SV-SEM-078")
           && has_code(invalid, "FSIM-SV-SEM-079")
           && has_code(invalid, "FSIM-SV-SEM-080")
+          && has_code(invalid, "FSIM-SV-SEM-082")
           && has_code(invalid, "FSIM-SV-SEM-081"),
       "unsupported dimensions, elements, and method arities diagnose");
+  require(
+      has_code(invalid, "FSIM-SV-UNSUPPORTED-037")
+          && has_code(invalid, "FSIM-SV-UNSUPPORTED-038"),
+      "static and ref container call boundaries diagnose");
 
   const auto verilog = parse_text(
       "container-verilog.v",

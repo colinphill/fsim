@@ -5,6 +5,7 @@
 #include "fsim/frontend/token.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -214,7 +215,10 @@ struct VhdlArrayInfo {
 enum class SystemVerilogContainerKind {
   DynamicArray,
   Queue,
+  AssociativeArray,
 };
+
+struct Type;
 
 /// Source-level metadata for one bounded SystemVerilog unpacked container.
 ///
@@ -227,6 +231,10 @@ struct SystemVerilogContainerInfo {
   // Present for `[$:N]`. The expression remains specialization-aware until
   // elaboration converts the maximum index to a maximum element count.
   std::optional<Expression> queue_maximum;
+  // Present for `element_type object[index_type]`. A shared indirection keeps
+  // the recursive Type representation value-copyable while retaining the
+  // index width, state domain, signedness, and named-type provenance.
+  std::shared_ptr<Type> associative_index_type;
   SourceSpan span;
 };
 
@@ -293,8 +301,8 @@ struct Type {
   // resolved from one. The packed range above is the concrete object
   // constraint; this metadata preserves nominal array semantics.
   std::optional<VhdlArrayInfo> vhdl_array;
-  // Present only for a SystemVerilog dynamic array or queue. All scalar fields
-  // above describe one element, not the container as a whole.
+  // Present only for a SystemVerilog dynamic array, queue, or associative
+  // array. All scalar fields above describe one element, not the container.
   std::optional<SystemVerilogContainerInfo> systemverilog_container;
 
   Type() = default;

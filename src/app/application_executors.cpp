@@ -28,7 +28,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     container_registers_.reserve(process.container_register_types.size());
     for (const auto& type : process.container_register_types) {
       container_registers_.push_back(
-          runtime::simir::ContainerValue{type, {}});
+          runtime::simir::ContainerValue{type, {}, {}});
     }
     jit_.initialize_frame(
         handle_,

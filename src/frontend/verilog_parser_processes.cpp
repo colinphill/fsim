@@ -1250,7 +1250,8 @@ std::optional<Statement> VerilogParser::parse_statement() {
       && at(TokenKind::LeftParen, 3)
       && contains_word(
           {"delete", "push_front", "push_back",
-           "pop_front", "pop_back"},
+           "pop_front", "pop_back", "exists",
+           "first", "last", "next", "prev"},
           current(2).text)) {
     const auto start = current();
     Statement statement;

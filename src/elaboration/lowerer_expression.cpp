@@ -49,6 +49,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
 
         if ((expression.kind == ExpressionKind::Call
              && (expression.text == ".size"
+                 || expression.text == ".exists"
+                 || expression.text == ".first"
+                 || expression.text == ".last"
+                 || expression.text == ".next"
+                 || expression.text == ".prev"
                  || expression.text == ".pop_front"
                  || expression.text == ".pop_back")
              && !expression.operands.empty()
@@ -90,6 +95,92 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             if (!width) {
                 return std::nullopt;
             }
+            const auto runtime_type =
+                container_type(*type, expression.span);
+            if (!runtime_type) {
+                return std::nullopt;
+            }
+            if (expression.kind == ExpressionKind::Call
+                && (expression.text == ".exists"
+                    || expression.text == ".first"
+                    || expression.text == ".last"
+                    || expression.text == ".next"
+                    || expression.text == ".prev")) {
+                if (!runtime_type->associative) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-015",
+                        expression.text
+                            + " requires an associative-array receiver",
+                        expression.span);
+                    return std::nullopt;
+                }
+                if (expression.operands.size() != 2) {
+                    return std::nullopt;
+                }
+                const auto* index_type =
+                    type->systemverilog_container
+                        ->associative_index_type.get();
+                const auto index = lower_expression(
+                    expression.operands[1],
+                    runtime_type->index_width,
+                    index_type);
+                if (!index) {
+                    return std::nullopt;
+                }
+                const auto destination =
+                    allocate_register(
+                        32, frontend::ValueDomain::Bit2);
+                if (expression.text == ".exists") {
+                    process_.operations.emplace_back(
+                        ContainerExists{
+                            destination, *source, *index});
+                    return destination;
+                }
+                if (expression.operands[1].kind
+                        != ExpressionKind::Identifier
+                    || (!locals_.contains(
+                            expression.operands[1].text)
+                        && !signals_.contains(
+                            expression.operands[1].text))) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-016",
+                        expression.text
+                            + " requires a direct mutable integral "
+                              "variable argument",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+                if (register_width(*index)
+                    != runtime_type->index_width) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-017",
+                        expression.text
+                            + " argument must match the associative-array "
+                              "index width",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+                auto traversal = ContainerTraversal::first;
+                if (expression.text == ".last") {
+                    traversal = ContainerTraversal::last;
+                } else if (expression.text == ".next") {
+                    traversal = ContainerTraversal::next;
+                } else if (expression.text == ".prev") {
+                    traversal = ContainerTraversal::previous;
+                }
+                process_.operations.emplace_back(
+                    TraverseContainer{
+                        destination, *source, *index, traversal});
+                if (const auto signal = signals_.find(
+                        expression.operands[1].text);
+                    signal != signals_.end()
+                    && !locals_.contains(
+                        expression.operands[1].text)) {
+                    process_.operations.emplace_back(
+                        WriteBlocking{signal->second, *index});
+                }
+                return destination;
+            }
             const auto destination =
                 allocate_register(*width, type->domain);
             if (expression.kind == ExpressionKind::Call) {
@@ -109,10 +200,18 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 return destination;
             }
             const auto index_width =
-                infer_width(expression.operands[1])
-                    .value_or(std::size_t{32});
+                runtime_type->associative
+                    ? static_cast<std::size_t>(
+                          runtime_type->index_width)
+                    : infer_width(expression.operands[1])
+                          .value_or(std::size_t{32});
             const auto index = lower_expression(
-                expression.operands[1], index_width);
+                expression.operands[1],
+                index_width,
+                runtime_type->associative
+                    ? type->systemverilog_container
+                          ->associative_index_type.get()
+                    : nullptr);
             if (!index) {
                 return std::nullopt;
             }
@@ -121,9 +220,24 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     destination,
                     *source,
                     *index,
-                    is_signed_expression(
-                        expression.operands[1])});
+                    runtime_type->associative
+                        ? runtime_type->signed_indices
+                        : is_signed_expression(
+                              expression.operands[1])});
             return destination;
+        }
+
+        if (expression.kind == ExpressionKind::Call
+            && expression.text.starts_with('.')
+            && !expression.operands.empty()
+            && is_container_expression(
+                expression.operands.front())) {
+            report(
+                "FSIM-ELAB-SVCONTAINER-008",
+                "unsupported container method '"
+                    + expression.text + "'",
+                expression.span);
+            return std::nullopt;
         }
 
         if (expression.kind == ExpressionKind::Call

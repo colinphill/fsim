@@ -12,10 +12,13 @@ std::optional<ContainerType> Lowerer::container_type(
     return std::nullopt;
   }
   const auto width = type.width();
-  if (!width || *width == 0 || *width > 64) {
+  if (!width || *width == 0 || *width > 64
+      || !type.packed_members.empty()
+      || type.domain == frontend::ValueDomain::String) {
     report(
         "FSIM-ELAB-SVCONTAINER-003",
-        "container elements must have an executable width in 1..64",
+        "container elements must be non-aggregate integral values with "
+        "an executable width in 1..64",
         span);
     return std::nullopt;
   }
@@ -26,6 +29,33 @@ std::optional<ContainerType> Lowerer::container_type(
   result.queue =
       type.systemverilog_container->kind
       == frontend::SystemVerilogContainerKind::Queue;
+  result.associative =
+      type.systemverilog_container->kind
+      == frontend::SystemVerilogContainerKind::AssociativeArray;
+  if (result.associative) {
+    const auto& index_type =
+        type.systemverilog_container->associative_index_type;
+    const auto index_width =
+        index_type ? index_type->width() : std::nullopt;
+    if (!index_type || !index_width || *index_width == 0
+        || *index_width > 64
+        || index_type->domain == frontend::ValueDomain::String
+        || index_type->domain == frontend::ValueDomain::Unknown
+        || !index_type->packed_members.empty()
+        || index_type->vhdl_array) {
+      report(
+          "FSIM-ELAB-SVCONTAINER-013",
+          "associative-array indices require a resolved integral scalar "
+          "type with width in 1..64",
+          type.systemverilog_container->span);
+      return std::nullopt;
+    }
+    result.index_width =
+        static_cast<std::uint32_t>(*index_width);
+    result.two_state_indices =
+        is_two_state_domain(index_type->domain);
+    result.signed_indices = index_type->is_signed;
+  }
   if (type.systemverilog_container->queue_maximum) {
     const auto maximum_index = constant_index(
         *type.systemverilog_container->queue_maximum);
@@ -97,6 +127,15 @@ Lowerer::lower_container_expression(
 void Lowerer::lower_container_method(
     const Statement& statement) {
   const auto& call = statement.value;
+  if (call.kind == ExpressionKind::Call
+      && (call.text == ".exists"
+          || call.text == ".first"
+          || call.text == ".last"
+          || call.text == ".next"
+          || call.text == ".prev")) {
+    (void)lower_expression(call, 32);
+    return;
+  }
   if (call.kind != ExpressionKind::Call
       || call.operands.empty()
       || call.operands.front().kind
@@ -114,14 +153,44 @@ void Lowerer::lower_container_method(
     return;
   }
   const auto width = type->width();
-  if (!width) {
+  const auto runtime_type =
+      container_type(*type, call.span);
+  if (!width || !runtime_type) {
     return;
   }
   if (call.text == ".delete") {
-    process_.operations.emplace_back(DeleteContainer{*target});
+    if (call.operands.size() == 2) {
+      if (!runtime_type->associative) {
+        report(
+            "FSIM-ELAB-SVCONTAINER-018",
+            "delete(index) requires an associative-array receiver",
+            call.span);
+        return;
+      }
+      const auto index = lower_expression(
+          call.operands[1],
+          runtime_type->index_width,
+          type->systemverilog_container
+              ->associative_index_type.get());
+      if (!index) {
+        return;
+      }
+      process_.operations.emplace_back(
+          DeleteContainer{*target, *index});
+    } else {
+      process_.operations.emplace_back(
+          DeleteContainer{*target, std::nullopt});
+    }
   } else if (
       call.text == ".push_front"
       || call.text == ".push_back") {
+    if (!runtime_type->queue) {
+      report(
+          "FSIM-ELAB-SVCONTAINER-019",
+          "push_front/push_back require a queue receiver",
+          call.span);
+      return;
+    }
     if (call.operands.size() != 2) {
       return;
     }
@@ -137,6 +206,13 @@ void Lowerer::lower_container_method(
   } else if (
       call.text == ".pop_front"
       || call.text == ".pop_back") {
+    if (!runtime_type->queue) {
+      report(
+          "FSIM-ELAB-SVCONTAINER-019",
+          "pop_front/pop_back require a queue receiver",
+          call.span);
+      return;
+    }
     const auto discarded =
         allocate_register(*width, type->domain);
     process_.operations.emplace_back(

@@ -3873,6 +3873,58 @@ passed all 12 Ubuntu and Windows jobs, including GCC Debug/Release,
 ASan/UBSan, exact LLVM 22.1.8 Debug/Release, both MSVC-compatible toolchains,
 and the frontend fuzz smoke.
 
+### Seventy-first feature batch — bounded SystemVerilog associative arrays
+
+Same-language SystemVerilog-2017 now retains one-dimensional associative
+arrays with integral built-in or visible named packed-scalar keys as a
+distinct container kind. Element and index types preserve exact width,
+signedness, and two- or four-state domain in frontend HIR, elaborated object
+metadata, and process-local register metadata. Wildcard and string keys,
+packed aggregate keys or elements, multidimensional forms, nonautomatic
+callable lifetimes, `ref` formals, and invalid container-kind method uses
+receive explicit diagnostics.
+
+Associative arrays initialize empty and support value-copy assignment,
+insertion, replacement, noninserting reads, `delete()`, `delete(index)`,
+`size()`, `exists(index)`, and `first`, `last`, `next`, and `prev`. Missing
+reads return the element type's zero default. Unknown keys fail
+deterministically. Keys remain unique in canonical numeric order, including
+signed negative-before-nonnegative ordering, and insertion beyond 4,096
+entries fails without exposing host maps or allocator state.
+
+The common container value now pairs ordered keys with elements while dynamic
+arrays and queues retain an empty key vector. SimIR adds immutable existence
+and traversal operations plus optional indexed deletion. Traversal explicitly
+models its inout key and return status as two register definitions, and LLVM
+validation now tracks multiple definitions per instruction. The existing
+append-only plain-C container callback is unchanged: generated code uses two
+calls at a traversal instruction to retrieve the selected key and success
+status, and callback failures remain contained at the current SimIR
+instruction.
+
+Automatic associative arrays copy by value through nested nonrecursive
+functions and input/output/inout task formals. Copy isolation, ordered
+copy-out, delay suspension, debugger stop/read/resume, and call safe points
+share the existing container activation-frame path. Debugger rendering uses
+`key=>value` pairs in canonical order without exposing storage identities.
+
+Native-object schema 24 records the index and element types, associative kind,
+4,096-entry limit, ordering semantic marker, optional delete index,
+existence/traversal fields, and transitive source/callable provenance. The
+standalone application differential proves interpreter, LLVM O0, and LLVM O2
+equivalence at both optimization settings, native execution without fallback,
+copy isolation, suspended task copy-out, traversal mutation, debugger
+observation, and cache-backed execution through the established project path.
+
+The focused warnings-as-errors frontend, runtime, elaboration, LLVM,
+application, diagnostic-catalog, and source-budget gates passed. The catalog
+covers 1,130 production codes and the source gate covers 284 authored files
+with an empty allowlist and a maximum of 2,000 lines. The exact LLVM 22.1.8
+warnings-as-errors Debug regression passed all 59 configured tests in 70.86
+seconds, and Release passed all 59 configured tests in 31.94 seconds on
+2026-07-30. Batch 71 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

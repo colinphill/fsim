@@ -442,14 +442,69 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           return PackedLogic4::from_aval_bval(
               target.type.element_width, aval, bval);
         };
+    const auto key =
+        [&](const runtime::simir::ContainerValue& target,
+            const std::uint64_t aval,
+            const std::uint64_t bval) {
+          if (!target.type.associative) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative-array method used on another container"};
+          }
+          if (bval != 0) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative-array index must be a known integral value"};
+          }
+          return PackedLogic4::from_aval_bval(
+              target.type.index_width, aval, 0);
+        };
+    const auto key_less =
+        [](const runtime::simir::ContainerValue& target,
+           const PackedLogic4& left,
+           const PackedLogic4& right) {
+          const auto lhs = left.low_word().aval;
+          const auto rhs = right.low_word().aval;
+          if (target.type.signed_indices) {
+            const auto sign =
+                UINT64_C(1)
+                << (target.type.index_width - 1U);
+            const auto lhs_negative = (lhs & sign) != 0;
+            const auto rhs_negative = (rhs & sign) != 0;
+            if (lhs_negative != rhs_negative) {
+              return lhs_negative;
+            }
+          }
+          return lhs < rhs;
+        };
+    const auto lower_key =
+        [&](const runtime::simir::ContainerValue& target,
+            const PackedLogic4& sought) {
+          return static_cast<std::size_t>(
+              std::lower_bound(
+                  target.keys.begin(), target.keys.end(), sought,
+                  [&](const PackedLogic4& candidate,
+                      const PackedLogic4& value) {
+                    return key_less(target, candidate, value);
+                  })
+              - target.keys.begin());
+        };
+    const auto key_equal =
+        [](const PackedLogic4& left,
+           const PackedLogic4& right) {
+          return left.low_word().aval
+              == right.low_word().aval;
+        };
     if (const auto* resize =
             std::get_if<runtime::simir::ResizeContainer>(
                 &operation)) {
       auto& target = registers.at(resize->target);
-      if (target.type.queue) {
+      if (target.type.queue || target.type.associative) {
         throw runtime::simir::InterpreterError{
             process, instruction,
-            "new[size] cannot resize a queue"};
+            target.type.queue
+                ? "new[size] cannot resize a queue"
+                : "new[size] cannot resize an associative array"};
       }
       const auto size = index(
           input0_aval, input0_bval, false,
@@ -471,6 +526,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       const auto& source = registers.at(copy->source);
       require_same(target, source);
       target.elements = source.elements;
+      target.keys = source.keys;
     } else if (const auto* read_object =
                    std::get_if<
                        runtime::simir::ReadContainerObject>(
@@ -480,6 +536,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           state.context->read_container_object(read_object->object);
       require_same(target, source);
       target.elements = source.elements;
+      target.keys = source.keys;
     } else if (const auto* write_object =
                    std::get_if<
                        runtime::simir::WriteContainerObject>(
@@ -495,6 +552,18 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                    std::get_if<runtime::simir::ContainerRead>(
                        &operation)) {
       const auto& source = registers.at(read->source);
+      if (source.type.associative) {
+        const auto sought =
+            key(source, input0_aval, input0_bval);
+        const auto at = lower_key(source, sought);
+        if (at < source.keys.size()
+            && key_equal(source.keys[at], sought)) {
+          const auto word = source.elements[at].low_word();
+          *result_aval = word.aval;
+          *result_bval = word.bval;
+        }
+        return 0;
+      }
       const auto at = index(
           input0_aval, input0_bval, read->signed_index,
           "container index");
@@ -510,6 +579,28 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                    std::get_if<runtime::simir::ContainerWrite>(
                        &operation)) {
       auto& target = registers.at(write->target);
+      if (target.type.associative) {
+        const auto sought =
+            key(target, input0_aval, input0_bval);
+        const auto source =
+            element(target, input1_aval, input1_bval);
+        const auto at = lower_key(target, sought);
+        if (at < target.keys.size()
+            && key_equal(target.keys[at], sought)) {
+          target.elements[at] = source;
+        } else {
+          if (target.elements.size()
+              >= runtime::simir::maximum_container_elements) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative array exceeds the 4096-entry limit"};
+          }
+          target.keys.insert(target.keys.begin() + at, sought);
+          target.elements.insert(
+              target.elements.begin() + at, source);
+        }
+        return 0;
+      }
       const auto at = index(
           input0_aval, input0_bval, write->signed_index,
           "container index");
@@ -523,7 +614,81 @@ std::uint32_t LlvmProcessExecutor::container_operation(
     } else if (const auto* erase =
                    std::get_if<runtime::simir::DeleteContainer>(
                        &operation)) {
-      registers.at(erase->target).elements.clear();
+      auto& target = registers.at(erase->target);
+      if (erase->index) {
+        const auto sought =
+            key(target, input0_aval, input0_bval);
+        const auto at = lower_key(target, sought);
+        if (at < target.keys.size()
+            && key_equal(target.keys[at], sought)) {
+          target.keys.erase(target.keys.begin() + at);
+          target.elements.erase(target.elements.begin() + at);
+        }
+      } else {
+        target.elements.clear();
+        target.keys.clear();
+      }
+    } else if (const auto* exists =
+                   std::get_if<runtime::simir::ContainerExists>(
+                       &operation)) {
+      const auto& source = registers.at(exists->source);
+      const auto sought =
+          key(source, input0_aval, input0_bval);
+      const auto at = lower_key(source, sought);
+      *result_aval =
+          at < source.keys.size()
+              && key_equal(source.keys[at], sought)
+          ? 1U
+          : 0U;
+    } else if (const auto* traverse =
+                   std::get_if<runtime::simir::TraverseContainer>(
+                       &operation)) {
+      const auto& source = registers.at(traverse->source);
+      if (!source.type.associative) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "first/last/next/prev require an associative array"};
+      }
+      std::optional<std::size_t> selected;
+      if (!source.keys.empty()) {
+        if (traverse->traversal
+            == runtime::simir::ContainerTraversal::first) {
+          selected = 0;
+        } else if (
+            traverse->traversal
+            == runtime::simir::ContainerTraversal::last) {
+          selected = source.keys.size() - 1U;
+        } else {
+          const auto sought =
+              key(source, input0_aval, input0_bval);
+          const auto at = lower_key(source, sought);
+          if (traverse->traversal
+              == runtime::simir::ContainerTraversal::next) {
+            const auto next =
+                at < source.keys.size()
+                        && key_equal(source.keys[at], sought)
+                    ? at + 1U
+                    : at;
+            if (next < source.keys.size()) {
+              selected = next;
+            }
+          } else if (at != 0) {
+            selected = at - 1U;
+          }
+        }
+      }
+      if (input1_aval == 0) {
+        if (selected) {
+          const auto word = source.keys[*selected].low_word();
+          *result_aval = word.aval;
+          *result_bval = word.bval;
+        } else {
+          *result_aval = input0_aval;
+          *result_bval = input0_bval;
+        }
+      } else {
+        *result_aval = selected ? 1U : 0U;
+      }
     } else if (const auto* push =
                    std::get_if<runtime::simir::PushContainer>(
                        &operation)) {
@@ -531,7 +696,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       if (!target.type.queue) {
         throw runtime::simir::InterpreterError{
             process, instruction,
-            "queue method used on a dynamic array"};
+            target.type.associative
+                ? "queue method used on an associative array"
+                : "queue method used on a dynamic array"};
       }
       const auto source =
           element(target, input0_aval, input0_bval);
@@ -556,7 +723,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             process, instruction,
             target.type.queue
                 ? "cannot pop an empty queue"
-                : "queue method used on a dynamic array"};
+                : (target.type.associative
+                       ? "queue method used on an associative array"
+                       : "queue method used on a dynamic array")};
       }
       const auto source = pop->front
           ? target.elements.front()

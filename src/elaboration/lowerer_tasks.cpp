@@ -214,7 +214,8 @@ void Lowerer::lower_task_call(const Statement& statement) {
                 == frontend::PortDirection::Output) {
                 process_.operations.emplace_back(
                     DeleteContainer{
-                        frame.container_arguments[index]});
+                        frame.container_arguments[index],
+                        std::nullopt});
                 continue;
             }
             const auto actual =

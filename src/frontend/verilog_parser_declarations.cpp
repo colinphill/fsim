@@ -688,16 +688,59 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
         "']' after queue dimension",
         "FSIM-SV-PARSE-155");
   } else {
-    error(
-        start,
-        "FSIM-SV-SEM-078",
-        "only one-dimensional dynamic [] and queue [$] or [$:N] "
-        "containers are supported");
-    while (!at_end() && !at(TokenKind::RightBracket)) {
-      (void)advance();
+    container.kind =
+        SystemVerilogContainerKind::AssociativeArray;
+    Type index_type;
+    const auto built_in =
+        keyword("byte") || keyword("shortint")
+        || keyword("longint") || keyword("time")
+        || keyword("integer") || keyword("int")
+        || keyword("logic") || keyword("reg") || keyword("bit")
+        || keyword("signed") || keyword("unsigned")
+        || at(TokenKind::LeftBracket);
+    if (built_in) {
+      index_type = parse_parameter_type();
+    } else if (keyword("string")) {
+      const auto unsupported = advance();
+      error(
+          unsupported,
+          "FSIM-SV-SEM-082",
+          "string associative-array indices are not supported");
+    } else if (
+        at(TokenKind::Identifier)
+        && !keyword_reserved(keyword_set_, current().text)) {
+      if (current().text == "$") {
+        error(
+            current(),
+            "FSIM-SV-SEM-078",
+            "wildcard associative-array indices are not supported");
+        (void)advance();
+      } else {
+        index_type = parse_named_type();
+      }
+    } else {
+      const auto unsupported = advance();
+      error(
+          unsupported,
+          "FSIM-SV-SEM-078",
+          "associative-array indices require an integral built-in or "
+          "visible named packed type");
     }
-    (void)match(TokenKind::RightBracket);
-    return true;
+    expect(
+        TokenKind::RightBracket,
+        "']' after associative-array index type",
+        "FSIM-SV-PARSE-157");
+    if (index_type.domain == ValueDomain::String) {
+      error(
+          start,
+          "FSIM-SV-SEM-082",
+          "string associative-array indices are not supported");
+    } else if (
+        index_type.domain != ValueDomain::Unknown
+        || !index_type.named_type.empty()) {
+      container.associative_index_type =
+          std::make_shared<Type>(std::move(index_type));
+    }
   }
   container.span = cover(start.span, previous().span);
   type.systemverilog_container = std::move(container);
@@ -705,7 +748,8 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
     error(
         start,
         "FSIM-SV-SEM-077",
-        "dynamic arrays and queues require SystemVerilog-2017");
+        "dynamic arrays, queues, and associative arrays require "
+        "SystemVerilog-2017");
   }
   if (type.spelling == "wire"
       || type.domain == ValueDomain::String
