@@ -599,7 +599,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       runtime::simir::locate_container_values(
           registers.at(locator->destination),
           registers.at(locator->source),
-          locator->operation);
+          locator->operation,
+          locator->predicate);
     } else if (const auto* read =
                    std::get_if<runtime::simir::ContainerRead>(
                        &operation)) {

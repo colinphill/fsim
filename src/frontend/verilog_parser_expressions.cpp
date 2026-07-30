@@ -516,6 +516,13 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             || member.text == "max"
             || member.text == "unique"
             || member.text == "unique_index";
+        const bool predicate_locator_method =
+            member.text == "find"
+            || member.text == "find_index"
+            || member.text == "find_first"
+            || member.text == "find_first_index"
+            || member.text == "find_last"
+            || member.text == "find_last_index";
         const auto expected_arguments =
             member.text == "push_front"
                     || member.text == "push_back"
@@ -532,6 +539,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                     || ordering_method
                     || unsupported_shuffle
                     || locator_method
+                    || predicate_locator_method
                 ? std::optional<std::size_t>{0}
             : member.text == "delete"
                 ? (argument_count <= 1
@@ -587,6 +595,41 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               current(),
               "FSIM-SV-UNSUPPORTED-042",
               "container locator with-clauses are not supported");
+        }
+        if (predicate_locator_method
+            && language_ != Language::SystemVerilog2017) {
+          error(
+              member,
+              "FSIM-SV-SEM-088",
+              "predicate container locator methods require "
+              "SystemVerilog 2017");
+        }
+        if (predicate_locator_method) {
+          if (current().text != "with") {
+            error(
+                current(),
+                "FSIM-SV-SEM-089",
+                "predicate container locator method '" + member.text
+                    + "' requires a with-clause");
+          } else {
+            advance();
+            expect(
+                TokenKind::LeftParen,
+                "'(' after container locator with",
+                "FSIM-SV-PARSE-165");
+            if (at(TokenKind::RightParen)) {
+              error(
+                  current(),
+                  "FSIM-SV-SEM-089",
+                  "a container locator with-clause requires a predicate");
+            } else {
+              operands.push_back(parse_expression());
+            }
+            expect(
+                TokenKind::RightParen,
+                "')' after container locator predicate",
+                "FSIM-SV-PARSE-166");
+          }
         }
         expression = Expression{
             ExpressionKind::Call,

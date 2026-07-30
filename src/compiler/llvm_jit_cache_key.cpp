@@ -115,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v32";
+    "fsim-llvm-native-object-v33";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -450,6 +450,31 @@ void add_dynamic_index_key(
                   static_cast<std::uint64_t>(value.operation));
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder, "predicate-count",
+                  value.predicate.size());
+              for (const auto& node : value.predicate) {
+                add_key_u64(
+                    builder, "predicate-operation",
+                    static_cast<std::uint64_t>(node.operation));
+                add_key_u64(
+                    builder, "predicate-left", node.left);
+                add_key_u64(
+                    builder, "predicate-right", node.right);
+                add_key_u64(
+                    builder, "predicate-constant-width",
+                    node.constant.width());
+                const auto word =
+                    node.constant.empty()
+                        ? runtime::Logic4Word{}
+                        : node.constant.low_word();
+                add_key_u64(
+                    builder, "predicate-constant-aval",
+                    word.aval);
+                add_key_u64(
+                    builder, "predicate-constant-bval",
+                    word.bval);
+              }
             },
             [&](const runtime::simir::ContainerRead& value) {
               builder.add("operation", "ContainerRead");

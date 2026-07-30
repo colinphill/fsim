@@ -238,6 +238,122 @@ void test_simir_containers() {
               value(32, UINT32_C(0xffffffff)),
               value(32, 1)},
       "static unique_index preserves signed declared indices");
+  const std::vector<ContainerPredicateNode> greater_than_five{
+      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{}},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 5)},
+      {ContainerPredicateOperator::greater, 0, 1, PackedLogic4{}}};
+  const std::vector<ContainerPredicateNode> equal_five{
+      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{}},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 5)},
+      {ContainerPredicateOperator::equal, 0, 1, PackedLogic4{}}};
+  for (const auto operation :
+       {ContainerLocatorOperator::find,
+        ContainerLocatorOperator::find_index,
+        ContainerLocatorOperator::find_first,
+        ContainerLocatorOperator::find_first_index,
+        ContainerLocatorOperator::find_last,
+        ContainerLocatorOperator::find_last_index}) {
+    const bool indices =
+        operation == ContainerLocatorOperator::find_index
+        || operation
+            == ContainerLocatorOperator::find_first_index
+        || operation
+            == ContainerLocatorOperator::find_last_index;
+    ContainerValue empty_result{
+        indices ? index_result_type : signed_order_type,
+        {}, {}};
+    locate_container_values(
+        empty_result, empty_locator_source, operation,
+        greater_than_five);
+    require(
+        empty_result.elements.empty(),
+        "empty predicate locators return an empty queue");
+  }
+  locate_container_values(
+      locator_result, fixed_locator,
+      ContainerLocatorOperator::find,
+      greater_than_five);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{
+              value(8, 7), value(8, 9)},
+      "find preserves declared element order");
+  locate_container_values(
+      index_result, fixed_locator,
+      ContainerLocatorOperator::find_index,
+      equal_five);
+  require(
+      index_result.elements
+          == std::vector<PackedLogic4>{
+              value(32, UINT32_C(0xfffffffe)),
+              value(32, 0)},
+      "find_index returns signed declared static indices");
+  locate_container_values(
+      locator_result, fixed_locator,
+      ContainerLocatorOperator::find_first,
+      greater_than_five);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{value(8, 7)},
+      "find_first returns the first matching value");
+  locate_container_values(
+      index_result, fixed_locator,
+      ContainerLocatorOperator::find_first_index,
+      greater_than_five);
+  require(
+      index_result.elements
+          == std::vector<PackedLogic4>{
+              value(32, UINT32_C(0xffffffff))},
+      "find_first_index returns the first matching declared index");
+  locate_container_values(
+      locator_result, fixed_locator,
+      ContainerLocatorOperator::find_last,
+      greater_than_five);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{value(8, 9)},
+      "find_last returns the last matching value");
+  locate_container_values(
+      index_result, fixed_locator,
+      ContainerLocatorOperator::find_last_index,
+      greater_than_five);
+  require(
+      index_result.elements
+          == std::vector<PackedLogic4>{value(32, 1)},
+      "find_last_index returns the last matching declared index");
+  ContainerValue unknown_find_result{
+      four_state_order_type, {}, {}};
+  const std::vector<ContainerPredicateNode> equal_one{
+      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{}},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 1)},
+      {ContainerPredicateOperator::equal, 0, 1, PackedLogic4{}}};
+  locate_container_values(
+      unknown_find_result, four_state_order,
+      ContainerLocatorOperator::find,
+      equal_one);
+  require(
+      unknown_find_result.elements
+          == std::vector<PackedLogic4>{value(8, 1)},
+      "unknown predicate results do not select an element");
+  ContainerType bounded_find_type = signed_order_type;
+  bounded_find_type.maximum_elements = 1;
+  ContainerValue bounded_find{bounded_find_type, {}, {}};
+  locate_container_values(
+      bounded_find, fixed_locator,
+      ContainerLocatorOperator::find,
+      greater_than_five);
+  require(
+      bounded_find.elements
+          == std::vector<PackedLogic4>{value(8, 7)},
+      "find respects a bounded result queue");
+  locate_container_values(
+      locator_result, locator_result,
+      ContainerLocatorOperator::find,
+      greater_than_five);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{value(8, 9)},
+      "predicate locator assignment safely supports an aliased queue");
   Interpreter interpreter;
   const auto array_object = interpreter.add_container_object(
       {"array", ContainerValue{array_type, {}, {}}});

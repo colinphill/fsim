@@ -95,6 +95,14 @@ module containers;
     located = values.max();
     located = values.unique();
     located_indices = values.unique_index();
+    located = values.find() with (item > 0);
+    located_indices = values.find_index() with (item != 2);
+    located = values.find_first() with (item >= 1 && item < 3);
+    located_indices =
+        values.find_first_index() with (!(item == 0));
+    located = values.find_last() with (item <= 3 || item == 7);
+    located_indices =
+        values.find_last_index() with (item > 1);
   end
 endmodule
 
@@ -279,6 +287,17 @@ endmodule
           })
           == 4,
       "container locator methods remain explicit no-argument call HIR");
+  require(
+      std::ranges::count_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.value.kind == ExpressionKind::Call
+                && statement.value.text.starts_with(".find")
+                && statement.value.operands.size() == 2;
+          })
+          == 6,
+      "predicate locator calls retain the receiver and one scoped "
+      "with-clause expression");
   const auto keyed_pattern =
       std::ranges::find_if(
           query_statements,
@@ -454,6 +473,27 @@ endmodule
               unsupported_locator,
               "FSIM-SV-UNSUPPORTED-042"),
       "container locator with-clauses diagnose explicitly");
+  const auto missing_predicate = parse_text(
+      "container-find-missing.sv",
+      "module m; int values[]; int result[$]; "
+      "initial begin result = values.find(); "
+      "result = values.find_index() with (); end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !missing_predicate.ok()
+          && has_code(
+              missing_predicate, "FSIM-SV-SEM-089"),
+      "predicate locators require a nonempty with-clause");
+  const auto malformed_predicate = parse_text(
+      "container-find-malformed.sv",
+      "module m; int values[]; int result[$]; "
+      "initial result = values.find() with item; endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_predicate.ok()
+          && has_code(
+              malformed_predicate, "FSIM-SV-PARSE-165"),
+      "predicate locator opening-parenthesis recovery is stable");
   require(
       has_code(invalid, "FSIM-SV-UNSUPPORTED-037")
           && has_code(invalid, "FSIM-SV-UNSUPPORTED-038"),
@@ -473,7 +513,8 @@ endmodule
       "container-verilog.v",
       "module m; integer values[]; integer value; "
       "initial begin value = '{1}; value = values.sum(); "
-      "values.sort(); value = values.min(); end "
+      "values.sort(); value = values.min(); "
+      "value = values.find() with (item); end "
       "endmodule",
       Language::Verilog2005);
   require(
@@ -482,7 +523,8 @@ endmodule
           && has_code(verilog, "FSIM-SV-SEM-084")
           && has_code(verilog, "FSIM-SV-SEM-085")
           && has_code(verilog, "FSIM-SV-SEM-086")
-          && has_code(verilog, "FSIM-SV-SEM-087"),
+          && has_code(verilog, "FSIM-SV-SEM-087")
+          && has_code(verilog, "FSIM-SV-SEM-088"),
       "containers, patterns, reductions, ordering, and locators require "
       "SystemVerilog-2017");
 

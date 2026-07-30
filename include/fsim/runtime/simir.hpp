@@ -73,6 +73,7 @@ struct CopyRegister {
 
 inline constexpr std::size_t maximum_string_bytes = 4096;
 inline constexpr std::size_t maximum_container_elements = 4096;
+inline constexpr std::size_t maximum_container_predicate_nodes = 64;
 inline constexpr std::size_t maximum_memory_file_bytes =
     1024U * 1024U;
 
@@ -237,6 +238,36 @@ enum class ContainerLocatorOperator : std::uint8_t {
   maximum,
   unique,
   unique_index,
+  find,
+  find_index,
+  find_first,
+  find_first_index,
+  find_last,
+  find_last_index,
+};
+
+enum class ContainerPredicateOperator : std::uint8_t {
+  item,
+  constant,
+  equal,
+  not_equal,
+  less,
+  less_equal,
+  greater,
+  greater_equal,
+  logical_and,
+  logical_or,
+  logical_not,
+};
+
+/// One node in a validated, source-ordered container-locator predicate.
+/// Non-leaf operands refer only to earlier nodes. The final node is the root.
+struct ContainerPredicateNode {
+  ContainerPredicateOperator operation{
+      ContainerPredicateOperator::item};
+  std::uint32_t left{};
+  std::uint32_t right{};
+  PackedLogic4 constant;
 };
 
 struct LocateContainer {
@@ -244,14 +275,17 @@ struct LocateContainer {
       ContainerLocatorOperator::minimum};
   ContainerRegisterId destination{};
   ContainerRegisterId source{};
+  std::vector<ContainerPredicateNode> predicate;
 };
 
-/// Populate a queue with extrema, unique values, or first-occurrence indices
-/// using the deterministic SystemVerilog subset policy.
+/// Populate a queue with extrema, unique values, first-occurrence indices, or
+/// predicate-selected values/indices using the deterministic SystemVerilog
+/// subset policy.
 void locate_container_values(
     ContainerValue& destination,
     const ContainerValue& source,
-    ContainerLocatorOperator operation);
+    ContainerLocatorOperator operation,
+    std::span<const ContainerPredicateNode> predicate = {});
 
 struct ContainerRead {
   RegisterId destination{};

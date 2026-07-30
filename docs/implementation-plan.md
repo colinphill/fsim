@@ -4326,6 +4326,58 @@ in 130.48 seconds, and Release passed all 59 tests in 43.77 seconds on
 2026-07-30. Batch 79 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Eightieth feature batch — bounded SystemVerilog predicate locators
+
+SystemVerilog-2017 direct one-dimensional integral static arrays, dynamic
+arrays, unbounded queues, and bounded queues now support `find`,
+`find_index`, `find_first`, `find_first_index`, `find_last`, and
+`find_last_index` with one required parenthesized `with` predicate. The parser
+retains receiver and predicate expression explicitly. Contextual lowering
+requires an exact-element queue for value results or a signed two-state
+32-bit queue for index results; associative and indirect receivers remain
+outside this bounded slice.
+
+One lexically scoped integral `item` iterator, element-convertible locally
+constant operands, equality/inequality, signedness-aware relations, and
+logical `&&`, `||`, and `!` lower to an immutable source-ordered graph of at
+most 64 nodes. Function calls, side effects, `item.index`, arithmetic
+involving `item`, nonconstant external operands, and broader expression
+families remain deferred. Runtime evaluation uses exact four-state operations:
+only a scalar one matches, while X/Z predicate results are false.
+
+`find`/`find_index` preserve declared static or current dynamic/queue order.
+First and last forms return at most one matching value or signed index, with
+last forms scanning from the final source element. Empty inputs return empty
+queues, bounded destinations truncate deterministically, and source elements
+are copied before result replacement for alias safety. Module objects, direct
+port aliases, and automatic callable values use the existing container
+register/object paths.
+
+The existing typed `LocateContainer` SimIR operation now carries validated
+predicate nodes. The interpreter and LLVM application executor share the same
+runtime kernel through the existing generic container callback, so the public
+native ABI is unchanged. Native-object schema 33 serializes the locator mode,
+every graph operator and edge, and each exact constant; dedicated cold/warm
+tests prove that predicate constant or operator changes invalidate identity.
+Stable frontend and elaboration diagnostics cover language, syntax, missing
+or empty clauses, result typing/context, receiver kind, iterator scope,
+constant conversion, unsupported expressions, discarded results, and graph
+bounds.
+
+Positive evidence covers all six methods, compound signed predicates, X/Z
+false selection, empty and bounded results, negative declared static indices,
+current indices, aliased queues, objects, ports, callable values,
+nested/generated hierarchy, interpreter, LLVM O0/O2, and cold/warm cache
+identity. The focused frontend, elaboration, runtime, LLVM, and application
+container gate passed before the full regression.
+
+The diagnostic catalog covers 1,190 production codes and the source gate
+covers 286 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 144.58 seconds, and Release passed all 59 tests in 47.41 seconds on
+2026-07-30. Batch 80 is a ten-batch CI-inspection boundary; its pushed
+GitHub Actions result is recorded in the resume handoff.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

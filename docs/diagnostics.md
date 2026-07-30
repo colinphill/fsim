@@ -535,6 +535,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-162` | error | Expected `;` after a read-memory task. |
 | `FSIM-SV-PARSE-163` | error | Expected `{` after a SystemVerilog assignment-pattern apostrophe. |
 | `FSIM-SV-PARSE-164` | error | Expected `}` after a SystemVerilog assignment pattern. |
+| `FSIM-SV-PARSE-165` | error | Expected `(` after a predicate container locator's `with` keyword. |
+| `FSIM-SV-PARSE-166` | error | Expected `)` after a predicate container locator expression. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -731,6 +733,8 @@ therefore excluded.
 | `FSIM-SV-SEM-085` | error | An unpacked-container reduction method is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-086` | error | An unpacked-container ordering method is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-087` | error | An unpacked-container locator method is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-088` | error | A predicate unpacked-container locator method is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-089` | error | A predicate unpacked-container locator omits its required nonempty `with` clause. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -1089,6 +1093,12 @@ therefore excluded.
 | `FSIM-ELAB-SVLOCATOR-003` | error | A container locator result target is not a compatible queue. |
 | `FSIM-ELAB-SVLOCATOR-004` | error | A container locator result is used outside a whole-queue assignment. |
 | `FSIM-ELAB-SVLOCATOR-005` | error | A result-producing container locator is used as a standalone statement. |
+| `FSIM-ELAB-SVFIND-001` | error | A predicate container locator lacks a direct supported nonassociative SystemVerilog unpacked-container receiver. |
+| `FSIM-ELAB-SVFIND-002` | error | A predicate container locator does not retain exactly one `with`-clause predicate. |
+| `FSIM-ELAB-SVFIND-003` | error | A predicate container locator result target is not a compatible value or signed 32-bit index queue. |
+| `FSIM-ELAB-SVFIND-004` | error | A predicate container locator uses an unsupported, nonconstant, mistyped, or overlarge predicate expression. |
+| `FSIM-ELAB-SVFIND-005` | error | A result-producing predicate container locator is used as a standalone statement. |
+| `FSIM-ELAB-SVFIND-006` | error | A predicate container locator result is used outside a whole-queue assignment. |
 | `FSIM-ELAB-SVMEMORY-001` | error | `$readmemb` or `$readmemh` is lowered outside SystemVerilog-2017. |
 | `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
 | `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |

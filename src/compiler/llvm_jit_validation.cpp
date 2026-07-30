@@ -554,37 +554,18 @@ validate_process(const Process &process,
               validate_container_register(operation.destination, index,
                                           "destination");
               validate_container_register(operation.source, index, "source");
-              if (static_cast<std::uint8_t>(operation.operation) >
-                  static_cast<std::uint8_t>(
-                      ContainerLocatorOperator::unique_index)) {
-                reject(process, index,
-                       "LocateContainer has an invalid operator");
-              }
               if (operation.destination
                       < process.container_register_types.size()
                   && operation.source
                       < process.container_register_types.size()) {
-                const auto& destination =
-                    process.container_register_types[operation.destination];
-                const auto& source =
-                    process.container_register_types[operation.source];
-                const bool index_result =
-                    operation.operation
-                    == ContainerLocatorOperator::unique_index;
-                if (!destination.queue || destination.associative
-                    || destination.fixed || source.associative
-                    || (index_result
-                            ? destination.element_width != 32
-                                  || !destination.two_state
-                                  || !destination.signed_elements
-                            : destination.element_width
-                                      != source.element_width
-                                  || destination.two_state
-                                      != source.two_state
-                                  || destination.signed_elements
-                                      != source.signed_elements)) {
-                  reject(process, index,
-                         "LocateContainer has incompatible container types");
+                if (const auto error =
+                        validate_container_locator_metadata(
+                            operation,
+                            process.container_register_types[
+                                operation.destination],
+                            process.container_register_types[
+                                operation.source])) {
+                  reject(process, index, *error);
                 }
               }
             },

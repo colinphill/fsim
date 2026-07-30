@@ -9,16 +9,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-79 bounded SystemVerilog
-  unpacked-container locator methods on top of the feature-batch-78
-  ordering-method handoff.
+- Implementation baseline: completed feature-batch-80 bounded SystemVerilog
+  predicate locator methods on top of the feature-batch-79 no-argument
+  locator handoff.
 - The source-size refactor is complete: all 286 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 130.48 seconds, and Release passed all 59 configured
-  tests in 43.77 seconds on 2026-07-30.
-- The diagnostic catalog covers all 1,180 production codes.
+  configured tests in 144.58 seconds, and Release passed all 59 configured
+  tests in 47.41 seconds on 2026-07-30.
+- The diagnostic catalog covers all 1,190 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -32,6 +32,9 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   the accumulated frontend matrix were repaired, and workflow builds returned
   to two workers to avoid hosted Ubuntu memory pressure. Replacement run
   `30555745832` passed all 12 Linux and Windows jobs.
+- Batch 80 is a required ten-batch GitHub Actions inspection boundary. Its
+  first pushed non-documentation run is pending this handoff commit and must
+  be inspected and repaired before Batch 80 is closed.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -300,7 +303,11 @@ now add no-argument `min`, `max`, `unique`, and `unique_index` expressions
 with typed queue results, empty/extrema/first-occurrence semantics, signed
 declared or current indices, alias-safe replacement, and validated schema-32
 interpreter/LLVM/cache parity across objects, ports, callable values, and
-suspension. Unicode
+suspension. The same direct nonassociative containers now add `find`,
+`find_index`, `find_first`, `find_first_index`, `find_last`, and
+`find_last_index` with one bounded pure `item` predicate, exact value or
+signed index queue results, X/Z-false selection, alias-safe replacement, and
+validated schema-33 interpreter/LLVM/cache parity. Unicode
 code-point semantics, multidimensional or
 aggregate/string-element containers, sliced/expression port actuals,
 cross-language container boundaries, and unrestricted allocation remain
@@ -308,43 +315,38 @@ separate release-gate work.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 80: bounded SystemVerilog predicate locator
-methods**:
+Resume with **feature batch 81: bounded SystemVerilog named locator iterators
+and predicate indices**:
 
-1. Retain `find`, `find_index`, `find_first`, `find_first_index`,
-   `find_last`, and `find_last_index` calls plus their required `with`
-   predicate as explicit HIR.
-2. Introduce one scoped integral iterator binding with exact source element
-   type and forbid leakage outside the predicate.
-3. Support deterministic predicates composed from the iterator, locally
-   constant integral operands, equality/inequality, relational comparison,
-   Boolean conjunction/disjunction, and unary negation.
-4. Return exact-element value queues or signed 32-bit index queues in declared
-   static or current dynamic/queue order.
-5. Make first/last variants stop at the correct source-order match while
-   general variants retain every match and empty inputs/results remain empty.
-6. Support module objects, input/output/inout port aliases, automatic
-   function/task formals and locals, suspension, and nested/generated
-   hierarchy without receiver mutation.
-7. Add validated bounded predicate metadata and result SimIR shared by the
-   interpreter and generic native container callback without a public ABI
-   extension.
-8. Version predicate structure, iterator/result typing, and comparison policy
-   in native-object cache identity.
-9. Diagnose missing/multiple/unsupported predicates, associative/noncontainer/
-   indirect receivers, incompatible contexts, iterator misuse, and
-   non-SystemVerilog use.
-10. Add frontend, elaboration, runtime, hierarchy/task/debugger,
-    interpreter, LLVM O0/O2, cache, empty/X/Z, and negative evidence; run the
-    full local gate, push, then perform the required Batch 80 GitHub CI
-    inspection and repair cycle.
+1. Retain the optional single locator iterator identifier as explicit,
+   source-spanned HIR while preserving implicit `item`.
+2. Bind the chosen iterator lexically to the exact source element type and
+   reject collision, leakage, or use outside its `with` predicate.
+3. Add a typed signed 32-bit iterator-index leaf for direct `.index`
+   predicates over supported nonassociative containers.
+4. Map static-array iterator indices to signed declared indices and
+   dynamic/queue indices to their current zero-based positions.
+5. Permit equality/inequality, relations, and logical composition between
+   the index leaf and locally constant signed 32-bit operands.
+6. Preserve Batch 80's exact element predicate behavior, result typing,
+   X/Z-false selection, first/last order, capacity, and alias policies.
+7. Extend validated bounded predicate metadata and the shared interpreter/
+   generic-native callback kernel without a public ABI change.
+8. Version iterator spelling independence, index-node structure, and
+   comparison typing in native-object cache identity.
+9. Diagnose multiple iterators, malformed/unknown iterator references,
+   unsupported index selection/calls, associative receivers, and mixed
+   element/index comparison profiles.
+10. Add frontend, elaboration, runtime, static-negative/current-index,
+    hierarchy/task, interpreter, LLVM O0/O2, cache, and negative evidence;
+    use focused gates and push the completed non-boundary batch.
 
-Keep this batch to one bounded pure predicate over existing one-dimensional
-integral static, dynamic, queue, and bounded-queue containers. Predicate
-function calls or side effects, `item.index`, associative locators,
-ordering/reduction `with` clauses, multidimensional or aggregate/string
-elements, interfaces, cross-language transfer, and unrestricted result
-allocation remain separate release-gate work.
+Keep this batch to one named or implicit iterator and its direct index over
+existing one-dimensional integral static, dynamic, queue, and bounded-queue
+containers. Predicate function calls or side effects, multiple iterators,
+associative locators, ordering/reduction `with` clauses, multidimensional or
+aggregate/string elements, interfaces, cross-language transfer, and
+unrestricted result allocation remain separate release-gate work.
 
 ## Working cadence
 
@@ -401,7 +403,8 @@ bounded-dynamic-container-port handoff, and the newest Batch 75 bounded
 unpacked-container-query handoff, Batch 76 bounded assignment-pattern handoff,
 Batch 77 bounded reduction-method handoff, and the newest Batch 78 bounded
 ordering-method handoff, followed by the newest Batch 79 bounded
-locator-method handoff. Treat the newest pushed commit on the same branch
+locator-method handoff and Batch 80 predicate-locator handoff. Treat the
+newest pushed commit on the same branch
 as the authoritative continuation and read this file from that checkout before
 doing work.
 
@@ -434,7 +437,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 80 below and return to focused tests until its tenth feature.
+resume Batch 81 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -452,14 +455,14 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin batch 80 at item 1 above. Do not rerun batch 79's full regression
+3. Begin batch 81 at item 1 above. Do not rerun batch 80's full regression
    unless a later change can affect container query, construction, reduction,
    ordering, or locator semantics,
    object binding, runtime helpers, callable activation frames, debugger paths,
    cache identity, or execution.
-4. Keep batch-80 work within bounded pure-predicate SystemVerilog `find*`
-   locator methods over supported one-dimensional integral static arrays,
-   dynamic arrays, and queues.
+4. Keep batch-81 work within bounded named-iterator and direct iterator-index
+   predicates over supported one-dimensional integral static arrays, dynamic
+   arrays, and queues.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -481,7 +484,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 79.
+recorded 59-test inventories are clean after feature batch 80.
 
 Before declaring any row complete, consult:
 

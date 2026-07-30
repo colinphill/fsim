@@ -1332,7 +1332,10 @@ std::optional<Statement> VerilogParser::parse_statement() {
                "first", "last", "next", "prev",
                "sum", "product", "and", "or", "xor",
                "reverse", "sort", "rsort", "shuffle",
-               "min", "max", "unique", "unique_index"},
+               "min", "max", "unique", "unique_index",
+               "find", "find_index", "find_first",
+               "find_first_index", "find_last",
+               "find_last_index"},
               current(lookahead + 1U).text)) {
         container_method_statement = true;
         break;

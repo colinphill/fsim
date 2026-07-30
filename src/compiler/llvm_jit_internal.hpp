@@ -59,6 +59,12 @@ struct ValidatedProcess {
 [[nodiscard]] std::optional<JitGeneratedRuntimeErrorReason>
 decode_generated_runtime_error(std::uint64_t value) noexcept;
 
+[[nodiscard]] std::optional<std::string>
+validate_container_locator_metadata(
+    const runtime::simir::LocateContainer& operation,
+    const runtime::simir::ContainerType& destination,
+    const runtime::simir::ContainerType& source);
+
 [[nodiscard]] ValidatedProcess validate_process(
     const runtime::simir::Process& process,
     std::span<const std::uint32_t> signal_widths,

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -106,6 +107,29 @@ module container_lowering #(
     assert (locations.size() == 2);
     assert (locations[0] == 0);
     assert (locations[1] == 1);
+    located = values.find() with (item == 7);
+    assert (located.size() == 2);
+    assert (located[0] == 7);
+    assert (located[1] == 7);
+    locations = values.find_index() with (item != 7);
+    assert (locations.size() == 1);
+    assert (locations[0] == 1);
+    located =
+        values.find_first() with (item >= STATIC_LEFT + 4);
+    assert (located.size() == 1);
+    assert (located[0] == 7);
+    locations =
+        values.find_first_index() with (item > 7 && item < 9);
+    assert (locations.size() == 1);
+    assert (locations[0] == 1);
+    located =
+        values.find_last() with (item <= 7 || item == 99);
+    assert (located.size() == 1);
+    assert (located[0] == 7);
+    locations =
+        values.find_last_index() with (!(item == 8));
+    assert (locations.size() == 1);
+    assert (locations[0] == 2);
     values.reverse();
     assert (values[0] == 7);
     values.sort();
@@ -137,6 +161,10 @@ module container_lowering #(
     assert (fixed_up[0] == 4'hb);
     assert (fixed_up[1] == 4'hc);
     fixed_up[0] = 0;
+    locations = fixed_up.find_index() with (item != 0);
+    assert (locations.size() == 2);
+    assert (locations[0] == -1);
+    assert (locations[1] == 1);
     assert (fixed_down[2] == 8'h21);
     fixed_down[3] = 8'h33;
     fixed_up[-1] = 4'ha;
@@ -233,6 +261,16 @@ endmodule
                 LocateContainer>(operation);
           })
       >= 4);
+  assert(
+      std::ranges::count_if(
+          process.operations,
+          [](const auto& operation) {
+            const auto* locator =
+                std::get_if<LocateContainer>(&operation);
+            return locator != nullptr
+                && !locator->predicate.empty();
+          })
+      >= 7);
   const auto values =
       elaborated.design->container_objects()[0].id;
   const auto pending =
@@ -618,7 +656,7 @@ module container_invalid_lowering;
   initial begin
     lookup.push_back(1);
     result = lookup.sort();
-    result = lookup.find();
+    result = lookup.find() with (item);
     result = result.sum();
     lookup.sum();
     result.sort();
@@ -632,6 +670,12 @@ module container_invalid_lowering;
     locator_result = fixed[0].min();
     result = fixed.min();
     fixed.min();
+    locator_result = lookup.find() with (item);
+    dynamic = fixed.find() with (item);
+    locator_result = fixed.find_index() with (item);
+    locator_result = fixed.find() with (item + 1 > 0);
+    result = fixed.find() with (item);
+    fixed.find() with (item);
     lookup[0] <= 1;
     dynamic.delete(0);
     fixed.delete();
@@ -647,8 +691,6 @@ endmodule
   assert(!rejected.ok());
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-003"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-008"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVREDUCE-001"));
   assert(has_diagnostic(
@@ -670,6 +712,16 @@ endmodule
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVLOCATOR-005"));
   assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVFIND-001"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVFIND-003"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVFIND-004"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVFIND-005"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVFIND-006"));
+  assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-013"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-018"));
@@ -685,6 +737,31 @@ endmodule
       rejected, "FSIM-ELAB-SVCONTAINER-014"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVMEMORY-003"));
+
+  std::string oversized_predicate =
+      "module oversized_predicate; byte values[]; "
+      "byte result[$]; initial result = values.find() with (";
+  for (int value = 0; value < 17; ++value) {
+    if (value != 0) {
+      oversized_predicate += " || ";
+    }
+    oversized_predicate +=
+        "item == " + std::to_string(value);
+  }
+  oversized_predicate += "); endmodule";
+  const auto oversized_parsed =
+      fsim::frontend::parse_text(
+          "container-predicate-oversized.sv",
+          oversized_predicate,
+          fsim::frontend::Language::SystemVerilog2017);
+  assert(oversized_parsed.ok());
+  const auto oversized_rejected =
+      fsim::elaboration::elaborate(
+          oversized_parsed.design, "oversized_predicate");
+  assert(
+      !oversized_rejected.ok()
+      && has_diagnostic(
+          oversized_rejected, "FSIM-ELAB-SVFIND-004"));
 
   const auto invalid_ports = fsim::frontend::parse_text(
       "container-port-invalid.sv",

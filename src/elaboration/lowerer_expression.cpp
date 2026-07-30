@@ -79,10 +79,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             && (expression.text == ".min"
                 || expression.text == ".max"
                 || expression.text == ".unique"
-                || expression.text == ".unique_index");
+                || expression.text == ".unique_index"
+                || expression.text == ".find"
+                || expression.text == ".find_index"
+                || expression.text == ".find_first"
+                || expression.text == ".find_first_index"
+                || expression.text == ".find_last"
+                || expression.text == ".find_last_index");
         if (container_locator) {
+            const bool predicate_locator =
+                expression.text.starts_with(".find");
             report(
-                "FSIM-ELAB-SVLOCATOR-004",
+                predicate_locator
+                    ? "FSIM-ELAB-SVFIND-006"
+                    : "FSIM-ELAB-SVLOCATOR-004",
                 "container locator results require a compatible "
                 "whole-queue assignment target",
                 expression.span);

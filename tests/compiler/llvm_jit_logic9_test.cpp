@@ -212,6 +212,28 @@ void test_rejections() {
       },
       "width constraints are inconsistent");
 
+  ContainerType locator_queue;
+  locator_queue.element_width = 8;
+  locator_queue.queue = true;
+  Process invalid_container_predicate;
+  invalid_container_predicate.name =
+      "invalid_container_predicate";
+  invalid_container_predicate.container_register_count = 2;
+  invalid_container_predicate.container_register_types = {
+      locator_queue, locator_queue};
+  invalid_container_predicate.operations = {
+      LocateContainer{
+          ContainerLocatorOperator::find, 0, 1, {}},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_container_predicate",
+            invalid_container_predicate,
+            no_signals);
+      },
+      "invalid predicate metadata");
+
   const auto projected_process =
       [](const ProjectedDelayMode mode,
          const std::uint64_t delay,

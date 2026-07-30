@@ -220,6 +220,95 @@ void require_associative(
   return false;
 }
 
+[[nodiscard]] PackedLogic4 evaluate_container_predicate(
+    const ContainerType& type,
+    const PackedLogic4& item,
+    const std::span<const ContainerPredicateNode> predicate) {
+  if (predicate.empty()
+      || predicate.size() > maximum_container_predicate_nodes) {
+    throw std::invalid_argument{
+        "SimIR container predicate node count is invalid"};
+  }
+  std::vector<PackedLogic4> values;
+  values.reserve(predicate.size());
+  for (std::size_t index = 0; index < predicate.size(); ++index) {
+    const auto& node = predicate[index];
+    const auto operand =
+        [&](const std::uint32_t id) -> const PackedLogic4& {
+          if (id >= index) {
+            throw std::invalid_argument{
+                "SimIR container predicate operand is not earlier"};
+          }
+          return values[id];
+        };
+    switch (node.operation) {
+    case ContainerPredicateOperator::item:
+      values.push_back(item);
+      break;
+    case ContainerPredicateOperator::constant:
+      if (node.constant.width() != type.element_width
+          || node.constant.is_logic9()
+          || (type.two_state
+              && node.constant.low_word().bval != 0)) {
+        throw std::invalid_argument{
+            "SimIR container predicate constant type mismatch"};
+      }
+      values.push_back(node.constant);
+      break;
+    case ContainerPredicateOperator::equal:
+    case ContainerPredicateOperator::not_equal:
+    case ContainerPredicateOperator::less:
+    case ContainerPredicateOperator::less_equal:
+    case ContainerPredicateOperator::greater:
+    case ContainerPredicateOperator::greater_equal: {
+      const auto& left = operand(node.left);
+      const auto& right = operand(node.right);
+      auto operation = BinaryOperator::equal;
+      if (node.operation == ContainerPredicateOperator::not_equal) {
+        operation = BinaryOperator::not_equal;
+      } else if (node.operation == ContainerPredicateOperator::less) {
+        operation = type.signed_elements
+            ? BinaryOperator::less_signed
+            : BinaryOperator::less_unsigned;
+      } else if (
+          node.operation == ContainerPredicateOperator::less_equal) {
+        operation = type.signed_elements
+            ? BinaryOperator::less_equal_signed
+            : BinaryOperator::less_equal_unsigned;
+      } else if (
+          node.operation == ContainerPredicateOperator::greater) {
+        operation = type.signed_elements
+            ? BinaryOperator::greater_signed
+            : BinaryOperator::greater_unsigned;
+      } else if (
+          node.operation == ContainerPredicateOperator::greater_equal) {
+        operation = type.signed_elements
+            ? BinaryOperator::greater_equal_signed
+            : BinaryOperator::greater_equal_unsigned;
+      }
+      values.push_back(binary_value(operation, left, right));
+      break;
+    }
+    case ContainerPredicateOperator::logical_and:
+    case ContainerPredicateOperator::logical_or:
+      values.push_back(logical_binary(
+          node.operation
+                  == ContainerPredicateOperator::logical_and
+              ? LogicalBinaryOperator::logical_and
+              : LogicalBinaryOperator::logical_or,
+          operand(node.left), operand(node.right)));
+      break;
+    case ContainerPredicateOperator::logical_not:
+      values.push_back(logical_not(operand(node.left)));
+      break;
+    default:
+      throw std::invalid_argument{
+          "invalid SimIR container predicate operator"};
+    }
+  }
+  return values.back();
+}
+
 }  // namespace
 
 void validate_container_value(const ContainerValue& value) {
@@ -404,7 +493,8 @@ void order_container_value(
 void locate_container_values(
     ContainerValue& destination,
     const ContainerValue& source,
-    const ContainerLocatorOperator operation) {
+    const ContainerLocatorOperator operation,
+    const std::span<const ContainerPredicateNode> predicate) {
   validate_container_value(source);
   validate_container_value(destination);
   if (source.type.associative || !destination.type.queue
@@ -413,13 +503,24 @@ void locate_container_values(
     throw std::invalid_argument{
         "container locators require a nonassociative source and queue result"};
   }
+  const bool predicate_locator =
+      operation >= ContainerLocatorOperator::find;
   const bool index_result =
-      operation == ContainerLocatorOperator::unique_index;
+      operation == ContainerLocatorOperator::unique_index
+      || operation == ContainerLocatorOperator::find_index
+      || operation == ContainerLocatorOperator::find_first_index
+      || operation == ContainerLocatorOperator::find_last_index;
   if (static_cast<std::uint8_t>(operation)
       > static_cast<std::uint8_t>(
-          ContainerLocatorOperator::unique_index)) {
+          ContainerLocatorOperator::find_last_index)) {
     throw std::invalid_argument{
         "invalid SimIR container locator operator"};
+  }
+  if (predicate_locator != !predicate.empty()) {
+    throw std::invalid_argument{
+        predicate_locator
+            ? "predicate container locator requires metadata"
+            : "non-predicate container locator has predicate metadata"};
   }
   if (index_result
           ? destination.type.element_width != 32
@@ -446,6 +547,53 @@ void locate_container_values(
           destination.elements.push_back(std::move(value));
         }
       };
+  const auto declared_index =
+      [&](const std::size_t offset) {
+        return source_type.fixed
+            ? source_type.index_left >= source_type.index_right
+                  ? source_type.index_left
+                        - static_cast<std::int32_t>(offset)
+                  : source_type.index_left
+                        + static_cast<std::int32_t>(offset)
+            : static_cast<std::int32_t>(offset);
+      };
+  const auto append_match =
+      [&](const std::size_t offset) {
+        if (index_result) {
+          append(PackedLogic4::from_aval_bval(
+              32,
+              static_cast<std::uint32_t>(
+                  declared_index(offset)),
+              0));
+        } else {
+          append(elements[offset]);
+        }
+      };
+  if (predicate_locator) {
+    const bool select_last =
+        operation == ContainerLocatorOperator::find_last
+        || operation
+            == ContainerLocatorOperator::find_last_index;
+    const bool select_one =
+        select_last
+        || operation == ContainerLocatorOperator::find_first
+        || operation
+            == ContainerLocatorOperator::find_first_index;
+    for (std::size_t step = 0; step < elements.size(); ++step) {
+      const auto offset =
+          select_last ? elements.size() - step - 1U : step;
+      if (truth_value(evaluate_container_predicate(
+              source_type, elements[offset], predicate))
+          != Logic4::one) {
+        continue;
+      }
+      append_match(offset);
+      if (select_one) {
+        break;
+      }
+    }
+    return;
+  }
   if (operation == ContainerLocatorOperator::minimum
       || operation == ContainerLocatorOperator::maximum) {
     if (elements.empty()) {
@@ -475,16 +623,7 @@ void locate_container_values(
       append(elements[offset]);
       continue;
     }
-    const auto index =
-        source_type.fixed
-            ? source_type.index_left >= source_type.index_right
-                  ? source_type.index_left
-                        - static_cast<std::int32_t>(offset)
-                  : source_type.index_left
-                        + static_cast<std::int32_t>(offset)
-            : static_cast<std::int32_t>(offset);
-    append(PackedLogic4::from_aval_bval(
-        32, static_cast<std::uint32_t>(index), 0));
+    append_match(offset);
   }
 }
 
@@ -814,7 +953,8 @@ void Interpreter::Impl::execute_container(
   const auto& source =
       get_container_register(process, operation.source);
   locate_container_values(
-      destination, source, operation.operation);
+      destination, source, operation.operation,
+      operation.predicate);
   ++process.pc;
 }
 

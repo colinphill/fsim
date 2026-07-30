@@ -91,4 +91,91 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept {
   return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::string>
+validate_container_locator_metadata(
+    const runtime::simir::LocateContainer& operation,
+    const runtime::simir::ContainerType& destination,
+    const runtime::simir::ContainerType& source) {
+  using namespace runtime::simir;
+  if (operation.operation > ContainerLocatorOperator::find_last_index) {
+    return "LocateContainer has an invalid operator";
+  }
+  const bool predicate_locator =
+      operation.operation >= ContainerLocatorOperator::find;
+  const bool index_result =
+      operation.operation == ContainerLocatorOperator::unique_index
+      || operation.operation == ContainerLocatorOperator::find_index
+      || operation.operation
+          == ContainerLocatorOperator::find_first_index
+      || operation.operation
+          == ContainerLocatorOperator::find_last_index;
+  if (!destination.queue || destination.associative
+      || destination.fixed || source.associative
+      || (index_result
+              ? destination.element_width != 32
+                    || !destination.two_state
+                    || !destination.signed_elements
+              : destination.element_width != source.element_width
+                    || destination.two_state != source.two_state
+                    || destination.signed_elements
+                        != source.signed_elements)) {
+    return "LocateContainer has incompatible container types";
+  }
+  if (predicate_locator != !operation.predicate.empty()
+      || operation.predicate.size()
+          > maximum_container_predicate_nodes) {
+    return "LocateContainer has invalid predicate metadata";
+  }
+  std::vector<bool> value_nodes;
+  value_nodes.reserve(operation.predicate.size());
+  for (std::size_t index = 0;
+       index < operation.predicate.size(); ++index) {
+    const auto& node = operation.predicate[index];
+    const auto earlier =
+        [index](const std::uint32_t operand) {
+          return operand < index;
+        };
+    const bool comparison =
+        node.operation >= ContainerPredicateOperator::equal
+        && node.operation
+            <= ContainerPredicateOperator::greater_equal;
+    if (node.operation
+        > ContainerPredicateOperator::logical_not) {
+      return "LocateContainer predicate has an invalid operator";
+    }
+    if (node.operation == ContainerPredicateOperator::item) {
+      value_nodes.push_back(true);
+    } else if (
+        node.operation == ContainerPredicateOperator::constant) {
+      if (node.constant.width() != source.element_width
+          || node.constant.is_logic9()
+          || (source.two_state
+              && node.constant.low_word().bval != 0)) {
+        return "LocateContainer predicate constant has the wrong type";
+      }
+      value_nodes.push_back(true);
+    } else if (comparison) {
+      if (!earlier(node.left) || !earlier(node.right)
+          || !value_nodes[node.left]
+          || !value_nodes[node.right]) {
+        return "LocateContainer comparison operands are invalid";
+      }
+      value_nodes.push_back(false);
+    } else if (
+        node.operation
+            == ContainerPredicateOperator::logical_not) {
+      if (!earlier(node.left)) {
+        return "LocateContainer logical operand is invalid";
+      }
+      value_nodes.push_back(false);
+    } else {
+      if (!earlier(node.left) || !earlier(node.right)) {
+        return "LocateContainer logical operands are invalid";
+      }
+      value_nodes.push_back(false);
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace fsim::compiler::llvm_detail

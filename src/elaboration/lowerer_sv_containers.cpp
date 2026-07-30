@@ -578,26 +578,206 @@ Lowerer::lower_container_pattern(
   return destination;
 }
 
+std::optional<std::vector<ContainerPredicateNode>>
+Lowerer::lower_container_predicate(
+    const Expression& expression,
+    const frontend::Type& source_type,
+    const ContainerType& runtime_type) {
+  std::vector<ContainerPredicateNode> nodes;
+  const auto append =
+      [&](ContainerPredicateNode node)
+          -> std::optional<std::uint32_t> {
+        if (nodes.size() >= maximum_container_predicate_nodes) {
+          report(
+              "FSIM-ELAB-SVFIND-004",
+              "container locator predicates are limited to 64 nodes",
+              expression.span);
+          return std::nullopt;
+        }
+        nodes.push_back(std::move(node));
+        return static_cast<std::uint32_t>(nodes.size() - 1U);
+      };
+  const auto contains_item =
+      [&](const auto& self, const Expression& candidate) -> bool {
+        return (candidate.kind == ExpressionKind::Identifier
+                && candidate.text == "item")
+            || std::ranges::any_of(
+                candidate.operands,
+                [&](const auto& operand) {
+                  return self(self, operand);
+                });
+      };
+  const auto lower_constant =
+      [&](const Expression& candidate)
+          -> std::optional<std::uint32_t> {
+        std::string error;
+        const auto value =
+            evaluate_systemverilog_constant_expression(
+                candidate, {}, {}, error);
+        const auto converted =
+            value
+                ? convert_systemverilog_parameter_value(
+                      *value, source_type, error)
+                : std::nullopt;
+        const auto literal =
+            converted
+                ? literal_value(
+                      converted->expression(candidate.span),
+                      runtime_type.element_width,
+                      frontend::Language::SystemVerilog2017)
+                : std::nullopt;
+        if (!literal
+            || literal->value.width()
+                != runtime_type.element_width
+            || (runtime_type.two_state
+                && literal->value.low_word().bval != 0)) {
+          report(
+              "FSIM-ELAB-SVFIND-004",
+              "container locator predicate constants must be "
+              "locally constant and convertible to the element type"
+                  + (error.empty() ? std::string{} : ": " + error),
+              candidate.span);
+          return std::nullopt;
+        }
+        ContainerPredicateNode node;
+        node.operation = ContainerPredicateOperator::constant;
+        node.constant = literal->value;
+        return append(std::move(node));
+      };
+  std::function<std::optional<std::uint32_t>(
+      const Expression&, bool)> lower;
+  lower =
+      [&](const Expression& candidate,
+          const bool value_operand)
+          -> std::optional<std::uint32_t> {
+        if (candidate.kind == ExpressionKind::Identifier
+            && candidate.text == "item") {
+          ContainerPredicateNode node;
+          node.operation = ContainerPredicateOperator::item;
+          return append(std::move(node));
+        }
+        if (!contains_item(contains_item, candidate)) {
+          return lower_constant(candidate);
+        }
+        if (value_operand) {
+          report(
+              "FSIM-ELAB-SVFIND-004",
+              "container locator comparisons accept only the scoped "
+              "'item' iterator or locally constant operands",
+              candidate.span);
+          return std::nullopt;
+        }
+        if (candidate.kind == ExpressionKind::Unary
+            && candidate.text == "!"
+            && candidate.operands.size() == 1) {
+          const auto operand =
+              lower(candidate.operands.front(), false);
+          if (!operand) {
+            return std::nullopt;
+          }
+          ContainerPredicateNode node;
+          node.operation =
+              ContainerPredicateOperator::logical_not;
+          node.left = *operand;
+          return append(std::move(node));
+        }
+        if (candidate.kind == ExpressionKind::Binary
+            && candidate.operands.size() == 2) {
+          const bool logical =
+              candidate.text == "&&"
+              || candidate.text == "||";
+          const bool comparison =
+              candidate.text == "=="
+              || candidate.text == "!="
+              || candidate.text == "<"
+              || candidate.text == "<="
+              || candidate.text == ">"
+              || candidate.text == ">=";
+          if (logical || comparison) {
+            const auto left = lower(
+                candidate.operands[0], comparison);
+            const auto right = lower(
+                candidate.operands[1], comparison);
+            if (!left || !right) {
+              return std::nullopt;
+            }
+            ContainerPredicateNode node;
+            node.left = *left;
+            node.right = *right;
+            if (candidate.text == "==") {
+              node.operation = ContainerPredicateOperator::equal;
+            } else if (candidate.text == "!=") {
+              node.operation =
+                  ContainerPredicateOperator::not_equal;
+            } else if (candidate.text == "<") {
+              node.operation = ContainerPredicateOperator::less;
+            } else if (candidate.text == "<=") {
+              node.operation =
+                  ContainerPredicateOperator::less_equal;
+            } else if (candidate.text == ">") {
+              node.operation = ContainerPredicateOperator::greater;
+            } else if (candidate.text == ">=") {
+              node.operation =
+                  ContainerPredicateOperator::greater_equal;
+            } else if (candidate.text == "&&") {
+              node.operation =
+                  ContainerPredicateOperator::logical_and;
+            } else {
+              node.operation =
+                  ContainerPredicateOperator::logical_or;
+            }
+            return append(std::move(node));
+          }
+        }
+        report(
+            "FSIM-ELAB-SVFIND-004",
+            "container locator predicates support the scoped 'item' "
+            "iterator, locally constant operands, comparisons, and "
+            "logical &&, ||, and !",
+            candidate.span);
+        return std::nullopt;
+      };
+  if (!lower(expression, false)) {
+    return std::nullopt;
+  }
+  return nodes;
+}
+
 bool Lowerer::lower_container_locator(
     const Expression& expression,
     const ContainerRegisterId destination,
     const ContainerType& destination_type) {
+  const bool predicate_locator =
+      expression.text == ".find"
+      || expression.text == ".find_index"
+      || expression.text == ".find_first"
+      || expression.text == ".find_first_index"
+      || expression.text == ".find_last"
+      || expression.text == ".find_last_index";
   if (language_ != frontend::Language::SystemVerilog2017
       || expression.operands.empty()
       || expression.operands.front().kind
           != ExpressionKind::Identifier
       || !is_container_expression(expression.operands.front())) {
     report(
-        "FSIM-ELAB-SVLOCATOR-001",
+        predicate_locator
+            ? "FSIM-ELAB-SVFIND-001"
+            : "FSIM-ELAB-SVLOCATOR-001",
         "container locators require a direct supported "
         "SystemVerilog unpacked-container receiver",
         expression.span);
     return false;
   }
-  if (expression.operands.size() != 1) {
+  if (expression.operands.size()
+      != (predicate_locator ? 2U : 1U)) {
     report(
-        "FSIM-ELAB-SVLOCATOR-002",
-        "bounded container locator methods take no arguments",
+        predicate_locator
+            ? "FSIM-ELAB-SVFIND-002"
+            : "FSIM-ELAB-SVLOCATOR-002",
+        predicate_locator
+            ? "predicate container locator methods require exactly "
+              "one with-clause predicate"
+            : "bounded container locator methods take no arguments",
         expression.span);
     return false;
   }
@@ -610,14 +790,19 @@ bool Lowerer::lower_container_locator(
           : std::nullopt;
   if (!source || !source_type || source_type->associative) {
     report(
-        "FSIM-ELAB-SVLOCATOR-001",
+        predicate_locator
+            ? "FSIM-ELAB-SVFIND-001"
+            : "FSIM-ELAB-SVLOCATOR-001",
         "bounded container locators do not support associative "
         "or unresolved receivers",
         expression.span);
     return false;
   }
   const bool index_result =
-      expression.text == ".unique_index";
+      expression.text == ".unique_index"
+      || expression.text == ".find_index"
+      || expression.text == ".find_first_index"
+      || expression.text == ".find_last_index";
   const bool compatible =
       destination_type.queue
       && !destination_type.associative
@@ -634,7 +819,9 @@ bool Lowerer::lower_container_locator(
                         == source_type->signed_elements);
   if (!compatible) {
     report(
-        "FSIM-ELAB-SVLOCATOR-003",
+        predicate_locator
+            ? "FSIM-ELAB-SVFIND-003"
+            : "FSIM-ELAB-SVLOCATOR-003",
         "container locator result requires a compatible queue target",
         expression.span);
     return false;
@@ -647,8 +834,33 @@ bool Lowerer::lower_container_locator(
   } else if (index_result) {
     operation = ContainerLocatorOperator::unique_index;
   }
+  if (expression.text == ".find") {
+    operation = ContainerLocatorOperator::find;
+  } else if (expression.text == ".find_index") {
+    operation = ContainerLocatorOperator::find_index;
+  } else if (expression.text == ".find_first") {
+    operation = ContainerLocatorOperator::find_first;
+  } else if (expression.text == ".find_first_index") {
+    operation = ContainerLocatorOperator::find_first_index;
+  } else if (expression.text == ".find_last") {
+    operation = ContainerLocatorOperator::find_last;
+  } else if (expression.text == ".find_last_index") {
+    operation = ContainerLocatorOperator::find_last_index;
+  }
+  std::vector<ContainerPredicateNode> predicate;
+  if (predicate_locator) {
+    const auto lowered = lower_container_predicate(
+        expression.operands[1], *source_frontend_type,
+        *source_type);
+    if (!lowered) {
+      return false;
+    }
+    predicate = std::move(*lowered);
+  }
   process_.operations.emplace_back(
-      LocateContainer{operation, destination, *source});
+      LocateContainer{
+          operation, destination, *source,
+          std::move(predicate)});
   return true;
 }
 
@@ -668,10 +880,20 @@ void Lowerer::lower_container_method(
       && (call.text == ".min"
           || call.text == ".max"
           || call.text == ".unique"
-          || call.text == ".unique_index");
+          || call.text == ".unique_index"
+          || call.text == ".find"
+          || call.text == ".find_index"
+          || call.text == ".find_first"
+          || call.text == ".find_first_index"
+          || call.text == ".find_last"
+          || call.text == ".find_last_index");
   if (locator_method) {
+    const bool predicate_locator =
+        call.text.starts_with(".find");
     report(
-        "FSIM-ELAB-SVLOCATOR-005",
+        predicate_locator
+            ? "FSIM-ELAB-SVFIND-005"
+            : "FSIM-ELAB-SVLOCATOR-005",
         "container locator results cannot be discarded",
         call.span);
     return;

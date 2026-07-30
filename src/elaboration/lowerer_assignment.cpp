@@ -535,7 +535,15 @@ using namespace elaboration_detail;
                     && (statement.value.text == ".min"
                         || statement.value.text == ".max"
                         || statement.value.text == ".unique"
-                        || statement.value.text == ".unique_index");
+                        || statement.value.text == ".unique_index"
+                        || statement.value.text == ".find"
+                        || statement.value.text == ".find_index"
+                        || statement.value.text == ".find_first"
+                        || statement.value.text
+                            == ".find_first_index"
+                        || statement.value.text == ".find_last"
+                        || statement.value.text
+                            == ".find_last_index");
                 if (locator) {
                     if (!lower_container_locator(
                             statement.value, target, *runtime_type)) {
