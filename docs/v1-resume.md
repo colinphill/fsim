@@ -259,7 +259,8 @@ release-gate work.
   change; do not run the full suite for every individual feature.
 - At the tenth feature, run the exact LLVM 22.1.8 Debug and Release regression
   appropriate to the batch, update the plan/support/matrix documents, commit,
-  and push the branch.
+  and push the branch. A feature batch is not handed off as complete until its
+  commit is present on `origin/codex/resumable-jit`.
 - Do not inspect GitHub Actions runs unless explicitly requested.
 - Preserve the 2,000-line hard limit, prefer approximately 1,600 lines, split
   compilation units by responsibility, and do not move executable
@@ -268,6 +269,60 @@ release-gate work.
   or compatibility wrappers for environment access, avoid POSIX-only path and
   process assumptions, keep the native ABI plain C, and test MSVC/clang-cl
   behavior in the scheduled platform gate.
+
+## Fresh-machine bootstrap
+
+The pushed branch is the portable handoff. On a new Linux x86-64 machine,
+install Git, Ninja, CMake 3.28 or newer, a C++20 compiler, and exact LLVM
+22.1.8. CMake may use an installed exact Boost.Context 1.91.0 and compatible
+Tcl 9.0 development package, or download the pinned fallbacks when network
+access is available.
+
+Clone and select the handoff branch:
+
+```sh
+git clone ssh://git@github.com/colinphill/fsim.git
+cd fsim
+git switch --track origin/codex/resumable-jit
+git status --short --branch
+git log -5 --oneline --decorate
+```
+
+History must contain Batch 66 commit `8822c79` (`feat: add VHDL non-value
+component generics`). Treat a newer pushed commit on the same branch as the
+authoritative continuation and read this file from that checkout before doing
+work.
+
+Configure the exact warnings-as-errors build pair:
+
+```sh
+cmake -S . -B build/llvm22-ninja-debug -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DFSIM_BUILD_TESTS=ON \
+  -DFSIM_LLVM_MODE=ON \
+  -DFSIM_WARNINGS_AS_ERRORS=ON \
+  -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
+cmake -S . -B build/llvm22-ninja-release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DFSIM_BUILD_TESTS=ON \
+  -DFSIM_LLVM_MODE=ON \
+  -DFSIM_WARNINGS_AS_ERRORS=ON \
+  -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
+cmake --build build/llvm22-ninja-debug --parallel 8
+cmake --build build/llvm22-ninja-release --parallel 8
+```
+
+Because a new host is a new toolchain/environment boundary, establish its
+baseline once before changing behavior:
+
+```sh
+ctest --test-dir build/llvm22-ninja-debug --output-on-failure
+ctest --test-dir build/llvm22-ninja-release --output-on-failure
+```
+
+The recorded timings above are evidence from the previous development host,
+not performance expectations for the new machine. After the baseline passes,
+resume Batch 67 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -313,17 +368,6 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 Both exact-LLVM build trees were rebuilt for feature batch 66. The configured
 test counts differ because the Release tree includes the fetched-Tcl
 relocation test; both recorded inventories are clean.
-
-For a fresh checkout, configure exact LLVM explicitly:
-
-```sh
-cmake -S . -B build/llvm22-ninja-debug -G Ninja \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DFSIM_BUILD_TESTS=ON \
-  -DFSIM_LLVM_MODE=ON \
-  -DFSIM_WARNINGS_AS_ERRORS=ON \
-  -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
-```
 
 Before declaring any row complete, consult:
 
