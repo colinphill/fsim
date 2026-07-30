@@ -923,6 +923,8 @@ private:
     [[nodiscard]] std::optional<ContainerType> container_type(
         const frontend::Type& type,
         const frontend::SourceSpan& span);
+    ExpressionAttempt lower_container_query(
+        const Expression& expression);
     ContainerRegisterId allocate_container_register(
         const ContainerType& type);
     void lower_container_method(const Statement& statement);

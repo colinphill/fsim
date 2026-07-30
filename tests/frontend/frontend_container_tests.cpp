@@ -65,6 +65,15 @@ module containers;
     bounded.delete();
     if (pending.size() == 1)
       values[0] = pending.pop_back();
+    assert ($left(image) == 7);
+    assert ($right(image) == 4);
+    assert ($low(ascending) == -2);
+    assert ($high(ascending) == 1);
+    assert ($increment(image) == 1);
+    assert ($size(values, 1) == 3);
+    assert ($bits(pending) == 8);
+    assert ($dimensions(lookup) == 2);
+    assert ($unpacked_dimensions(image) == 1);
   end
 endmodule
 
@@ -178,6 +187,35 @@ endmodule
           && unit->processes[0].statements[1].memory_start
           && unit->processes[0].statements[1].memory_finish,
       "$readmemh/$readmemb retain target, radix, and optional bounds");
+  const auto& query_statements =
+      unit->processes[0].statements;
+  const auto has_query =
+      [&](const std::string_view name) {
+        return std::ranges::any_of(
+            query_statements,
+            [&](const auto& statement) {
+              return statement.condition.kind
+                          == ExpressionKind::Binary
+                  && std::ranges::any_of(
+                      statement.condition.operands,
+                      [&](const auto& operand) {
+                        return operand.kind
+                                == ExpressionKind::Call
+                            && operand.text == name;
+                      });
+            });
+      };
+  require(
+      has_query("$left")
+          && has_query("$right")
+          && has_query("$low")
+          && has_query("$high")
+          && has_query("$increment")
+          && has_query("$size")
+          && has_query("$bits")
+          && has_query("$dimensions")
+          && has_query("$unpacked_dimensions"),
+      "container query system functions remain explicit typed calls");
   require(
       unit->tasks.size() == 1
           && unit->tasks[0].arguments.size() == 3

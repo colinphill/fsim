@@ -9,6 +9,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type*) {
+        auto container_query =
+            lower_container_query(expression);
+        if (container_query.handled) {
+            return container_query;
+        }
         if (expression.kind == ExpressionKind::Unary
             && expression.operands.size() == 1
             && expression.text == "!") {

@@ -72,6 +72,20 @@ module container_lowering #(
     fixed_down[3] = 8'h33;
     fixed_up[-1] = 4'ha;
     fixed_up[1] = 4'hc;
+    assert ($left(fixed_down) == STATIC_LEFT);
+    assert ($right(fixed_down) == 1);
+    assert ($low(fixed_down) == 1);
+    assert ($high(fixed_down) == STATIC_LEFT);
+    assert ($increment(fixed_down) == 1);
+    assert ($size(fixed_down) == 3);
+    assert ($bits(fixed_down) == 24);
+    assert ($left(fixed_up) == -1);
+    assert ($right(fixed_up) == 1);
+    assert ($low(fixed_up) == -1);
+    assert ($high(fixed_up) == 1);
+    assert ($increment(fixed_up) == -1);
+    assert ($size(fixed_up) == 3);
+    assert ($bits(fixed_up) == 12);
     assert (copied_static(fixed_down) == 8'h33);
     assert ($isunknown(fixed_down[2]));
     assert (fixed_up[-1] == 4'ha);
@@ -186,6 +200,15 @@ module static_port_leaf #(
     inout bit [3:0] shared[-1:1]);
   initial begin
     #1;
+    assert ($left(source) == LEFT);
+    assert ($right(source) == RIGHT);
+    assert ($low(source) == RIGHT);
+    assert ($high(source) == LEFT);
+    assert ($increment(source) == 1);
+    assert ($size(source, RIGHT - RIGHT + 1) == 4);
+    assert ($bits(source) == 32);
+    assert ($dimensions(source) == 2);
+    assert ($unpacked_dimensions(source) == 1);
     assert (source[LEFT] == 8'h31);
     assert (source[RIGHT] == 8'h04);
     result = source;
@@ -318,6 +341,18 @@ module dynamic_port_leaf #(
   initial begin
     KEY cursor;
     #1;
+    assert ($left(source) == 0);
+    assert ($right(source) == 1);
+    assert ($low(source) == 0);
+    assert ($high(source) == 1);
+    assert ($increment(source) == -1);
+    assert ($size(source, LIMIT - LIMIT + 1) == 2);
+    assert ($bits(source) == 64);
+    assert ($dimensions(source) == 2);
+    assert ($unpacked_dimensions(source) == 1);
+    assert ($right(result) == -1);
+    assert ($high(result) == -1);
+    assert ($bits(result) == 0);
     assert (source.size() == 2);
     assert (source[0] == 11);
     result.push_back(8'h21);
@@ -330,9 +365,19 @@ module dynamic_port_leaf #(
     assert (cursor == -1);
     assert (scores.next(cursor) == 1);
     assert (cursor == 2);
+    assert ($size(bounded) == 2);
+    assert ($bits(bounded) == 2);
+    assert ($size(scores) == 2);
+    assert ($bits(scores) == 32);
+    assert ($dimensions(scores) == 2);
+    assert ($unpacked_dimensions(scores) == 1);
     work = new[3];
     work[0] = 31;
     work[2] = 33;
+    assert ($right(work) == 2);
+    assert ($high(work) == 2);
+    assert ($size(work) == 3);
+    assert ($bits(work) == 96);
   end
 endmodule
 
@@ -596,11 +641,13 @@ module byte_dynamic_accept(input byte value[]);
 endmodule
 
 module bad_dynamic_port_top;
+  typedef int item_t;
   int dynamic_value[];
   int queue_value[$];
   int bounded_value[$:2];
   int associative_value[logic signed [4:0]];
   logic [7:0] four_state_value[];
+  int query_result;
   dynamic_accept expression_actual(
       .value(dynamic_value[0]));
   dynamic_accept unknown_actual(.value(missing));
@@ -615,6 +662,13 @@ module bad_dynamic_port_top;
   dynamic_output second(.value(dynamic_value));
   dynamic_input read_only(.value(dynamic_value));
   dynamic_forward forward(.value(dynamic_value));
+  initial begin
+    query_result = $left(associative_value);
+    query_result = $size(dynamic_value, 2);
+    query_result = $bits(dynamic_value, 1);
+    query_result = $dimensions(dynamic_value, 1);
+    query_result = $size(item_t);
+  end
 endmodule
 )",
           fsim::frontend::Language::SystemVerilog2017);
@@ -634,6 +688,14 @@ endmodule
       rejected_dynamic_ports, "FSIM-ELAB-SVPORT-008"));
   assert(has_diagnostic(
       rejected_dynamic_ports, "FSIM-ELAB-SVPORT-009"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-001"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-002"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-003"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-004"));
 
   const auto mixed_parent = fsim::frontend::parse_text(
       "mixed-container-port.vhd",

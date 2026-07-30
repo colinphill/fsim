@@ -330,10 +330,15 @@ void inspect_dynamic_port_aliases(
       && result.time == 3);
   debugger.execute({"show", "result"});
   debugger.execute({"show", "scores"});
+  debugger.execute({"show", "observed_bits"});
   assert(
       debugger_output.str().find("00100001")
           != std::string::npos
       && debugger_output.str().find("0001001000110100")
+          != std::string::npos
+      && debugger_output.str().find(
+             "observed_bits = "
+             "00000000000000000000000001000000")
           != std::string::npos);
 }
 
@@ -370,6 +375,15 @@ module static_port_leaf #(
     inout bit [3:0] shared[-1:1]);
   initial begin
     #1;
+    assert ($left(source) == LEFT);
+    assert ($right(source) == RIGHT);
+    assert ($low(source) == RIGHT);
+    assert ($high(source) == LEFT);
+    assert ($increment(source) == 1);
+    assert ($size(source, LEFT - LEFT + 1) == 4);
+    assert ($bits(source) == 32);
+    assert ($dimensions(source) == 2);
+    assert ($unpacked_dimensions(source) == 1);
     assert (source[LEFT] == 8'h31);
     assert (source[RIGHT] == 8'h04);
     result = source;
@@ -388,19 +402,42 @@ module dynamic_port_leaf #(
     inout bit bounded[$:LIMIT],
     inout logic [15:0] scores[KEY],
     inout int work[]);
+  int observed_bits;
   task automatic suspend_mutate(
       inout int target[],
       inout byte queue_target[$]);
+    int scratch[];
     #1;
+    scratch = new[1];
     target = new[2];
     target[0] = 41;
     target[1] = 42;
     queue_target.push_back(8'h21);
     queue_target.push_back(8'h22);
+    assert ($left(target) == 0);
+    assert ($right(target) == 1);
+    assert ($size(target) == 2);
+    assert ($bits(queue_target) == 16);
+    assert ($dimensions(target) == 2);
+    assert ($unpacked_dimensions(target) == 1);
+    assert ($size(scratch) == 1);
+    assert ($bits(scratch) == 32);
   endtask
   initial begin
     KEY cursor;
     #1;
+    assert ($left(source) == 0);
+    assert ($right(source) == 1);
+    assert ($low(source) == 0);
+    assert ($high(source) == 1);
+    assert ($increment(source) == -1);
+    assert ($size(source, LIMIT - LIMIT + 1) == 2);
+    assert ($bits(source) == 64);
+    assert ($dimensions(source) == 2);
+    assert ($unpacked_dimensions(source) == 1);
+    assert ($right(result) == -1);
+    assert ($high(result) == -1);
+    assert ($bits(result) == 0);
     assert (source.size() == 2);
     assert (source[0] == 11);
     bounded.push_back(1);
@@ -412,6 +449,16 @@ module dynamic_port_leaf #(
     assert (scores.next(cursor) == 1);
     assert (cursor == 2);
     suspend_mutate(work, result);
+    observed_bits = $bits(work);
+    assert (observed_bits == 64);
+    assert ($right(work) == 1);
+    assert ($high(work) == 1);
+    assert ($size(bounded) == 2);
+    assert ($bits(bounded) == 2);
+    assert ($size(scores) == 2);
+    assert ($bits(scores) == 32);
+    assert ($dimensions(scores) == 2);
+    assert ($unpacked_dimensions(scores) == 1);
   end
 endmodule
 
@@ -464,7 +511,10 @@ module container_top;
       .scores(dynamic_scores),
       .work(dynamic_work));
   function automatic int count(input byte source[$:2]);
-    return source.size();
+    assert ($left(source) == 0);
+    assert ($right(source) == 1);
+    assert ($bits(source) == 16);
+    return $size(source);
   endfunction
   function automatic int lookup_count(input byte source[key_t]);
     return source.size();
@@ -507,6 +557,13 @@ module container_top;
     assert (binary[-1] == 8'h01);
     assert ($isunknown(binary[0]));
     assert (binary[1] == 8'h03);
+    assert ($left(binary) == -1);
+    assert ($right(binary) == 1);
+    assert ($low(binary) == -1);
+    assert ($high(binary) == 1);
+    assert ($increment(binary) == -1);
+    assert ($size(binary) == 3);
+    assert ($bits(binary) == 24);
     values = new[2];
     values[0] = 7;
     lookup[3] = 30;
@@ -546,8 +603,18 @@ module container_top;
     assert (dynamic_work.size() == 2);
     assert (dynamic_work[0] == 41);
     assert (dynamic_work[1] == 42);
-    $display("%0d:%0d:%0d",
-             values[0], pending[0], count(pending));
+    assert ($left(dynamic_work) == 0);
+    assert ($right(dynamic_work) == 1);
+    assert ($low(dynamic_work) == 0);
+    assert ($high(dynamic_work) == 1);
+    assert ($increment(dynamic_work) == -1);
+    assert ($size(dynamic_work) == 2);
+    assert ($bits(dynamic_work) == 64);
+    assert ($dimensions(dynamic_work) == 2);
+    assert ($unpacked_dimensions(dynamic_work) == 1);
+    $display("%0d:%0d:%0d:%0d",
+             values[0], pending[0], count(pending),
+             $size(dynamic_result));
   end
 endmodule
 )";
@@ -567,7 +634,8 @@ endmodule
             == fsim::runtime::RunStatus::completed
         && reference.result.time == 3
         && reference.output
-            == (std::vector<std::string>{"7", ":2", ":2"}));
+            == (std::vector<std::string>{
+                "7", ":2", ":2", ":2"}));
     assert(reference.output == compiled.output);
     assert(reference.values == compiled.values);
     assert(reference.pending == compiled.pending);

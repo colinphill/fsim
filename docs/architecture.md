@@ -641,7 +641,15 @@ descending range and `-1` for an ascending range. The optional dimension
 argument is accepted when it is the locally static value `1`.
 `$dimensions` and `$unpacked_dimensions` use the same retained metadata and
 return `1` and `0`, respectively, for the currently supported packed-only
-objects. Unpacked or multidimensional arrays remain pending.
+objects. Direct supported one-dimensional integral unpacked-container objects
+share this query surface. Static arrays fold their specialized bounds,
+direction, size, element-width bit count, and `2`/`1` total/unpacked dimension
+counts without reading storage. Dynamic arrays and queues compose the existing
+`ContainerSize` operation with signed subtraction or unsigned multiplication;
+empty right/high is therefore `-1`. Associative arrays expose entry-count
+`$size`, entry-width `$bits`, and `2`/`1` dimension counts while finite-bound
+queries diagnose. Type-only, indirect, and multidimensional container queries
+remain pending.
 `$onehot` and `$onehot0` lower to dedicated common reduction operators. They
 count exact `1` elements of the packed operand, ignore `X` and `Z` elements,
 and return a two-state bit indicating exactly one or at most one set element.

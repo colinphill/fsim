@@ -193,6 +193,192 @@ Lowerer::lower_container_expression(
   return destination;
 }
 
+Lowerer::ExpressionAttempt Lowerer::lower_container_query(
+    const Expression& expression) {
+  if (expression.kind != ExpressionKind::Call) {
+    return {};
+  }
+  const bool bound_query =
+      expression.text == "$left"
+      || expression.text == "$right"
+      || expression.text == "$low"
+      || expression.text == "$high"
+      || expression.text == "$increment";
+  const bool size_query = expression.text == "$size";
+  const bool bits_query = expression.text == "$bits";
+  const bool dimensions_query =
+      expression.text == "$dimensions";
+  const bool unpacked_dimensions_query =
+      expression.text == "$unpacked_dimensions";
+  if (!bound_query && !size_query && !bits_query
+      && !dimensions_query
+      && !unpacked_dimensions_query) {
+    return {};
+  }
+  if (expression.operands.empty()) {
+    return {};
+  }
+  if (!is_container_expression(
+          expression.operands.front())) {
+    const auto& operand = expression.operands.front();
+    if (operand.kind == ExpressionKind::Identifier
+        && visible_type_mark(operand.text) != nullptr) {
+      report(
+          "FSIM-ELAB-SVQUERY-004",
+          expression.text
+              + " type-only forms are outside the bounded "
+                "container-query subset",
+          operand.span);
+      return std::nullopt;
+    }
+    return {};
+  }
+  const bool accepts_dimension = bound_query || size_query;
+  const auto maximum_arguments =
+      accepts_dimension ? std::size_t{2} : std::size_t{1};
+  if (language_ != frontend::Language::SystemVerilog2017
+      || expression.operands.size() > maximum_arguments) {
+    report(
+        "FSIM-ELAB-SVQUERY-001",
+        expression.text
+            + " requires a direct one-dimensional SystemVerilog "
+              "container object",
+        expression.span);
+    return std::nullopt;
+  }
+  if (expression.operands.size() == 2) {
+    auto dimension =
+        constant_index(expression.operands[1]);
+    if (!dimension) {
+      std::string error;
+      if (const auto value =
+              evaluate_systemverilog_constant_expression(
+                  expression.operands[1], {}, {}, error)) {
+        dimension = value->integer_value();
+      }
+    }
+    if (!dimension || *dimension != 1) {
+      report(
+          "FSIM-ELAB-SVQUERY-002",
+          expression.text
+              + " supports only the constant unpacked dimension 1",
+          expression.operands[1].span);
+      return std::nullopt;
+    }
+  }
+  const auto& operand = expression.operands.front();
+  const auto* source_type =
+      operand.kind == ExpressionKind::Identifier
+          ? object_type(operand.text)
+          : nullptr;
+  const auto runtime_type =
+      source_type
+          ? container_type(*source_type, operand.span)
+          : std::nullopt;
+  if (!source_type || !runtime_type) {
+    report(
+        "FSIM-ELAB-SVQUERY-001",
+        expression.text
+            + " requires a direct typed container object",
+        operand.span);
+    return std::nullopt;
+  }
+  const auto constant_result =
+      [&](const std::int64_t value) {
+        const auto destination =
+            allocate_register(
+                32, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant{
+            destination,
+            unsigned_value(
+                static_cast<std::uint32_t>(value), 32)});
+        return ExpressionAttempt{destination};
+      };
+  if (dimensions_query) {
+    return constant_result(2);
+  }
+  if (unpacked_dimensions_query) {
+    return constant_result(1);
+  }
+  if (runtime_type->associative && bound_query) {
+    report(
+        "FSIM-ELAB-SVQUERY-003",
+        expression.text
+            + " has no finite bound for an associative array",
+        operand.span);
+    return std::nullopt;
+  }
+  if (runtime_type->fixed) {
+    const auto left =
+        static_cast<std::int64_t>(
+            runtime_type->index_left);
+    const auto right =
+        static_cast<std::int64_t>(
+            runtime_type->index_right);
+    const auto count =
+        left >= right
+            ? left - right + 1
+            : right - left + 1;
+    if (bits_query) {
+      return constant_result(
+          count * runtime_type->element_width);
+    }
+    if (size_query) {
+      return constant_result(count);
+    }
+    if (expression.text == "$left") {
+      return constant_result(left);
+    }
+    if (expression.text == "$right") {
+      return constant_result(right);
+    }
+    if (expression.text == "$low") {
+      return constant_result(std::min(left, right));
+    }
+    if (expression.text == "$high") {
+      return constant_result(std::max(left, right));
+    }
+    return constant_result(left >= right ? 1 : -1);
+  }
+  if (bound_query
+      && (expression.text == "$left"
+          || expression.text == "$low")) {
+    return constant_result(0);
+  }
+  if (bound_query
+      && expression.text == "$increment") {
+    return constant_result(-1);
+  }
+  const auto source = lower_container_expression(operand);
+  if (!source) {
+    return std::nullopt;
+  }
+  const auto size =
+      allocate_register(32, frontend::ValueDomain::Bit2);
+  process_.operations.emplace_back(
+      ContainerSize{size, *source});
+  if (size_query) {
+    return size;
+  }
+  const auto factor =
+      allocate_register(32, frontend::ValueDomain::Bit2);
+  process_.operations.emplace_back(LoadConstant{
+      factor,
+      unsigned_value(
+          bits_query ? runtime_type->element_width : 1,
+          32)});
+  const auto destination =
+      allocate_register(32, frontend::ValueDomain::Bit2);
+  process_.operations.emplace_back(Binary{
+      bits_query
+          ? BinaryOperator::multiply_unsigned
+          : BinaryOperator::subtract_signed,
+      destination,
+      size,
+      factor});
+  return destination;
+}
+
 void Lowerer::lower_container_method(
     const Statement& statement) {
   const auto& call = statement.value;

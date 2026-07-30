@@ -693,7 +693,9 @@ using namespace elaboration_detail;
         const auto expose_type_mark =
             [&](const std::string_view name,
                 const frontend::Type& type) {
-              if (!type.enumeration_literals.empty()
+              if (unit.language
+                      == frontend::Language::SystemVerilog2017
+                  || !type.enumeration_literals.empty()
                   || type.vhdl_array) {
                   visible_type_marks.try_emplace(
                       std::string{name}, &type);
@@ -703,8 +705,17 @@ using namespace elaboration_detail;
             expose_type_mark(alias.name, alias.type);
         }
         for (const auto& parameter : unit.parameters) {
-            expose_type_mark(
-                parameter.type.spelling, parameter.type);
+            if (unit.language
+                    == frontend::Language::SystemVerilog2017
+                && parameter.kind
+                    == frontend::ParameterKind::Type) {
+                expose_type_mark(
+                    parameter.name, parameter.type);
+            } else if (unit.language
+                       != frontend::Language::SystemVerilog2017) {
+                expose_type_mark(
+                    parameter.type.spelling, parameter.type);
+            }
         }
         const auto* ports = unit_ports(parsed_, unit);
         if (ports == nullptr) {

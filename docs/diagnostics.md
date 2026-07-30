@@ -1059,6 +1059,10 @@ therefore excluded.
 | `FSIM-ELAB-SVCONTAINER-019` | error | A queue-only push or pop method is used on another container kind. |
 | `FSIM-ELAB-SVCONTAINER-020` | error | Static unpacked-array bounds are not locally constant signed 32-bit values spanning 1 through 4,096 elements. |
 | `FSIM-ELAB-SVCONTAINER-021` | error | `delete()` is used to clear a fixed static unpacked array. |
+| `FSIM-ELAB-SVQUERY-001` | error | A bounded unpacked-container query has the wrong language or arity, an indirect expression, or no direct typed container object. |
+| `FSIM-ELAB-SVQUERY-002` | error | A bounded unpacked-container query dimension is not the locally constant dimension `1`. |
+| `FSIM-ELAB-SVQUERY-003` | error | A finite-bound query is applied to an associative array. |
+| `FSIM-ELAB-SVQUERY-004` | error | A type-only SystemVerilog query is outside the bounded container-query subset. |
 | `FSIM-ELAB-SVMEMORY-001` | error | `$readmemb` or `$readmemh` is lowered outside SystemVerilog-2017. |
 | `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
 | `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |

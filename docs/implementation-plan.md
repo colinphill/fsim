@@ -4081,6 +4081,62 @@ in 78.04 seconds, and Release passed all 59 tests in 35.05 seconds on
 2026-07-30. Batch 74 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Seventy-fifth feature batch — bounded SystemVerilog unpacked-container queries
+
+SystemVerilog-2017 direct one-dimensional integral static arrays, dynamic
+arrays, unbounded and bounded queues, and integral-key associative arrays now
+use the existing typed call HIR for `$left`, `$right`, `$low`, `$high`,
+`$increment`, `$size`, `$dimensions`, `$unpacked_dimensions`, and `$bits`.
+The bounded form accepts an optional locally constant dimension only where the
+query permits it and only when its value is the unpacked dimension `1`.
+
+Static-array queries fold from the specialized runtime type without reading
+container storage. They preserve the exact signed left/right bounds and
+ascending/descending increment convention, derive low/high and element count,
+multiply the count by the packed element width for `$bits`, and report two
+total dimensions with one unpacked dimension. Both descending parameterized
+ports and ascending signed-index arrays have positive runtime evidence.
+
+Dynamic arrays and queues retain left/low `0` and increment `-1`, then compose
+the existing `ContainerSize` SimIR operation with signed subtraction for
+right/high or unsigned multiplication for `$bits`. Empty right/high is
+deterministically `-1`, while populated values track allocation and queue
+mutation. Associative arrays expose current entry-count `$size`, entry-width
+`$bits`, and dimension counts; finite-bound queries fail rather than inventing
+an ordering bound.
+
+The query lowerer resolves the same container register or opaque object ID
+already used by mutation and traversal. Module objects, automatic function and
+task formals, task locals retained across suspension, static and dynamic port
+aliases, and nested/generated child paths therefore observe one coherent
+value without duplicated storage. Existing packed query behavior remains
+available for packed operands, while visible SystemVerilog typedef/type
+parameter marks provide a stable rejection path for unsupported type-only
+container forms.
+
+No new SimIR operation or native callback was required. Runtime queries reuse
+validated `ContainerSize`, `Binary`, and constant operations already shared by
+the interpreter and LLVM lowerer. Native-object schema 28 records the expanded
+container-query semantics and prevents reuse of older objects while retaining
+canonical type, operation, object, callable, source, and specialization
+identity.
+
+Positive evidence covers typed frontend calls, static folding, dynamic empty
+and populated results, queue and associative values, ascending/descending
+ranges, parameterized port aliases, callable formals, a suspended automatic
+local, assertions, formatted output, debugger-visible stored results,
+interpreter, LLVM O0/O2, and cold/warm cache execution. Stable diagnostics
+cover invalid dimensions and arity, associative finite bounds, and type-only
+forms; the existing frontend matrix continues to reject multidimensional and
+unsupported container declarations.
+
+The diagnostic catalog covers 1,154 production codes and the source gate
+covers 285 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 86.99 seconds, and Release passed all 59 tests in 34.74 seconds on
+2026-07-30. Batch 75 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
