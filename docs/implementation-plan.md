@@ -3852,8 +3852,18 @@ and ASan/UBSan plus exact-LLVM Debug and Release; replacement CI confirmation
 initially exposed four additional cache-key helpers with the same warning in
 [run 30553184827](https://github.com/colinphill/fsim/actions/runs/30553184827).
 All six helpers are now conditionally compiled and the additional targets pass
-the same five local configurations; final replacement CI confirmation awaits
-publishing the follow-up repair.
+the same five local configurations. The next replacement,
+[run 30553851223](https://github.com/colinphill/fsim/actions/runs/30553851223),
+reached the full Windows test matrices and exposed two further portability
+defects: translated text streams produced CRLF bytes where SystemVerilog file
+operations require exact LF bytes, and the accumulated frontend matrix
+exhausted Windows' 1 MiB default stack in MSVC-compatible Debug builds. All
+supported simulator file modes now use binary stream transport while retaining
+their logical read/write modes, and the Windows Debug frontend test receives
+the same 8 MiB stack reserve as the accumulated elaboration matrix. Focused
+frontend, runtime, and SystemVerilog file tests pass under non-LLVM Debug,
+Release, and ASan/UBSan plus exact-LLVM Debug and Release; final replacement
+CI confirmation awaits publishing this repair.
 
 ## v1 release condition
 

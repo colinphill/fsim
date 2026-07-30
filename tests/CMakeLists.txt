@@ -21,6 +21,20 @@ add_executable(
 )
 fsim_configure_test(fsim_frontend_tests)
 target_link_libraries(fsim_frontend_tests PRIVATE fsim_frontend)
+if(
+  WIN32
+  AND (
+    MSVC
+    OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+  )
+)
+  # The accumulated frontend feature matrix now exceeds Windows' 1 MiB
+  # default stack in unoptimized MSVC-compatible builds.
+  target_link_options(
+    fsim_frontend_tests
+    PRIVATE "$<$<CONFIG:Debug>:/STACK:8388608>"
+  )
+endif()
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
 
 add_executable(fsim_project_tests project/project_config_test.cpp)

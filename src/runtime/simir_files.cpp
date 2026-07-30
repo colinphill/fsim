@@ -42,22 +42,31 @@ struct Mode {
     const std::string_view spelling) {
   using std::ios;
   if (spelling == "r") {
-    return Mode{ios::in, true, false};
+    return Mode{ios::in | ios::binary, true, false};
   }
   if (spelling == "w") {
-    return Mode{ios::out | ios::trunc, false, true};
+    return Mode{
+        ios::out | ios::trunc | ios::binary, false, true};
   }
   if (spelling == "a") {
-    return Mode{ios::out | ios::app, false, true};
+    return Mode{
+        ios::out | ios::app | ios::binary, false, true};
   }
   if (spelling == "r+") {
-    return Mode{ios::in | ios::out, true, true};
+    return Mode{
+        ios::in | ios::out | ios::binary, true, true};
   }
   if (spelling == "w+") {
-    return Mode{ios::in | ios::out | ios::trunc, true, true};
+    return Mode{
+        ios::in | ios::out | ios::trunc | ios::binary,
+        true,
+        true};
   }
   if (spelling == "a+") {
-    return Mode{ios::in | ios::out | ios::app, true, true};
+    return Mode{
+        ios::in | ios::out | ios::app | ios::binary,
+        true,
+        true};
   }
   return std::nullopt;
 }

@@ -23,8 +23,12 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
   two helpers and raised every workflow build from two to eight workers;
   replacement run `30553184827` exposed four more helpers with the same
-  non-LLVM warning. All six are now guarded and locally verified; replacement
-  confirmation awaits publishing the follow-up repair.
+  non-LLVM warning. All six are now guarded. The next replacement run
+  `30553851223` reached the full Windows tests and exposed host newline
+  translation in SystemVerilog file streams plus Debug frontend stack
+  exhaustion. Binary stream transport and an 8 MiB Windows Debug stack for
+  the accumulated frontend matrix are locally verified; replacement
+  confirmation awaits publishing this repair.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
