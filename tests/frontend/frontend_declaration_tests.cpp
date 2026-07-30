@@ -922,6 +922,270 @@ endmodule
       "function lifetime, direction, and timing diagnostics");
 }
 
+void test_vhdl_function_declarations() {
+  const auto parsed = parse_text(
+      "functions.vhd",
+      R"(
+package math_pkg is
+  pure function twice parameter (value : in integer) return integer;
+end package;
+
+package body math_pkg is
+  pure function twice parameter (value : in integer) return integer is
+  begin
+    return value + value;
+  end function twice;
+end package body math_pkg;
+
+entity function_user is
+  generic (
+    function transform parameter (value : integer) return integer is <>;
+    impure function observe(value : integer) return integer is selected);
+  port (
+    input_value : in integer;
+    result : out integer);
+end entity;
+
+architecture rtl of function_user is
+  pure function increment(constant value : in integer) return integer is
+    variable temporary : integer := value;
+  begin
+    temporary := temporary + 1;
+    return temporary;
+  end function increment;
+begin
+  result <= increment(input_value);
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "bounded VHDL function forms must parse");
+  require(
+      parsed.design.units.size() == 4,
+      "package declaration, body, entity, and architecture function units");
+
+  const auto& package_function =
+      parsed.design.units.front().functions.front();
+  require(
+      package_function.name == "twice"
+          && package_function.language == Language::Vhdl2008
+          && package_function.pure
+          && !package_function.defined
+          && package_function.arguments.size() == 1,
+      "package function declaration HIR");
+  const auto& package_body =
+      parsed.design.units[1].functions.front();
+  require(
+      parsed.design.units[1].primary_name == "math_pkg"
+          && package_body.name == "twice"
+          && package_body.defined
+          && package_body.statements.size() == 1
+          && package_body.statements.front().kind
+              == StatementKind::Return,
+      "package function body HIR");
+
+  const auto& entity = parsed.design.units[2];
+  require(
+      entity.parameters.size() == 2
+          && entity.parameters[0].kind
+              == ParameterKind::Function
+          && entity.parameters[1].kind
+              == ParameterKind::Function,
+      "interface functions remain distinct generic formals");
+  const auto& boxed =
+      *entity.parameters[0].function_profile;
+  const auto& named =
+      *entity.parameters[1].function_profile;
+  require(
+      entity.parameters[0].name == "transform"
+          && boxed.pure && boxed.default_box
+          && !boxed.default_name
+          && boxed.arguments.size() == 1
+          && boxed.arguments.front().name == "value"
+          && boxed.return_type.domain
+              == ValueDomain::Integer,
+      "boxed interface function profile HIR");
+  require(
+      entity.parameters[1].name == "observe"
+          && !named.pure && !named.default_box
+          && named.default_name
+          && *named.default_name == "selected",
+      "named impure interface function default HIR");
+
+  const auto& body =
+      parsed.design.units.back().functions.front();
+  require(
+      body.name == "increment"
+          && body.language == Language::Vhdl2008
+          && body.pure && body.defined && body.automatic
+          && body.variables.size() == 1
+          && body.statements.size() == 2
+          && body.statements.front().kind
+              == StatementKind::Assignment
+          && body.statements.back().kind
+              == StatementKind::Return
+          && body.statements.back().value.kind
+              == ExpressionKind::Identifier,
+      "VHDL function body, locals, and return HIR");
+
+  const auto invalid = parse_text(
+      "invalid_functions.vhd",
+      R"(
+entity invalid_functions is
+  generic (
+    function bad(signal value : out integer := 1)
+      return integer is "not_a_name";
+    procedure bad_procedure(signal value : buffer integer));
+end entity;
+
+architecture rtl of invalid_functions is
+  function "+"(value : integer) return integer is
+  begin
+    return;
+  end function "+";
+  function timed(value : integer) return integer is
+  begin
+    wait for 1 ns;
+    return value;
+  end function;
+begin
+  process
+  begin
+    return 1;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid.ok(),
+      "invalid bounded VHDL function forms must be rejected");
+  const auto has_code =
+      [&](const std::string_view code) {
+        return std::ranges::any_of(
+            invalid.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            });
+      };
+  require(
+      has_code("FSIM-VHDL-UNSUPPORTED-029")
+          && has_code("FSIM-VHDL-UNSUPPORTED-030")
+          && has_code("FSIM-VHDL-UNSUPPORTED-032")
+          && has_code("FSIM-VHDL-UNSUPPORTED-033")
+          && has_code("FSIM-VHDL-UNSUPPORTED-038")
+          && has_code("FSIM-VHDL-UNSUPPORTED-039")
+          && has_code("FSIM-VHDL-UNSUPPORTED-037")
+          && has_code("FSIM-VHDL-PARSE-157")
+          && has_code("FSIM-VHDL-PARSE-164")
+          && has_code("FSIM-VHDL-SEM-046"),
+      "VHDL function class, mode, default, designator, procedure, "
+      "return, and placement diagnostics");
+}
+
+void test_systemverilog_task_declarations() {
+  const auto parsed = parse_text("tasks.sv",
+                                 R"(
+package transform_pkg;
+  timeunit 1ns;
+  timeprecision 1ns;
+  task automatic exchange(
+      input logic [7:0] source,
+      output logic [7:0] destination,
+      inout logic [7:0] accumulator);
+    logic [7:0] temporary;
+    temporary = source;
+    destination = temporary;
+    accumulator = accumulator + temporary;
+    return;
+  endtask : exchange
+endpackage
+
+module task_owner;
+  event wake;
+  logic ready;
+  task automatic clear;
+    logic temporary;
+    temporary = 1'b0;
+    #1;
+    @(wake);
+    wait (ready);
+    -> wake;
+  endtask
+endmodule
+)",
+                                 Language::SystemVerilog2017);
+  require(parsed.ok(), "automatic SystemVerilog tasks must parse");
+  require(parsed.design.units.size() == 2 &&
+              parsed.design.units.front().tasks.size() == 1 &&
+              parsed.design.units.back().tasks.size() == 1,
+          "package and module task design units");
+  require(parsed.design.units.front().time_unit == "1ns" &&
+              parsed.design.units.front().time_precision == "1ns",
+          "package task timing context");
+  const auto &task = parsed.design.units.front().tasks.front();
+  require(task.name == "exchange" && task.automatic &&
+              task.arguments.size() == 3 &&
+              task.arguments[0].direction == PortDirection::Input &&
+              task.arguments[1].direction == PortDirection::Output &&
+              task.arguments[2].direction == PortDirection::Inout &&
+              task.variables.size() == 1 && task.statements.size() == 4 &&
+              task.statements.back().kind == StatementKind::Return &&
+              !task.statements.back().value.valid(),
+          "task HIR preserves formals, locals, body, lifetime, and return");
+  require(parsed.design.units.back().tasks.front().arguments.empty(),
+          "classic no-argument task header");
+  const auto &timed_task = parsed.design.units.back().tasks.front();
+  require(timed_task.statements.size() == 5 &&
+              timed_task.statements[1].kind == StatementKind::Delay &&
+              timed_task.statements[2].kind == StatementKind::WaitOn &&
+              timed_task.statements[3].kind == StatementKind::WaitUntil &&
+              timed_task.statements[4].kind == StatementKind::EventTrigger,
+          "task HIR admits bounded timing, event waits, condition waits, "
+          "and named-event triggers");
+
+  const auto invalid = parse_text("invalid_tasks.sv",
+                                  R"(
+module invalid_tasks;
+  task static bad(
+      ref logic value,
+      output string text,
+      output logic value);
+    #1 value <= 1'b1;
+    return value;
+  endtask : mismatched
+endmodule
+)",
+                                  Language::SystemVerilog2017);
+  require(!invalid.ok(), "invalid task forms must be rejected");
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        invalid.diagnostics,
+        [&](const Diagnostic &diagnostic) { return diagnostic.code == code; });
+  };
+  require(has_code("FSIM-SV-UNSUPPORTED-037") &&
+              has_code("FSIM-SV-UNSUPPORTED-038") &&
+              has_code("FSIM-SV-UNSUPPORTED-039") &&
+              has_code("FSIM-SV-SEM-067") && has_code("FSIM-SV-SEM-068") &&
+              has_code("FSIM-SV-SEM-070") && has_code("FSIM-SV-SEM-071"),
+          "task lifetime, formal, body, return, and closing-name diagnostics");
+
+  const auto duplicate = parse_text("duplicate_tasks.sv",
+                                    R"(
+package duplicate_tasks;
+  task automatic same;
+  endtask
+  task automatic same;
+  endtask
+endpackage
+)",
+                                    Language::SystemVerilog2017);
+  require(!duplicate.ok() &&
+              std::ranges::any_of(duplicate.diagnostics,
+                                  [](const Diagnostic &diagnostic) {
+                                    return diagnostic.code == "FSIM-SV-SEM-073";
+                                  }),
+          "duplicate task declarations are rejected");
+}
+
 void test_immediate_assertions() {
   const auto vhdl = parse_text(
       "assertions.vhd",

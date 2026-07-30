@@ -653,17 +653,19 @@ std::optional<Statement> VerilogParser::parse_statement() {
     const auto start = previous();
     Statement statement;
     statement.kind = StatementKind::Return;
-    if (!in_function_) {
-      error(
-          start,
+    if (!in_function_ && !in_task_) {
+      error(start,
           "FSIM-SV-SEM-056",
-          "a return statement must be nested in a function");
+          "a return statement must be nested in a function or task");
     }
-    if (!at(TokenKind::Semicolon)) {
+    if (in_task_ && !at(TokenKind::Semicolon)) {
+      error(start, "FSIM-SV-SEM-071",
+            "a task return statement cannot return a value");
       statement.value = parse_expression();
-    } else {
-      error(
-          start,
+    } else if (!at(TokenKind::Semicolon)) {
+      statement.value = parse_expression();
+    } else if (in_function_) {
+      error(start,
           "FSIM-SV-SEM-057",
           "a non-void function return requires a value");
     }
@@ -1115,6 +1117,38 @@ std::optional<Statement> VerilogParser::parse_statement() {
     statement.kind = StatementKind::Null;
     statement.span = previous().span;
     return statement;
+  }
+
+  if (at(TokenKind::Identifier)) {
+    std::size_t lookahead = 1;
+    while (at(TokenKind::Scope, lookahead) &&
+           at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
+    if (at(TokenKind::LeftParen, lookahead) ||
+        at(TokenKind::Semicolon, lookahead)) {
+      const auto start = advance();
+      std::string name = start.text;
+      while (match(TokenKind::Scope)) {
+        name += "::";
+        name += expect_identifier("package-scoped task name").text;
+      }
+      Statement statement;
+      statement.kind = StatementKind::TaskCall;
+      statement.task_name = std::move(name);
+      if (match(TokenKind::LeftParen)) {
+        if (!at(TokenKind::RightParen)) {
+          do {
+            statement.task_arguments.push_back(parse_expression());
+          } while (match(TokenKind::Comma));
+        }
+        expect(TokenKind::RightParen, "')' after task call arguments",
+               "FSIM-SV-PARSE-146");
+      }
+      expect(TokenKind::Semicolon, "';' after task call", "FSIM-SV-PARSE-147");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
   }
 
   if (at(TokenKind::Identifier)

@@ -360,6 +360,9 @@ entity unsafe_integer_alias is
 end entity;
 architecture rtl of unsafe_integer_alias is
   signal source : integer;
+  component positive_child is
+    port (value : in positive);
+  end component;
 begin
   child: positive_child port map (value => source);
 end architecture;

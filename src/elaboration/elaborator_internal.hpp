@@ -539,12 +539,24 @@ void expand_generate_regions(
     DesignUnit& unit,
     std::vector<Diagnostic>& diagnostics);
 
+struct PackageBinding {
+    std::string template_name;
+    DesignUnit unit;
+    ConstantEnvironment environment;
+    std::vector<std::pair<std::string, std::string>> values;
+    std::vector<std::pair<std::string, std::string>> identity_values;
+};
+
+using PackageEnvironment =
+    std::unordered_map<std::string, PackageBinding>;
+
 struct SpecializedUnit {
     DesignUnit unit;
     ConstantEnvironment environment;
     SystemVerilogStringEnvironment string_environment;
     std::vector<std::pair<std::string, std::string>> values;
     std::vector<std::pair<std::string, std::string>> identity_values;
+    PackageEnvironment packages;
 };
 
 struct InterfaceTypeSpecialization {
@@ -563,7 +575,11 @@ NamedTypeEnvironment local_systemverilog_type_environment(
 InterfaceTypeSpecialization specialize_vhdl_interface_types(
     const DesignUnit& source,
     const std::vector<frontend::ParameterOverride>& overrides,
+    const ConstantEnvironment& parent_environment,
+    const ConstantDomainEnvironment& parent_domains,
     const NamedTypeEnvironment& parent_types,
+    const std::vector<frontend::FunctionDeclaration>& parent_functions,
+    const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
     frontend::Language association_language,
     std::vector<Diagnostic>& diagnostics);
 
@@ -681,6 +697,8 @@ public:
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_type_marks,
         const std::vector<frontend::FunctionDeclaration>& functions,
+        const std::vector<frontend::TaskDeclaration>& tasks,
+        const std::vector<frontend::ProcedureDeclaration>& procedures,
         std::vector<Diagnostic>& diagnostics);
 
     Process lower_process(
@@ -918,6 +936,30 @@ private:
 
     void diagnose_function_cycles();
 
+    void initialize_task_support();
+
+    void lower_task_call(const Statement& statement);
+
+    void lower_pending_tasks();
+
+    void lower_task_body(std::size_t task_index);
+
+    void lower_task_return(const Statement& statement);
+
+    void diagnose_task_cycles();
+
+    void initialize_procedure_support();
+
+    void lower_procedure_call(const Statement& statement);
+
+    void lower_pending_procedures();
+
+    void lower_procedure_body(std::size_t procedure_index);
+
+    void lower_procedure_return(const Statement& statement);
+
+    void diagnose_procedure_cycles();
+
     void collect_identifiers(
         const Expression& expression,
         std::set<std::string>& output) const;
@@ -949,6 +991,8 @@ private:
     const std::unordered_map<
         std::string, const frontend::Type*>& visible_type_marks_;
     const std::vector<frontend::FunctionDeclaration>& functions_;
+    const std::vector<frontend::TaskDeclaration>& tasks_;
+    const std::vector<frontend::ProcedureDeclaration>& procedures_;
     std::vector<Diagnostic>& diagnostics_;
     Process process_;
     RegisterId next_register_{};
@@ -998,6 +1042,46 @@ private:
     std::vector<InstructionIndex> function_return_jumps_;
     CallStack function_call_stack_;
     bool function_support_initialized_{};
+    struct TaskFrame {
+        const frontend::TaskDeclaration* source{};
+        std::vector<RegisterId> arguments;
+        std::optional<InstructionIndex> target;
+        std::vector<InstructionIndex> call_sites;
+        bool allocated{};
+        bool queued{};
+        bool lowered{};
+    };
+    std::vector<TaskFrame> task_frames_;
+    std::unordered_map<std::string, std::size_t> task_indices_;
+    std::deque<std::size_t> pending_tasks_;
+    std::vector<std::unordered_set<std::size_t>>
+        task_dependencies_;
+    std::vector<bool> task_suspending_;
+    std::optional<std::size_t> active_task_;
+    std::vector<InstructionIndex> task_return_jumps_;
+    CallStack task_call_stack_;
+    bool task_support_initialized_{};
+    struct ProcedureFrame {
+        const frontend::ProcedureDeclaration* source{};
+        std::vector<RegisterId> arguments;
+        std::optional<InstructionIndex> target;
+        std::vector<InstructionIndex> call_sites;
+        bool allocated{};
+        bool queued{};
+        bool lowered{};
+    };
+    std::vector<ProcedureFrame> procedure_frames_;
+    std::unordered_map<std::string, std::size_t>
+        procedure_indices_;
+    std::deque<std::size_t> pending_procedures_;
+    std::vector<std::unordered_set<std::size_t>>
+        procedure_dependencies_;
+    std::optional<std::size_t> active_procedure_;
+    std::vector<InstructionIndex> procedure_return_jumps_;
+    CallStack procedure_call_stack_;
+    bool procedure_support_initialized_{};
+    frontend::ProcessKind process_kind_{
+        frontend::ProcessKind::VhdlProcess};
     frontend::Language language_{frontend::Language::Vhdl2008};
     std::string hierarchy_;
 };
@@ -1021,8 +1105,42 @@ private:
     using SignalMap = std::unordered_map<std::string, SignalId>;
     using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
 
+    struct ConfiguredVhdlInstance {
+        frontend::Instance instance;
+        std::optional<DesignUnit> target;
+        const frontend::VhdlComponentConfiguration*
+            configuration_rule{};
+        const DesignUnit* referenced_configuration{};
+        std::string component_name;
+        std::string component_identity;
+        std::string configuration_identity;
+        bool applied{};
+        bool valid{true};
+    };
+
     static std::vector<std::string> selected_name_parts(
         const std::string_view name);
+
+    const DesignUnit* select_vhdl_configuration_root(
+        const DesignUnit& configuration);
+
+    std::string vhdl_configuration_identity(
+        const DesignUnit& configuration) const;
+
+    void validate_vhdl_component_configurations(
+        const DesignUnit& unit,
+        const std::string& path);
+
+    ConfiguredVhdlInstance configure_vhdl_component_instance(
+        const DesignUnit& unit,
+        const frontend::Instance& instance,
+        const std::string& path);
+
+    ConfiguredVhdlInstance bind_vhdl_component_instance(
+        const DesignUnit& unit,
+        const frontend::Instance& instance,
+        const std::string& path,
+        const ConstantEnvironment& parent_environment);
 
     void expand_vhdl_context_references(
         DesignUnit& unit,
@@ -1041,7 +1159,43 @@ private:
     std::optional<SpecializedUnit> specialize_vhdl_package(
         const DesignUnit& package,
         std::vector<const DesignUnit*>& import_stack,
-        const frontend::SourceSpan& reference_span);
+        const frontend::SourceSpan& reference_span,
+        const std::vector<frontend::ParameterOverride>& overrides = {},
+        const ConstantEnvironment& parent_environment = {},
+        const ConstantDomainEnvironment& parent_domains = {},
+        const NamedTypeEnvironment& parent_types = {},
+        const std::vector<frontend::FunctionDeclaration>&
+            parent_functions = {},
+        const std::vector<frontend::ProcedureDeclaration>&
+            parent_procedures = {});
+
+    void bind_vhdl_interface_packages(
+        DesignUnit& unit,
+        std::vector<frontend::ParameterOverride>& overrides,
+        const PackageEnvironment& parent_packages,
+        const ConstantEnvironment& parent_environment,
+        const ConstantDomainEnvironment& parent_domains,
+        const NamedTypeEnvironment& parent_types,
+        const std::vector<frontend::FunctionDeclaration>&
+            parent_functions,
+        const std::vector<frontend::ProcedureDeclaration>&
+            parent_procedures,
+        frontend::Language association_language,
+        PackageEnvironment& bindings,
+        std::vector<std::pair<std::string, std::string>>&
+            identity_values);
+
+    void instantiate_vhdl_local_packages(
+        SpecializedUnit& specialized,
+        const PackageEnvironment& inherited_packages);
+
+    void instantiate_vhdl_generic_subprograms(
+        SpecializedUnit& specialized);
+
+    void materialize_vhdl_package_binding(
+        DesignUnit& unit,
+        std::string_view prefix,
+        const PackageBinding& binding);
 
     void import_qualified_vhdl_package_constants(
         DesignUnit& unit,
@@ -1083,13 +1237,19 @@ private:
         const bool vhdl = false,
         const bool resolve_ports = true);
 
-    DesignUnit effective_unit(const DesignUnit& selected);
+    DesignUnit effective_unit(
+        const DesignUnit& selected,
+        const DesignUnit* entity_override = nullptr);
 
     SpecializedUnit specialize_selected_unit(
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
         const ConstantEnvironment& parent_environment,
+        const ConstantDomainEnvironment& parent_domains,
         const NamedTypeEnvironment& parent_types,
+        const std::vector<frontend::FunctionDeclaration>& parent_functions,
+        const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
+        const PackageEnvironment& parent_packages,
         const frontend::Language association_language);
 
     void finish();
@@ -1195,7 +1355,8 @@ private:
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
         std::vector<std::pair<std::string, std::string>>
-            parameter_identity_values);
+            parameter_identity_values,
+        PackageEnvironment package_environment);
 
     void report(
         std::string code,
@@ -1207,6 +1368,9 @@ private:
     std::vector<Diagnostic>& diagnostics_;
     std::unordered_map<std::string, const Binding*> bindings_;
     std::unordered_set<std::string> used_bindings_;
+    const DesignUnit* active_vhdl_configuration_{};
+    std::unordered_map<std::string, const DesignUnit*>
+        vhdl_configurations_by_path_;
     std::unordered_map<
         std::string, const SystemCInstanceDescription*>
         systemc_instances_;

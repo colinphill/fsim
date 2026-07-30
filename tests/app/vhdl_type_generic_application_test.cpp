@@ -206,7 +206,8 @@ architecture rtl of type_generic_top is
   signal bit_output : bit;
 begin
   word_copy: entity work.generic_copy(rtl)
-    generic map (Word_T)
+    generic map (bit_vector()"
+               << left << R"( downto 0))
     port map (
       input_value => word_input,
       output_value => word_output

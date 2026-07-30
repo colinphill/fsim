@@ -272,6 +272,19 @@ using namespace elaboration_detail;
                 const auto imported =
                     imported_types.find(name);
                 if (imported == imported_types.end()) {
+                    const auto separator = name.find('.');
+                    const auto deferred_package_type =
+                        vhdl
+                        && separator != std::string::npos
+                        && std::ranges::any_of(
+                            unit.package_instances,
+                            [&](const auto& instance) {
+                                return instance.name
+                                    == name.substr(0, separator);
+                            });
+                    if (deferred_package_type) {
+                        return true;
+                    }
                     report(
                         vhdl
                             ? "FSIM-ELAB-VHTYPE-001"
@@ -312,6 +325,15 @@ using namespace elaboration_detail;
             [&](auto& declaration) {
                 (void)resolve_type(declaration.type);
             };
+        const auto resolve_component =
+            [&](frontend::VhdlComponentDeclaration& component) {
+                for (auto& generic : component.generics) {
+                    (void)resolve_type(generic.type);
+                }
+                for (auto& port : component.ports) {
+                    (void)resolve_type(port.type);
+                }
+            };
         std::function<void(std::vector<Statement>&)>
             resolve_statements;
         resolve_statements =
@@ -344,6 +366,10 @@ using namespace elaboration_detail;
                 for (auto& signal : body.signals) {
                     resolve_declaration(signal);
                 }
+                for (auto& component :
+                     body.vhdl_component_declarations) {
+                    resolve_component(component);
+                }
                 for (auto& process : body.processes) {
                     for (auto& variable : process.variables) {
                         resolve_declaration(variable);
@@ -373,6 +399,26 @@ using namespace elaboration_detail;
                 if (parameter.default_type) {
                     (void)resolve_type(*parameter.default_type);
                 }
+            } else if (
+                parameter.kind
+                    == frontend::ParameterKind::Function) {
+                if (parameter.function_profile) {
+                    (void)resolve_type(
+                        parameter.function_profile->return_type);
+                    for (auto& argument :
+                         parameter.function_profile->arguments) {
+                        (void)resolve_type(argument.type);
+                    }
+                }
+            } else if (
+                parameter.kind
+                    == frontend::ParameterKind::Procedure) {
+                if (parameter.procedure_profile) {
+                    for (auto& argument :
+                         parameter.procedure_profile->arguments) {
+                        (void)resolve_type(argument.type);
+                    }
+                }
             } else {
                 resolve_declaration(parameter);
             }
@@ -385,6 +431,29 @@ using namespace elaboration_detail;
         for (auto& signal : unit.signals) {
             resolve_declaration(signal);
         }
+        for (auto& component :
+             unit.vhdl_component_declarations) {
+            resolve_component(component);
+        }
+        for (auto& function : unit.functions) {
+            (void)resolve_type(function.return_type);
+            for (auto& argument : function.arguments) {
+                (void)resolve_type(argument.type);
+            }
+            for (auto& variable : function.variables) {
+                resolve_declaration(variable);
+            }
+            resolve_statements(function.statements);
+        }
+        for (auto& procedure : unit.procedures) {
+            for (auto& argument : procedure.arguments) {
+                (void)resolve_type(argument.type);
+            }
+            for (auto& variable : procedure.variables) {
+                resolve_declaration(variable);
+            }
+            resolve_statements(procedure.statements);
+        }
         for (auto& process : unit.processes) {
             for (auto& variable : process.variables) {
                 resolve_declaration(variable);
@@ -396,7 +465,9 @@ using namespace elaboration_detail;
 
 
 
-    DesignUnit HierarchyBuilder::effective_unit(const DesignUnit& selected) {
+    DesignUnit HierarchyBuilder::effective_unit(
+        const DesignUnit& selected,
+        const DesignUnit* entity_override) {
         auto result = selected;
         if (selected.kind
             == frontend::UnitKind::VerilogModule) {
@@ -448,12 +519,83 @@ using namespace elaboration_detail;
             != frontend::UnitKind::VhdlArchitecture) {
             return result;
         }
-        const auto* entity = find_vhdl_entity(parsed_, selected);
+        const auto* entity =
+            entity_override != nullptr
+                ? entity_override
+                : find_vhdl_entity(parsed_, selected);
         if (entity == nullptr) {
             return result;
         }
         result.parameters = entity->parameters;
         result.ports = entity->ports;
+        std::vector<frontend::VhdlComponentDeclaration>
+            entity_components =
+                entity->vhdl_component_declarations;
+        for (auto& component : entity_components) {
+            component.region =
+                frontend::VhdlComponentDeclarationRegion::Entity;
+            component.owner_library =
+                entity->library.empty()
+                    ? std::string{"work"}
+                    : entity->library;
+            component.owner_name = entity->name;
+        }
+        result.vhdl_component_declarations.insert(
+            result.vhdl_component_declarations.begin(),
+            std::make_move_iterator(
+                entity_components.begin()),
+            std::make_move_iterator(
+                entity_components.end()));
+        result.package_instances.insert(
+            result.package_instances.begin(),
+            entity->package_instances.begin(),
+            entity->package_instances.end());
+        result.generic_function_templates.insert(
+            result.generic_function_templates.begin(),
+            entity->generic_function_templates.begin(),
+            entity->generic_function_templates.end());
+        result.generic_procedure_templates.insert(
+            result.generic_procedure_templates.begin(),
+            entity->generic_procedure_templates.begin(),
+            entity->generic_procedure_templates.end());
+        result.generic_function_instances.insert(
+            result.generic_function_instances.begin(),
+            entity->generic_function_instances.begin(),
+            entity->generic_function_instances.end());
+        result.generic_procedure_instances.insert(
+            result.generic_procedure_instances.begin(),
+            entity->generic_procedure_instances.begin(),
+            entity->generic_procedure_instances.end());
+        for (const auto& function : entity->functions) {
+            if (function.name.find('.') == std::string::npos
+                || std::ranges::any_of(
+                    result.functions,
+                    [&](const auto& existing) {
+                        return existing.name == function.name;
+                    })) {
+                continue;
+            }
+            result.functions.push_back(function);
+        }
+        for (const auto& procedure : entity->procedures) {
+            if (procedure.name.find('.') == std::string::npos
+                || std::ranges::any_of(
+                    result.procedures,
+                    [&](const auto& existing) {
+                        return existing.name == procedure.name;
+                    })) {
+                continue;
+            }
+            result.procedures.push_back(procedure);
+        }
+        for (const auto& dependency :
+             entity->source_dependencies) {
+            if (std::ranges::find(
+                    result.source_dependencies, dependency)
+                == result.source_dependencies.end()) {
+                result.source_dependencies.push_back(dependency);
+            }
+        }
         for (const auto& generic : result.parameters) {
             if (std::any_of(
                     result.signals.begin(),
@@ -495,6 +637,19 @@ using namespace elaboration_detail;
             type_environment);
         import_qualified_vhdl_package_constants(
             result, import_stack);
+        for (const auto& alias : entity->type_aliases) {
+            if (alias.name.find('.') == std::string::npos) {
+                continue;
+            }
+            type_environment.insert_or_assign(
+                alias.name,
+                NamedTypeBinding{
+                    alias.type,
+                    (entity->library.empty()
+                         ? std::string{"work"}
+                         : entity->library)
+                        + "." + entity->name});
+        }
         import_qualified_vhdl_package_types(
             result, type_environment, import_stack);
         for (const auto& generic : result.parameters) {
@@ -541,7 +696,31 @@ using namespace elaboration_detail;
                             == generic.span.begin.offset;
                 });
             if (resolved != result.parameters.end()) {
-                resolved->type = generic.type;
+                if (generic.kind
+                    == frontend::ParameterKind::Function) {
+                    resolved->function_profile =
+                        generic.function_profile;
+                } else if (
+                    generic.kind
+                        == frontend::ParameterKind::Procedure) {
+                    resolved->procedure_profile =
+                        generic.procedure_profile;
+                } else if (
+                    generic.kind
+                        == frontend::ParameterKind::Package) {
+                    resolved->package_profile =
+                        generic.package_profile;
+                } else {
+                    resolved->type = generic.type;
+                }
+            }
+            if (generic.kind
+                    == frontend::ParameterKind::Function
+                || generic.kind
+                    == frontend::ParameterKind::Procedure
+                || generic.kind
+                    == frontend::ParameterKind::Package) {
+                continue;
             }
             if ((generic.type.packed_range
                  && generic.type.enumeration_literals.empty())
@@ -600,6 +779,24 @@ using namespace elaboration_detail;
                     {},
                     frontend::TypeDeclarationKind::Alias});
         }
+        for (auto& component :
+             result.vhdl_component_declarations) {
+            if (component.owner_library.empty()) {
+                component.owner_library =
+                    result.library.empty()
+                        ? std::string{"work"}
+                        : result.library;
+            }
+            if (component.owner_name.empty()) {
+                component.owner_name =
+                    component.region
+                            == frontend::
+                                VhdlComponentDeclarationRegion::
+                                    Entity
+                        ? entity->name
+                        : result.name;
+            }
+        }
         return result;
     }
 
@@ -609,23 +806,91 @@ using namespace elaboration_detail;
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
         const ConstantEnvironment& parent_environment,
+        const ConstantDomainEnvironment& parent_domains,
         const NamedTypeEnvironment& parent_types,
+        const std::vector<frontend::FunctionDeclaration>& parent_functions,
+        const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
+        const PackageEnvironment& parent_packages,
         const frontend::Language association_language) {
-        auto effective = effective_unit(selected);
+        auto normalized_overrides = overrides;
+        PackageEnvironment interface_packages;
+        std::vector<std::pair<std::string, std::string>>
+            package_identities;
+        std::optional<DesignUnit> selected_override;
+        std::optional<DesignUnit> entity_override;
+        if (selected.language
+            == frontend::Language::Vhdl2008) {
+            if (selected.kind
+                == frontend::UnitKind::VhdlArchitecture) {
+                if (const auto* entity =
+                        find_vhdl_entity(parsed_, selected);
+                    entity != nullptr) {
+                    entity_override = *entity;
+                    if (std::ranges::any_of(
+                            entity_override->parameters,
+                            [](const auto& parameter) {
+                                return parameter.kind
+                                    == frontend::ParameterKind::
+                                        Package;
+                            })) {
+                        bind_vhdl_interface_packages(
+                            *entity_override,
+                            normalized_overrides,
+                            parent_packages,
+                            parent_environment,
+                            parent_domains,
+                            parent_types,
+                            parent_functions,
+                            parent_procedures,
+                            association_language,
+                            interface_packages,
+                            package_identities);
+                    }
+                }
+            } else {
+                selected_override = selected;
+                if (std::ranges::any_of(
+                        selected_override->parameters,
+                        [](const auto& parameter) {
+                            return parameter.kind
+                                == frontend::ParameterKind::Package;
+                        })) {
+                    bind_vhdl_interface_packages(
+                        *selected_override,
+                        normalized_overrides,
+                        parent_packages,
+                        parent_environment,
+                        parent_domains,
+                        parent_types,
+                        parent_functions,
+                        parent_procedures,
+                        association_language,
+                        interface_packages,
+                        package_identities);
+                }
+            }
+        }
+        auto effective = effective_unit(
+            selected_override ? *selected_override : selected,
+            entity_override ? &*entity_override : nullptr);
         auto type_specialized =
             selected.language
                     == frontend::Language::SystemVerilog2017
                 ? specialize_systemverilog_type_parameters(
                       effective,
-                      overrides,
+                      normalized_overrides,
                       parent_environment,
                       parent_types,
                       association_language,
                       diagnostics_)
                 : specialize_vhdl_interface_types(
                       effective,
-                      overrides,
+                      normalized_overrides,
+                      parent_environment,
+                      parent_domains,
                       parent_types,
+                      parent_functions,
+                      parent_procedures,
                       association_language,
                       diagnostics_);
         if (type_specialized.applied) {
@@ -699,7 +964,7 @@ using namespace elaboration_detail;
                 };
             for (const auto& parameter : effective.parameters) {
                 if (parameter.kind
-                    == frontend::ParameterKind::Type) {
+                    != frontend::ParameterKind::Value) {
                     if (append_named(
                             specialized.values,
                             type_specialized.values,
@@ -738,6 +1003,15 @@ using namespace elaboration_detail;
                     value.first);
             }
         }
+        for (const auto& identity : package_identities) {
+            specialized.values.push_back(identity);
+            specialized.identity_values.push_back(identity);
+        }
+        specialized.packages = interface_packages;
+        instantiate_vhdl_local_packages(
+            specialized, interface_packages);
+        instantiate_vhdl_generic_subprograms(
+            specialized);
         return specialized;
     }
 
@@ -933,6 +1207,25 @@ using namespace elaboration_detail;
                 declaration.span);
             return std::nullopt;
         }
+        const auto separator =
+            declaration.type.spelling.find_last_of('.');
+        const auto simple_type_name =
+            declaration.type.spelling.substr(
+                separator == std::string::npos
+                    ? 0
+                    : separator + 1);
+        if (!declaration.type.packed_range
+            && !declaration.type.packed_range_expression
+            && (simple_type_name == "bit_vector"
+                || simple_type_name == "std_logic_vector"
+                || simple_type_name == "std_ulogic_vector")) {
+            report(
+                "FSIM-ELAB-VHARRAY-005",
+                "VHDL array object '" + declaration.name
+                    + "' requires a concrete non-null index constraint",
+                declaration.span);
+            return std::nullopt;
+        }
         const auto width = declaration.type.width().value_or(1);
         if (width == 0 || width > std::numeric_limits<std::size_t>::max()) {
             report(
@@ -1089,6 +1382,25 @@ using namespace elaboration_detail;
         const std::string& path,
         const frontend::SourceSpan& source,
         const bool cross_language) {
+        const auto separator =
+            port.type.spelling.find_last_of('.');
+        const auto simple_type_name =
+            port.type.spelling.substr(
+                separator == std::string::npos
+                    ? 0
+                    : separator + 1);
+        if (!port.type.packed_range
+            && !port.type.packed_range_expression
+            && (simple_type_name == "bit_vector"
+                || simple_type_name == "std_logic_vector"
+                || simple_type_name == "std_ulogic_vector")) {
+            report(
+                "FSIM-ELAB-VHARRAY-005",
+                "VHDL array port '" + path + "." + port.name
+                    + "' requires a concrete non-null index constraint",
+                source);
+            return;
+        }
         const auto unsupported_domain =
             [](const frontend::ValueDomain domain) {
                 return domain == frontend::ValueDomain::Unknown;

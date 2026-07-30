@@ -944,17 +944,16 @@ end entity recovered;
 )",
       Language::Vhdl2008);
   require(
-      !body.ok()
-          && body.design.units.size() == 1
-          && body.design.units.front().name == "recovered"
-          && std::any_of(
-              body.diagnostics.begin(),
-              body.diagnostics.end(),
-              [](const Diagnostic& diagnostic) {
-                return diagnostic.code
-                    == "FSIM-VHDL-UNSUPPORTED-022";
-              }),
-      "package-body rejection recovers at the outer end clause");
+      body.ok()
+          && body.design.units.size() == 2
+          && body.design.units.front().name == "unsupported"
+          && body.design.units.front().primary_name
+              == "unsupported"
+          && body.design.units.front().functions.size() == 1
+          && body.design.units.front().functions.front().defined
+          && body.design.units.back().name == "recovered",
+      "bounded package function bodies retain HIR and recover at the "
+      "outer end clause");
 }
 
 void test_ignored_initializers_are_rejected() {

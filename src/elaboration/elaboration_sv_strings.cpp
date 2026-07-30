@@ -187,6 +187,17 @@ void substitute_statements(
             statement.value, environment, integer_environment);
         substitute_expression(
             statement.condition, environment, integer_environment);
+        for (auto& argument : statement.task_arguments) {
+            substitute_expression(
+                argument, environment, integer_environment);
+        }
+        for (auto& association :
+             statement.procedure_arguments) {
+            substitute_expression(
+                association.value,
+                environment,
+                integer_environment);
+        }
         substitute_expression(
             statement.loop_initial, environment, integer_environment);
         substitute_expression(

@@ -16,6 +16,7 @@ namespace fsim::frontend {
 enum class UnitKind {
   VhdlEntity,
   VhdlArchitecture,
+  VhdlConfiguration,
   VhdlPackage,
   VhdlContext,
   SystemVerilogPackage,
@@ -327,6 +328,89 @@ struct VariableDeclaration {
   SourceSpan span;
 };
 
+struct FunctionArgument {
+  std::string name;
+  Type type;
+  PortDirection direction{PortDirection::Input};
+  SourceSpan span;
+};
+
+enum class InterfaceObjectClass {
+  Constant,
+  Variable,
+};
+
+struct ProcedureArgument {
+  std::string name;
+  Type type;
+  PortDirection direction{PortDirection::Input};
+  InterfaceObjectClass object_class{InterfaceObjectClass::Constant};
+  SourceSpan span;
+};
+
+struct InterfaceFunctionProfile {
+  Type return_type;
+  std::vector<FunctionArgument> arguments;
+  bool pure{true};
+  std::optional<std::string> default_name;
+  bool default_box{};
+  SourceSpan span;
+};
+
+struct InterfaceProcedureProfile {
+  std::vector<ProcedureArgument> arguments;
+  std::optional<std::string> default_name;
+  bool default_box{};
+  SourceSpan span;
+};
+
+struct ParameterOverride {
+  // Empty for a positional parameter override or VHDL generic actual.
+  std::optional<std::string> name;
+  Expression value;
+  SourceSpan span;
+  // An unambiguously parsed data-type or subtype-indication actual. Identifier
+  // type marks and syntactically ambiguous parenthesized VHDL constraints
+  // remain in value until formal-aware elaboration disambiguates them.
+  std::optional<Type> type_value;
+  // VHDL box association (`<>`) requests the corresponding template
+  // generic's default rather than supplying an expression or subtype.
+  bool default_box{};
+
+  ParameterOverride() = default;
+
+  ParameterOverride(
+      std::optional<std::string> parameter_name,
+      Expression parameter_value,
+      SourceSpan parameter_span,
+      std::optional<Type> parameter_type_value = std::nullopt,
+      const bool parameter_default_box = false)
+      : name(std::move(parameter_name)),
+        value(std::move(parameter_value)),
+        span(std::move(parameter_span)),
+        type_value(std::move(parameter_type_value)),
+        default_box(parameter_default_box) {}
+};
+
+struct InterfacePackageProfile {
+  // Canonical VHDL selected name of the generic package template.
+  std::string template_name;
+  // Explicit template-generic associations retained in declaration order.
+  std::vector<ParameterOverride> generic_map;
+  // `generic map (<>)` leaves the complete template map open for the
+  // package-instance actual selected at the enclosing generic association.
+  bool generic_map_box{};
+  SourceSpan span;
+};
+
+struct PackageInstantiation {
+  std::string name;
+  std::string template_name;
+  std::vector<ParameterOverride> generic_map;
+  bool generic_map_box{};
+  SourceSpan span;
+};
+
 struct PortConnection {
   // Empty for a positional connection.
   std::optional<std::string> port;
@@ -334,9 +418,75 @@ struct PortConnection {
   SourceSpan span;
 };
 
+enum class VhdlInstantiationSelectionKind {
+  Labels,
+  All,
+  Others,
+};
+
+enum class VhdlBindingAspectKind {
+  Entity,
+  Configuration,
+  Open,
+};
+
+/// A bounded VHDL binding indication retained by either an architecture
+/// configuration specification or a component configuration.
+struct VhdlBindingIndication {
+  VhdlBindingAspectKind kind{VhdlBindingAspectKind::Entity};
+  // Canonical selected entity name, normally `library.entity`.
+  std::string entity_name;
+  std::string architecture_name;
+  // Canonical selected configuration name, normally `library.configuration`.
+  std::string configuration_name;
+  std::vector<ParameterOverride> generic_map;
+  std::vector<PortConnection> port_map;
+  SourceSpan span;
+};
+
+/// A component instantiation-list plus its selected entity aspect.
+struct VhdlComponentConfiguration {
+  VhdlInstantiationSelectionKind selection{
+      VhdlInstantiationSelectionKind::Labels};
+  std::vector<std::string> labels;
+  std::string component_name;
+  VhdlBindingIndication binding;
+  SourceSpan span;
+};
+
+/// The bounded block configuration admitted by the v1 configuration slice.
+struct VhdlBlockConfiguration {
+  std::string block_name;
+  // An explicitly selected one-dimensional generate occurrence.
+  std::optional<Expression> generate_index;
+  std::vector<VhdlComponentConfiguration> component_configurations;
+  std::vector<VhdlBlockConfiguration> block_configurations;
+  SourceSpan span;
+};
+
+/// Payload of a VHDL configuration declaration DesignUnit.
+struct VhdlConfigurationDeclaration {
+  VhdlBlockConfiguration block;
+  SourceSpan span;
+};
+
+/// One port formal retained by an architecture-local VHDL component
+/// declaration. Defaults are syntax/compatibility metadata in the bounded
+/// component slice; executable expression/open port actuals remain separate.
+struct VhdlComponentPort {
+  std::string name;
+  Type type;
+  PortDirection direction{PortDirection::Unknown};
+  std::optional<Expression> default_value;
+  SourceSpan span;
+};
+
 enum class ParameterKind {
   Value,
   Type,
+  Function,
+  Procedure,
+  Package,
 };
 
 struct ParameterDeclaration {
@@ -354,7 +504,17 @@ struct ParameterDeclaration {
   // SystemVerilog type parameters retain a data-type default separately from
   // value expressions. Empty denotes a required type actual.
   std::optional<Type> default_type;
-
+  // VHDL-2008 interface function generics retain their complete supported
+  // profile and optional named/box default independently from value/type
+  // defaults.
+  std::optional<InterfaceFunctionProfile> function_profile;
+  // VHDL-2008 interface procedure generics retain formal object classes,
+  // modes, types, and optional named/box defaults separately from functions.
+  std::optional<InterfaceProcedureProfile> procedure_profile;
+  // VHDL-2008 interface package generics retain the selected template and
+  // template-generic compatibility map independently from every other
+  // generic family.
+  std::optional<InterfacePackageProfile> package_profile;
   ParameterDeclaration() = default;
 
   ParameterDeclaration(
@@ -364,36 +524,54 @@ struct ParameterDeclaration {
       bool parameter_local,
       SourceSpan parameter_span,
       ParameterKind parameter_kind = ParameterKind::Value,
-      std::optional<Type> parameter_default_type = std::nullopt)
+      std::optional<Type> parameter_default_type = std::nullopt,
+      std::optional<InterfaceFunctionProfile>
+          parameter_function_profile = std::nullopt,
+      std::optional<InterfaceProcedureProfile>
+          parameter_procedure_profile = std::nullopt,
+      std::optional<InterfacePackageProfile>
+          parameter_package_profile = std::nullopt)
       : name(std::move(parameter_name)),
         type(std::move(parameter_type)),
         default_value(std::move(parameter_default)),
         local(parameter_local),
         span(std::move(parameter_span)),
         kind(parameter_kind),
-        default_type(std::move(parameter_default_type)) {}
+        default_type(std::move(parameter_default_type)),
+        function_profile(std::move(parameter_function_profile)),
+        procedure_profile(std::move(parameter_procedure_profile)),
+        package_profile(std::move(parameter_package_profile)) {}
 };
 
-struct ParameterOverride {
-  // Empty for a positional parameter override or VHDL generic actual.
-  std::optional<std::string> name;
-  Expression value;
+enum class VhdlComponentDeclarationRegion {
+  Architecture,
+  Entity,
+  Package,
+  Block,
+  Generate,
+};
+
+/// A VHDL component declaration retained in declaration and lexical order.
+///
+/// Generic formals reuse ParameterDeclaration so value types and defaults have
+/// the same representation as entity generics. The optional end name is
+/// retained even though a mismatched name is diagnosed by the frontend.
+struct VhdlComponentDeclaration {
+  std::string name;
+  std::vector<ParameterDeclaration> generics;
+  std::vector<VhdlComponentPort> ports;
+  std::optional<std::string> end_name;
+  VhdlComponentDeclarationRegion region{
+      VhdlComponentDeclarationRegion::Architecture};
+  // Empty for a design-unit declarative region. Generated/block declarations
+  // use the canonical elaborated scope (`block.loop[1]`, for example).
+  std::string scope_path;
+  // Canonical library/unit owner, populated for entity/package declarations
+  // and retained through direct package visibility.
+  std::string owner_library;
+  std::string owner_name;
+  std::size_t declaration_order{};
   SourceSpan span;
-  // An unambiguously parsed SystemVerilog data-type actual. Identifier type
-  // marks remain in value until formal-aware elaboration disambiguates them.
-  std::optional<Type> type_value;
-
-  ParameterOverride() = default;
-
-  ParameterOverride(
-      std::optional<std::string> parameter_name,
-      Expression parameter_value,
-      SourceSpan parameter_span,
-      std::optional<Type> parameter_type_value = std::nullopt)
-      : name(std::move(parameter_name)),
-        value(std::move(parameter_value)),
-        span(std::move(parameter_span)),
-        type_value(std::move(parameter_type_value)) {}
 };
 
 enum class VerilogUnconnectedDrive {
@@ -409,6 +587,10 @@ struct Instance {
   std::string name;
   std::vector<ParameterOverride> parameter_overrides;
   std::vector<PortConnection> connections;
+  // True for `label: component_name ...`; false for direct entity/module
+  // instantiation. VHDL configuration specifications apply only to the
+  // component form.
+  bool vhdl_component_instance{};
   // Compilation-directive state at the instance declaration. Pull values
   // apply only to omitted input ports.
   VerilogUnconnectedDrive unconnected_drive{
@@ -474,6 +656,8 @@ enum class StatementKind {
   Break,
   Continue,
   Return,
+  TaskCall,
+  ProcedureCall,
   Assert,
   Delay,
   WaitOn,
@@ -486,6 +670,13 @@ enum class StatementKind {
   Finish,
   Block,
   Null,
+};
+
+struct SubprogramAssociation {
+  // Empty for a positional association.
+  std::optional<std::string> formal;
+  Expression value;
+  SourceSpan span;
 };
 
 enum class CaseMatchKind {
@@ -547,6 +738,14 @@ struct Statement {
   Expression target;
   Expression value;
   Expression condition;
+  // SystemVerilog user-task invocation. Kept separate from expression calls
+  // because task formals have direction and copy-out semantics.
+  std::string task_name;
+  std::vector<Expression> task_arguments;
+  // A VHDL sequential procedure call remains distinct from a SystemVerilog
+  // task call and retains each positional or named association span.
+  std::string procedure_name;
+  std::vector<SubprogramAssociation> procedure_arguments;
   // A VHDL sequential for-loop retains its implicit constant name and
   // locally-static discrete range until elaboration unrolls the body.
   std::string loop_variable;
@@ -653,13 +852,6 @@ struct Process {
   SourceSpan span;
 };
 
-struct FunctionArgument {
-  std::string name;
-  Type type;
-  PortDirection direction{PortDirection::Input};
-  SourceSpan span;
-};
-
 /// Typed source-level HDL function.
 ///
 /// v1 functions are automatic, integral, and time-free. Frontends retain the
@@ -672,6 +864,82 @@ struct FunctionDeclaration {
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
   bool automatic{};
+  Language language{Language::SystemVerilog2017};
+  bool pure{};
+  bool defined{true};
+  // Nonempty only for an elaborated generic-subprogram instance.
+  std::string specialization_identity;
+  SourceSpan span;
+};
+
+struct TaskArgument {
+  std::string name;
+  Type type;
+  PortDirection direction{PortDirection::Input};
+  SourceSpan span;
+};
+
+/// Typed source-level SystemVerilog task.
+///
+/// Tasks are retained independently from functions because they have no
+/// result object and their output/inout formals require copy-out semantics.
+/// The current bounded subset admits only explicit automatic, integral, and
+/// nonrecursive task bodies with the supported scheduler controls.
+struct TaskDeclaration {
+  std::string name;
+  std::vector<TaskArgument> arguments;
+  std::vector<VariableDeclaration> variables;
+  std::vector<Statement> statements;
+  bool automatic{};
+  SourceSpan span;
+};
+
+/// Typed source-level VHDL procedure.
+///
+/// Procedures are retained independently from functions and SystemVerilog
+/// tasks. The bounded v1 slice is same-language, scalar, time-free, and uses
+/// deterministic copy-in/copy-out for variable-class formals.
+struct ProcedureDeclaration {
+  std::string name;
+  std::vector<ProcedureArgument> arguments;
+  std::vector<VariableDeclaration> variables;
+  std::vector<Statement> statements;
+  Language language{Language::Vhdl2008};
+  bool defined{true};
+  // Nonempty only for an elaborated generic-subprogram instance.
+  std::string specialization_identity;
+  SourceSpan span;
+};
+
+/// Retained VHDL-2008 generic function template.
+///
+/// A template is not callable. Its ordinary function declaration/body is
+/// retained separately so elaboration can specialize it with the generic
+/// interface before publishing a callable instance.
+struct GenericFunctionTemplate {
+  std::vector<ParameterDeclaration> generic_parameters;
+  FunctionDeclaration function;
+  // The complete generic-clause plus subprogram span. The nested function
+  // span may instead identify a matching package-body implementation.
+  SourceSpan span;
+};
+
+/// Retained VHDL-2008 generic procedure template.
+struct GenericProcedureTemplate {
+  std::vector<ParameterDeclaration> generic_parameters;
+  ProcedureDeclaration procedure;
+  SourceSpan span;
+};
+
+/// A declarative VHDL-2008 generic subprogram instantiation.
+///
+/// Function and procedure instances use separate DesignUnit collections so
+/// their kind remains explicit even before template lookup succeeds.
+struct GenericSubprogramInstantiation {
+  std::string name;
+  std::string template_name;
+  std::vector<ParameterOverride> generic_map;
+  bool generic_map_box{};
   SourceSpan span;
 };
 
@@ -690,6 +958,7 @@ struct GenerateBody {
   // are not externally overridable specialization parameters.
   std::vector<ParameterDeclaration> constants;
   std::vector<SignalDeclaration> signals;
+  std::vector<VhdlComponentDeclaration> vhdl_component_declarations;
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;
   std::vector<Instance> instances;
@@ -778,6 +1047,25 @@ struct DesignUnit {
   std::vector<SignalDeclaration> ports;
   std::vector<SignalDeclaration> signals;
   std::vector<FunctionDeclaration> functions;
+  std::vector<TaskDeclaration> tasks;
+  std::vector<ProcedureDeclaration> procedures;
+  // Generic subprogram templates are never directly callable. Successful
+  // instances are materialized into functions/procedures during elaboration.
+  std::vector<GenericFunctionTemplate> generic_function_templates;
+  std::vector<GenericProcedureTemplate> generic_procedure_templates;
+  std::vector<GenericSubprogramInstantiation> generic_function_instances;
+  std::vector<GenericSubprogramInstantiation> generic_procedure_instances;
+  // Local VHDL generic-package instances declared in this unit's declarative
+  // region. Interface package formals remain ParameterKind::Package entries.
+  std::vector<PackageInstantiation> package_instances;
+  // Architecture-local component declarations retained in source declaration
+  // order for component instantiation and configuration binding.
+  std::vector<VhdlComponentDeclaration> vhdl_component_declarations;
+  // Architecture declarative configuration specifications. A configuration
+  // declaration instead uses vhdl_configuration on its own design unit.
+  std::vector<VhdlComponentConfiguration>
+      vhdl_configuration_specifications;
+  std::optional<VhdlConfigurationDeclaration> vhdl_configuration;
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;
   std::vector<Instance> instances;

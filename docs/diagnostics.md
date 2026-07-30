@@ -223,6 +223,84 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-149` | error | A VHDL aggregate range choice is missing its right bound. |
 | `FSIM-VHDL-PARSE-150` | error | A VHDL aggregate choice list has no choice after `|`. |
 | `FSIM-VHDL-PARSE-151` | error | A VHDL aggregate range or choice list is not followed by `=>`. |
+| `FSIM-VHDL-PARSE-152` | error | A VHDL function formal declaration is missing `:` after its names. |
+| `FSIM-VHDL-PARSE-153` | error | VHDL function formal declarations are not separated by `;`. |
+| `FSIM-VHDL-PARSE-154` | error | A VHDL function formal list is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-155` | error | A VHDL function specification is missing `return`. |
+| `FSIM-VHDL-PARSE-156` | error | An interface-function box default has a malformed `<>`. |
+| `FSIM-VHDL-PARSE-157` | error | An interface function's `is` clause has neither a function name nor `<>`. |
+| `FSIM-VHDL-PARSE-158` | error | A VHDL function body is missing `is`. |
+| `FSIM-VHDL-PARSE-159` | error | A VHDL function-local variable declaration is missing `:`. |
+| `FSIM-VHDL-PARSE-160` | error | A VHDL function-local variable declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-161` | error | A VHDL function body is missing `begin`. |
+| `FSIM-VHDL-PARSE-162` | error | A VHDL function body is missing `end`. |
+| `FSIM-VHDL-PARSE-163` | error | A VHDL function body is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-164` | error | A VHDL function return statement has no result expression. |
+| `FSIM-VHDL-PARSE-165` | error | A VHDL return statement is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-166` | error | A bounded VHDL package body is missing `end`. |
+| `FSIM-VHDL-PARSE-167` | error | A bounded VHDL package body is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-168` | error | A VHDL procedure parameter declaration is missing the colon before its mode and subtype. |
+| `FSIM-VHDL-PARSE-169` | error | Adjacent VHDL procedure parameter declarations are missing a separating semicolon. |
+| `FSIM-VHDL-PARSE-170` | error | A VHDL procedure parameter list is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-171` | error | An interface-procedure box default is missing the closing `>`. |
+| `FSIM-VHDL-PARSE-172` | error | An interface-procedure `is` default is neither a procedure name nor `<>`. |
+| `FSIM-VHDL-PARSE-173` | error | A VHDL procedure body is missing `is`. |
+| `FSIM-VHDL-PARSE-174` | error | A VHDL procedure-local variable declaration is missing its colon. |
+| `FSIM-VHDL-PARSE-175` | error | A VHDL procedure-local variable declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-176` | error | A VHDL procedure body is missing `begin`. |
+| `FSIM-VHDL-PARSE-177` | error | A VHDL procedure body is missing `end`. |
+| `FSIM-VHDL-PARSE-178` | error | A VHDL procedure body is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-179` | error | A VHDL procedure call is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-180` | error | A VHDL procedure call is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-181` | error | A package generic-map aspect is missing `map`. |
+| `FSIM-VHDL-PARSE-182` | error | A package generic-map aspect is missing its opening parenthesis. |
+| `FSIM-VHDL-PARSE-183` | error | A whole-map package generic box is missing its closing `>`. |
+| `FSIM-VHDL-PARSE-184` | error | A whole-map package generic box is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-185` | error | A defaulted package generic association is missing its closing `>`. |
+| `FSIM-VHDL-PARSE-186` | error | A package generic association list is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-187` | error | An interface package declaration is missing `is`. |
+| `FSIM-VHDL-PARSE-188` | error | An interface package declaration is missing `new`. |
+| `FSIM-VHDL-PARSE-189` | error | An interface package declaration is missing its `generic map` aspect. |
+| `FSIM-VHDL-PARSE-190` | error | A local package instantiation is missing `is`. |
+| `FSIM-VHDL-PARSE-191` | error | A local package instantiation is missing `new`. |
+| `FSIM-VHDL-PARSE-192` | error | A local package instantiation is missing its `generic map` aspect. |
+| `FSIM-VHDL-PARSE-193` | error | A local package instantiation is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-194` | error | A generic subprogram instantiation is missing `is`. |
+| `FSIM-VHDL-PARSE-195` | error | A generic subprogram instantiation is missing `new`. |
+| `FSIM-VHDL-PARSE-196` | error | A generic subprogram aspect is missing `map`. |
+| `FSIM-VHDL-PARSE-197` | error | A generic subprogram map is missing its opening parenthesis. |
+| `FSIM-VHDL-PARSE-198` | error | A whole-map generic subprogram box is missing its closing `>`. |
+| `FSIM-VHDL-PARSE-199` | error | A whole-map generic subprogram box is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-200` | error | A defaulted generic subprogram association is missing its closing `>`. |
+| `FSIM-VHDL-PARSE-201` | error | A generic subprogram association list is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-202` | error | A generic subprogram instantiation is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-203` | error | A generic clause intended for a subprogram is not followed by a function or procedure. |
+| `FSIM-VHDL-PARSE-204` | error | A configuration declaration is missing `of`. |
+| `FSIM-VHDL-PARSE-205` | error | A configuration declaration is missing `is`. |
+| `FSIM-VHDL-PARSE-206` | error | A configuration declaration is missing its top architecture block introduced by `for`. |
+| `FSIM-VHDL-PARSE-207` | error | A component configuration or specification is missing the colon after its instantiation list. |
+| `FSIM-VHDL-PARSE-208` | error | A component configuration or specification is missing `use`. |
+| `FSIM-VHDL-PARSE-209` | error | A bounded configuration binding indication is missing `entity`. |
+| `FSIM-VHDL-PARSE-210` | error | A configured entity aspect has no parenthesized architecture name. |
+| `FSIM-VHDL-PARSE-211` | error | A configuration port-map aspect is missing `map`. |
+| `FSIM-VHDL-PARSE-212` | error | A configuration port-map aspect is missing its opening parenthesis. |
+| `FSIM-VHDL-PARSE-213` | error | A configuration port-map aspect is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-214` | error | A configuration binding indication is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-215` | error | A component configuration is missing `end for`. |
+| `FSIM-VHDL-PARSE-216` | error | A component configuration is missing the semicolon after `end for`. |
+| `FSIM-VHDL-PARSE-217` | error | An architecture block configuration is missing `end for`. |
+| `FSIM-VHDL-PARSE-218` | error | An architecture block configuration is missing the semicolon after `end for`. |
+| `FSIM-VHDL-PARSE-219` | error | A configuration declaration is missing `end`. |
+| `FSIM-VHDL-PARSE-220` | error | A configuration declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-221` | error | A component port clause is missing its opening parenthesis. |
+| `FSIM-VHDL-PARSE-222` | error | A component port declaration is missing the colon after its names. |
+| `FSIM-VHDL-PARSE-223` | error | A component port declaration is missing a supported mode. |
+| `FSIM-VHDL-PARSE-224` | error | Component port declarations are not separated by semicolons. |
+| `FSIM-VHDL-PARSE-225` | error | A component port clause is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-226` | error | A component port clause is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-227` | error | A component declaration is missing its end clause. |
+| `FSIM-VHDL-PARSE-228` | error | A component declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-229` | error | An indexed generate block configuration is missing its closing parenthesis. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -262,6 +340,35 @@ therefore excluded.
 | `FSIM-VHDL-SEM-039` | error | An aggregate contains multiple `others` associations or does not place `others` last. |
 | `FSIM-VHDL-SEM-040` | error | A VHDL enumeration declares the same identifier or character literal more than once. |
 | `FSIM-VHDL-SEM-041` | error | `others` is combined with another choice in one VHDL aggregate association. |
+| `FSIM-VHDL-SEM-042` | error | A VHDL function profile declares the same formal name more than once. |
+| `FSIM-VHDL-SEM-043` | error | A VHDL function declaration appears in a region that requires a body. |
+| `FSIM-VHDL-SEM-044` | error | A VHDL function local duplicates the result, a formal, or another local. |
+| `FSIM-VHDL-SEM-045` | error | A VHDL function end name does not match its designator. |
+| `FSIM-VHDL-SEM-046` | error | A VHDL return statement appears outside a function body. |
+| `FSIM-VHDL-SEM-047` | error | A package-body end name does not match its package name. |
+| `FSIM-VHDL-SEM-048` | error | A bounded VHDL function body has no explicit return statement. |
+| `FSIM-VHDL-SEM-049` | error | A constant-class VHDL procedure parameter has an output or inout mode. |
+| `FSIM-VHDL-SEM-050` | error | A VHDL procedure profile declares the same formal name more than once. |
+| `FSIM-VHDL-SEM-051` | error | A VHDL procedure declaration appears in a region that requires a body. |
+| `FSIM-VHDL-SEM-052` | error | A VHDL procedure local duplicates a formal or another local. |
+| `FSIM-VHDL-SEM-053` | error | A VHDL procedure end name does not match its designator. |
+| `FSIM-VHDL-SEM-054` | error | A VHDL procedure return statement carries a value. |
+| `FSIM-VHDL-SEM-055` | error | A positional VHDL procedure-call actual follows a named actual. |
+| `FSIM-VHDL-SEM-056` | error | A bounded VHDL procedure body assigns to a constant-class formal. |
+| `FSIM-VHDL-SEM-057` | error | A package generic-map aspect associates the same named formal more than once. |
+| `FSIM-VHDL-SEM-058` | error | A positional package generic association follows a named association. |
+| `FSIM-VHDL-SEM-059` | error | A declarative region contains the same local package-instance name more than once. |
+| `FSIM-VHDL-SEM-060` | error | A generic subprogram map associates the same named formal more than once. |
+| `FSIM-VHDL-SEM-061` | error | A positional generic subprogram association follows a named association. |
+| `FSIM-VHDL-SEM-062` | error | A generic subprogram instance duplicates another subprogram declaration or instance. |
+| `FSIM-VHDL-SEM-063` | error | A generic subprogram template has no generic formal. |
+| `FSIM-VHDL-SEM-064` | error | A declarative region contains a duplicate generic function or procedure template. |
+| `FSIM-VHDL-SEM-065` | error | A configuration instantiation list contains the same component label more than once. |
+| `FSIM-VHDL-SEM-066` | error | `all` or `others` is combined with another configuration instantiation-list choice. |
+| `FSIM-VHDL-SEM-067` | error | A configuration declaration's end name does not match its opening name. |
+| `FSIM-VHDL-SEM-068` | error | One declarative region repeats an exact component profile. |
+| `FSIM-VHDL-SEM-069` | error | A component declaration's end name does not match its opening name. |
+| `FSIM-VHDL-SEM-071` | error | A component generic or port formal is declared more than once or conflicts with another component formal. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -279,13 +386,34 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
 | `FSIM-VHDL-UNSUPPORTED-021` | error | Guarded VHDL block statements are not executable yet. |
-| `FSIM-VHDL-UNSUPPORTED-022` | error | A package body or package declaration outside the bounded constant-only subset is not implemented. |
+| `FSIM-VHDL-UNSUPPORTED-022` | error | A package declaration item is outside the bounded constant, type, subtype, or function subset. |
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
 | `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element requires guarded-signal driver disconnection, which is not executable yet. |
 | `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
 | `FSIM-VHDL-UNSUPPORTED-027` | error | A VHDL array declaration has multiple dimensions, a noninteger index subtype, or an element outside the current scalar packed subset. |
-| `FSIM-VHDL-UNSUPPORTED-028` | error | A VHDL interface type generic uses a classified or defaulted form beyond the VHDL-2008 unclassified `type T` subset. |
+| `FSIM-VHDL-UNSUPPORTED-028` | error | A VHDL interface type generic uses classified or default-like syntax outside the VHDL-2008 unclassified `type T` form. |
+| `FSIM-VHDL-UNSUPPORTED-029` | error | A bounded VHDL function formal is not constant class. |
+| `FSIM-VHDL-UNSUPPORTED-030` | error | A bounded VHDL function formal is not input mode. |
+| `FSIM-VHDL-UNSUPPORTED-031` | error | A VHDL function formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
+| `FSIM-VHDL-UNSUPPORTED-032` | error | A bounded VHDL function formal has a default expression. |
+| `FSIM-VHDL-UNSUPPORTED-033` | error | A VHDL function uses an operator-symbol designator. |
+| `FSIM-VHDL-UNSUPPORTED-034` | error | A VHDL function result type is outside the bounded scalar integral or visible scalar-subtype profile. |
+| `FSIM-VHDL-UNSUPPORTED-035` | error | A VHDL function declarative item is not a local variable. |
+| `FSIM-VHDL-UNSUPPORTED-037` | error | A bounded VHDL function body contains timing, signal updates, or another unsupported statement. |
+| `FSIM-VHDL-UNSUPPORTED-038` | error | A bounded VHDL procedure formal has signal or file class rather than constant or variable class. |
+| `FSIM-VHDL-UNSUPPORTED-039` | error | A bounded VHDL procedure formal uses buffer, linkage, or another unsupported mode. |
+| `FSIM-VHDL-UNSUPPORTED-040` | error | A VHDL procedure formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
+| `FSIM-VHDL-UNSUPPORTED-041` | error | A bounded VHDL procedure formal has a default expression. |
+| `FSIM-VHDL-UNSUPPORTED-042` | error | A VHDL procedure uses an operator-symbol designator. |
+| `FSIM-VHDL-UNSUPPORTED-043` | error | A VHDL procedure declarative item is not a local variable. |
+| `FSIM-VHDL-UNSUPPORTED-044` | error | A bounded VHDL procedure body contains timing, signal updates, or another unsupported statement. |
+| `FSIM-VHDL-UNSUPPORTED-045` | error | A nested interface-package formal appears in a bounded generic subprogram template. |
+| `FSIM-VHDL-UNSUPPORTED-046` | error | A generic function instantiation carries a `pure` or `impure` prefix. |
+| `FSIM-VHDL-UNSUPPORTED-047` | error | A bounded generic function template is impure. |
+| `FSIM-VHDL-UNSUPPORTED-050` | error | A configuration declaration contains an item outside the bounded architecture/component configuration subset. |
+| `FSIM-VHDL-UNSUPPORTED-051` | error | A component declaration uses a non-value generic outside the bounded component profile. |
+| `FSIM-VHDL-UNSUPPORTED-052` | error | A component declaration contains an unsupported declarative item. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -384,6 +512,11 @@ therefore excluded.
 | `FSIM-SV-PARSE-140` | error | Expected `)` after a bounded SystemVerilog function argument list. |
 | `FSIM-SV-PARSE-141` | error | Expected `;` after a bounded SystemVerilog function header. |
 | `FSIM-SV-PARSE-142` | error | Expected `endfunction` after a bounded SystemVerilog function body. |
+| `FSIM-SV-PARSE-143` | error | Expected `)` after a bounded SystemVerilog task argument list. |
+| `FSIM-SV-PARSE-144` | error | Expected `;` after a bounded SystemVerilog task header. |
+| `FSIM-SV-PARSE-145` | error | Expected `endtask` after a bounded SystemVerilog task body. |
+| `FSIM-SV-PARSE-146` | error | Expected `)` after a bounded SystemVerilog task call argument list. |
+| `FSIM-SV-PARSE-147` | error | Expected `;` after a bounded SystemVerilog task call. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -560,6 +693,12 @@ therefore excluded.
 | `FSIM-SV-SEM-064` | error | A bounded function contains a timing control, event statement, or task statement. |
 | `FSIM-SV-SEM-065` | error | A bounded function has no function-name assignment or value-return statement. |
 | `FSIM-SV-SEM-066` | error | A module or package declares the same bounded function name more than once. |
+| `FSIM-SV-SEM-067` | error | A bounded task repeats an argument name. |
+| `FSIM-SV-SEM-068` | error | A bounded task closing name differs from its declaration name. |
+| `FSIM-SV-SEM-069` | error | A bounded task local conflicts with an argument or earlier local. |
+| `FSIM-SV-SEM-070` | error | A bounded task contains a nonblocking/intra-assignment control, `$stop`, or `$finish`. |
+| `FSIM-SV-SEM-071` | error | A bounded task return statement incorrectly supplies a value. |
+| `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -592,6 +731,10 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-034` | error | A bounded function return or argument type is not integral. |
 | `FSIM-SV-UNSUPPORTED-035` | error | A bounded function formal uses `ref`, `output`, or `inout` instead of `input`. |
 | `FSIM-SV-UNSUPPORTED-036` | error | A bounded function uses an unpacked/default argument or a classic body argument declaration. |
+| `FSIM-SV-UNSUPPORTED-037` | error | A bounded task is static or omits the explicit `automatic` lifetime required by the current activation-frame implementation. |
+| `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
+| `FSIM-SV-UNSUPPORTED-039` | error | A bounded task formal is not integral. |
+| `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
 
 ## Elaboration and SimIR lowering
 
@@ -725,6 +868,97 @@ therefore excluded.
 | `FSIM-ELAB-SVFUNC-005` | error | A return statement is outside an executable function or lacks a value during lowering. |
 | `FSIM-ELAB-SVFUNC-006` | error | Bounded runtime functions contain a direct or indirect recursive call cycle. |
 | `FSIM-ELAB-SVFUNC-007` | error | The same bare function name is directly visible from multiple imported SystemVerilog packages. |
+| `FSIM-ELAB-VHFUNC-001` | error | An interface-function generic has no retained profile in HIR. |
+| `FSIM-ELAB-VHFUNC-002` | error | An interface-function association or selected actual is not same-language VHDL. |
+| `FSIM-ELAB-VHFUNC-003` | error | An interface-function actual is not a simple visible function name. |
+| `FSIM-ELAB-VHFUNC-004` | error | A required interface-function generic has no actual or default. |
+| `FSIM-ELAB-VHFUNC-005` | error | A named function actual is invisible or has no conforming supported profile. |
+| `FSIM-ELAB-VHFUNC-006` | error | A named or box-default function actual is ambiguous among conforming visible functions. |
+| `FSIM-ELAB-VHFUNC-007` | error | A selected function actual has no executable body. |
+| `FSIM-ELAB-VHFUNC-008` | error | A selected function actual is impure in the bounded interface-function subset. |
+| `FSIM-ELAB-VHFUNC-009` | error | An interface-function binding conflicts with a child-local function name. |
+| `FSIM-ELAB-VHFUNC-010` | error | The same VHDL function name is directly visible from multiple packages. |
+| `FSIM-ELAB-VHPROC-001` | error | An interface-procedure generic has no retained profile in HIR. |
+| `FSIM-ELAB-VHPROC-002` | error | An interface-procedure association or selected actual is not same-language VHDL. |
+| `FSIM-ELAB-VHPROC-003` | error | An interface-procedure actual is not a simple visible procedure name. |
+| `FSIM-ELAB-VHPROC-004` | error | A required interface-procedure generic has no actual or default. |
+| `FSIM-ELAB-VHPROC-005` | error | A named procedure actual is invisible or has no conforming class, mode, and type profile. |
+| `FSIM-ELAB-VHPROC-006` | error | A named or box-default procedure actual is ambiguous among conforming visible procedures. |
+| `FSIM-ELAB-VHPROC-007` | error | A selected procedure actual has no executable body. |
+| `FSIM-ELAB-VHPROC-008` | error | An interface-procedure actual names a function rather than a procedure. |
+| `FSIM-ELAB-VHPROC-009` | error | A selected procedure actual contains timing or a non-variable update. |
+| `FSIM-ELAB-VHPROC-010` | error | A recursive VHDL procedure call graph is unsupported. |
+| `FSIM-ELAB-VHPROC-011` | error | An interface-procedure binding conflicts with a child-local subprogram name. |
+| `FSIM-ELAB-VHPROC-012` | error | A generated or scoped procedure actual is outside the bounded interface-procedure subset. |
+| `FSIM-ELAB-VHPROC-013` | error | The same VHDL procedure name is directly visible from multiple packages. |
+| `FSIM-ELAB-VHPROC-014` | error | A VHDL procedure call names no visible procedure. |
+| `FSIM-ELAB-VHPROC-015` | error | A named VHDL procedure-call association is unknown or duplicated. |
+| `FSIM-ELAB-VHPROC-016` | error | A positional VHDL procedure actual follows a named actual during lowering. |
+| `FSIM-ELAB-VHPROC-017` | error | A VHDL procedure call has too many or too few actuals. |
+| `FSIM-ELAB-VHPROC-018` | error | A variable-class, output, or inout procedure formal receives a non-writable actual. |
+| `FSIM-ELAB-VHPROC-019` | error | The visible VHDL procedure set exceeds the SimIR call-stack capacity. |
+| `FSIM-ELAB-VHPROC-020` | error | A VHDL procedure formal has no executable width in the bounded 1–64-bit representation. |
+| `FSIM-ELAB-VHPROC-021` | error | A VHDL procedure return is outside a procedure or carries a value. |
+| `FSIM-ELAB-VHPKG-001` | error | An interface-package generic has no retained profile, or a nested interface-package formal appears in a bounded generic package template. |
+| `FSIM-ELAB-VHPKG-002` | error | An interface-package association crosses a non-VHDL language boundary. |
+| `FSIM-ELAB-VHPKG-003` | error | An interface-package actual is not a simple visible package-instance name. |
+| `FSIM-ELAB-VHPKG-004` | error | A required interface-package generic has no actual package instance. |
+| `FSIM-ELAB-VHPKG-005` | error | A named package-instance actual is not directly visible. |
+| `FSIM-ELAB-VHPKG-006` | error | An interface-package actual resolves to a value, type, function, or procedure rather than a package instance. |
+| `FSIM-ELAB-VHPKG-007` | error | A package-instance actual specializes a different generic package template. |
+| `FSIM-ELAB-VHPKG-008` | error | A package-instance actual does not conform to the interface package's explicit or defaulted generic map. |
+| `FSIM-ELAB-VHPKG-009` | error | A generic package template name is malformed or not found in the requested library. |
+| `FSIM-ELAB-VHPKG-010` | error | A selected bounded package instance has an incomplete required function or procedure body. |
+| `FSIM-ELAB-VHPKG-011` | error | A generated or scoped package actual is outside the bounded interface-package subset. |
+| `FSIM-ELAB-VHPKG-012` | error | A generic package template or local package-instance name is ambiguous. |
+| `FSIM-ELAB-VHPKG-013` | error | A local package instantiation selects a nongeneric package declaration. |
+| `FSIM-ELAB-VHPKG-014` | error | A generic package template is passed without first creating a package instance. |
+| `FSIM-ELAB-VHGSUB-001` | error | A generic subprogram template is missing or not directly visible before its instantiation. |
+| `FSIM-ELAB-VHGSUB-002` | error | A generic subprogram template is ambiguous locally or across directly visible packages. |
+| `FSIM-ELAB-VHGSUB-003` | error | A generic subprogram instantiation selects the wrong subprogram kind or a nongeneric subprogram. |
+| `FSIM-ELAB-VHGSUB-004` | error | A selected generic subprogram template has no conforming executable body. |
+| `FSIM-ELAB-VHGSUB-006` | error | A generic subprogram template is called before being instantiated. |
+| `FSIM-ELAB-VHGSUB-007` | error | A bounded generic subprogram template contains a recursive call. |
+| `FSIM-ELAB-VHGSUB-008` | error | A materialized generic subprogram instance conflicts with another callable subprogram. |
+| `FSIM-ELAB-VHGSUB-009` | error | A selected or scoped generic subprogram template is outside the bounded directly visible subset. |
+| `FSIM-ELAB-VHGSUB-011` | error | A generic subprogram template contains an unsupported interface-package formal. |
+| `FSIM-ELAB-VHGSUB-012` | error | Generic subprogram specialization failed to retain its selected template body. |
+| `FSIM-ELAB-VHGSUB-013` | error | A generic subprogram declaration and body do not have conforming generic lists and callable profiles. |
+| `FSIM-ELAB-VHCONFIG-001` | error | A VHDL configuration design unit has no retained block-configuration payload. |
+| `FSIM-ELAB-VHCONFIG-002` | error | A configuration declaration's target entity is missing or ambiguous in its library. |
+| `FSIM-ELAB-VHCONFIG-003` | error | A configuration declaration selects a missing architecture of its target entity. |
+| `FSIM-ELAB-VHCONFIG-004` | error | A configuration declaration selects an ambiguous architecture. |
+| `FSIM-ELAB-VHCONFIG-005` | error | A configuration rule names a component with no component-style instances in the configured region. |
+| `FSIM-ELAB-VHCONFIG-006` | error | A configuration label does not select an instance of the stated component. |
+| `FSIM-ELAB-VHCONFIG-007` | error | Configuration label, `all`, or `others` rules overlap or occur more than once for one component. |
+| `FSIM-ELAB-VHCONFIG-008` | error | A configuration binding has a malformed entity aspect or selects a missing VHDL entity/architecture. |
+| `FSIM-ELAB-VHCONFIG-009` | error | A configuration binding selects an ambiguous VHDL entity/architecture. |
+| `FSIM-ELAB-VHCONFIG-010` | error | A nested block/generate configuration has a non-static index or does not select an elaborated occurrence. |
+| `FSIM-ELAB-VHCONFIG-011` | error | A positional component map remained after component-formal normalization and cannot be composed through a configuration binding map. |
+| `FSIM-ELAB-VHCONFIG-012` | error | A configuration port map is not a supported named target-port to component-port mapping. |
+| `FSIM-ELAB-VHCONFIG-013` | error | A configuration binding has a malformed configuration aspect or selects a missing configuration declaration. |
+| `FSIM-ELAB-VHCONFIG-014` | error | A configuration binding selects an ambiguous configuration declaration. |
+| `FSIM-ELAB-VHCONFIG-015` | error | A nested block/generate scope is configured more than once at the same level. |
+| `FSIM-ELAB-VHCOMP-001` | error | A component-style instance has no visible bounded component declaration. |
+| `FSIM-ELAB-VHCOMP-002` | error | A component-style instance ambiguously matches multiple equally visible component declarations. |
+| `FSIM-ELAB-VHCOMP-003` | error | Default component binding finds no same-library VHDL entity or architecture. |
+| `FSIM-ELAB-VHCOMP-005` | error | A default or configured component target has a missing or ambiguous entity interface. |
+| `FSIM-ELAB-VHCOMP-006` | error | A component generic profile is incompatible with its bound entity generic profile. |
+| `FSIM-ELAB-VHCOMP-007` | error | A component port profile, mode, type, or width is incompatible with its bound entity port profile. |
+| `FSIM-ELAB-VHCOMP-008` | error | A component generic association is unknown, duplicated, out of order, excessive, or omits a required formal. |
+| `FSIM-ELAB-VHCOMP-009` | error | A component port association is unknown, duplicated, out of order, excessive, or omits a required formal. |
+| `FSIM-ELAB-VHCOMP-010` | error | A configuration binding map names an unknown component or entity formal. |
+| `FSIM-ELAB-VHCOMP-011` | error | Default component binding would cross languages and requires an explicit manifest binding. |
+| `FSIM-ELAB-VHCOMP-012` | error | No equally visible component overload matches the instance associations, modes, types, or dependent widths. |
+| `FSIM-ELAB-SVTASK-001` | error | A bounded task call names no visible task. |
+| `FSIM-ELAB-SVTASK-003` | error | The visible bounded task set exceeds the representable SimIR call-stack capacity. |
+| `FSIM-ELAB-SVTASK-004` | error | More than one bounded task has the same visible name. |
+| `FSIM-ELAB-SVTASK-005` | error | A bounded task call has the wrong number of arguments. |
+| `FSIM-ELAB-SVTASK-006` | error | A bounded task formal type does not specialize to an executable width from 1 through 64 bits. |
+| `FSIM-ELAB-SVTASK-007` | error | A task return statement is outside an executable task during lowering. |
+| `FSIM-ELAB-SVTASK-008` | error | Bounded runtime tasks contain a direct or indirect recursive call cycle. |
+| `FSIM-ELAB-SVTASK-009` | error | The same bare task name is directly visible from multiple imported SystemVerilog packages. |
+| `FSIM-ELAB-SVTASK-010` | error | A suspending bounded task is called from `final`, `always_comb`, or `always_latch`. |
 | `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the design unit where it is used. |
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |
@@ -793,10 +1027,11 @@ therefore excluded.
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
 | `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves to something other than scalar integer, Boolean, or bit. |
-| `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated actual type mark. |
-| `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a type mark. |
+| `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated subtype indication. |
+| `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a subtype indication. |
 | `FSIM-ELAB-GENTYPE-003` | error | A VHDL interface type generic actual names a type that is not visible at the association. |
 | `FSIM-ELAB-GENTYPE-004` | error | A VHDL interface type generic is given an actual through a non-VHDL association boundary. |
+| `FSIM-ELAB-GENTYPE-005` | error | A VHDL value generic is given an unambiguous subtype-indication actual. |
 | `FSIM-ELAB-PARAM-001` | error | A parameter override has an unknown/local target, is missing or excessive, or is applied to a SystemC factory. |
 | `FSIM-ELAB-PARAM-002` | error | A parameter override is duplicated during elaboration. |
 | `FSIM-ELAB-PARAM-003` | error | Named and positional parameter overrides are mixed during elaboration. |

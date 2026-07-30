@@ -48,9 +48,10 @@ ElaborationResult elaborate(
     ElaborationResult result;
     const auto requested = simple_top_name(top);
     bool systemc_top = false;
+    std::optional<TargetSpec> requested_target;
     if (top.find(':') != std::string_view::npos) {
-        const auto target = parse_target(top);
-        if (!target) {
+        requested_target = parse_target(top);
+        if (!requested_target) {
             result.diagnostics.push_back({
                 "FSIM-ELAB-003",
                 "malformed qualified top-level target '"
@@ -58,15 +59,8 @@ ElaborationResult elaborate(
                 {}});
             return result;
         }
-        systemc_top = target->language == "systemc";
-        if (target->language == "vhdl" && !target->architecture) {
-            result.diagnostics.push_back({
-                "FSIM-ELAB-004",
-                "a qualified VHDL top must name an architecture, for "
-                "example vhdl:work.entity(rtl)",
-                {}});
-            return result;
-        }
+        systemc_top =
+            requested_target->language == "systemc";
     }
 
     ElaboratedDesign design;
@@ -102,6 +96,18 @@ ElaborationResult elaborate(
                 "FSIM-ELAB-001",
                 "top-level design unit '" + requested
                     + "' was not found",
+                {}});
+            return result;
+        }
+        if (requested_target
+            && requested_target->language == "vhdl"
+            && !requested_target->architecture
+            && unit->kind
+                != frontend::UnitKind::VhdlConfiguration) {
+            result.diagnostics.push_back({
+                "FSIM-ELAB-004",
+                "a qualified VHDL entity top must name an architecture, "
+                "or name a configuration declaration",
                 {}});
             return result;
         }

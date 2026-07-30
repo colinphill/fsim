@@ -13,12 +13,16 @@ Lowerer::Lowerer(
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_type_marks,
         const std::vector<frontend::FunctionDeclaration>& functions,
+        const std::vector<frontend::TaskDeclaration>& tasks,
+        const std::vector<frontend::ProcedureDeclaration>& procedures,
         std::vector<Diagnostic>& diagnostics)
         : design_(design),
           signals_(signals),
           visible_types_(visible_types),
           visible_type_marks_(visible_type_marks),
           functions_(functions),
+          tasks_(tasks),
+          procedures_(procedures),
           diagnostics_(diagnostics) {}
 
 
@@ -29,6 +33,7 @@ Lowerer::Lowerer(
         const std::string_view hierarchy) {
         process_ = Process{};
         language_ = language;
+        process_kind_ = source.kind;
         hierarchy_ = std::string{hierarchy};
         next_register_ = 0;
         register_widths_.clear();
@@ -53,6 +58,8 @@ Lowerer::Lowerer(
             process_.initialize = false;
         }
         initialize_function_support();
+        initialize_task_support();
+        initialize_procedure_support();
         initialize_variables(source.variables);
         bool wildcard_sensitivity = false;
         for (const auto& sensitivity : source.sensitivities) {
@@ -155,6 +162,8 @@ Lowerer::Lowerer(
             process_.operations.emplace_back(WaitSensitivity{});
             process_.operations.emplace_back(Jump{resume_entry});
         }
+        lower_pending_tasks();
+        lower_pending_procedures();
         lower_pending_functions();
         process_.register_count = next_register_;
         process_.register_value_kinds.reserve(register_domains_.size());
@@ -187,6 +196,7 @@ Lowerer::Lowerer(
         const std::size_t order) {
         process_ = Process{};
         language_ = language;
+        process_kind_ = ProcessKind::VhdlProcess;
         next_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
@@ -206,7 +216,10 @@ Lowerer::Lowerer(
                    ? "concurrent_" + std::to_string(order)
                    : statement.label);
         initialize_function_support();
-        emit_debug_point(DebugPointKind::process_entry, statement.span);
+        initialize_task_support();
+        initialize_procedure_support();
+        emit_debug_point(
+            DebugPointKind::process_entry, statement.span);
 
         std::set<std::string> dependencies;
         collect_statement_identifiers(
@@ -223,6 +236,8 @@ Lowerer::Lowerer(
         } else {
             process_.operations.emplace_back(Halt{});
         }
+        lower_pending_tasks();
+        lower_pending_procedures();
         lower_pending_functions();
         process_.register_count = next_register_;
         process_.register_value_kinds.reserve(register_domains_.size());
@@ -818,7 +833,9 @@ Lowerer::Lowerer(
                 kind = DebugPointKind::assertion;
             } else if (
                 statement.kind == StatementKind::Display
-                || statement.kind == StatementKind::Report) {
+                || statement.kind == StatementKind::Report
+                || statement.kind == StatementKind::TaskCall
+                || statement.kind == StatementKind::ProcedureCall) {
                 kind = DebugPointKind::call;
             } else if (
                 statement.kind == StatementKind::Delay
@@ -848,7 +865,19 @@ Lowerer::Lowerer(
             lower_loop_control(statement, false);
             break;
         case StatementKind::Return:
-            lower_function_return(statement);
+            if (active_task_) {
+                lower_task_return(statement);
+            } else if (active_procedure_) {
+                lower_procedure_return(statement);
+            } else {
+                lower_function_return(statement);
+            }
+            break;
+        case StatementKind::TaskCall:
+            lower_task_call(statement);
+            break;
+        case StatementKind::ProcedureCall:
+            lower_procedure_call(statement);
             break;
         case StatementKind::Assert:
             lower_assert(statement);

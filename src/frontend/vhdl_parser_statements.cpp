@@ -78,6 +78,39 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
     statement.span = span_from(start, previous());
     return statement;
   }
+  if (match_keyword("return", true)) {
+    const auto start = previous();
+    Statement statement;
+    statement.kind = StatementKind::Return;
+    if (!in_vhdl_function_ && !in_vhdl_procedure_) {
+      error(
+          start,
+          "FSIM-VHDL-SEM-046",
+          "a VHDL return statement is only supported in a subprogram body");
+    }
+    if (at(TokenKind::Semicolon)) {
+      if (in_vhdl_function_) {
+        error(
+            current(),
+            "FSIM-VHDL-PARSE-164",
+            "a VHDL function return statement requires an expression");
+      }
+    } else {
+      statement.value = parse_expression();
+      if (in_vhdl_procedure_) {
+        error(
+            start,
+            "FSIM-VHDL-SEM-054",
+            "a VHDL procedure return statement cannot return a value");
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after return statement",
+        "FSIM-VHDL-PARSE-165");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
   if (match_keyword("assert", true)) {
     return parse_vhdl_assertion(previous());
   }
@@ -366,6 +399,38 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
     statement.span = span_from(start, previous());
     return statement;
   }
+  const auto procedure_call_ahead =
+      [&]() {
+        if (!at(TokenKind::Identifier)) {
+          return false;
+        }
+        std::size_t lookahead = 1;
+        while (at(TokenKind::Dot, lookahead)
+               && at(TokenKind::Identifier, lookahead + 1)) {
+          lookahead += 2;
+        }
+        if (at(TokenKind::Semicolon, lookahead)) {
+          return true;
+        }
+        if (!at(TokenKind::LeftParen, lookahead)) {
+          return false;
+        }
+        std::size_t depth = 0;
+        do {
+          if (at(TokenKind::LeftParen, lookahead)) {
+            ++depth;
+          } else if (at(TokenKind::RightParen, lookahead)) {
+            --depth;
+          } else if (at(TokenKind::EndOfFile, lookahead)) {
+            return false;
+          }
+          ++lookahead;
+        } while (depth != 0);
+        return at(TokenKind::Semicolon, lookahead);
+      };
+  if (procedure_call_ahead()) {
+    return parse_vhdl_procedure_call();
+  }
   if (auto assignment = parse_assignment(false)) {
     return assignment;
   }
@@ -375,6 +440,68 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
             unsupported.text + "'");
   skip_to_semicolon();
   return std::nullopt;
+}
+
+std::optional<Statement>
+VhdlParser::parse_vhdl_procedure_call() {
+  if (!at(TokenKind::Identifier)) {
+    return std::nullopt;
+  }
+  const auto start_position = position();
+  const auto start = advance();
+  std::string name = vhdl_name(start.text);
+  while (match(TokenKind::Dot)) {
+    name += '.';
+    name += vhdl_name(
+        expect_identifier("selected procedure name").text);
+  }
+
+  Statement statement;
+  statement.kind = StatementKind::ProcedureCall;
+  statement.procedure_name = std::move(name);
+  if (match(TokenKind::LeftParen)) {
+    bool saw_named = false;
+    if (!at(TokenKind::RightParen)) {
+      do {
+        const auto association_start = current();
+        SubprogramAssociation association;
+        if (at(TokenKind::Identifier)
+            && at(TokenKind::Arrow, 1)) {
+          saw_named = true;
+          association.formal =
+              vhdl_name(advance().text);
+          advance();
+          association.value = parse_expression();
+        } else {
+          if (saw_named) {
+            error(
+                current(),
+                "FSIM-VHDL-SEM-055",
+                "a positional procedure actual cannot follow a named "
+                "actual");
+          }
+          association.value = parse_expression();
+        }
+        association.span =
+            span_from(association_start, previous());
+        statement.procedure_arguments.push_back(
+            std::move(association));
+      } while (match(TokenKind::Comma));
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after procedure call arguments",
+        "FSIM-VHDL-PARSE-179");
+  } else if (!at(TokenKind::Semicolon)) {
+    rewind(start_position);
+    return std::nullopt;
+  }
+  expect(
+      TokenKind::Semicolon,
+      "';' after procedure call",
+      "FSIM-VHDL-PARSE-180");
+  statement.span = span_from(start, previous());
+  return statement;
 }
 
 Statement VhdlParser::parse_vhdl_assertion(const Token& start) {

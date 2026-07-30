@@ -772,6 +772,8 @@ end entity;
 architecture rtl of generic_top is
   signal named_data : bit_vector(3 downto 0);
   signal mixed_data : bit_vector(1 downto 0);
+  signal ranged_data : bit_vector(0 downto 0);
+  signal constrained_data : bit_vector(0 downto 0);
 begin
   named_child: entity work.generic_child(rtl)
     generic map (
@@ -788,6 +790,18 @@ begin
       Required => 1
     )
     port map (data => mixed_data);
+  ranged_type_child: entity work.generic_child(rtl)
+    generic map (
+      integer range 2 to 7,
+      Required => 2
+    )
+    port map (data => ranged_data);
+  constrained_type_child: entity work.generic_child(rtl)
+    generic map (
+      bit_vector(3 downto 0),
+      Required => 2
+    )
+    port map (data => constrained_data);
 end architecture;
 )",
       Language::Vhdl2008);
@@ -832,7 +846,7 @@ end architecture;
       });
   require(
       top_architecture != result.design.units.end()
-          && top_architecture->instances.size() == 2
+          && top_architecture->instances.size() == 4
           && top_architecture->instances[0]
                  .parameter_overrides.size()
               == 3
@@ -845,6 +859,31 @@ end architecture;
                  .parameter_overrides[2].name
               == std::optional<std::string>{"enabled"},
       "named and positional-then-named generic maps are represented");
+  const auto& ranged_actual =
+      top_architecture->instances[2].parameter_overrides[0];
+  require(
+      ranged_actual.type_value
+          && ranged_actual.type_value->spelling == "integer"
+          && ranged_actual.type_value->integer_range_expression
+          && !ranged_actual
+                  .type_value->integer_range_expression->descending
+          && ranged_actual.type_value
+                 ->integer_range_expression->span.source_name
+              == "generics.vhd"
+          && ranged_actual.value.kind == ExpressionKind::Invalid,
+      "unambiguous VHDL range subtype actuals retain typed HIR");
+  const auto& constrained_actual =
+      top_architecture->instances[3].parameter_overrides[0];
+  require(
+      !constrained_actual.type_value
+          && constrained_actual.value.kind
+              == ExpressionKind::Slice
+          && constrained_actual.value.text == "downto"
+          && constrained_actual.value.operands.size() == 3
+          && constrained_actual.value.operands[0].text
+              == "bit_vector",
+      "ambiguous parenthesized subtype actuals retain slice HIR for "
+      "formal-aware elaboration");
 
   const auto invalid = parse_text(
       "invalid-generics.vhd",

@@ -13,10 +13,17 @@ int main() {
   test_mixed_language_and_systemc();
   test_process_and_wait_lowering();
   test_systemverilog_function_lowering();
+  test_systemverilog_task_lowering();
   test_case_and_expression_lowering();
   test_numeric_and_system_function_lowering();
   test_selection_and_assignment_lowering();
   test_assertion_types_and_random_lowering();
   test_vhdl_interface_type_generics();
+  test_vhdl_interface_function_generics();
+  test_vhdl_interface_procedure_generics();
+  test_vhdl_interface_package_generics();
+  test_vhdl_generic_subprograms();
+  test_vhdl_components();
+  test_vhdl_configurations();
   std::cout << "elaborator tests passed\n";
 }

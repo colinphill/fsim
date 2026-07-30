@@ -268,6 +268,7 @@ void VerilogParser::validate_function_body(
               || statement.kind == StatementKind::WaitOn
               || statement.kind == StatementKind::WaitUntil
               || statement.kind == StatementKind::EventTrigger
+              || statement.kind == StatementKind::TaskCall
               || statement.kind == StatementKind::Display
               || statement.kind == StatementKind::MonitorControl
               || statement.kind == StatementKind::Report
@@ -296,6 +297,174 @@ void VerilogParser::validate_function_body(
         "function '" + function.name
             + "' has no result assignment or return statement");
   }
+}
+
+TaskDeclaration VerilogParser::parse_task(const Token& start) {
+  TaskDeclaration task;
+  if (match_keyword("automatic")) {
+    task.automatic = true;
+  } else if (match_keyword("static")) {
+    error(previous(), "FSIM-SV-UNSUPPORTED-037",
+          "static task activation records are not implemented; declare "
+          "the task automatic");
+  } else {
+    error(start, "FSIM-SV-UNSUPPORTED-037",
+          "the current task subset requires an explicit automatic lifetime");
+  }
+
+  const auto name = expect_identifier("task name");
+  task.name = name.text;
+
+  auto saved_names = std::move(current_procedural_names_);
+  const bool saved_in_task = in_task_;
+  current_procedural_names_.clear();
+  in_task_ = true;
+
+  if (match(TokenKind::LeftParen)) {
+    Type inherited_type;
+    PortDirection inherited_direction{PortDirection::Input};
+    bool have_inherited_formal = false;
+    while (!at_end() && !at(TokenKind::RightParen)) {
+      auto direction = inherited_direction;
+      bool explicit_direction = false;
+      if (is_direction_keyword()) {
+        direction = parse_direction();
+        inherited_direction = direction;
+        explicit_direction = true;
+      } else if (match_keyword("ref")) {
+        direction = PortDirection::Inout;
+        inherited_direction = direction;
+        explicit_direction = true;
+        error(previous(), "FSIM-SV-UNSUPPORTED-038",
+              "ref task arguments are not implemented; use input, output, "
+              "or inout");
+      } else if (!have_inherited_formal) {
+        inherited_direction = PortDirection::Input;
+        direction = PortDirection::Input;
+      }
+
+      const bool explicit_type =
+          keyword("string") || keyword("byte") || keyword("shortint") ||
+          keyword("longint") || keyword("time") || keyword("integer") ||
+          keyword("int") || keyword("logic") || keyword("reg") ||
+          keyword("bit") || keyword("signed") || keyword("unsigned") ||
+          at(TokenKind::LeftBracket) || is_named_type_reference_start();
+      Type type;
+      if (explicit_direction || explicit_type || !have_inherited_formal) {
+        type = parse_parameter_type();
+        inherited_type = type;
+      } else {
+        type = inherited_type;
+      }
+      have_inherited_formal = true;
+      if (type.spelling == "string") {
+        error(current(), "FSIM-SV-UNSUPPORTED-039",
+              "task arguments are limited to integral values");
+      }
+
+      const auto argument_name = expect_identifier("task argument name");
+      if (!current_procedural_names_.insert(argument_name.text).second) {
+        error(argument_name, "FSIM-SV-SEM-067",
+              "duplicate task argument '" + argument_name.text + "'");
+      }
+      task.arguments.push_back(TaskArgument{argument_name.text, std::move(type),
+                                            direction, argument_name.span});
+      if (at(TokenKind::LeftBracket)) {
+        error(current(), "FSIM-SV-UNSUPPORTED-040",
+              "unpacked task arguments are not implemented");
+        skip_balanced(TokenKind::LeftBracket, TokenKind::RightBracket);
+      }
+      if (match(TokenKind::Assign)) {
+        error(previous(), "FSIM-SV-UNSUPPORTED-040",
+              "default task arguments are not implemented");
+        (void)parse_expression();
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(TokenKind::RightParen, "')' after task arguments",
+           "FSIM-SV-PARSE-143");
+  }
+  expect(TokenKind::Semicolon, "';' after task header", "FSIM-SV-PARSE-144");
+
+  Statement body;
+  body.kind = StatementKind::Block;
+  while (!at_end() && !keyword("endtask")) {
+    const auto before = position();
+    if (is_direction_keyword() || keyword("ref")) {
+      const auto unsupported = advance();
+      error(unsupported, "FSIM-SV-UNSUPPORTED-040",
+            "classic task argument declarations are not implemented; use "
+            "an ANSI argument list or a no-argument task");
+      skip_to_semicolon();
+    } else if (is_declaration_start()) {
+      parse_procedural_declaration(body);
+    } else if (auto statement = parse_statement()) {
+      body.statements.push_back(std::move(*statement));
+    }
+    if (position() == before) {
+      advance();
+    }
+  }
+  expect_keyword("endtask", false, "FSIM-SV-PARSE-145");
+  if (match(TokenKind::Colon)) {
+    const auto end_name = expect_identifier("task name after endtask");
+    if (end_name.text != task.name) {
+      error(end_name, "FSIM-SV-SEM-068",
+            "task end name does not match '" + task.name + "'");
+    }
+  }
+
+  task.variables = std::move(body.declarations);
+  task.statements = std::move(body.statements);
+  task.span = span_from(start, previous());
+  validate_task_body(task, start);
+
+  current_procedural_names_ = std::move(saved_names);
+  in_task_ = saved_in_task;
+  return task;
+}
+
+void VerilogParser::validate_task_body(
+    const TaskDeclaration& task,
+    const Token& start) {
+  std::unordered_set<std::string> names;
+  for (const auto& argument : task.arguments) {
+    names.insert(argument.name);
+  }
+  for (const auto& variable : task.variables) {
+    if (!names.insert(variable.name).second) {
+      error(start, "FSIM-SV-SEM-069",
+            "duplicate or conflicting task local '" + variable.name + "'");
+    }
+  }
+
+  const auto inspect =
+      [&](const auto& self,
+          const std::vector<Statement>& statements) -> void {
+    for (const auto& statement : statements) {
+      const bool forbidden =
+          statement.kind == StatementKind::Pause ||
+          statement.kind == StatementKind::Finish ||
+          (statement.kind == StatementKind::Assignment &&
+           (statement.assignment_kind != AssignmentKind::Blocking ||
+            statement.procedural_assignment_control !=
+                ProceduralAssignmentControl::None));
+      if (forbidden) {
+        error(start, "FSIM-SV-SEM-070",
+              "bounded tasks reject nonblocking or intra-assignment "
+              "controls, $stop, and $finish");
+      }
+      self(self, statement.statements);
+      self(self, statement.else_statements);
+      for (const auto& alternative :
+           statement.case_alternatives) {
+        self(self, alternative.statements);
+      }
+    }
+  };
+  inspect(inspect, task.statements);
 }
 
 }  // namespace fsim::frontend

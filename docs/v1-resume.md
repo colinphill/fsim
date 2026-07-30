@@ -7,20 +7,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 ## Snapshot
 
-- Recorded: 2026-07-29.
+- Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: `9aee9e4` (`feat: add SystemVerilog functions`).
-- The feature baseline and batch documentation are synchronized with
-  `origin/codex/resumable-jit`.
-- The source-size refactor is complete: all 233 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-64 cadence checkpoint based
+  on `d1a3057`; batches 54–64 are included in the checkpoint commit.
+- The source-size refactor is complete: all 263 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 1,987 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 46
-  configured tests in 304.19 seconds, and Release passed all 47 configured
-  tests in 123.26 seconds on 2026-07-29. Focused LLVM Debug and LLVM-disabled
-  gates passed all seven and six affected tests, respectively.
-- The diagnostic catalog covers all 834 production codes.
-- No CI state was inspected during feature batch 53 or this handoff.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 54
+  configured tests in 318.53 seconds, and Release passed all 55 configured
+  tests in 130.33 seconds on 2026-07-30.
+- The diagnostic catalog covers all 1,069 production codes.
+- No CI state was inspected during feature batches 54–64 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -32,7 +30,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, automatic integral functions, full unsigned-64 values, and entity-level VHDL-2008 interface type generics now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL generic-type semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, automatic integral functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded component declarations with deterministic default binding now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -52,6 +50,56 @@ not rebuilt:
   activation frames, constant evaluation, package visibility, nested
   nonrecursive runtime calls, SimIR call/return control, debugger safe points,
   and transitive native-cache provenance;
+- bounded SystemVerilog module/package tasks with explicit automatic
+  activation frames, parameter-sized integral input/output/inout formals,
+  deterministic deferred copy-in/copy-out, nested function/task calls,
+  delays, named-event/condition waits, valueless early return after
+  suspension, package visibility/time context, lifecycle and recursion
+  diagnostics, debugger locals across stop/resume, and
+  interpreter/LLVM O0/O2/cache equivalence;
+- entity-level VHDL-2008 unclassified interface type generics with
+  same-language constrained subtype-indication resolution over supported
+  vectors, portable integers, nominal enumerations, records, and
+  one-dimensional arrays; nested forwarding, dependent object specialization,
+  and canonical cache identities;
+- bounded VHDL-2008 interface function generics with retained pure scalar
+  profiles, required/named/box defaults, local and directly visible package
+  actuals with matching package bodies, constant/default folding, nested
+  forwarding, specialization-local binding, debugger call points, and
+  interpreter/LLVM O0/O2/cache equivalence;
+- bounded VHDL-2008 interface procedure generics with retained
+  constant/variable scalar profiles and `in`/`out`/`inout` modes,
+  required/named/box defaults, matching local/package actuals, nested
+  forwarding and procedure calls, deterministic ordered copy-in/copy-out,
+  debugger call points and live formals/locals, and
+  interpreter/LLVM O0/O2/cache equivalence;
+- bounded VHDL-2008 interface package generics and entity/architecture-local
+  generic package instances over existing value/type/function/procedure
+  families, with explicit/default/box maps, declaration-ordered
+  specialization, selected constants/types/subprograms, nested forwarding,
+  exact instance/source identity, debugger-visible procedure frames, and
+  interpreter/LLVM O0/O2/cache equivalence;
+- bounded VHDL-2008 generic function/procedure templates and local or
+  package-visible instantiations over existing value/type/function/procedure
+  families, with explicit/default/box maps, declaration/body conformance,
+  dependent helper specialization, nested interface-subprogram forwarding,
+  canonical transitive identity, debugger call metadata, and
+  interpreter/LLVM O0/O2/cache equivalence;
+- bounded VHDL-2008 configuration declarations and architecture declarative
+  configuration specifications over component-style instances, with recursive
+  static-block and selected for/if/case-generate rules, explicit
+  label/`all`/`others` selection, entity/configuration/open aspects, nearest-
+  scope precedence, named generic/port-map composition, configuration-top
+  selection, referenced-subtree activation, direct-entity isolation, canonical
+  transitive source identity, and interpreter/LLVM O0/O2/debugger/cache
+  equivalence;
+- bounded VHDL-2008 component declarations in architecture, entity, package,
+  block, and selected-generate regions with retained value-generic and
+  scalar/vector port profiles, nearest lexical/package visibility, overload
+  selection by association/mode/type/dependent width, named/positional formal
+  normalization, latest-analyzed compatible same-library default binding,
+  configuration-map precedence, version-2 scope/source/target identity, and
+  interpreter/LLVM O0/O2/debugger/cache equivalence;
 - packed Bit2, Logic4, and exact Logic9 values, wide-value runtime kernels,
   process-owned drivers, standard resolution, delayed/projected transactions,
   NBA/update writes, dynamic packed indexing, and committed-change visibility;
@@ -81,9 +129,12 @@ document merely because the parser accepts a related form.
 
 ### 1. Close the architecture gate
 
-- Complete VHDL generic-type semantics beyond the implemented entity-level
-  VHDL-2008 unclassified `type T` slice, including remaining classified,
-  package/subprogram, dependent element-type, and unconstrained-object cases.
+- Complete VHDL generic semantics beyond the implemented entity-level
+  VHDL-2008 unclassified interface type, constrained-type-actual, and bounded
+  interface-function/procedure/package and generic-subprogram slices,
+  including general or nested generic package units, nested/composite generic
+  subprograms, dependent type declarations, and broader unconstrained-object
+  cases.
 - Complete SystemVerilog runtime mutable strings, type actuals beyond the
   bounded same-language packed subset, widths above 64 bits,
   genvar-dependent typed constants, and remaining LRM expression typing.
@@ -109,8 +160,10 @@ document merely because the parser accepts a related form.
 
 ### 3. Complete VHDL-2008 v1 scope
 
-- Finish configurations; full libraries, packages/bodies, and contexts;
-  generics; components/direct instantiation; blocks and generates.
+- Complete configuration semantics beyond the bounded declaration/specification
+  slice; full libraries, packages/bodies, and contexts; generics; component
+  composite interfaces and non-value generics; incremental configurations and
+  complete library analysis order; direct instantiation; blocks and generates.
 - Finish name/overload resolution, constant evaluation, legality, resolution
   functions, complete synthesizable statements, and full promised composite
   type/aggregate/attribute behavior.
@@ -161,37 +214,43 @@ opaque native session/object model already used by Tcl.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 54: synthesizable SystemVerilog tasks**:
+Resume with **feature batch 65: bounded VHDL-2008 composite component
+profiles**:
 
-1. Represent task declarations, formal directions, local declarations,
-   executable bodies, lifetime, and source spans explicitly in SystemVerilog
-   HIR without conflating them with value-returning functions.
-2. Parse bounded module/package tasks in ANSI and classic no-argument forms
-   with explicit `automatic` lifetime and checked closing names.
-3. Resolve lexical, wildcard-imported, and directly package-selected task
-   names with stable duplicate, visibility, and ambiguity diagnostics.
-4. Specialize 1–64-bit integral input, output, and inout formal types plus
-   parameter-dependent packed ranges using the existing typed environments.
-5. Give each task invocation an isolated automatic activation frame with
-   deterministic value copy-in and output/inout copy-out semantics.
-6. Execute the supported nonsuspending blocking-assignment, block,
-   conditional, exact-case, bounded-loop, expression, function-call, and
-   nested task-call subset inside task bodies.
-7. Lower task calls through the existing explicit SimIR call/return control
-   while applying copy-out operations only after a normal task return.
-8. Diagnose direct or indirect function/task recursion cycles and reject task
-   use from constant expressions.
-9. Retain task-call debugger safe points, addressable locals/formals, and
-   transitive package-source provenance in specialization/native-cache
+1. Extend component-profile type ownership so package, entity, architecture,
+   block, and selected-generate declarations retain resolved nominal type and
+   subtype provenance.
+2. Accept existing bounded enumeration, record, one-dimensional user-array,
+   and named scalar/vector subtype indications in component port profiles.
+3. Resolve local, directly visible package, and selected package type marks in
+   component declarations with the same source dependency rules as entity
+   interfaces.
+4. Preserve nominal record/enumeration/array identity and scalar/vector subtype
+   constraints while normalizing component and entity formals by position.
+5. Select equally visible component overloads by nominal composite type,
+   subtype constraint/direction, port mode, and existing value-generic
+   specialization.
+6. Bind whole-signal composite actuals through component formals into compatible
+   entity ports without flattening away language-local nominal legality.
+7. Compose architecture/configuration port maps after composite component-formal
+   normalization and retain existing direct-entity isolation.
+8. Include resolved type declarations, subtype constraints, owning package
+   sources, and selected composite profile in versioned specialization/cache
    identity.
-10. Add frontend, negative, elaboration, runtime, interpreter/LLVM O0/O2,
-    debugger, cold/warm, and edited-task invalidation evidence, then run and
-    push the scheduled regression gate.
+9. Diagnose missing/ambiguous type marks, nominal mismatches, incompatible
+   constraints/directions/modes, unsupported composite defaults, illegal maps,
+   and implicit mixed-language defaults.
+10. Add frontend, negative, elaboration, package/local type visibility,
+    overload/configuration hierarchy, interpreter/LLVM O0/O2, debugger,
+    cold/warm, and edited-type-source selective-cache evidence, then run the
+    scheduled gate.
 
-Keep this batch bounded to nonsuspending integral automatic tasks. Static or
-implicit lifetimes, timing/event controls in tasks, `ref`, runtime strings,
-unpacked arguments, recursion, DPI, generated tasks, and cross-language task
-calls remain separate release-gate work.
+Keep this batch to same-language whole-signal ports over the existing bounded
+enumeration, non-nested packed record, one-dimensional scalar-element
+user-array, and named scalar/vector subtype families. Composite aggregates as
+port actuals, non-value component generics, executable omitted port defaults,
+incremental configurations, mixed-language default binding, and general
+overload resolution remain separate release-gate work.
 
 ## Working cadence
 
@@ -224,13 +283,15 @@ For a clean-context restart:
 1. Use `docs/v1-resume.md` as the entry point, `docs/feature-matrix.md` as the
    release authority, and `docs/implementation-plan.md` only when historical
    detail is needed.
-2. Confirm the branch is `codex/resumable-jit`, the worktree is clean, and
-   history contains implementation commit `9aee9e4`.
-3. Begin batch 54 at item 1 above. Batch 53 is complete; do not rerun its full
-   regression unless a later change can affect its function/runtime behavior.
-4. Keep batch-54 work within the nonsuspending automatic integral-task bound.
+2. Confirm the branch is `codex/resumable-jit` and history contains
+   `feat: complete v1 feature batches 54 through 64`.
+3. Begin batch 65 at item 1 above. Do not rerun batch 64's full regression
+   unless a later change can
+   affect component/configuration binding, hierarchy, cache identity, or
+   runtime behavior.
+4. Keep batch-65 work within bounded VHDL-2008 composite component profiles.
    Record intentional scope changes in this handoff before implementation.
-5. Use targeted tests during the batch, run the full Debug and Release gates
+5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
    and push.
 
@@ -241,14 +302,14 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 54 is in progress, for example:
+Use a narrow test expression while batch 65 is in progress, for example:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
   -R 'fsim\.(frontend|elaboration|llvm|application|source-line-budget)'
 ```
 
-Both exact-LLVM build trees were rebuilt for feature batch 53. The configured
+Both exact-LLVM build trees were rebuilt for feature batch 64. The configured
 test counts differ because the Release tree includes the fetched-Tcl
 relocation test; both recorded inventories are clean.
 

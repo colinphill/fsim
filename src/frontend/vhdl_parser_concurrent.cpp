@@ -11,12 +11,16 @@ GenerateRegion VhdlParser::parse_vhdl_conditional_generate(
   result.else_scope = result.then_scope;
   result.condition = parse_expression();
   expect_keyword("generate", true, "FSIM-VHDL-PARSE-056");
-  parse_vhdl_generate_declarations(result.then_body);
+  parse_vhdl_generate_declarations(
+      result.then_body,
+      VhdlComponentDeclarationRegion::Generate);
   (void)match_keyword("begin", true);
   parse_vhdl_generate_branch(result.then_body);
   if (match_keyword("else", true)) {
     expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
-    parse_vhdl_generate_declarations(result.else_body);
+    parse_vhdl_generate_declarations(
+        result.else_body,
+        VhdlComponentDeclarationRegion::Generate);
     (void)match_keyword("begin", true);
     parse_vhdl_generate_branch(result.else_body);
   }
@@ -85,7 +89,9 @@ GenerateRegion VhdlParser::parse_vhdl_iterative_generate(
               {},
               expression_span}},
       expression_span};
-  parse_vhdl_generate_declarations(result.then_body);
+  parse_vhdl_generate_declarations(
+      result.then_body,
+      VhdlComponentDeclarationRegion::Generate);
   (void)match_keyword("begin", true);
   parse_vhdl_generate_branch(result.then_body);
   expect_keyword("end", true, "FSIM-VHDL-PARSE-065");
@@ -178,7 +184,9 @@ GenerateRegion VhdlParser::parse_vhdl_selection_generate(
         TokenKind::Arrow,
         "'=>' after case-generate choices",
         "FSIM-VHDL-PARSE-073");
-    parse_vhdl_generate_declarations(alternative.body);
+    parse_vhdl_generate_declarations(
+        alternative.body,
+        VhdlComponentDeclarationRegion::Generate);
     (void)match_keyword("begin", true);
     parse_vhdl_generate_branch(
         alternative.body,
@@ -223,7 +231,9 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
         "guarded block statements are not executable yet");
   }
   (void)match_keyword("is", true);
-  parse_vhdl_generate_declarations(result.then_body);
+  parse_vhdl_generate_declarations(
+      result.then_body,
+      VhdlComponentDeclarationRegion::Block);
   expect_keyword("begin", true, "FSIM-VHDL-PARSE-078");
   parse_vhdl_generate_branch(result.then_body);
   expect_keyword("end", true, "FSIM-VHDL-PARSE-079");
@@ -246,7 +256,9 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
   return result;
 }
 
-void VhdlParser::parse_vhdl_generate_declarations(GenerateBody& body) {
+void VhdlParser::parse_vhdl_generate_declarations(
+    GenerateBody& body,
+    const VhdlComponentDeclarationRegion region) {
   for (;;) {
     if (match_keyword("signal", true)) {
       parse_signal_declaration(
@@ -256,6 +268,19 @@ void VhdlParser::parse_vhdl_generate_declarations(GenerateBody& body) {
     if (match_keyword("constant", true)) {
       parse_vhdl_generate_constant(
           body, previous());
+      continue;
+    }
+    if (match_keyword("component", true)) {
+      const auto component_start = previous();
+      auto declaration =
+          parse_vhdl_component_declaration(
+              component_start,
+              body.vhdl_component_declarations.size());
+      declaration.region = region;
+      add_vhdl_component_declaration(
+          body.vhdl_component_declarations,
+          std::move(declaration),
+          component_start);
       continue;
     }
     break;
@@ -422,6 +447,7 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
   } else {
     const auto component = expect_identifier("component name");
     instance.unit_name = vhdl_name(component.text);
+    instance.vhdl_component_instance = true;
   }
 
   if (match_keyword("generic", true)) {
@@ -467,6 +493,17 @@ void VhdlParser::parse_vhdl_generic_map(
       "'(' after generic map",
       "FSIM-VHDL-PARSE-038");
   bool saw_named = false;
+  const auto begins_unambiguous_subtype_indication = [&]() {
+    if (!at(TokenKind::Identifier)) {
+      return false;
+    }
+    std::size_t lookahead = 1;
+    while (at(TokenKind::Dot, lookahead)
+           && at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
+    return keyword("range", lookahead, true);
+  };
   while (!at_end() && !at(TokenKind::RightParen)) {
     const auto association_start = current();
     ParameterOverride actual;
@@ -506,7 +543,11 @@ void VhdlParser::parse_vhdl_generic_map(
           "open generic actuals are not implemented in this frontend "
           "slice");
     } else {
-      actual.value = parse_expression();
+      if (begins_unambiguous_subtype_indication()) {
+        actual.type_value = parse_vhdl_type(true, true);
+      } else {
+        actual.value = parse_expression();
+      }
     }
     actual.span =
         cover(association_start.span, previous().span);

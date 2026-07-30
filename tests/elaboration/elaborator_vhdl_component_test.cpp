@@ -1,0 +1,671 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "elaborator_test_support.hpp"
+
+namespace fsim::tests::elaboration {
+
+namespace {
+
+void append_design(
+    fsim::frontend::ParsedDesign& destination,
+    fsim::frontend::ParsedDesign source) {
+    for (auto& unit : source.units) {
+        destination.units.push_back(std::move(unit));
+    }
+}
+
+const fsim::elaboration::SpecializationInfo&
+specialization(
+    const fsim::elaboration::ElaborationResult& result,
+    const std::string_view path) {
+    const auto found = std::ranges::find_if(
+        result.design->specializations(),
+        [&](const auto& candidate) {
+          return candidate.instance == path;
+        });
+    assert(found != result.design->specializations().end());
+    return *found;
+}
+
+fsim::elaboration::ElaborationResult elaborate_text(
+    const std::string_view name,
+    const std::string_view source,
+    const std::string_view top) {
+    const auto parsed = fsim::frontend::parse_text(
+        name, source, fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    return fsim::elaboration::elaborate(parsed.design, top);
+}
+
+}  // namespace
+
+void test_vhdl_components() {
+    auto leaf = fsim::frontend::parse_text(
+        "component_leaf.vhd",
+        R"(
+entity component_leaf is
+  generic (entity_width : positive := 9);
+  port (
+    entity_input : in std_logic_vector(entity_width - 1 downto 0);
+    entity_output : out std_logic_vector(entity_width - 1 downto 0));
+end entity;
+architecture rtl of component_leaf is
+begin
+  entity_output <= entity_input;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    auto top = fsim::frontend::parse_text(
+        "component_top.vhd",
+        R"(
+entity component_top is
+end entity;
+architecture rtl of component_top is
+  signal first_input : std_logic_vector(3 downto 0);
+  signal first_output : std_logic_vector(3 downto 0);
+  signal second_input : std_logic_vector(3 downto 0);
+  signal second_output : std_logic_vector(3 downto 0);
+  component component_leaf is
+    generic (component_width : positive := 4);
+    port (
+      component_input :
+        in std_logic_vector(component_width - 1 downto 0);
+      component_output :
+        out std_logic_vector(component_width - 1 downto 0));
+  end component component_leaf;
+begin
+  positional_child: component_leaf
+    generic map (4)
+    port map (first_input, first_output);
+  default_child: component_leaf
+    port map (
+      component_input => second_input,
+      component_output => second_output);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(leaf.ok() && top.ok());
+    append_design(leaf.design, std::move(top.design));
+    const auto positive = fsim::elaboration::elaborate(
+        leaf.design, "vhdl:work.component_top(rtl)");
+    if (!positive.ok()) {
+        for (const auto& diagnostic : positive.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(positive.ok());
+    for (const auto child : {
+             "component_top.positional_child",
+             "component_top.default_child"}) {
+        const auto& selected = specialization(positive, child);
+        assert(selected.unit == "vhdl:work.component_leaf(rtl)");
+        assert(std::ranges::find(
+                   selected.source_dependencies,
+                   "component_top.vhd")
+               != selected.source_dependencies.end());
+        const auto identity = std::ranges::find_if(
+            selected.parameter_identity_values,
+            [](const auto& value) {
+              return value.first == "__component";
+            });
+        assert(identity != selected.parameter_identity_values.end());
+        assert(identity->second.starts_with(
+            "vhdl-component-binding-v2;name=component_leaf"));
+    }
+    assert(std::ranges::any_of(
+        specialization(
+            positive,
+            "component_top.positional_child")
+            .parameter_values,
+        [](const auto& value) {
+          return value.first == "entity_width"
+              && value.second == "4";
+        }));
+
+    auto visible_profiles = fsim::frontend::parse_text(
+        "visible_component_profiles.vhd",
+        R"(
+package visible_component_profiles is
+  component package_leaf is
+    port (value : in integer);
+  end component;
+  component shadow_leaf is
+    port (value : in bit);
+  end component;
+  component overload_leaf is
+    port (value : in integer);
+  end component;
+  component overload_leaf is
+    port (value : in bit);
+  end component;
+  component mode_leaf is
+    port (value : in integer);
+  end component;
+  component mode_leaf is
+    port (value : out integer);
+  end component;
+  component vector_leaf is
+    generic (width : positive := 4);
+    port (
+      value : in std_logic_vector(width - 1 downto 0));
+  end component;
+  component vector_leaf is
+    generic (width : positive := 8);
+    port (value : in std_logic_vector(7 downto 0));
+  end component;
+end package;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    auto visible_hierarchy = fsim::frontend::parse_text(
+        "visible_component_hierarchy.vhd",
+        R"(
+entity package_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of package_leaf is
+begin
+end architecture;
+architecture fast of package_leaf is
+begin
+end architecture;
+entity entity_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of entity_leaf is
+begin
+end architecture;
+entity shadow_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of shadow_leaf is
+begin
+end architecture;
+entity overload_leaf is
+  port (value : in integer);
+end entity;
+architecture first of overload_leaf is
+begin
+end architecture;
+architecture second of overload_leaf is
+begin
+end architecture;
+entity mode_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of mode_leaf is
+begin
+end architecture;
+entity vector_leaf is
+  generic (width : positive := 4);
+  port (
+    value : in std_logic_vector(width - 1 downto 0));
+end entity;
+architecture rtl of vector_leaf is
+begin
+end architecture;
+entity lexical_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of lexical_leaf is
+begin
+end architecture;
+entity generated_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of generated_leaf is
+begin
+end architecture;
+
+use work.visible_component_profiles.all;
+entity visible_component_top is
+  component entity_leaf is
+    port (value : in integer);
+  end component;
+end entity;
+architecture rtl of visible_component_top is
+  signal value : integer;
+  signal vector_value : std_logic_vector(3 downto 0);
+  component shadow_leaf is
+    port (value : in integer);
+  end component;
+  for package_child : package_leaf
+    use entity work.package_leaf(rtl);
+begin
+  package_child: package_leaf port map (value);
+  entity_child: entity_leaf port map (value);
+  shadow_child: shadow_leaf port map (value);
+  overload_child: overload_leaf port map (value);
+  mode_child: mode_leaf port map (value);
+  vector_child: vector_leaf
+    generic map (4)
+    port map (vector_value);
+  local_block: block
+    component lexical_leaf is
+      port (value : in integer);
+    end component;
+  begin
+    lexical_child: lexical_leaf port map (value);
+  end block;
+  selected: if true generate
+    component generated_leaf is
+      port (value : in integer);
+    end component;
+  begin
+    generated_child: generated_leaf port map (value);
+  end generate;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(visible_profiles.ok() && visible_hierarchy.ok());
+    append_design(
+        visible_profiles.design,
+        std::move(visible_hierarchy.design));
+    const auto visible_result =
+        fsim::elaboration::elaborate(
+            visible_profiles.design,
+            "vhdl:work.visible_component_top(rtl)");
+    if (!visible_result.ok()) {
+        for (const auto& diagnostic :
+             visible_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(visible_result.ok());
+    for (const auto path : {
+             "visible_component_top.package_child",
+             "visible_component_top.entity_child",
+             "visible_component_top.shadow_child",
+             "visible_component_top.mode_child",
+             "visible_component_top.vector_child",
+             "visible_component_top.local_block.lexical_child",
+             "visible_component_top.selected.generated_child"}) {
+        assert(
+            specialization(visible_result, path).unit.ends_with(
+                "(rtl)"));
+    }
+    assert(
+        specialization(
+            visible_result,
+            "visible_component_top.overload_child").unit
+        == "vhdl:work.overload_leaf(second)");
+    assert(
+        specialization(
+            visible_result,
+            "visible_component_top.package_child").unit
+        == "vhdl:work.package_leaf(rtl)");
+    const auto& package_child =
+        specialization(
+            visible_result,
+            "visible_component_top.package_child");
+    assert(std::ranges::find(
+        package_child.source_dependencies,
+        "visible_component_profiles.vhd")
+        != package_child.source_dependencies.end());
+    const auto package_identity = std::ranges::find_if(
+        package_child.parameter_identity_values,
+        [](const auto& value) {
+          return value.first == "__component";
+        });
+    assert(
+        package_identity
+            != package_child.parameter_identity_values.end()
+        && package_identity->second.find(
+               "region=2;scope=;owner=work."
+               "visible_component_profiles")
+            != std::string::npos);
+
+    const auto hidden_sibling = elaborate_text(
+        "hidden_sibling_component.vhd",
+        R"(
+entity lexical_only_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of lexical_only_leaf is
+begin
+end architecture;
+entity hidden_sibling_top is
+end entity;
+architecture rtl of hidden_sibling_top is
+  signal value : integer;
+begin
+  declaring_block: block
+    component lexical_only_leaf is
+      port (value : in integer);
+    end component;
+  begin
+    visible_child: lexical_only_leaf port map (value);
+  end block;
+  sibling_block: block
+  begin
+    hidden_child: lexical_only_leaf port map (value);
+  end block;
+end architecture;
+)",
+        "vhdl:work.hidden_sibling_top(rtl)");
+    assert(!hidden_sibling.ok());
+    assert(has_diagnostic(
+        hidden_sibling, "FSIM-ELAB-VHCOMP-001"));
+
+    const auto unmatched_overload = elaborate_text(
+        "unmatched_component_overload.vhd",
+        R"(
+entity overloaded_target is
+  port (value : in integer);
+end entity;
+architecture rtl of overloaded_target is
+begin
+end architecture;
+entity unmatched_overload_top is
+end entity;
+architecture rtl of unmatched_overload_top is
+  signal value : std_logic;
+  component overloaded_target is
+    port (value : in integer);
+  end component;
+  component overloaded_target is
+    port (value : in bit);
+  end component;
+begin
+  child: overloaded_target port map (value);
+end architecture;
+)",
+        "vhdl:work.unmatched_overload_top(rtl)");
+    assert(!unmatched_overload.ok());
+    assert(has_diagnostic(
+        unmatched_overload, "FSIM-ELAB-VHCOMP-012"));
+
+    const auto ambiguous_packages = elaborate_text(
+        "ambiguous_package_components.vhd",
+        R"(
+package first_component_profiles is
+  component shared_package_leaf is
+    port (value : in integer);
+  end component;
+end package;
+package second_component_profiles is
+  component shared_package_leaf is
+    port (value : in integer);
+  end component;
+end package;
+entity shared_package_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of shared_package_leaf is
+begin
+end architecture;
+use work.first_component_profiles.all;
+use work.second_component_profiles.all;
+entity ambiguous_package_top is
+end entity;
+architecture rtl of ambiguous_package_top is
+  signal value : integer;
+begin
+  child: shared_package_leaf port map (value);
+end architecture;
+)",
+        "vhdl:work.ambiguous_package_top(rtl)");
+    assert(!ambiguous_packages.ok());
+    assert(has_diagnostic(
+        ambiguous_packages, "FSIM-ELAB-VHCOMP-002"));
+
+    const auto missing_declaration = elaborate_text(
+        "missing_component_declaration.vhd",
+        R"(
+entity undeclared_leaf is
+end entity;
+architecture rtl of undeclared_leaf is
+begin
+end architecture;
+entity missing_component_declaration is
+end entity;
+architecture rtl of missing_component_declaration is
+begin
+  child: undeclared_leaf port map ();
+end architecture;
+)",
+        "vhdl:work.missing_component_declaration(rtl)");
+    assert(!missing_declaration.ok());
+    assert(has_diagnostic(
+        missing_declaration, "FSIM-ELAB-VHCOMP-001"));
+
+    auto duplicate_hir = fsim::frontend::parse_text(
+        "duplicate_component_hir.vhd",
+        R"(
+entity duplicate_component_leaf is
+end entity;
+architecture rtl of duplicate_component_leaf is
+begin
+end architecture;
+entity duplicate_component_top is
+end entity;
+architecture rtl of duplicate_component_top is
+  component duplicate_component_leaf is
+  end component;
+begin
+  child: duplicate_component_leaf port map ();
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(duplicate_hir.ok());
+    auto& duplicate_architecture = duplicate_hir.design.units.back();
+    duplicate_architecture.vhdl_component_declarations.push_back(
+        duplicate_architecture.vhdl_component_declarations.front());
+    const auto duplicate_result = fsim::elaboration::elaborate(
+        duplicate_hir.design,
+        "vhdl:work.duplicate_component_top(rtl)");
+    assert(!duplicate_result.ok());
+    assert(has_diagnostic(
+        duplicate_result, "FSIM-ELAB-VHCOMP-002"));
+
+    const auto missing_target = elaborate_text(
+        "missing_component_target.vhd",
+        R"(
+entity missing_component_target is
+end entity;
+architecture rtl of missing_component_target is
+  component absent_leaf is
+  end component;
+begin
+  child: absent_leaf port map ();
+end architecture;
+)",
+        "vhdl:work.missing_component_target(rtl)");
+    assert(!missing_target.ok());
+    assert(has_diagnostic(
+        missing_target, "FSIM-ELAB-VHCOMP-003"));
+
+    const auto ambiguous_architecture = elaborate_text(
+        "ambiguous_component_architecture.vhd",
+        R"(
+entity ambiguous_leaf is
+end entity;
+architecture first of ambiguous_leaf is
+begin
+end architecture;
+architecture second of ambiguous_leaf is
+begin
+end architecture;
+entity ambiguous_component_top is
+end entity;
+architecture rtl of ambiguous_component_top is
+  component ambiguous_leaf is
+  end component;
+begin
+  child: ambiguous_leaf port map ();
+end architecture;
+)",
+        "vhdl:work.ambiguous_component_top(rtl)");
+    assert(ambiguous_architecture.ok());
+    assert(
+        specialization(
+            ambiguous_architecture,
+            "ambiguous_component_top.child").unit
+        == "vhdl:work.ambiguous_leaf(second)");
+
+    const auto ambiguous_entity = elaborate_text(
+        "ambiguous_component_entity.vhd",
+        R"(
+entity duplicate_leaf is
+end entity;
+entity duplicate_leaf is
+end entity;
+architecture rtl of duplicate_leaf is
+begin
+end architecture;
+entity duplicate_component_top is
+end entity;
+architecture rtl of duplicate_component_top is
+  component duplicate_leaf is
+  end component;
+begin
+  child: duplicate_leaf port map ();
+end architecture;
+)",
+        "vhdl:work.duplicate_component_top(rtl)");
+    assert(!ambiguous_entity.ok());
+    assert(has_diagnostic(
+        ambiguous_entity, "FSIM-ELAB-VHCOMP-005"));
+
+    const auto generic_profile = elaborate_text(
+        "incompatible_component_generic.vhd",
+        R"(
+entity incompatible_generic_leaf is
+  generic (amount : integer := 2);
+end entity;
+architecture rtl of incompatible_generic_leaf is
+begin
+end architecture;
+entity incompatible_generic_top is
+end entity;
+architecture rtl of incompatible_generic_top is
+  component incompatible_generic_leaf is
+    generic (amount : boolean := true);
+  end component;
+begin
+  child: incompatible_generic_leaf port map ();
+end architecture;
+)",
+        "vhdl:work.incompatible_generic_top(rtl)");
+    assert(!generic_profile.ok());
+    assert(has_diagnostic(
+        generic_profile, "FSIM-ELAB-VHCOMP-006"));
+
+    const auto port_profile = elaborate_text(
+        "incompatible_component_port.vhd",
+        R"(
+entity incompatible_port_leaf is
+  port (value : in integer);
+end entity;
+architecture rtl of incompatible_port_leaf is
+begin
+end architecture;
+entity incompatible_port_top is
+end entity;
+architecture rtl of incompatible_port_top is
+  signal value : integer;
+  component incompatible_port_leaf is
+    port (value : out integer);
+  end component;
+begin
+  child: incompatible_port_leaf port map (value);
+end architecture;
+)",
+        "vhdl:work.incompatible_port_top(rtl)");
+    assert(!port_profile.ok());
+    assert(has_diagnostic(
+        port_profile, "FSIM-ELAB-VHCOMP-007"));
+
+    const auto invalid_maps = elaborate_text(
+        "invalid_component_maps.vhd",
+        R"(
+entity mapped_leaf is
+  generic (amount : integer);
+  port (value : in integer);
+end entity;
+architecture rtl of mapped_leaf is
+begin
+end architecture;
+entity invalid_component_maps is
+end entity;
+architecture rtl of invalid_component_maps is
+  signal value : integer;
+  component mapped_leaf is
+    generic (component_amount : integer);
+    port (component_value : in integer);
+  end component;
+begin
+  child: mapped_leaf
+    generic map (unknown_amount => 1)
+    port map (unknown_value => value);
+end architecture;
+)",
+        "vhdl:work.invalid_component_maps(rtl)");
+    assert(!invalid_maps.ok());
+    assert(has_diagnostic(
+        invalid_maps, "FSIM-ELAB-VHCOMP-008"));
+    assert(has_diagnostic(
+        invalid_maps, "FSIM-ELAB-VHCOMP-009"));
+
+    const auto invalid_configuration_map = elaborate_text(
+        "invalid_component_configuration_map.vhd",
+        R"(
+entity configured_profile_leaf is
+  generic (amount : integer := 1);
+  port (value : in integer);
+end entity;
+architecture rtl of configured_profile_leaf is
+begin
+end architecture;
+entity configured_profile_top is
+end entity;
+architecture rtl of configured_profile_top is
+  signal value : integer;
+  component configured_profile_leaf is
+    generic (component_amount : integer := 1);
+    port (component_value : in integer);
+  end component;
+  for child : configured_profile_leaf
+    use entity work.configured_profile_leaf(rtl)
+      generic map (missing_amount => component_amount);
+begin
+  child: configured_profile_leaf
+    generic map (component_amount => 2)
+    port map (component_value => value);
+end architecture;
+)",
+        "vhdl:work.configured_profile_top(rtl)");
+    assert(!invalid_configuration_map.ok());
+    assert(has_diagnostic(
+        invalid_configuration_map,
+        "FSIM-ELAB-VHCOMP-010"));
+
+    auto foreign = fsim::frontend::parse_text(
+        "foreign_default.sv",
+        "module foreign_default; endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    auto foreign_parent = fsim::frontend::parse_text(
+        "foreign_default_parent.vhd",
+        R"(
+entity foreign_default_parent is
+end entity;
+architecture rtl of foreign_default_parent is
+  component foreign_default is
+  end component;
+begin
+  child: foreign_default port map ();
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(foreign.ok() && foreign_parent.ok());
+    append_design(
+        foreign.design, std::move(foreign_parent.design));
+    const auto cross_language = fsim::elaboration::elaborate(
+        foreign.design,
+        "vhdl:work.foreign_default_parent(rtl)");
+    assert(!cross_language.ok());
+    assert(has_diagnostic(
+        cross_language, "FSIM-ELAB-VHCOMP-011"));
+}
+
+}  // namespace fsim::tests::elaboration

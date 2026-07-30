@@ -43,6 +43,21 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   current_generate_names_.clear();
   declared_genvars_.clear();
   external_genvar_uses_.clear();
+  module_time_unit_magnitude_ =
+      compilation_time_unit_.empty()
+          ? current_time_unit_magnitude_
+          : compilation_time_unit_magnitude_;
+  module_time_unit_ =
+      compilation_time_unit_.empty()
+          ? current_time_unit_
+          : compilation_time_unit_;
+  module_time_precision_ =
+      compilation_time_precision_.empty()
+          ? current_time_precision_
+          : compilation_time_precision_;
+  module_time_unit_declared_ = false;
+  module_time_precision_declared_ = false;
+  module_has_non_time_item_ = false;
   DesignUnit unit;
   unit.kind = UnitKind::SystemVerilogPackage;
   unit.language = language_;
@@ -50,6 +65,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
       compilation_unit_imports_;
   active_package_imports_ =
       unit.systemverilog_imports;
+  update_unit_time(unit);
   const auto name = expect_identifier("package name");
   unit.name = name.text;
   expect(
@@ -57,22 +73,34 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
       "';' after package header",
       "FSIM-SV-PARSE-080");
   while (!at_end() && !keyword("endpackage")) {
-    if (match_keyword("parameter")
+    if (time_declaration_start()) {
+      const auto declaration = advance();
+      parse_time_declaration(&unit, declaration);
+    } else if (match_keyword("parameter")
         || match_keyword("localparam")) {
+      module_has_non_time_item_ = true;
       parse_parameter_group(
           unit, true, false, previous());
     } else if (match_keyword("import")) {
+      module_has_non_time_item_ = true;
       parse_import_clause(
           unit.systemverilog_imports, previous());
       active_package_imports_ =
           unit.systemverilog_imports;
     } else if (match_keyword("typedef")) {
+      module_has_non_time_item_ = true;
       parse_typedef(unit, previous());
     } else if (match_keyword("function")) {
+      module_has_non_time_item_ = true;
       auto function = parse_function(previous());
       const bool duplicate = std::ranges::any_of(
           unit.functions,
           [&](const FunctionDeclaration& existing) {
+            return existing.name == function.name;
+          })
+          || std::ranges::any_of(
+              unit.tasks,
+              [&](const TaskDeclaration& existing) {
             return existing.name == function.name;
           });
       if (duplicate) {
@@ -83,7 +111,29 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
       } else {
         unit.functions.push_back(std::move(function));
       }
+    } else if (match_keyword("task")) {
+      module_has_non_time_item_ = true;
+      auto task = parse_task(previous());
+      const bool duplicate = std::ranges::any_of(
+          unit.tasks,
+          [&](const TaskDeclaration& existing) {
+            return existing.name == task.name;
+          })
+          || std::ranges::any_of(
+              unit.functions,
+              [&](const FunctionDeclaration& existing) {
+            return existing.name == task.name;
+          });
+      if (duplicate) {
+        error(
+            start,
+            "FSIM-SV-SEM-073",
+            "duplicate package task '" + task.name + "'");
+      } else {
+        unit.tasks.push_back(std::move(task));
+      }
     } else {
+      module_has_non_time_item_ = true;
       const auto unsupported = advance();
       error(
           unsupported,

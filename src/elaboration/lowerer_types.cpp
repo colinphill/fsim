@@ -710,6 +710,19 @@ using namespace elaboration_detail;
             case StatementKind::Return:
                 collect_identifiers(statement.value, output);
                 break;
+            case StatementKind::TaskCall:
+                for (const auto& argument :
+                     statement.task_arguments) {
+                    collect_identifiers(argument, output);
+                }
+                break;
+            case StatementKind::ProcedureCall:
+                for (const auto& association :
+                     statement.procedure_arguments) {
+                    collect_identifiers(
+                        association.value, output);
+                }
+                break;
             case StatementKind::Case:
                 collect_identifiers(statement.condition, output);
                 for (const auto& alternative :

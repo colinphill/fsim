@@ -64,14 +64,60 @@ class VhdlParser final : private detail::ParserBase {
 
   DesignUnit parse_context_declaration(const Token& start);
 
-  void skip_vhdl_package_body();
-
-  DesignUnit parse_package(const Token& start);
+  DesignUnit parse_package(
+      const Token& start,
+      bool body = false);
 
   void parse_package_constant(
       DesignUnit& unit, const Token& start);
 
+  std::string parse_vhdl_selected_name(
+      std::string_view description);
+
+  void parse_vhdl_package_generic_map(
+      std::vector<ParameterOverride>& associations,
+      bool& box,
+      const Token& start);
+
+  ParameterDeclaration parse_vhdl_interface_package(
+      const Token& start);
+
+  PackageInstantiation parse_vhdl_package_instantiation(
+      const Token& start);
+
   DesignUnit parse_entity(const Token& start);
+
+  DesignUnit parse_vhdl_configuration(const Token& start);
+
+  VhdlComponentDeclaration parse_vhdl_component_declaration(
+      const Token& start,
+      std::size_t declaration_order);
+
+  void add_vhdl_component_declaration(
+      std::vector<VhdlComponentDeclaration>& declarations,
+      VhdlComponentDeclaration declaration,
+      const Token& start);
+
+  void parse_vhdl_component_ports(
+      VhdlComponentDeclaration& declaration,
+      const Token& start);
+
+  VhdlBlockConfiguration parse_vhdl_block_configuration(
+      const Token& start);
+
+  VhdlComponentConfiguration
+  parse_vhdl_component_configuration(
+      const Token& start,
+      bool require_end_for);
+
+  VhdlBindingIndication parse_vhdl_binding_indication(
+      const Token& start);
+
+  void parse_vhdl_binding_port_map(
+      std::vector<PortConnection>& associations,
+      const Token& start);
+
+  void skip_vhdl_configuration_for_block();
 
   void add_vhdl_generic(
       DesignUnit& unit,
@@ -80,7 +126,59 @@ class VhdlParser final : private detail::ParserBase {
 
   void parse_vhdl_generics(
       DesignUnit& unit,
+      const Token& start,
+      bool expect_terminating_semicolon = true);
+
+  [[nodiscard]] bool
+  vhdl_generic_clause_precedes_subprogram() const;
+
+  void parse_vhdl_generic_subprogram(
+      DesignUnit& unit,
+      const Token& start,
+      bool allow_declaration);
+
+  void parse_vhdl_subprogram_generic_map(
+      std::vector<ParameterOverride>& associations,
+      bool& box,
       const Token& start);
+
+  GenericSubprogramInstantiation
+  parse_vhdl_subprogram_instantiation(
+      const Token& start,
+      std::string_view kind);
+
+  void parse_vhdl_function_item(
+      DesignUnit& unit,
+      const Token& start,
+      bool pure,
+      bool allow_declaration);
+
+  void parse_vhdl_procedure_item(
+      DesignUnit& unit,
+      const Token& start,
+      bool allow_declaration);
+
+  ParameterDeclaration parse_vhdl_interface_function(
+      const Token& start,
+      bool pure);
+
+  ParameterDeclaration parse_vhdl_interface_procedure(
+      const Token& start);
+
+  FunctionDeclaration parse_vhdl_function(
+      const Token& start,
+      bool pure,
+      bool allow_declaration);
+
+  ProcedureDeclaration parse_vhdl_procedure(
+      const Token& start,
+      bool allow_declaration);
+
+  std::vector<FunctionArgument>
+  parse_vhdl_function_parameters();
+
+  std::vector<ProcedureArgument>
+  parse_vhdl_procedure_parameters();
 
   void parse_vhdl_ports(DesignUnit& unit);
 
@@ -120,7 +218,9 @@ class VhdlParser final : private detail::ParserBase {
       const Token& label,
       const Token& start);
 
-  void parse_vhdl_generate_declarations(GenerateBody& body);
+  void parse_vhdl_generate_declarations(
+      GenerateBody& body,
+      VhdlComponentDeclarationRegion region);
 
   void parse_vhdl_generate_constant(
       GenerateBody& body, const Token& start);
@@ -145,6 +245,8 @@ class VhdlParser final : private detail::ParserBase {
       std::initializer_list<std::string_view> terminators);
 
   std::optional<Statement> parse_sequential_statement();
+
+  std::optional<Statement> parse_vhdl_procedure_call();
 
   Statement parse_vhdl_assertion(const Token& start);
 
@@ -194,6 +296,8 @@ class VhdlParser final : private detail::ParserBase {
   std::unordered_set<std::string> vhdl_named_types_;
   std::vector<std::string> sequential_loop_labels_;
   std::vector<std::string> sequential_loop_labels_seen_;
+  bool in_vhdl_function_{};
+  bool in_vhdl_procedure_{};
 };
 
 }  // namespace fsim::frontend

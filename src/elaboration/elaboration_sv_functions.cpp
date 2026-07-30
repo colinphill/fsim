@@ -611,6 +611,18 @@ void fold_statements(
             statement.value, functions, environment, fallback);
         fold_expression(
             statement.condition, functions, environment, fallback);
+        for (auto& argument : statement.task_arguments) {
+            fold_expression(
+                argument, functions, environment, fallback);
+        }
+        for (auto& association :
+             statement.procedure_arguments) {
+            fold_expression(
+                association.value,
+                functions,
+                environment,
+                fallback);
+        }
         fold_expression(
             statement.loop_initial, functions, environment, fallback);
         fold_expression(
@@ -834,6 +846,62 @@ void fold_systemverilog_constant_functions(
         }
         fold_statements(
             function.statements,
+            functions,
+            environment,
+            fallback_environment);
+    }
+    for (auto& task : unit.tasks) {
+        for (auto& argument : task.arguments) {
+            fold_type(
+                argument.type,
+                functions,
+                environment,
+                fallback_environment);
+        }
+        for (auto& variable : task.variables) {
+            fold_type(
+                variable.type,
+                functions,
+                environment,
+                fallback_environment);
+            if (variable.initializer) {
+                fold_expression(
+                    *variable.initializer,
+                    functions,
+                    environment,
+                    fallback_environment);
+            }
+        }
+        fold_statements(
+            task.statements,
+            functions,
+            environment,
+            fallback_environment);
+    }
+    for (auto& procedure : unit.procedures) {
+        for (auto& argument : procedure.arguments) {
+            fold_type(
+                argument.type,
+                functions,
+                environment,
+                fallback_environment);
+        }
+        for (auto& variable : procedure.variables) {
+            fold_type(
+                variable.type,
+                functions,
+                environment,
+                fallback_environment);
+            if (variable.initializer) {
+                fold_expression(
+                    *variable.initializer,
+                    functions,
+                    environment,
+                    fallback_environment);
+            }
+        }
+        fold_statements(
+            procedure.statements,
             functions,
             environment,
             fallback_environment);

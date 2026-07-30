@@ -63,6 +63,50 @@ The current tree contains:
   conditional alternatives; constant member/index/slice reads and writes;
   debugger-local visibility; and interpreter/LLVM O0/O2, transitive cache,
   and VCD equivalence;
+- entity-level VHDL-2008 unclassified interface type generics with
+  same-language named/positional constrained subtype actuals over supported
+  vectors, portable integers, nominal enumerations, records, and
+  one-dimensional scalar-element arrays; nested forwarding, targeted
+  constraint/object diagnostics, dependent object specialization, retained
+  child-source metadata, and interpreter/LLVM O0/O2 selective-cache
+  equivalence;
+- bounded VHDL-2008 interface function generics with retained pure scalar
+  profiles, required/named/box defaults, local and directly imported package
+  actuals, function-derived constant defaults, nested forwarding, runtime
+  calls, package-body/source provenance, debugger call points, and
+  interpreter/LLVM O0/O2 cold/warm/edit-cache equivalence;
+- bounded VHDL-2008 interface procedure generics with retained constant or
+  variable scalar profiles and `in`/`out`/`inout` modes, required/named/box
+  defaults, local and directly imported package actuals, nested forwarding
+  and procedure calls, deterministic ordered copy-in/copy-out to signals or
+  variables, live debugger formals/locals, package-body/source provenance,
+  and interpreter/LLVM O0/O2 cold/warm/edit-cache equivalence;
+- bounded VHDL-2008 interface package generics and entity/architecture-local
+  generic package instances over the existing value, type, function, and
+  procedure families; explicit/default/box maps, declaration-ordered
+  specialization, selected constants/types/subprograms, nested forwarding,
+  exact instance and transitive source identity, debugger-visible procedure
+  frames, and interpreter/LLVM O0/O2 cold/warm/edit-cache equivalence;
+- bounded VHDL-2008 generic function and procedure templates and local or
+  package-visible instantiations over the existing value, type, function, and
+  procedure generic families; explicit/default/box maps, declaration/body
+  matching, dependent callable specialization, use as nested interface
+  subprogram actuals, versioned transitive identity, debugger call metadata,
+  and interpreter/LLVM O0/O2 cold/warm/edit-cache equivalence;
+- bounded VHDL-2008 configuration declarations and architecture declarative
+  configuration specifications over component-style instances; recursive
+  static block and selected for/if/case-generate rules, explicit label, `all`,
+  and `others` selection, entity/configuration/open binding aspects, nearest-
+  scope precedence, named generic/port-map composition, configuration top
+  selection, referenced-subtree activation, direct-entity isolation, versioned
+  transitive source identity, and interpreter/LLVM O0/O2 cold/warm/edit-cache
+  equivalence;
+- bounded VHDL-2008 component declarations in architecture, entity, package,
+  block, and selected-generate regions with retained value-generic and
+  scalar/vector port profiles; lexical/package visibility, profile overload
+  selection, formal-aware named/positional associations, latest-analyzed
+  same-library architecture default binding, configuration-map precedence,
+  and versioned scope/source selective-cache identity;
 - bounded SystemVerilog packages with immutable integral
   parameters/localparams, packed integral typedef aliases, and packed enum
   types/enumerators plus non-nested packed struct and equal-width packed union
@@ -79,6 +123,12 @@ The current tree contains:
   types, function-name or explicit-return results, constant evaluation,
   package visibility, nested nonrecursive calls, debugger safe points, and
   interpreter/LLVM O0/O2 plus native-cache equivalence;
+- bounded SystemVerilog module/package tasks with explicit `automatic`
+  lifetime, 1–64-bit integral input/output/inout formals, parameter-sized
+  types, deterministic copy-in/copy-out, local/imported/package-selected
+  nested nonrecursive calls, delays/event/condition waits, deferred copy-out,
+  post-suspension early return, debugger stop/resume locals and safe points,
+  and interpreter/LLVM O0/O2 plus native-cache equivalence;
 - bounded Verilog-2005/SystemVerilog `$clog2` folding for nonnegative integral
   constant arguments in parameter/localparam defaults and specialized packed
   ranges, with zero and exact/non-power-of-two edge behavior;

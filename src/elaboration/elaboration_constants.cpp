@@ -1745,7 +1745,8 @@ void substitute_parameters(
         *right,
         type.packed_range_expression->descending.value_or(
             *left >= *right)};
-    if (type.vhdl_array) {
+    if (language == frontend::Language::Vhdl2008
+        && type.packed_range_expression->descending) {
         const bool null =
             range.descending ? range.left < range.right
                              : range.left > range.right;
@@ -1759,6 +1760,8 @@ void substitute_parameters(
             type.packed_range_expression.reset();
             return;
         }
+    }
+    if (type.vhdl_array) {
         if (type.vhdl_array->index_base_range
             && (!type.vhdl_array->index_base_range->contains(range.left)
                 || !type.vhdl_array->index_base_range->contains(

@@ -516,6 +516,12 @@ class VerilogParser final : private detail::ParserBase {
       const FunctionDeclaration& function,
       const Token& start);
 
+  TaskDeclaration parse_task(const Token& start);
+
+  void validate_task_body(
+      const TaskDeclaration& task,
+      const Token& start);
+
   void parse_genvar_declaration(DesignUnit& unit);
 
   void parse_generate_region(
@@ -703,6 +709,7 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> current_function_arguments_;
   std::string current_function_name_;
   bool in_function_{};
+  bool in_task_{};
   std::unordered_map<std::string, std::size_t>
       current_generate_names_;
   std::unordered_map<std::string, std::size_t>

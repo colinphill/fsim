@@ -312,6 +312,18 @@ SpecializedUnit specialize_unit(
                 value = evaluate_constant_expression(
                     actual_expression, parent_environment, error);
             }
+            if (!value && is_vhdl) {
+                const auto function_value =
+                    evaluate_systemverilog_constant_function_expression(
+                        actual_expression,
+                        {},
+                        parent_environment,
+                        source.functions,
+                        error);
+                if (function_value) {
+                    value = function_value->integer_value();
+                }
+            }
             if (!value) {
                 diagnostics.push_back({
                     code(
@@ -521,6 +533,19 @@ SpecializedUnit specialize_unit(
                             error);
                     }
                     if (!value) {
+                        const auto function_value =
+                            evaluate_systemverilog_constant_function_expression(
+                                default_expression,
+                                {},
+                                result.environment,
+                                result.unit.functions,
+                                error);
+                        if (function_value) {
+                            value =
+                                function_value->integer_value();
+                        }
+                    }
+                    if (!value) {
                         diagnostics.push_back({
                             code(
                                 SpecializationDiagnostic::
@@ -718,6 +743,15 @@ SpecializedUnit specialize_unit(
             diagnostics);
         result.string_environment =
             std::move(systemverilog_string_environment);
+    } else if (is_vhdl) {
+        // The bounded VHDL and SystemVerilog function HIR intentionally
+        // shares the same time-free integral evaluator. Calls whose operands
+        // are not locally static remain in the tree for runtime lowering.
+        fold_systemverilog_constant_functions(
+            result.unit,
+            {},
+            result.environment,
+            diagnostics);
     }
     for (auto& parameter : result.unit.parameters) {
         substitute_parameters(
@@ -875,6 +909,199 @@ SpecializedUnit specialize_unit(
             diagnostics,
             source.language);
     }
+    for (auto& task : result.unit.tasks) {
+        for (auto& argument : task.arguments) {
+            substitute_parameters(
+                argument.type,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        for (auto& variable : task.variables) {
+            substitute_parameters(
+                variable,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        substitute_parameters(
+            task.statements,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+    }
+    for (auto& procedure : result.unit.procedures) {
+        for (auto& argument : procedure.arguments) {
+            substitute_parameters(
+                argument.type,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        for (auto& variable : procedure.variables) {
+            substitute_parameters(
+                variable,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        substitute_parameters(
+            procedure.statements,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+    }
+    const auto substitute_generic_parameters =
+        [&](auto& parameters) {
+          for (auto& parameter : parameters) {
+            if (parameter.kind
+                    == frontend::ParameterKind::Type
+                && parameter.default_type) {
+              substitute_parameters(
+                  *parameter.default_type,
+                  result.environment,
+                  domains,
+                  diagnostics,
+                  source.language);
+            } else if (
+                parameter.kind
+                    == frontend::ParameterKind::Function
+                && parameter.function_profile) {
+              substitute_parameters(
+                  parameter.function_profile->return_type,
+                  result.environment,
+                  domains,
+                  diagnostics,
+                  source.language);
+              for (auto& argument :
+                   parameter.function_profile->arguments) {
+                substitute_parameters(
+                    argument.type,
+                    result.environment,
+                    domains,
+                    diagnostics,
+                    source.language);
+              }
+            } else if (
+                parameter.kind
+                    == frontend::ParameterKind::Procedure
+                && parameter.procedure_profile) {
+              for (auto& argument :
+                   parameter.procedure_profile->arguments) {
+                substitute_parameters(
+                    argument.type,
+                    result.environment,
+                    domains,
+                    diagnostics,
+                    source.language);
+              }
+            } else {
+              substitute_parameters(
+                  parameter.type,
+                  result.environment,
+                  domains,
+                  diagnostics,
+                  source.language);
+              substitute_parameters(
+                  parameter.default_value,
+                  result.environment,
+                  domains,
+                  source.language);
+            }
+          }
+        };
+    for (auto& generic :
+         result.unit.generic_function_templates) {
+        substitute_generic_parameters(
+            generic.generic_parameters);
+        auto& function = generic.function;
+        substitute_parameters(
+            function.return_type,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+        for (auto& argument : function.arguments) {
+            substitute_parameters(
+                argument.type,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        for (auto& variable : function.variables) {
+            substitute_parameters(
+                variable,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        substitute_parameters(
+            function.statements,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+    }
+    for (auto& generic :
+         result.unit.generic_procedure_templates) {
+        substitute_generic_parameters(
+            generic.generic_parameters);
+        auto& procedure = generic.procedure;
+        for (auto& argument : procedure.arguments) {
+            substitute_parameters(
+                argument.type,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        for (auto& variable : procedure.variables) {
+            substitute_parameters(
+                variable,
+                result.environment,
+                domains,
+                diagnostics,
+                source.language);
+        }
+        substitute_parameters(
+            procedure.statements,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+    }
+    const auto substitute_generic_maps =
+        [&](auto& instances) {
+          for (auto& instance : instances) {
+            for (auto& actual : instance.generic_map) {
+              substitute_parameters(
+                  actual.value,
+                  result.environment,
+                  domains,
+                  source.language);
+              if (actual.type_value) {
+                substitute_parameters(
+                    *actual.type_value,
+                    result.environment,
+                    domains,
+                    diagnostics,
+                    source.language);
+              }
+            }
+          }
+        };
+    substitute_generic_maps(
+        result.unit.generic_function_instances);
+    substitute_generic_maps(
+        result.unit.generic_procedure_instances);
     substitute_parameters(
         result.unit.concurrent_statements,
         result.environment,

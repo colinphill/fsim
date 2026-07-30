@@ -13,6 +13,13 @@ const DesignUnit* choose_unit(
         }
     }
     for (const auto& unit : parsed.units) {
+        if (unit.kind
+                == frontend::UnitKind::VhdlConfiguration
+            && unit.name == requested) {
+            return &unit;
+        }
+    }
+    for (const auto& unit : parsed.units) {
         if (unit.kind == frontend::UnitKind::VhdlArchitecture
             && unit.primary_name == requested) {
             return &unit;
@@ -119,7 +126,26 @@ const DesignUnit* choose_top_unit(
     const std::string_view spelling) {
     if (spelling.find(':') != std::string_view::npos) {
         const auto target = parse_target(spelling);
-        return target ? choose_bound_unit(parsed, *target) : nullptr;
+        if (!target) {
+            return nullptr;
+        }
+        if (target->language == "vhdl"
+            && !target->architecture) {
+            for (const auto& unit : parsed.units) {
+                const auto library =
+                    unit.library.empty()
+                        ? std::string_view{"work"}
+                        : std::string_view{unit.library};
+                if (unit.kind
+                        == frontend::UnitKind::VhdlConfiguration
+                    && unit.name == target->unit
+                    && (target->library.empty()
+                        || library == target->library)) {
+                    return &unit;
+                }
+            }
+        }
+        return choose_bound_unit(parsed, *target);
     }
     return choose_unit(parsed, simple_top_name(spelling));
 }
@@ -181,6 +207,11 @@ std::string unit_identity(const DesignUnit& unit) {
     if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
         return "vhdl:" + std::string{library} + "." + unit.primary_name
             + "(" + unit.name + ")";
+    }
+    if (unit.kind
+            == frontend::UnitKind::VhdlConfiguration) {
+        return "vhdl:" + std::string{library}
+            + ".configuration(" + unit.name + ")";
     }
     return "sv:" + std::string{library} + "." + unit.name;
 }

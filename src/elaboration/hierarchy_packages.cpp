@@ -41,15 +41,53 @@ HierarchyBuilder::HierarchyBuilder(
 
 
     void HierarchyBuilder::build(const DesignUnit& root) {
+        const DesignUnit* selected = &root;
+        std::optional<DesignUnit> configured_root;
+        std::string configuration_identity;
+        if (root.kind
+            == frontend::UnitKind::VhdlConfiguration) {
+            selected =
+                select_vhdl_configuration_root(root);
+            if (selected == nullptr) {
+                finish();
+                return;
+            }
+            active_vhdl_configuration_ = &root;
+            vhdl_configurations_by_path_[design_.top_] = &root;
+            configured_root = *selected;
+            const auto configuration_source = std::string{
+                frontend::physical_source(root.span)};
+            if (!configuration_source.empty()
+                && std::ranges::find(
+                       configured_root->source_dependencies,
+                       configuration_source)
+                    == configured_root
+                           ->source_dependencies.end()) {
+                configured_root->source_dependencies.push_back(
+                    configuration_source);
+            }
+            selected = &*configured_root;
+            configuration_identity =
+                vhdl_configuration_identity(root);
+        }
         auto specialized = specialize_selected_unit(
-            root, {}, {}, {}, root.language);
+            *selected, {}, {}, {}, {}, {}, {}, {},
+            selected->language);
+        if (!configuration_identity.empty()) {
+            specialized.identity_values.emplace_back(
+                "__configuration",
+                std::move(configuration_identity));
+        }
         instantiate(
             specialized.unit,
             design_.top_,
             {},
             std::move(specialized.environment),
             std::move(specialized.values),
-            std::move(specialized.identity_values));
+            std::move(specialized.identity_values),
+            std::move(specialized.packages));
+        active_vhdl_configuration_ = nullptr;
+        vhdl_configurations_by_path_.clear();
         finish();
     }
 
@@ -217,6 +255,16 @@ HierarchyBuilder::HierarchyBuilder(
         std::vector<const DesignUnit*>& import_stack,
         NamedTypeEnvironment& imported_types) {
         std::vector<frontend::ParameterDeclaration> imports;
+        std::vector<frontend::FunctionDeclaration>
+            function_imports;
+        std::vector<frontend::ProcedureDeclaration>
+            procedure_imports;
+        std::vector<frontend::GenericFunctionTemplate>
+            generic_function_imports;
+        std::vector<frontend::GenericProcedureTemplate>
+            generic_procedure_imports;
+        std::vector<frontend::VhdlComponentDeclaration>
+            component_imports;
         std::unordered_map<std::string, std::string> bare_owners;
         std::unordered_set<std::string> dependencies;
         const auto owner_library =
@@ -255,6 +303,7 @@ HierarchyBuilder::HierarchyBuilder(
                                       candidate.library};
                         return candidate.kind
                                 == frontend::UnitKind::VhdlPackage
+                            && candidate.primary_name.empty()
                             && candidate.name == parts[1]
                             && candidate_library
                                 == requested_library;
@@ -382,6 +431,174 @@ HierarchyBuilder::HierarchyBuilder(
                         NamedTypeBinding{
                             alias.type, package_owner});
                 }
+                for (const auto& function :
+                     specialized.unit.functions) {
+                    const bool exported =
+                        std::ranges::any_of(
+                            package->functions,
+                            [&](const auto& declaration) {
+                                return declaration.name
+                                    == function.name;
+                            })
+                        || std::ranges::any_of(
+                            package->generic_function_instances,
+                            [&](const auto& declaration) {
+                              return declaration.name
+                                  == function.name;
+                            });
+                    if (!exported || !function.defined
+                        || (!import_all
+                            && function.name != parts[2])) {
+                        continue;
+                    }
+                    found_selected = true;
+                    const auto [owner, inserted] =
+                        bare_owners.emplace(
+                            function.name, package_owner);
+                    if (!inserted
+                        && owner->second != package_owner) {
+                        report(
+                            "FSIM-ELAB-VHFUNC-010",
+                            "VHDL function '" + function.name
+                                + "' is directly visible from multiple "
+                                  "packages",
+                            item.span);
+                        continue;
+                    }
+                    if (std::ranges::none_of(
+                            function_imports,
+                            [&](const auto& existing) {
+                                return existing.name
+                                    == function.name;
+                            })) {
+                        function_imports.push_back(function);
+                    }
+                }
+                for (const auto& procedure :
+                     specialized.unit.procedures) {
+                    const bool exported =
+                        std::ranges::any_of(
+                            package->procedures,
+                            [&](const auto& declaration) {
+                                return declaration.name
+                                    == procedure.name;
+                            })
+                        || std::ranges::any_of(
+                            package->generic_procedure_instances,
+                            [&](const auto& declaration) {
+                              return declaration.name
+                                  == procedure.name;
+                            });
+                    if (!exported || !procedure.defined
+                        || (!import_all
+                            && procedure.name != parts[2])) {
+                        continue;
+                    }
+                    found_selected = true;
+                    const auto [owner, inserted] =
+                        bare_owners.emplace(
+                            procedure.name, package_owner);
+                    if (!inserted
+                        && owner->second != package_owner) {
+                        report(
+                            "FSIM-ELAB-VHPROC-013",
+                            "VHDL procedure '" + procedure.name
+                                + "' is directly visible from multiple "
+                                  "packages",
+                            item.span);
+                        continue;
+                    }
+                    if (std::ranges::none_of(
+                            procedure_imports,
+                            [&](const auto& existing) {
+                                return existing.name
+                                    == procedure.name;
+                            })) {
+                        procedure_imports.push_back(procedure);
+                    }
+                }
+                for (const auto& generic :
+                     specialized.unit
+                         .generic_function_templates) {
+                    if (!import_all
+                        && generic.function.name != parts[2]) {
+                        continue;
+                    }
+                    found_selected = true;
+                    const auto [owner, inserted] =
+                        bare_owners.emplace(
+                            generic.function.name,
+                            package_owner);
+                    if (!inserted
+                        && owner->second != package_owner) {
+                        report(
+                            "FSIM-ELAB-VHGSUB-002",
+                            "generic function template '"
+                                + generic.function.name
+                                + "' is directly visible from "
+                                  "multiple packages",
+                            item.span);
+                        continue;
+                    }
+                    if (std::ranges::none_of(
+                            generic_function_imports,
+                            [&](const auto& existing) {
+                              return existing.function.name
+                                  == generic.function.name;
+                            })) {
+                        generic_function_imports.push_back(
+                            generic);
+                    }
+                }
+                for (const auto& generic :
+                     specialized.unit
+                         .generic_procedure_templates) {
+                    if (!import_all
+                        && generic.procedure.name != parts[2]) {
+                        continue;
+                    }
+                    found_selected = true;
+                    const auto [owner, inserted] =
+                        bare_owners.emplace(
+                            generic.procedure.name,
+                            package_owner);
+                    if (!inserted
+                        && owner->second != package_owner) {
+                        report(
+                            "FSIM-ELAB-VHGSUB-002",
+                            "generic procedure template '"
+                                + generic.procedure.name
+                                + "' is directly visible from "
+                                  "multiple packages",
+                            item.span);
+                        continue;
+                    }
+                    if (std::ranges::none_of(
+                            generic_procedure_imports,
+                            [&](const auto& existing) {
+                              return existing.procedure.name
+                                  == generic.procedure.name;
+                            })) {
+                        generic_procedure_imports.push_back(
+                            generic);
+                    }
+                }
+                for (auto component :
+                     package->vhdl_component_declarations) {
+                    if (!import_all
+                        && component.name != parts[2]) {
+                        continue;
+                    }
+                    found_selected = true;
+                    component.region =
+                        frontend::VhdlComponentDeclarationRegion::
+                            Package;
+                    component.owner_library =
+                        requested_library;
+                    component.owner_name = package->name;
+                    component_imports.push_back(
+                        std::move(component));
+                }
                 if (!found_selected) {
                     report(
                         "FSIM-ELAB-PKG-003",
@@ -411,6 +628,40 @@ HierarchyBuilder::HierarchyBuilder(
             std::make_move_iterator(unit.parameters.begin()),
             std::make_move_iterator(unit.parameters.end()));
         unit.parameters = std::move(imports);
+        function_imports.insert(
+            function_imports.end(),
+            std::make_move_iterator(unit.functions.begin()),
+            std::make_move_iterator(unit.functions.end()));
+        unit.functions = std::move(function_imports);
+        procedure_imports.insert(
+            procedure_imports.end(),
+            std::make_move_iterator(unit.procedures.begin()),
+            std::make_move_iterator(unit.procedures.end()));
+        unit.procedures = std::move(procedure_imports);
+        generic_function_imports.insert(
+            generic_function_imports.end(),
+            std::make_move_iterator(
+                unit.generic_function_templates.begin()),
+            std::make_move_iterator(
+                unit.generic_function_templates.end()));
+        unit.generic_function_templates =
+            std::move(generic_function_imports);
+        generic_procedure_imports.insert(
+            generic_procedure_imports.end(),
+            std::make_move_iterator(
+                unit.generic_procedure_templates.begin()),
+            std::make_move_iterator(
+                unit.generic_procedure_templates.end()));
+        unit.generic_procedure_templates =
+            std::move(generic_procedure_imports);
+        component_imports.insert(
+            component_imports.end(),
+            std::make_move_iterator(
+                unit.vhdl_component_declarations.begin()),
+            std::make_move_iterator(
+                unit.vhdl_component_declarations.end()));
+        unit.vhdl_component_declarations =
+            std::move(component_imports);
     }
 
 
@@ -418,7 +669,15 @@ HierarchyBuilder::HierarchyBuilder(
     std::optional<SpecializedUnit> HierarchyBuilder::specialize_vhdl_package(
         const DesignUnit& package,
         std::vector<const DesignUnit*>& import_stack,
-        const frontend::SourceSpan& reference_span) {
+        const frontend::SourceSpan& reference_span,
+        const std::vector<frontend::ParameterOverride>& overrides,
+        const ConstantEnvironment& parent_environment,
+        const ConstantDomainEnvironment& parent_domains,
+        const NamedTypeEnvironment& parent_types,
+        const std::vector<frontend::FunctionDeclaration>&
+            parent_functions,
+        const std::vector<frontend::ProcedureDeclaration>&
+            parent_procedures) {
         if (std::find(
                 import_stack.begin(),
                 import_stack.end(),
@@ -448,10 +707,164 @@ HierarchyBuilder::HierarchyBuilder(
         }
         import_stack.push_back(&package);
         auto effective_package = package;
+        const auto package_library =
+            package.library.empty()
+                ? std::string_view{"work"}
+                : std::string_view{package.library};
+        const auto package_body = std::ranges::find_if(
+            parsed_.units,
+            [&](const DesignUnit& candidate) {
+                const auto candidate_library =
+                    candidate.library.empty()
+                        ? std::string_view{"work"}
+                        : std::string_view{candidate.library};
+                return candidate.kind
+                        == frontend::UnitKind::VhdlPackage
+                    && candidate.primary_name == package.name
+                    && candidate.name == package.name
+                    && candidate_library == package_library;
+            });
+        if (package_body != parsed_.units.end()) {
+            effective_package.parameters.insert(
+                effective_package.parameters.end(),
+                package_body->parameters.begin(),
+                package_body->parameters.end());
+            effective_package.type_aliases.insert(
+                effective_package.type_aliases.end(),
+                package_body->type_aliases.begin(),
+                package_body->type_aliases.end());
+            effective_package.generic_function_templates.insert(
+                effective_package.generic_function_templates.end(),
+                package_body->generic_function_templates.begin(),
+                package_body->generic_function_templates.end());
+            effective_package.generic_procedure_templates.insert(
+                effective_package.generic_procedure_templates.end(),
+                package_body->generic_procedure_templates.begin(),
+                package_body->generic_procedure_templates.end());
+            effective_package.generic_function_instances.insert(
+                effective_package.generic_function_instances.end(),
+                package_body->generic_function_instances.begin(),
+                package_body->generic_function_instances.end());
+            effective_package.generic_procedure_instances.insert(
+                effective_package.generic_procedure_instances.end(),
+                package_body->generic_procedure_instances.begin(),
+                package_body->generic_procedure_instances.end());
+            const auto conforming_declaration =
+                [](const frontend::FunctionDeclaration& declaration,
+                   const frontend::FunctionDeclaration& body) {
+                  if (declaration.name != body.name
+                      || declaration.arguments.size()
+                          != body.arguments.size()
+                      || declaration.return_type.spelling
+                          != body.return_type.spelling
+                      || declaration.return_type.domain
+                          != body.return_type.domain) {
+                      return false;
+                  }
+                  for (std::size_t index = 0;
+                       index < declaration.arguments.size();
+                       ++index) {
+                      if (declaration.arguments[index].direction
+                              != body.arguments[index].direction
+                          || declaration.arguments[index].type.spelling
+                              != body.arguments[index].type.spelling
+                          || declaration.arguments[index].type.domain
+                              != body.arguments[index].type.domain) {
+                          return false;
+                      }
+                  }
+                  return true;
+                };
+            for (const auto& body_function :
+                 package_body->functions) {
+                if (!body_function.defined) {
+                    continue;
+                }
+                const auto declaration =
+                    std::ranges::find_if(
+                        effective_package.functions,
+                        [&](const auto& candidate) {
+                            return candidate.name
+                                    == body_function.name
+                                && !candidate.defined
+                                && conforming_declaration(
+                                    candidate, body_function);
+                        });
+                if (declaration
+                    != effective_package.functions.end()) {
+                    *declaration = body_function;
+                } else {
+                    effective_package.functions.push_back(
+                        body_function);
+                }
+            }
+            const auto conforming_procedure_declaration =
+                [](const frontend::ProcedureDeclaration& declaration,
+                   const frontend::ProcedureDeclaration& body) {
+                  if (declaration.name != body.name
+                      || declaration.arguments.size()
+                          != body.arguments.size()) {
+                      return false;
+                  }
+                  for (std::size_t index = 0;
+                       index < declaration.arguments.size(); ++index) {
+                      const auto& left = declaration.arguments[index];
+                      const auto& right = body.arguments[index];
+                      if (left.type.spelling != right.type.spelling
+                          || left.type.domain != right.type.domain
+                          || left.direction != right.direction
+                          || left.object_class
+                              != right.object_class) {
+                          return false;
+                      }
+                  }
+                  return true;
+                };
+            for (const auto& body_procedure :
+                 package_body->procedures) {
+                if (!body_procedure.defined) {
+                    continue;
+                }
+                const auto declaration =
+                    std::ranges::find_if(
+                        effective_package.procedures,
+                        [&](const auto& candidate) {
+                            return candidate.name
+                                    == body_procedure.name
+                                && !candidate.defined
+                                && conforming_procedure_declaration(
+                                    candidate, body_procedure);
+                        });
+                if (declaration
+                    != effective_package.procedures.end()) {
+                    *declaration = body_procedure;
+                } else {
+                    effective_package.procedures.push_back(
+                        body_procedure);
+                }
+            }
+            effective_package.vhdl_context.insert(
+                effective_package.vhdl_context.end(),
+                package_body->vhdl_context.begin(),
+                package_body->vhdl_context.end());
+            const auto body_source = std::string{
+                frontend::physical_source(package_body->span)};
+            if (!body_source.empty()
+                && body_source
+                    != frontend::physical_source(package.span)
+                && std::ranges::find(
+                       effective_package.source_dependencies,
+                       body_source)
+                    == effective_package
+                           .source_dependencies.end()) {
+                effective_package.source_dependencies.push_back(
+                    body_source);
+            }
+        }
         std::vector<frontend::VhdlContextItem>
             expanded_package_context;
         std::vector<const DesignUnit*> context_stack;
-        const auto package_library =
+        const auto effective_package_library =
             effective_package.library.empty()
                 ? std::string{"work"}
                 : effective_package.library;
@@ -460,7 +873,7 @@ HierarchyBuilder::HierarchyBuilder(
             package.vhdl_context,
             expanded_package_context,
             context_stack,
-            package_library);
+            effective_package_library);
         NamedTypeEnvironment type_environment;
         import_vhdl_package_constants(
             effective_package,
@@ -471,6 +884,20 @@ HierarchyBuilder::HierarchyBuilder(
             effective_package, import_stack);
         import_qualified_vhdl_package_types(
             effective_package, type_environment, import_stack);
+        for (const auto& parameter :
+             effective_package.parameters) {
+            if (parameter.kind
+                != frontend::ParameterKind::Type) {
+                continue;
+            }
+            type_environment.insert_or_assign(
+                parameter.name,
+                NamedTypeBinding{
+                    {},
+                    effective_package_library + "."
+                        + effective_package.name,
+                    true});
+        }
         resolve_named_types(
             effective_package, type_environment, true);
         for (const auto& [name, binding] : type_environment) {
@@ -491,12 +918,41 @@ HierarchyBuilder::HierarchyBuilder(
                     {},
                     frontend::TypeDeclarationKind::Alias});
         }
+        auto type_specialized =
+            specialize_vhdl_interface_types(
+                effective_package,
+                overrides,
+                parent_environment,
+                parent_domains,
+                parent_types,
+                parent_functions,
+                parent_procedures,
+                frontend::Language::Vhdl2008,
+                diagnostics_);
+        if (type_specialized.applied) {
+            resolve_named_types(
+                type_specialized.unit, {}, true);
+        }
         auto specialized = specialize_unit(
-            effective_package,
-            {},
-            {},
+            type_specialized.unit,
+            type_specialized.value_overrides,
+            parent_environment,
             frontend::Language::Vhdl2008,
             diagnostics_);
+        if (specialized.identity_values.empty()) {
+            specialized.identity_values = specialized.values;
+        }
+        if (!type_specialized.values.empty()) {
+            specialized.values.insert(
+                specialized.values.begin(),
+                type_specialized.values.begin(),
+                type_specialized.values.end());
+            specialized.identity_values.insert(
+                specialized.identity_values.begin(),
+                type_specialized.values.begin(),
+                type_specialized.values.end());
+        }
+        instantiate_vhdl_generic_subprograms(specialized);
         import_stack.pop_back();
         return specialized;
     }
@@ -508,6 +964,27 @@ HierarchyBuilder::HierarchyBuilder(
         std::vector<const DesignUnit*>& import_stack) {
         auto identifiers = qualified_identifiers(unit);
         std::unordered_set<std::string> local_objects;
+        std::unordered_set<std::string> local_qualified_items;
+        for (const auto& parameter : unit.parameters) {
+            if (parameter.name.find('.') != std::string::npos) {
+                local_qualified_items.insert(parameter.name);
+            }
+        }
+        for (const auto& alias : unit.type_aliases) {
+            if (alias.name.find('.') != std::string::npos) {
+                local_qualified_items.insert(alias.name);
+            }
+        }
+        for (const auto& function : unit.functions) {
+            if (function.name.find('.') != std::string::npos) {
+                local_qualified_items.insert(function.name);
+            }
+        }
+        for (const auto& procedure : unit.procedures) {
+            if (procedure.name.find('.') != std::string::npos) {
+                local_qualified_items.insert(procedure.name);
+            }
+        }
         for (const auto& port : unit.ports) {
             local_objects.emplace(port.name);
         }
@@ -535,7 +1012,18 @@ HierarchyBuilder::HierarchyBuilder(
         for (const auto& identifier : ordered) {
             const auto& reference_span =
                 identifiers.at(identifier);
+            if (local_qualified_items.contains(identifier)) {
+                continue;
+            }
             const auto parts = selected_name_parts(identifier);
+            if (!parts.empty()
+                && std::ranges::any_of(
+                    unit.package_instances,
+                    [&](const auto& instance) {
+                        return instance.name == parts.front();
+                    })) {
+                continue;
+            }
             if (!parts.empty()
                 && local_objects.contains(parts.front())) {
                 // A selected record element has the same lexical shape as
@@ -571,6 +1059,7 @@ HierarchyBuilder::HierarchyBuilder(
                                   candidate.library};
                     return candidate.kind
                             == frontend::UnitKind::VhdlPackage
+                        && candidate.primary_name.empty()
                         && candidate.name == package_name
                         && candidate_library
                             == requested_library;
@@ -738,6 +1227,14 @@ HierarchyBuilder::HierarchyBuilder(
         for (const auto& [name, span] :
              expression_identifiers) {
             const auto parts = selected_name_parts(name);
+            if (!parts.empty()
+                && std::ranges::any_of(
+                    unit.package_instances,
+                    [&](const auto& instance) {
+                        return instance.name == parts.front();
+                    })) {
+                continue;
+            }
             if (parts.size() != 2 && parts.size() != 3) {
                 continue;
             }
@@ -761,6 +1258,7 @@ HierarchyBuilder::HierarchyBuilder(
                                   candidate.library};
                     return candidate.kind
                             == frontend::UnitKind::VhdlPackage
+                        && candidate.primary_name.empty()
                         && candidate.name == package_name
                         && candidate_library
                             == requested_library;
@@ -786,7 +1284,23 @@ HierarchyBuilder::HierarchyBuilder(
         for (const auto& name : ordered) {
             const auto& reference_span =
                 referenced_types.at(name);
+            if (imported_types.contains(name)
+                || std::ranges::any_of(
+                    unit.type_aliases,
+                    [&](const auto& alias) {
+                        return alias.name == name;
+                    })) {
+                continue;
+            }
             const auto parts = selected_name_parts(name);
+            if (!parts.empty()
+                && std::ranges::any_of(
+                    unit.package_instances,
+                    [&](const auto& instance) {
+                        return instance.name == parts.front();
+                    })) {
+                continue;
+            }
             if (parts.size() != 2 && parts.size() != 3) {
                 report(
                     "FSIM-ELAB-VHTYPE-004",
@@ -815,6 +1329,7 @@ HierarchyBuilder::HierarchyBuilder(
                                   candidate.library};
                     return candidate.kind
                             == frontend::UnitKind::VhdlPackage
+                        && candidate.primary_name.empty()
                         && candidate.name == package_name
                         && candidate_library
                             == requested_library;
@@ -1006,6 +1521,7 @@ HierarchyBuilder::HierarchyBuilder(
         std::vector<frontend::ParameterDeclaration> imports;
         std::vector<frontend::FunctionDeclaration>
             function_imports;
+        std::vector<frontend::TaskDeclaration> task_imports;
         std::unordered_map<std::string, std::string> owners;
         for (const auto& import_item :
              unit.systemverilog_imports) {
@@ -1161,6 +1677,34 @@ HierarchyBuilder::HierarchyBuilder(
                     function_imports.push_back(function);
                 }
             }
+            for (const auto& task :
+                 specialized_package->unit.tasks) {
+                if (!wildcard
+                    && task.name != import_item.name) {
+                    continue;
+                }
+                found_selected = true;
+                const auto [owner, inserted] =
+                    owners.emplace(
+                        task.name, package->name);
+                if (!inserted
+                    && owner->second != package->name) {
+                    report(
+                        "FSIM-ELAB-SVTASK-009",
+                        "SystemVerilog task '"
+                            + task.name
+                            + "' is imported from multiple packages",
+                        import_item.span);
+                    continue;
+                }
+                if (std::ranges::none_of(
+                        task_imports,
+                        [&](const auto& existing) {
+                            return existing.name == task.name;
+                        })) {
+                    task_imports.push_back(task);
+                }
+            }
             if (!found_selected) {
                 report(
                     "FSIM-ELAB-SVPKG-002",
@@ -1183,9 +1727,12 @@ HierarchyBuilder::HierarchyBuilder(
             std::make_move_iterator(unit.functions.begin()),
             std::make_move_iterator(unit.functions.end()));
         unit.functions = std::move(function_imports);
+        task_imports.insert(
+            task_imports.end(),
+            std::make_move_iterator(unit.tasks.begin()),
+            std::make_move_iterator(unit.tasks.end()));
+        unit.tasks = std::move(task_imports);
     }
-
-
 
     void HierarchyBuilder::import_qualified_systemverilog_package_items(
         DesignUnit& unit,
@@ -1204,6 +1751,7 @@ HierarchyBuilder::HierarchyBuilder(
         std::vector<frontend::ParameterDeclaration> imports;
         std::vector<frontend::FunctionDeclaration>
             function_imports;
+        std::vector<frontend::TaskDeclaration> task_imports;
         for (const auto& identifier : ordered) {
             const auto& reference_span =
                 identifiers.at(identifier);
@@ -1259,11 +1807,19 @@ HierarchyBuilder::HierarchyBuilder(
                 [&](const auto& candidate) {
                     return candidate.name == constant_name;
                 });
+            const auto task = std::find_if(
+                specialized_package->unit.tasks.begin(),
+                specialized_package->unit.tasks.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == constant_name;
+                });
             if (declaration == package->parameters.end()
                 && alias
                     == specialized_package->unit.type_aliases.end()
                 && function
-                    == specialized_package->unit.functions.end()) {
+                    == specialized_package->unit.functions.end()
+                && task
+                    == specialized_package->unit.tasks.end()) {
                 report(
                     "FSIM-ELAB-SVPKG-002",
                     "SystemVerilog package '"
@@ -1289,6 +1845,15 @@ HierarchyBuilder::HierarchyBuilder(
                 auto imported = *function;
                 imported.name = identifier;
                 function_imports.push_back(std::move(imported));
+                append_package_dependencies(
+                    unit, *package, *specialized_package);
+                continue;
+            }
+            if (task
+                != specialized_package->unit.tasks.end()) {
+                auto imported = *task;
+                imported.name = identifier;
+                task_imports.push_back(std::move(imported));
                 append_package_dependencies(
                     unit, *package, *specialized_package);
                 continue;
@@ -1356,6 +1921,11 @@ HierarchyBuilder::HierarchyBuilder(
             std::make_move_iterator(unit.functions.begin()),
             std::make_move_iterator(unit.functions.end()));
         unit.functions = std::move(function_imports);
+        task_imports.insert(
+            task_imports.end(),
+            std::make_move_iterator(unit.tasks.begin()),
+            std::make_move_iterator(unit.tasks.end()));
+        unit.tasks = std::move(task_imports);
     }
 
 } // namespace fsim::elaboration

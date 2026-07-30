@@ -2569,8 +2569,8 @@ The completed ten-feature slice is:
 
 1. Represent VHDL value and interface type generics as distinct HIR formal
    kinds while preserving declaration order and source spans.
-2. Parse the VHDL-2008 unclassified `type T` form and diagnose
-   classified/defaulted forms outside that revision's bounded subset.
+2. Parse the VHDL-2008 unclassified `type T` form and diagnose VHDL-2019
+   classified or invalid default-like forms outside the VHDL-2008 grammar.
 3. Match named and positional type-mark actuals in the same case-insensitive
    association sequence as existing value generics.
 4. Resolve builtin, parent-local type/subtype, and direct package/library
@@ -2887,6 +2887,632 @@ six affected tests, respectively. The diagnostic catalog covers all 834
 production codes. The final tracked-source gate covers 233 authored files
 with an empty allowlist and a maximum of 1,987 lines. No CI state was
 inspected.
+
+### Fifty-fourth feature batch — synthesizable SystemVerilog tasks
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent task declarations, directional integral formals, locals, bodies,
+   lifetime, and source spans independently from functions.
+2. Parse bounded module/package tasks in ANSI and classic no-argument forms
+   with explicit automatic lifetime, valueless return, and checked end names.
+3. Resolve lexical, wildcard-imported, and directly package-selected task
+   names with stable duplicate, ambiguity, visibility, and arity diagnostics.
+4. Specialize 1–64-bit input/output/inout formal and local types through the
+   existing parameter-dependent packed type environments.
+5. Give each invocation deterministic automatic formal/local storage with
+   input/inout copy-in and ordered output/inout copy-out.
+6. Execute nonsuspending blocks, blocking assignments, conditionals, exact
+   case, canonical loops, expressions, function calls, nested task calls, and
+   valueless early return inside task bodies.
+7. Lower task calls through separate persistent SimIR `CallStack`, `Call`,
+   and `Return` control, with copy-out at the caller continuation.
+8. Reject task statements inside functions, exclude tasks from constant
+   function evaluation, and diagnose direct or indirect task recursion.
+9. Retain task-call debugger safe points, addressable formals/locals, and
+   transitive package-source specialization/native-cache provenance.
+10. Require frontend, negative, elaboration, interpreter/LLVM O0/O2,
+    debugger-local, cold/warm, and edited-task invalidation evidence.
+
+The task HIR and parser deliberately remain separate from value-returning
+functions. Runtime lowering allocates a per-process task frame for each
+visible task; inputs and inouts are copied before the call, output formals are
+initialized, and output/inout actuals are updated only after normal or early
+return. A distinct task return stack prevents task nesting from perturbing the
+existing function ABI. Direct and indirect recursive task graphs are rejected.
+
+The standalone application fixture invokes a local task that calls an
+imported package task, exercises input/output/inout semantics and task locals,
+and compares final values through the interpreter and LLVM O0/O2. It requires
+one cold native-object store, one warm hit, and a miss plus changed
+specialization key after editing the task implementation. The elaboration
+fixture separately covers direct package selection, nested function/task
+calls, early return, arity rejection, and recursion diagnosis.
+
+At the batch-54 boundary, static or implicit task lifetimes, classic body
+argument declarations, timing/event controls, `ref`, default/unpacked
+arguments, widths above 64 bits, recursion, runtime strings, DPI, generated
+tasks, and cross-language task calls remained release-gate work. Batch 55
+below supersedes the timing/event-control limitation for the precisely
+bounded automatic-task subset.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 47
+configured tests in 308.90 seconds, and Release passed all 48 configured
+tests in 124.34 seconds on 2026-07-29. The diagnostic catalog covers all 857
+production codes. The final tracked-source gate covers 236 authored files
+with an empty allowlist and a maximum of 1,987 lines. No CI state was
+inspected.
+
+### Fifty-fifth feature batch — suspending automatic SystemVerilog tasks
+
+The completed ten-feature architecture-gate slice is:
+
+1. Admit statement-level delays, named-event waits/triggers, and condition
+   waits in otherwise bounded automatic integral task bodies.
+2. Preserve the task return continuation, call-stack pointer/entries,
+   formals, and locals in persistent process registers across suspension.
+3. Leave output and inout copy-out operations at the caller continuation so
+   intermediate waits cannot publish formal values.
+4. Support nested suspension through distinct local and imported package
+   tasks, including package task delay normalization under the package time
+   context.
+5. Execute suspending calls from `initial`, event-controlled `always`, and
+   already-suspending tasks.
+6. Diagnose direct or indirect suspending calls from `final`,
+   `always_comb`, and `always_latch` through a fixed-point task call-graph
+   analysis while retaining the existing function/task separation.
+7. Retain task call/wait/process-suspend safe points and live task
+   formals/locals across debugger stop, read, and resume in interpreter and
+   compiled execution.
+8. Preserve a delayed nonblocking named-event deadline scheduled before a
+   nested suspension and NBA/update ordering when a condition wait wakes.
+9. Unwind valueless early return after suspension through the shared task
+   epilogue with exactly one ordered copy-out.
+10. Require signal-change and safe-point parity across interpreter, LLVM O0,
+    LLVM O2, cold/warm cache reuse, and a task-source edit that changes both
+    specialization identity and behavior.
+
+Task frames did not require a runtime ABI change: the existing SimIR task
+`CallStack`, formal/local registers, and caller continuation were already
+process-persistent. The implementation therefore adds frontend legality,
+time traversal, transitive lifecycle checks, and evidence around the
+existing resumable process frame. Delays inside package tasks now inherit
+and expose package `timescale`/`timeunit` context before project-resolution
+normalization.
+
+The standalone application fixture starts a local task from an
+event-controlled `always`, schedules a delayed named event, suspends through
+an imported package task, observes an output before return, waits on the
+event and an NBA-updated condition, returns early, and finally checks
+deferred output/inout publication. It compares final time/state,
+signal-change observations, and execution points across interpreter and LLVM
+O0/O2, stops at the compiled and interpreted suspended boundary to read live
+formals before resuming, requires cold/warm cache behavior, and edits the
+package task source to require a new key and native object.
+
+General timeout syntax is not claimed: the bounded SystemVerilog subset has
+no independent timeout construct without the still-deferred fork/join
+family. The fixture instead proves that an absolute delayed named-event
+deadline survives nested task suspension. Static or implicit task
+lifetimes, classic body argument declarations, `ref`, default/unpacked
+arguments, widths above 64 bits, recursion, runtime strings, fork/join and
+general event expressions, DPI, generated tasks, and cross-language task
+calls remain release-gate work.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 48
+configured tests in 313.13 seconds, and Release passed all 49 configured
+tests in 129.00 seconds on 2026-07-29. Focused LLVM Debug and LLVM-disabled
+task gates also passed. The diagnostic catalog covers all 858 production
+codes. The final tracked-source gate covers 237 authored files with an empty
+allowlist and a maximum of 1,987 lines. No CI state was inspected.
+
+### Fifty-sixth feature batch — constrained VHDL interface-type actuals
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent an unambiguously parsed VHDL subtype-indication actual in the
+   shared parameter-override HIR while retaining syntactically ambiguous
+   parenthesized forms for formal-aware elaboration.
+2. Parse named and positional `range` subtype indications with their selected
+   type mark, direction, bound expressions, and source spans without changing
+   ordinary value-generic expressions.
+3. Interpret a parenthesized VHDL slice as an index constraint only after its
+   association has matched an interface type formal.
+4. Resolve and constrain builtin vector families plus parent-local and direct
+   package-selected vector or one-dimensional user-array type marks.
+5. Resolve portable integer-family range actuals through the existing
+   signed-32-bit range folder and derived-base containment checks.
+6. Resolve nominal enumeration-range actuals with literal or correctly typed
+   parent-generic bounds while preserving nominal identity and direction.
+7. Forward constrained vector and enumeration actuals through a nested
+   unclassified interface type formal without losing concrete metadata.
+8. Reject null arrays, out-of-base ranges, constrained-array reconstraint,
+   wrong-kind/value expressions, type actuals on value formals, invisible
+   marks, unconstrained objects, and cross-language associations.
+9. Include every folded constraint in the existing versioned structural type
+   identity so specialization and native-object cache keys distinguish exact
+   actual shapes.
+10. Extend frontend, negative, elaboration, interpreter, LLVM O0/O2,
+    child-source, cold/warm cache, and edited-constraint selective-invalidation
+    evidence.
+
+The parser deliberately does not decide that every `T(L downto R)` expression
+is a type actual: the same syntax can denote a value slice. It retains that
+expression and the elaborator reinterprets it only when the matched formal has
+HIR kind `Type`. The unambiguous `T range L to R` form uses the typed actual
+slot immediately. Both paths converge on the ordinary VHDL named-type
+constraint merger and constant folder.
+
+Parent specialization now supplies both constant values and their nominal
+domains to child type-actual folding. This matters for enumeration bounds:
+an integer with the same ordinal is not accepted as an enumeration generic.
+Builtin vectors also receive explicit null-object checks at local-object and
+hierarchy-port creation rather than silently acquiring scalar width.
+
+The focused matrix covers builtin and generic-dependent vectors, portable
+integer ranges, reverse nominal enumeration ranges, local and
+package-selected scalar-element arrays, numeric and typed enumeration parent
+bounds, and nested forwarding. The application differential changes a direct
+`bit_vector(L downto 0)` actual from four to eight bits and requires only that
+specialization to miss the cache in interpreter/LLVM O0/O2 runs.
+
+Interface subprogram/package generics, generic package/subprogram units,
+type-formal-dependent record/array declarations, access/file/protected types,
+multidimensional or composite-element arrays, unconstrained runtime objects,
+and mixed-language type actuals remain release-gate work. VHDL-2019 classified
+interface type syntax remains outside the VHDL-2008 grammar.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, and VHDL type-generic application gate passed. The catalog now
+covers 859 production codes, and the source gate still covers 237 authored
+files with an empty allowlist and a maximum of 1,987 lines. The exact LLVM
+22.1.8 warnings-as-errors Debug regression passed all 48 configured tests in
+312.06 seconds, and Release passed all 49 configured tests in 127.89 seconds
+on 2026-07-29. No CI state was inspected.
+
+### Fifty-seventh feature batch — VHDL-2008 interface function generics
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent interface functions as a distinct generic-formal HIR kind with
+   retained purity, supported parameter/result profile, default, and span.
+2. Parse optional `pure`/`impure`, the standard optional `parameter` keyword,
+   constant input formals, scalar return type, required form, named default,
+   and `is <>`, with bounded recovery and stable diagnostics.
+3. Match named and positional function actual designators in the existing
+   VHDL generic association order without weakening value/type
+   disambiguation.
+4. Resolve a unique conforming pure local function or directly visible
+   package function, including declaration/body matching across package
+   design units.
+5. Copy the selected body under the formal name into specialization-local HIR
+   and retain versioned profile/source identity plus physical dependencies.
+6. Evaluate calls in bounded integer constant expressions and value-generic
+   defaults, leaving nonstatic calls for common runtime lowering.
+7. Forward a bound formal through another generic entity while preserving its
+   original body, source location, identity, and time-free context.
+8. Reuse typed SimIR function call frames, explicit returns, locals,
+   debugger call points, nonrecursive call-graph checks, and cache machinery.
+9. Diagnose malformed profiles, procedures, timing or signal updates,
+   non-name actuals, missing, invisible, wrong-profile, ambiguous, undefined,
+   impure, conflicting, and non-VHDL bindings.
+10. Add frontend/package-body, negative, elaboration, constant-default,
+    package visibility, interpreter, LLVM O0/O2, call-point, cold/warm, and
+    edited-function cache evidence.
+
+The parser retains VHDL's optional `parameter` keyword before the formal-list
+parentheses. Function formals are limited to constant input parameters and
+scalar integer/Boolean/bit or visible supported scalar subtypes. Bounded
+function bodies are automatic, time-free, use local-variable updates, and
+require explicit value return. The same time-free integral evaluator used by
+SystemVerilog functions folds VHDL calls only when all inputs are locally
+static; dynamic signal inputs remain as call HIR and lower through the common
+SimIR call/return path.
+
+Package bodies retain the existing VHDL package unit kind with an explicit
+secondary-unit marker. Package specialization merges a matching bounded
+function body into its visible declaration, preserves the body source as a
+dependency, and imports only defined public declarations. Function actual
+identity includes its profile, purity, physical source, and source offset,
+while the source dependency hash invalidates callers after an implementation
+edit.
+
+Interface procedures/packages, operator-symbol designators,
+unconstrained/composite formals or results, generated functions, general
+overload sets, generic package/subprogram units, recursive calls, and
+mixed-language subprogram actuals remain outside this bounded slice.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, and VHDL function-generic application gate passed. The catalog
+now covers 901 production codes, and the source gate covers 240 authored files
+with an empty allowlist and a maximum of 1,987 lines. The exact LLVM 22.1.8
+warnings-as-errors Debug regression passed all 49 configured tests in 316.94
+seconds, and Release passed all 50 configured tests in 128.77 seconds on
+2026-07-29. No CI state was inspected.
+
+### Fifty-eighth feature batch — VHDL-2008 interface procedure generics
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent interface procedures as a distinct generic-formal HIR kind with
+   retained constant/variable class, mode, supported scalar profile, default,
+   association spans, and source span.
+2. Parse the standard optional `parameter` keyword, constant or variable
+   `in`/`out`/`inout` formals, required form, named default, and `is <>`, with
+   bounded recovery and stable diagnostics.
+3. Parse bounded local and declaration/body-matched package procedure bodies,
+   procedure-local variables, valueless return, and positional or named
+   sequential procedure-call statements.
+4. Resolve a unique conforming same-language local or directly visible package
+   procedure by the complete supported object-class, mode, and type profile.
+5. Copy the selected body under the formal name into specialization-local HIR
+   and retain versioned profile/source identity plus physical package-body
+   dependencies.
+6. Lower time-free sequential procedure calls through independent SimIR call
+   frames with deterministic scalar input copy-in and ordered output/inout
+   copy-out to writable signal or variable actuals.
+7. Forward a bound interface procedure through another generic entity without
+   losing its selected body, formal modes, source, or cache provenance.
+8. Preserve debugger call points and live procedure formals and locals across
+   interpreter and LLVM O0/O2 execution, including a nested procedure call.
+9. Diagnose malformed profiles, missing/defaultless, expression, invisible,
+   wrong-profile, ambiguous, undefined, function-kind, conflicting,
+   generated/scoped, timed, recursive, non-writable, and cross-language
+   actuals.
+10. Add frontend, package-body, negative, elaboration, runtime, nested-call,
+    debugger-local, cold/warm, and edited-procedure selective-cache evidence.
+
+Procedures remain distinct from both value-returning VHDL functions and
+SystemVerilog tasks in source HIR and call statements. Only the low-level SimIR
+call-stack representation is shared. The bounded body is automatic, time-free,
+scalar, and may update procedure formals or local variables. Signal assignment,
+waits, suspensions, unconstrained or composite formals, signal/file classes,
+operator-symbol designators, generated declarations, general overload sets,
+generic package/subprogram units, and mixed-language procedure actuals remain
+outside this slice.
+
+Package specialization now merges a matching bounded procedure body into its
+public declaration, imports only defined declared procedures, and retains the
+separate body source as a transitive dependency. Procedure actual identity
+includes the complete supported class/mode/type profile, physical source, and
+source offset. Editing a local actual invalidates direct, named-default,
+box-default, and forwarded consumers while leaving the package-procedure
+specialization reusable.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, and VHDL procedure-generic application gates passed. The
+catalog now covers 949 production codes and the source gate covers 244 authored
+files with an empty allowlist and a maximum of 1,987 lines. The exact LLVM
+22.1.8 warnings-as-errors Debug regression passed all 50 configured tests in
+306.74 seconds, and Release passed all 51 configured tests in 132.71 seconds
+on 2026-07-29. No CI state was inspected.
+
+### Fifty-ninth feature batch — VHDL-2008 interface package generics
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent interface package formals and package instances as distinct HIR
+   kinds retaining the selected template, generic-map form, associations,
+   defaults, identities, and source spans.
+2. Parse bounded generic package declarations plus
+   entity/architecture-local package instantiations with explicit,
+   individual-`<>`, and whole-`<>` generic maps.
+3. Support package templates over the existing scalar value, type, function,
+   and procedure generic families, including dependent explicit maps.
+4. Specialize local package instances in declaration order with matching
+   bounded bodies, declarations, maps, and transitive source provenance.
+5. Resolve a unique same-language local package-instance actual against the
+   interface formal's template and supported fixed/default/box map profile.
+6. Materialize selected constants, types, functions, and procedures beneath
+   the interface-package formal prefix for dependent declarations and calls.
+7. Forward an exact interface package binding through a nested generic entity
+   without losing its instance, selected members, map, source dependencies, or
+   specialization identity.
+8. Define a versioned canonical package identity over the template, actual
+   map, specialized declarations/bodies, and transitive package-body sources.
+9. Diagnose malformed maps; missing, expression, invisible, wrong-kind,
+   wrong-template, incompatible, unspecialized, ambiguous, cyclic,
+   generated/scoped, incomplete-body, nongeneric-target, and cross-language
+   package actuals.
+10. Add frontend, negative, elaboration, dependent-object/subprogram runtime,
+    debugger-frame, interpreter/LLVM O0/O2, cold/warm, and edited-package
+    selective-cache evidence.
+
+This slice deliberately keeps package instances acyclic, same-language, and
+local to entity or architecture declarative regions. Generic templates use
+only the already supported scalar value/type/function/procedure families.
+Nested package instantiation, generated/scoped instances, general generic
+package or subprogram units, unconstrained/composite declarations, overload
+sets, and mixed-language package actuals remain outside the bounded contract.
+
+Package specialization now resolves dependent type and subprogram actuals in
+declaration order, merges matching bounded bodies, renames callable members
+under the selected formal prefix, and propagates physical declaration/body
+dependencies into specialization and native-cache keys. Editing the package
+body invalidates its direct and forwarded consumers while an unrelated
+package specialization remains reusable. The runtime differential covers a
+direct local instance and a forwarded interface instance at interpreter,
+LLVM O0, and LLVM O2, including debugger-visible procedure metadata.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, and VHDL package-generic application gates passed. The catalog
+now covers 979 production codes and the source gate covers 249 authored files
+with an empty allowlist and a maximum of 1,987 lines. The exact LLVM 22.1.8
+warnings-as-errors Debug regression passed all 51 configured tests in 320.46
+seconds, and Release passed all 52 configured tests in 130.93 seconds on
+2026-07-29. No CI state was inspected.
+
+### Sixtieth feature batch — VHDL-2008 generic subprograms
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent generic function/procedure templates and instantiated
+   subprograms as distinct HIR forms retaining generic lists, callable
+   profiles, maps, bodies, spans, and identities.
+2. Parse bounded generic subprogram clauses over the existing scalar value,
+   type, function, and procedure generic families with stable recovery.
+3. Parse local and package-visible function/procedure instantiations with
+   omitted-default, explicit positional/named, individual-`<>`, and
+   whole-`<>` maps.
+4. Match declaration/body pairs and specialize instances in declaration
+   order while keeping the generic template itself noncallable.
+5. Resolve dependent scalar types, values, function calls, and procedure
+   calls inside the specialized body from the selected generic map.
+6. Bind an instantiated function or procedure as an interface-subprogram
+   actual and forward its helper bodies and identity through nested hierarchy.
+7. Reuse the independent function and time-free procedure SimIR call frames,
+   including deterministic procedure copy-in/copy-out and debugger metadata.
+8. Define a versioned canonical identity over the template, map, callable
+   profile, declaration/body sources, bound helpers, and transitive package
+   provenance.
+9. Diagnose malformed and illegal maps; missing, ambiguous, wrong-kind,
+   nongeneric, unspecialized, recursive, conflicting, generated/scoped,
+   incomplete, mismatched, nested-package, and cross-language cases.
+10. Add frontend, negative, elaboration, package visibility, nested
+    forwarding, runtime, debugger, interpreter/LLVM O0/O2, cold/warm, and
+    edited-source selective-cache evidence.
+
+Generic subprogram templates remain bounded to pure functions or time-free
+procedures with scalar callable profiles and the already implemented generic
+families. Package declaration/body pairs export instantiated callables, while
+local instances retain declaration-order visibility. Each bound function or
+procedure generic becomes an instance-local helper, and transitive helper
+dependencies follow an instantiated subprogram when it is forwarded as an
+interface actual.
+
+Operator-symbol designators, general overload sets, unconstrained/composite
+profiles, nested generic templates, generated/scoped instantiations,
+suspending generic procedures, interface-package formals inside generic
+subprograms, and mixed-language actuals remain outside this bounded slice.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, and VHDL generic-subprogram application gates passed. The
+catalog now covers 1,008 production codes and the source gate covers 253
+authored files with an empty allowlist and a maximum of 1,987 lines. The exact
+LLVM 22.1.8 warnings-as-errors Debug regression passed all 52 configured tests
+in 315.70 seconds, and Release passed all 53 configured tests in 129.98
+seconds on 2026-07-29. No CI state was inspected.
+
+### Sixty-first feature batch — VHDL-2008 configurations
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent configuration declarations, architecture blocks, component
+   configurations/specifications, binding indications, instantiation
+   selections, maps, context, and spans as distinct HIR.
+2. Parse bounded named configuration declarations selecting one architecture
+   through a top-level `for architecture_name` block.
+3. Parse architecture declarative configuration specifications and
+   declaration-owned component configurations with explicit
+   `use entity library.entity(architecture)` bindings.
+4. Support explicit component-label lists plus bounded `all` and `others`
+   selection with deterministic overlap, missing-component, and wrong-label
+   diagnostics.
+5. Index named configurations as VHDL project-top targets and resolve exactly
+   one entity and selected architecture in the manifest library.
+6. Give configuration-declaration rules precedence at the configured root,
+   apply architecture specifications recursively, and keep direct entity
+   instances and manifest bindings independent.
+7. Compose named generic and port binding maps through named component actuals
+   before the existing specialization and boundary-legality paths.
+8. Define a versioned configuration identity over its target, selection rules,
+   maps, and selected architectures while propagating physical configuration
+   sources into configured child cache provenance.
+9. Diagnose malformed or incomplete HIR; missing/ambiguous targets,
+   components, or labels; conflicting `all`/`others`; unsupported nested
+   forms; unresolved positional map composition; recursion; and cross-language
+   targets.
+10. Add frontend, negative, elaboration, top-selection, nested component,
+    runtime, source-debug, interpreter/LLVM O0/O2, cold/warm, and edited-
+    configuration selective-cache evidence.
+
+The executable subset is same-language VHDL and applies only to
+component-style instances. A configuration declaration contains one selected
+architecture block, while an architecture may carry bounded declarative
+configuration specifications. Named binding maps may rename component
+generic/port formals into the selected entity interface. The configuration
+source invalidates only the configured root and selected component consumers;
+direct entity, unrelated stable, and nested architecture-specification
+specializations remain reusable.
+
+General nested block/generate or incremental configurations, configuration
+aspects and `open`, positional binding-indication maps, complete component-
+declaration and default-binding rules, and mixed-language configuration
+targets remain outside this bounded slice. Batch 62 subsequently added
+architecture-local component declarations and normalized positional component
+instance associations before this binding-indication composition.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, and VHDL configuration application gates passed. The catalog
+now covers 1,042 production codes and the source gate covers 258 authored
+files with an empty allowlist and a maximum of 1,987 lines. The exact LLVM
+22.1.8 warnings-as-errors Debug regression passed all 53 configured tests in
+320.44 seconds, and Release passed all 54 configured tests in 134.91 seconds
+on 2026-07-29. No CI state was inspected.
+
+### Sixty-second feature batch — VHDL-2008 component declarations
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent architecture-local component declarations, value-generic
+   profiles/defaults, scalar/vector port profiles/modes/default metadata,
+   declaration order, optional end names, and spans as explicit HIR.
+2. Parse bounded component declarations in architecture declarative regions
+   using the existing scalar/vector type and value-generic grammar.
+3. Diagnose duplicate/conflicting formals and declarations, mismatched end
+   names, configuration use before declaration, non-value generics, and
+   unsupported component items.
+4. Require each component-style instance to resolve exactly one visible
+   declaration instead of treating its component name as an implicit entity.
+5. Implement deterministic same-library default binding to exactly one entity
+   and one uniquely available architecture when no configuration rule applies.
+6. Normalize named and positional component generic/port actuals against the
+   declaration, enforce ordering/coverage/default rules, and map compatible
+   formals by position into the entity interface.
+7. Check value-generic kind/type/dependent-width and port mode/type/width
+   compatibility, including renamed formals, while materializing component
+   defaults independently of entity defaults.
+8. Validate configuration binding maps against both component and entity
+   profiles and compose them after positional component actual normalization.
+9. Diagnose missing/ambiguous declarations, entities, or architectures;
+   incompatible profiles; illegal maps; cycles; and implicit cross-language
+   default binding.
+10. Add frontend, negative, elaboration, configuration-interaction, hierarchy,
+    source-debug, interpreter/LLVM O0/O2, cold/warm, and edited-profile
+    selective-cache evidence.
+
+The executable subset is architecture-local, same-language VHDL and covers
+value generics plus the existing supported scalar/vector port types. Component
+and entity formal names may differ when their declaration-order profiles
+match. A configuration binding may explicitly rename those formals, while an
+unconfigured component requires a unique entity and architecture in the
+parent library. Direct entity and explicit manifest bindings remain
+independent.
+
+Each bound child carries a versioned component declaration/profile/target
+identity and the physical declaration source as semantic cache provenance.
+The runtime differential renames only component formals between builds:
+component consumers and the parent receive new keys, while an unrelated
+direct-entity child remains reusable.
+
+Package/entity-visible or overloaded component declarations, non-value
+component generics, composite interfaces, executable omitted port defaults,
+mixed-language default binding, and complete LRM default-binding precedence
+remain outside this bounded slice.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, configuration, and component application gates passed. The
+catalog now covers 1,067 production codes and the source gate covers 263
+authored files with an empty allowlist and a maximum of 1,987 lines. The exact
+LLVM 22.1.8 warnings-as-errors Debug regression passed all 54 configured tests
+in 312.54 seconds, and Release passed all 55 configured tests in 134.16
+seconds on 2026-07-30. No CI state was inspected.
+
+### Sixty-third feature batch — nested VHDL-2008 configurations
+
+The completed ten-feature architecture-gate slice is:
+
+1. Represent recursive block/generate configurations, optional explicit
+   generate indices, child rules, entity/configuration/open aspects, maps, and
+   spans as explicit HIR.
+2. Parse nested configurations for existing unguarded labeled static blocks.
+3. Parse and elaborate statically selected one-dimensional iterative,
+   conditional, and case-generate configuration occurrences over canonical
+   generated hierarchy paths.
+4. Resolve same-language `use configuration library.name` aspects with `work`
+   normalized to the parent library and activate the referenced configuration
+   only for that component subtree.
+5. Treat `use open` as an explicit request for the bounded unique same-library
+   default component binding.
+6. Select the deepest matching nested rule, falling back deterministically
+   through enclosing configuration blocks and architecture specifications.
+7. Compose supported generic and port maps through nested entity and referenced
+   configuration aspects after component-formal normalization.
+8. Define version-2 recursive configuration/binding identities containing
+   nested paths, maps, references, selected targets, and transitive physical
+   sources.
+9. Diagnose missing, ambiguous, duplicate, or non-static scopes; missing or
+   ambiguous references; ambiguous open defaults; cycles; invalid maps; and
+   cross-language configuration targets.
+10. Add frontend, negative, block/for/if/case elaboration, reference hierarchy,
+    source-debug, interpreter/LLVM O0/O2, cold/warm, and edited-reference
+    selective-cache evidence.
+
+The executable subset remains same-language VHDL and uses existing unguarded
+blocks, already-supported generate forms, one-dimensional explicit generate
+indices, and architecture-local bounded component profiles. Incremental
+configurations, dynamic or multi-index generate specifications, general
+block-specification ranges, package-visible component overloads, and
+mixed-language configuration references remain outside this slice.
+
+Each configured child now carries a recursive binding identity. A referenced
+configuration is registered at the selected child hierarchy path, so its rules
+cannot leak into siblings. Editing the referenced configuration invalidates
+that child and its configured descendants while unrelated root/direct/stable
+specializations retain their native-cache keys.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, and VHDL configuration application gates passed. The catalog
+now covers 1,070 production codes and the source gate covers 263 authored files
+with an empty allowlist and a maximum of 1,987 lines. The exact LLVM 22.1.8
+warnings-as-errors Debug regression passed all 54 configured tests in 181.60
+seconds, and Release passed all 55 configured tests in 64.66 seconds on
+2026-07-30. No CI state was inspected.
+
+### Sixty-fourth feature batch — VHDL-2008 component visibility and overloads
+
+The completed ten-feature architecture-gate slice is:
+
+1. Extend component HIR ownership with explicit architecture, entity, package,
+   block, and generate declarative-region provenance plus lexical scope paths.
+2. Parse bounded component declarations in existing entity, package,
+   architecture, unguarded-block, and selected-generate declarative regions.
+3. Import package-declared component profiles through existing selected and
+   wildcard `use` visibility with owning-package source provenance.
+4. Select nearest lexical declarations before architecture, entity, and
+   directly visible package declarations without leaking sibling scopes.
+5. Select repeated-name component overloads by normalized generic/port
+   association shape rather than rejecting every repeated name.
+6. Include modes, resolved types, value-generic profiles, and dependent widths
+   in bounded overload and entity-profile matching.
+7. Select the latest analyzed compatible same-library architecture by default
+   while preserving architecture-specification and configuration precedence.
+8. Apply architecture specifications and recursive configuration rules after
+   choosing the visible component declaration/profile.
+9. Preserve declaration region, scope, order, owner/package sources, normalized
+   profile, and selected target in version-2 specialization/cache identity.
+10. Add frontend, negative, elaboration, lexical/package/overload/default
+    precedence, interpreter/LLVM O0/O2, debugger, cold/warm, and edited-package-
+    profile selective-cache evidence.
+
+The executable subset remains same-language VHDL and covers existing bounded
+value generics and scalar/vector ports. Components declared in selected
+generate bodies receive the canonical generated scope path; a block/generate
+declaration is visible only in its own subtree. Entity and architecture
+declarations shadow imported package declarations, and equally visible
+overloads are filtered using the instance association shape and the unique
+default entity interface. Package ownership and source dependencies survive
+normalization into each selected child.
+
+Default binding now uses deterministic parsed-unit analysis order: the latest
+compatible architecture wins when no explicit rule applies. Configuration
+specifications no longer depend on textual component-declaration order and
+continue to override that default after overload selection. This replaces the
+former multiple-architecture error while retaining ambiguity diagnostics for
+multiple entity interfaces or equally visible matching declarations.
+
+Non-value component generics, composite component interfaces, executable
+omitted port defaults, mixed-language default binding, incremental
+configurations, complete library analysis-order semantics, and general overload
+resolution remain outside this bounded slice.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, configuration, and component application gates passed. The
+catalog now covers 1,069 production codes and the source gate covers 263
+authored files with an empty allowlist and a maximum of 1,987 lines. The exact
+LLVM 22.1.8 warnings-as-errors Debug regression passed all 54 configured tests
+in 318.53 seconds, and Release passed all 55 configured tests in 130.33 seconds
+on 2026-07-30. No CI state was inspected.
 
 ## v1 release condition
 

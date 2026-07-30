@@ -71,7 +71,14 @@ int main() {
     test_systemverilog_compiler_directives();
     test_systemverilog_parameters();
     test_systemverilog_packages();
+    test_vhdl_function_declarations();
+    test_vhdl_procedure_declarations();
+    test_vhdl_generic_subprogram_declarations();
+    test_vhdl_component_declarations();
+    test_vhdl_configurations();
+    test_vhdl_package_generics();
     test_systemverilog_function_declarations();
+    test_systemverilog_task_declarations();
     test_immediate_assertions();
     test_vhdl_literal_report();
     test_process_variable_declarations();

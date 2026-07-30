@@ -302,9 +302,13 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_concurrent.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_components.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_core.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_configurations.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_declarations.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_expressions.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_functions.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_packages.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_statements.cpp"
 )
 add_library(fsim_frontend STATIC ${FSIM_FRONTEND_SOURCES})
@@ -343,6 +347,10 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_sv_strings.cpp
       src/elaboration/elaboration_sv_type_parameters.cpp
       src/elaboration/elaboration_type_generics.cpp
+      src/elaboration/elaboration_vhdl_components.cpp
+      src/elaboration/elaboration_vhdl_configurations.cpp
+      src/elaboration/elaboration_vhdl_packages.cpp
+      src/elaboration/elaboration_vhdl_subprograms.cpp
       src/elaboration/elaboration_targets.cpp
       src/elaboration/hierarchy_packages.cpp
       src/elaboration/hierarchy_systemc.cpp
@@ -354,7 +362,9 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_expression_system.cpp
       src/elaboration/lowerer_expression_unary.cpp
       src/elaboration/lowerer_functions.cpp
+      src/elaboration/lowerer_procedures.cpp
       src/elaboration/lowerer_process.cpp
+      src/elaboration/lowerer_tasks.cpp
       src/elaboration/lowerer_types.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)

@@ -1163,6 +1163,18 @@ void substitute_sv_function(
     substitute_sv_statements(function.statements, environment);
 }
 
+void substitute_sv_task(
+    frontend::TaskDeclaration& task,
+    const SystemVerilogConstantEnvironment& environment) {
+    for (auto& argument : task.arguments) {
+        substitute_sv_type(argument.type, environment);
+    }
+    for (auto& variable : task.variables) {
+        substitute_sv_variable(variable, environment);
+    }
+    substitute_sv_statements(task.statements, environment);
+}
+
 void substitute_sv_statements(
     std::vector<Statement>& statements,
     const SystemVerilogConstantEnvironment& environment) {
@@ -1173,6 +1185,15 @@ void substitute_sv_statements(
             statement.value, environment);
         substitute_systemverilog_parameters(
             statement.condition, environment);
+        for (auto& argument : statement.task_arguments) {
+            substitute_systemverilog_parameters(
+                argument, environment);
+        }
+        for (auto& association :
+             statement.procedure_arguments) {
+            substitute_systemverilog_parameters(
+                association.value, environment);
+        }
         substitute_systemverilog_parameters(
             statement.loop_initial, environment);
         substitute_systemverilog_parameters(
@@ -1331,6 +1352,9 @@ void substitute_systemverilog_parameters(
     }
     for (auto& function : unit.functions) {
         substitute_sv_function(function, environment);
+    }
+    for (auto& task : unit.tasks) {
+        substitute_sv_task(task, environment);
     }
     substitute_sv_statements(
         unit.concurrent_statements, environment);

@@ -404,8 +404,15 @@ std::string unit_key(const frontend::DesignUnit& unit)  {
     case frontend::UnitKind::VhdlArchitecture:
       return "vhdl:" + unit.library + ":architecture:"
           + unit.primary_name + ':' + unit.name;
+    case frontend::UnitKind::VhdlConfiguration:
+      return "vhdl:" + unit.library + ":configuration:"
+          + unit.name;
     case frontend::UnitKind::VhdlPackage:
-      return "vhdl:" + unit.library + ":package:" + unit.name;
+      return "vhdl:" + unit.library
+          + (unit.primary_name.empty()
+                 ? ":package:"
+                 : ":package-body:")
+          + unit.name;
     case frontend::UnitKind::VhdlContext:
       return "vhdl:" + unit.library + ":context:" + unit.name;
     case frontend::UnitKind::SystemVerilogPackage:

@@ -528,7 +528,7 @@ void VerilogParser::parse_time_declaration(
     error(
         declaration,
         "FSIM-SV-SEM-047",
-        "module time declarations must precede other module items");
+        "module/package time declarations must precede other items");
   }
 
   bool& unit_declared =
@@ -828,6 +828,11 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
           unit.functions,
           [&](const FunctionDeclaration& existing) {
             return existing.name == function.name;
+          })
+          || std::ranges::any_of(
+              unit.tasks,
+              [&](const TaskDeclaration& existing) {
+            return existing.name == function.name;
           });
       if (duplicate) {
         error(
@@ -836,6 +841,27 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
             "duplicate module function '" + function.name + "'");
       } else {
         unit.functions.push_back(std::move(function));
+      }
+    } else if (match_keyword("task")) {
+      module_has_non_time_item_ = true;
+      auto task = parse_task(previous());
+      const bool duplicate = std::ranges::any_of(
+          unit.tasks,
+          [&](const TaskDeclaration& existing) {
+            return existing.name == task.name;
+          })
+          || std::ranges::any_of(
+              unit.functions,
+              [&](const FunctionDeclaration& existing) {
+            return existing.name == task.name;
+          });
+      if (duplicate) {
+        error(
+            start,
+            "FSIM-SV-SEM-073",
+            "duplicate module task '" + task.name + "'");
+      } else {
+        unit.tasks.push_back(std::move(task));
       }
     } else if (match_keyword("genvar")) {
       module_has_non_time_item_ = true;

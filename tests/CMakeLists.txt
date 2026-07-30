@@ -9,6 +9,11 @@ add_executable(
   frontend/frontend_vhdl_type_tests.cpp
   frontend/frontend_vhdl_statement_tests.cpp
   frontend/frontend_declaration_tests.cpp
+  frontend/frontend_vhdl_subprogram_tests.cpp
+  frontend/frontend_vhdl_generic_subprogram_tests.cpp
+  frontend/frontend_vhdl_component_tests.cpp
+  frontend/frontend_vhdl_configuration_tests.cpp
+  frontend/frontend_vhdl_package_generic_tests.cpp
   frontend/frontend_statement_tests.cpp
   frontend/frontend_generate_output_tests.cpp
 )
@@ -79,11 +84,18 @@ add_executable(
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_process_test.cpp
   elaboration/elaborator_function_test.cpp
+  elaboration/elaborator_task_test.cpp
   elaboration/elaborator_expression_test.cpp
   elaboration/elaborator_numeric_test.cpp
   elaboration/elaborator_selection_test.cpp
   elaboration/elaborator_types_test.cpp
   elaboration/elaborator_type_generic_test.cpp
+  elaboration/elaborator_vhdl_function_test.cpp
+  elaboration/elaborator_vhdl_procedure_test.cpp
+  elaboration/elaborator_vhdl_package_test.cpp
+  elaboration/elaborator_vhdl_generic_subprogram_test.cpp
+  elaboration/elaborator_vhdl_component_test.cpp
+  elaboration/elaborator_vhdl_configuration_test.cpp
 )
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
@@ -292,6 +304,121 @@ set_tests_properties(
   PROPERTIES LABELS "fast;generics;vhdl;cache;hierarchy"
 )
 
+add_executable(
+  fsim_vhdl_function_generic_application_tests
+  app/vhdl_function_generic_application_test.cpp
+)
+fsim_configure_test(fsim_vhdl_function_generic_application_tests)
+target_link_libraries(
+  fsim_vhdl_function_generic_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_function_generics
+  COMMAND fsim_vhdl_function_generic_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_function_generics
+  PROPERTIES LABELS "fast;functions;generics;vhdl;cache;hierarchy"
+)
+
+add_executable(
+  fsim_vhdl_procedure_generic_application_tests
+  app/vhdl_procedure_generic_application_test.cpp
+)
+fsim_configure_test(fsim_vhdl_procedure_generic_application_tests)
+target_link_libraries(
+  fsim_vhdl_procedure_generic_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_procedure_generics
+  COMMAND fsim_vhdl_procedure_generic_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_procedure_generics
+  PROPERTIES LABELS "fast;procedures;generics;vhdl;cache;hierarchy"
+)
+
+add_executable(
+  fsim_vhdl_package_generic_application_tests
+  app/vhdl_package_generic_application_test.cpp
+)
+fsim_configure_test(fsim_vhdl_package_generic_application_tests)
+target_link_libraries(
+  fsim_vhdl_package_generic_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_package_generics
+  COMMAND fsim_vhdl_package_generic_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_package_generics
+  PROPERTIES
+    LABELS "fast;packages;functions;procedures;generics;vhdl;cache;hierarchy"
+)
+
+add_executable(
+  fsim_vhdl_generic_subprogram_application_tests
+  app/vhdl_generic_subprogram_application_test.cpp
+)
+fsim_configure_test(
+  fsim_vhdl_generic_subprogram_application_tests)
+target_link_libraries(
+  fsim_vhdl_generic_subprogram_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_generic_subprograms
+  COMMAND fsim_vhdl_generic_subprogram_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_generic_subprograms
+  PROPERTIES
+    LABELS "fast;functions;procedures;generics;vhdl;cache;hierarchy"
+)
+
+add_executable(
+  fsim_vhdl_configuration_application_tests
+  app/vhdl_configuration_application_test.cpp
+)
+fsim_configure_test(
+  fsim_vhdl_configuration_application_tests)
+target_link_libraries(
+  fsim_vhdl_configuration_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_configurations
+  COMMAND fsim_vhdl_configuration_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_configurations
+  PROPERTIES
+    LABELS "fast;configurations;vhdl;cache;hierarchy;debugger"
+)
+
+add_executable(
+  fsim_vhdl_component_application_tests
+  app/vhdl_component_application_test.cpp
+)
+fsim_configure_test(
+  fsim_vhdl_component_application_tests)
+target_link_libraries(
+  fsim_vhdl_component_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_components
+  COMMAND fsim_vhdl_component_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_components
+  PROPERTIES
+    LABELS "fast;components;vhdl;cache;hierarchy;debugger"
+)
+
   add_executable(
     fsim_scoped_local_application_tests
     app/scoped_local_application_test.cpp
@@ -345,6 +472,46 @@ set_tests_properties(
     fsim.application.sv_functions
     PROPERTIES
       LABELS "fast;functions;systemverilog;cache"
+  )
+
+  add_executable(
+    fsim_sv_task_application_tests
+    app/sv_task_application_test.cpp
+  )
+  fsim_configure_test(fsim_sv_task_application_tests)
+  target_link_libraries(
+    fsim_sv_task_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_tasks
+    COMMAND fsim_sv_task_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_tasks
+    PROPERTIES
+      LABELS "fast;tasks;systemverilog;cache"
+  )
+
+  add_executable(
+    fsim_sv_suspending_task_application_tests
+    app/sv_suspending_task_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_sv_suspending_task_application_tests
+  )
+  target_link_libraries(
+    fsim_sv_suspending_task_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_suspending_tasks
+    COMMAND fsim_sv_suspending_task_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_suspending_tasks
+    PROPERTIES
+      LABELS "fast;tasks;timing;systemverilog;cache"
   )
 
   add_executable(

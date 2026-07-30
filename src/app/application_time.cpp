@@ -196,6 +196,12 @@ std::string effective_resolution(
     for (auto& process : unit.processes) {
       visit_delays(process.statements, consider);
     }
+    for (auto& task : unit.tasks) {
+      visit_delays(task.statements, consider);
+    }
+    for (auto& procedure : unit.procedures) {
+      visit_delays(procedure.statements, consider);
+    }
   }
   return finest_spelling;
 }
@@ -368,11 +374,25 @@ bool normalize_delays(
     for (auto& process : unit.processes) {
       visit_delays(process.statements, normalize);
     }
+    for (auto& task : unit.tasks) {
+      visit_delays(task.statements, normalize);
+    }
+    for (auto& procedure : unit.procedures) {
+      visit_delays(procedure.statements, normalize);
+    }
     validate_vhdl_rejection_limits(
         unit.concurrent_statements, diagnostics, valid);
     for (const auto& process : unit.processes) {
       validate_vhdl_rejection_limits(
           process.statements, diagnostics, valid);
+    }
+    for (const auto& task : unit.tasks) {
+      validate_vhdl_rejection_limits(
+          task.statements, diagnostics, valid);
+    }
+    for (const auto& procedure : unit.procedures) {
+      validate_vhdl_rejection_limits(
+          procedure.statements, diagnostics, valid);
     }
   }
   return valid;
@@ -408,6 +428,12 @@ void select_delay_alternatives(
     visit_delays(unit.concurrent_statements, select);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, select);
+    }
+    for (auto& task : unit.tasks) {
+      visit_delays(task.statements, select);
+    }
+    for (auto& procedure : unit.procedures) {
+      visit_delays(procedure.statements, select);
     }
   }
 }

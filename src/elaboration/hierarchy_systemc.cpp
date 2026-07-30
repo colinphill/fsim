@@ -605,6 +605,10 @@ using namespace elaboration_detail;
                     actuals,
                     {},
                     {},
+                    {},
+                    {},
+                    {},
+                    {},
                     selected->language);
             auto child_aliases = connect_foreign_child(
                 child, specialized.unit, child_path, objects);
@@ -614,7 +618,8 @@ using namespace elaboration_detail;
                 std::move(child_aliases),
                 std::move(specialized.environment),
                 std::move(specialized.values),
-                std::move(specialized.identity_values));
+                std::move(specialized.identity_values),
+                std::move(specialized.packages));
         }
         stack_.pop_back();
     }
@@ -629,7 +634,8 @@ using namespace elaboration_detail;
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
         std::vector<std::pair<std::string, std::string>>
-            parameter_identity_values) {
+            parameter_identity_values,
+        PackageEnvironment package_environment) {
         const auto parent_types =
             unit.language == frontend::Language::Vhdl2008
                 ? local_vhdl_type_environment(unit)
@@ -637,6 +643,24 @@ using namespace elaboration_detail;
                     == frontend::Language::SystemVerilog2017
                 ? local_systemverilog_type_environment(unit)
                 : NamedTypeEnvironment{};
+        ConstantDomainEnvironment parent_domains;
+        for (const auto& parameter : unit.parameters) {
+            if (parameter.kind
+                    != frontend::ParameterKind::Value
+                || parameter_environment.find(parameter.name)
+                    == parameter_environment.end()) {
+                continue;
+            }
+            parent_domains.insert_or_assign(
+                parameter.name,
+                ConstantTypeInfo{
+                    parameter.type.domain,
+                    unit.language
+                            == frontend::Language::Vhdl2008
+                        && !parameter.type
+                                .enumeration_literals.empty(),
+                    parameter.type.nominal_type});
+        }
         if (!instance_paths_.insert(path).second) {
             report(
                 "FSIM-ELAB-HIER-001",
@@ -751,6 +775,8 @@ using namespace elaboration_detail;
             visible_types,
             visible_type_marks,
             unit.functions,
+            unit.tasks,
+            unit.procedures,
             diagnostics_};
         for (std::size_t index = 0;
              index < unit.concurrent_statements.size(); ++index) {
@@ -770,6 +796,7 @@ using namespace elaboration_detail;
         }
         design_.specializations_.push_back(std::move(specialization));
 
+        validate_vhdl_component_configurations(unit, path);
         for (const auto& instance : unit.instances) {
             const auto child_path = path + "." + instance.name;
             const auto* binding = binding_for(child_path);
@@ -802,31 +829,81 @@ using namespace elaboration_detail;
                     continue;
                 }
             }
-            const auto* target =
-                bound_target(instance, unit, child_path, binding);
+            ConfiguredVhdlInstance configured;
+            const frontend::Instance* selected_instance =
+                &instance;
+            const DesignUnit* target = nullptr;
+            if (binding == nullptr) {
+                configured =
+                    bind_vhdl_component_instance(
+                        unit,
+                        instance,
+                        child_path,
+                        parameter_environment);
+                if (!configured.valid) {
+                    continue;
+                }
+                if (configured.applied) {
+                    selected_instance = &configured.instance;
+                    target = configured.target
+                        ? &*configured.target
+                        : nullptr;
+                    if (target == nullptr) {
+                        continue;
+                    }
+                }
+            }
+            if (target == nullptr) {
+                target = bound_target(
+                    *selected_instance,
+                    unit,
+                    child_path,
+                    binding);
+            }
             if (target == nullptr) {
                 continue;
             }
             auto child_specialized = specialize_selected_unit(
                 *target,
-                instance.parameter_overrides,
+                selected_instance->parameter_overrides,
                 parameter_environment,
+                parent_domains,
                 parent_types,
+                unit.functions,
+                unit.procedures,
+                package_environment,
                 unit.language);
+            if (!configured.component_identity.empty()) {
+                if (child_specialized.identity_values.empty()) {
+                    child_specialized.identity_values =
+                        child_specialized.values;
+                }
+                child_specialized.values.emplace_back(
+                    "__component",
+                    configured.component_name);
+                child_specialized.identity_values.emplace_back(
+                    "__component",
+                    configured.component_identity);
+            }
             auto child_aliases = connect_instance(
-                instance,
+                *selected_instance,
                 child_specialized.unit,
                 child_path,
                 local,
                 binding,
                 target->language != unit.language);
+            if (configured.referenced_configuration != nullptr) {
+                vhdl_configurations_by_path_[child_path] =
+                    configured.referenced_configuration;
+            }
             instantiate(
                 child_specialized.unit,
                 child_path,
                 std::move(child_aliases),
                 std::move(child_specialized.environment),
                 std::move(child_specialized.values),
-                std::move(child_specialized.identity_values));
+                std::move(child_specialized.identity_values),
+                std::move(child_specialized.packages));
         }
         stack_.pop_back();
     }
