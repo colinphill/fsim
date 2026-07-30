@@ -32,6 +32,9 @@ std::optional<ContainerType> Lowerer::container_type(
   result.associative =
       type.systemverilog_container->kind
       == frontend::SystemVerilogContainerKind::AssociativeArray;
+  result.fixed =
+      type.systemverilog_container->kind
+      == frontend::SystemVerilogContainerKind::StaticArray;
   if (result.associative) {
     const auto& index_type =
         type.systemverilog_container->associative_index_type;
@@ -70,6 +73,63 @@ std::optional<ContainerType> Lowerer::container_type(
     }
     result.maximum_elements =
         static_cast<std::uint32_t>(*maximum_index + 1);
+  }
+  if (result.fixed) {
+    std::optional<std::int64_t> left;
+    std::optional<std::int64_t> right;
+    const auto bound_value =
+        [](const Expression& expression) {
+          if (const auto simple = constant_index(expression)) {
+            return simple;
+          }
+          std::string error;
+          const auto value =
+              evaluate_systemverilog_constant_expression(
+                  expression, {}, {}, error);
+          return value
+              ? value->integer_value()
+              : std::optional<std::int64_t>{};
+        };
+    if (const auto& range =
+            type.systemverilog_container
+                ->static_range_expression) {
+      left = bound_value(range->left);
+      right = bound_value(range->right);
+    } else if (
+        const auto& concrete_range =
+            type.systemverilog_container->static_range) {
+      left = concrete_range->left;
+      right = concrete_range->right;
+    }
+    const auto in_int32 =
+        [](const std::int64_t value) {
+          return value
+                  >= std::numeric_limits<std::int32_t>::min()
+              && value
+                  <= std::numeric_limits<std::int32_t>::max();
+        };
+    if (!left || !right || !in_int32(*left)
+        || !in_int32(*right)) {
+      report(
+          "FSIM-ELAB-SVCONTAINER-020",
+          "static unpacked-array bounds must be locally constant "
+          "32-bit integral values",
+          type.systemverilog_container->span);
+      return std::nullopt;
+    }
+    const auto count =
+        *left >= *right
+            ? static_cast<std::uint64_t>(*left - *right) + 1U
+            : static_cast<std::uint64_t>(*right - *left) + 1U;
+    if (count > maximum_container_elements) {
+      report(
+          "FSIM-ELAB-SVCONTAINER-020",
+          "static unpacked arrays are limited to 4096 elements",
+          type.systemverilog_container->span);
+      return std::nullopt;
+    }
+    result.index_left = static_cast<std::int32_t>(*left);
+    result.index_right = static_cast<std::int32_t>(*right);
   }
   return result;
 }
@@ -178,6 +238,13 @@ void Lowerer::lower_container_method(
       process_.operations.emplace_back(
           DeleteContainer{*target, *index});
     } else {
+      if (runtime_type->fixed) {
+        report(
+            "FSIM-ELAB-SVCONTAINER-021",
+            "delete() cannot clear a static unpacked array",
+            call.span);
+        return;
+      }
       process_.operations.emplace_back(
           DeleteContainer{*target, std::nullopt});
     }

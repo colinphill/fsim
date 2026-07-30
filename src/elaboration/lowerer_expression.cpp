@@ -203,8 +203,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 runtime_type->associative
                     ? static_cast<std::size_t>(
                           runtime_type->index_width)
-                    : infer_width(expression.operands[1])
-                          .value_or(std::size_t{32});
+                    : runtime_type->fixed
+                          ? std::size_t{32}
+                          : infer_width(expression.operands[1])
+                                .value_or(std::size_t{32});
             const auto index = lower_expression(
                 expression.operands[1],
                 index_width,
@@ -222,8 +224,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     *index,
                     runtime_type->associative
                         ? runtime_type->signed_indices
-                        : is_signed_expression(
-                              expression.operands[1])});
+                        : runtime_type->fixed
+                              || is_signed_expression(
+                                  expression.operands[1])});
             return destination;
         }
 

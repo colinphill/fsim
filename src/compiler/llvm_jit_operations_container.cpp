@@ -199,6 +199,13 @@ void ContainerOperationLowerer::lower(
   branch_to_next();
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::LoadMemory& value) {
+  invoke(
+      value.start, value.finish, std::nullopt,
+      value.hexadecimal ? "container.readmemh"
+                        : "container.readmemb");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::PushContainer& value) {
   invoke(value.source, std::nullopt, std::nullopt, "container.push");
 }

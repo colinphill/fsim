@@ -3925,6 +3925,57 @@ seconds, and Release passed all 59 configured tests in 31.94 seconds on
 2026-07-30. Batch 71 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Seventy-second feature batch — bounded SystemVerilog static memories
+
+Same-language SystemVerilog-2017 now retains one-dimensional locally constant
+static unpacked arrays as a fixed container kind distinct from packed vectors,
+dynamic arrays, queues, and associative arrays. Frontend HIR preserves both
+specialization-dependent and concrete left/right bounds. Elaboration folds
+parameterized bounds to signed 32-bit indices, rejects ranges above 4,096
+elements, and carries exact direction plus element width, signedness, and
+two-/four-state domain into module objects and process registers.
+
+Fixed storage is materialized densely in declared-index order. Two-state
+elements default to zero and four-state elements default to X. Known signed
+indices map through the retained left/right bounds, while unknown or
+out-of-range indices fail without aliasing another element. Whole-value copy
+requires exact range and element metadata. Resize and delete mutation remain
+limited to their legal dynamic container kinds.
+
+`$readmemb` and `$readmemh` are explicit HIR and SimIR operations with a
+bounded string path, direct fixed-array target, and optional signed 32-bit
+start/finish registers. The shared parser accepts whitespace, line and block
+comments, hexadecimal `@` address directives, underscores, binary or
+hexadecimal data, width truncation/zero extension, and exact X/Z/? states. It
+uses the existing manifest-root-confined file service, caps source text at
+1 MiB, defaults unaddressed data to numerically increasing indices, follows
+explicit start/finish direction, and never exposes paths, streams, storage
+addresses, or allocators to generated code.
+
+Interpreter and native execution share the fixed storage and memory-text
+semantics. The existing append-only container callback remains ABI-stable;
+generated code supplies only optional scalar bounds while the callback reads
+the immutable path-register ID from SimIR. Debugger rendering includes each
+declared fixed index. Automatic fixed arrays use the existing value-copy
+function/task frames, ordered inout copy-out, delay suspension, safe points,
+and interpreter/native local inspection.
+
+Native-object schema 25 records fixed kind, signed bounds, every memory-load
+operation field, the 4,096-element and 1 MiB limits, semantic markers, and
+transitive source/callable provenance while deliberately excluding external
+memory-file contents. Frontend, runtime, elaboration, and standalone
+application fixtures cover ascending/descending and parameterized ranges,
+defaults, whole copy, invalid mutation/index/bounds, binary/hex input,
+comments, addresses, exact X/Z states, interpreter/LLVM O0/O2 equivalence,
+suspended automatic copy-out, debugger rendering, and cache-backed execution.
+
+The diagnostic catalog covers 1,142 production codes and the source gate
+covers 284 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 71.78 seconds, and Release passed all 59 tests in 32.63 seconds on
+2026-07-30. Batch 72 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

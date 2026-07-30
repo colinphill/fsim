@@ -776,6 +776,20 @@ using namespace elaboration_detail;
                     collect_identifiers(statement.value, output);
                 }
                 break;
+            case StatementKind::MemoryLoad:
+                collect_identifiers(
+                    statement.memory_file, output);
+                collect_identifiers(
+                    statement.memory_target, output);
+                if (statement.memory_start) {
+                    collect_identifiers(
+                        *statement.memory_start, output);
+                }
+                if (statement.memory_finish) {
+                    collect_identifiers(
+                        *statement.memory_finish, output);
+                }
+                break;
             case StatementKind::MonitorControl:
                 break;
             case StatementKind::EventTrigger:

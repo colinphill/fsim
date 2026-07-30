@@ -1131,6 +1131,23 @@ void substitute_sv_type(
     substitute_range(type.integer_range_expression);
     substitute_range(type.integer_base_range_expression);
     substitute_range(type.discrete_range_expression);
+    if (type.systemverilog_container) {
+        if (type.systemverilog_container->queue_maximum) {
+            substitute_systemverilog_parameters(
+                *type.systemverilog_container->queue_maximum,
+                environment);
+        }
+        substitute_range(
+            type.systemverilog_container
+                ->static_range_expression);
+        if (type.systemverilog_container
+                ->associative_index_type) {
+            substitute_sv_type(
+                *type.systemverilog_container
+                     ->associative_index_type,
+                environment);
+        }
+    }
     for (auto& member : type.packed_members) {
         substitute_range(member.packed_range_expression);
     }
@@ -1185,6 +1202,18 @@ void substitute_sv_statements(
             statement.value, environment);
         substitute_systemverilog_parameters(
             statement.condition, environment);
+        substitute_systemverilog_parameters(
+            statement.memory_file, environment);
+        substitute_systemverilog_parameters(
+            statement.memory_target, environment);
+        if (statement.memory_start) {
+            substitute_systemverilog_parameters(
+                *statement.memory_start, environment);
+        }
+        if (statement.memory_finish) {
+            substitute_systemverilog_parameters(
+                *statement.memory_finish, environment);
+        }
         for (auto& argument : statement.task_arguments) {
             substitute_systemverilog_parameters(
                 argument, environment);

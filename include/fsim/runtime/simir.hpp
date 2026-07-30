@@ -73,6 +73,8 @@ struct CopyRegister {
 
 inline constexpr std::size_t maximum_string_bytes = 4096;
 inline constexpr std::size_t maximum_container_elements = 4096;
+inline constexpr std::size_t maximum_memory_file_bytes =
+    1024U * 1024U;
 
 struct ContainerType {
   std::uint32_t element_width{1};
@@ -80,9 +82,12 @@ struct ContainerType {
   bool signed_elements{};
   bool queue{};
   bool associative{};
+  bool fixed{};
   std::uint32_t index_width{32};
   bool two_state_indices{};
   bool signed_indices{true};
+  std::int32_t index_left{};
+  std::int32_t index_right{};
   std::optional<std::uint32_t> maximum_elements;
 
   friend bool operator==(const ContainerType&,
@@ -99,6 +104,11 @@ struct ContainerValue {
   friend bool operator==(const ContainerValue&,
                          const ContainerValue&) = default;
 };
+
+/// Construct the language-defined initial value for a container type. Fixed
+/// unpacked arrays are materialized densely in declared-index order.
+[[nodiscard]] ContainerValue
+default_container_value(const ContainerType& type);
 
 /// Construct a process-local byte string from immutable SimIR literal bytes.
 struct LoadStringConstant {
@@ -221,6 +231,23 @@ struct TraverseContainer {
   RegisterId index{};
   ContainerTraversal traversal{ContainerTraversal::first};
 };
+
+struct LoadMemory {
+  ContainerRegisterId target{};
+  StringRegisterId path{};
+  std::optional<RegisterId> start;
+  std::optional<RegisterId> finish;
+  bool hexadecimal{};
+};
+
+/// Parse bounded IEEE-style read-memory text into a fixed unpacked array.
+/// Tokens may contain underscores, X/Z/? digits, comments, and @addresses.
+void load_memory_text(
+    ContainerValue& target,
+    std::string_view text,
+    bool hexadecimal,
+    std::optional<std::int32_t> start = std::nullopt,
+    std::optional<std::int32_t> finish = std::nullopt);
 
 struct PushContainer {
   ContainerRegisterId target{};
@@ -937,7 +964,7 @@ using Operation =
                  ReadContainerObject, WriteContainerObject,
                  ContainerSize, ContainerRead, ContainerWrite,
                  DeleteContainer, ContainerExists, TraverseContainer,
-                 PushContainer, PopContainer, FileOpen,
+                 LoadMemory, PushContainer, PopContainer, FileOpen,
                  FileClose, FileWriteLiteral, FileWriteFormatted,
                  FileWriteString, FileReadLine, FileEndOfFile,
                  FileErrorStatus, UnaryNot,

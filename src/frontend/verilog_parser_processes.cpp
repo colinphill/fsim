@@ -883,6 +883,46 @@ std::optional<Statement> VerilogParser::parse_statement() {
     return statement;
   }
 
+  if (keyword("$readmemb") || keyword("$readmemh")) {
+    const bool hexadecimal = keyword("$readmemh");
+    const auto start = advance();
+    Statement statement;
+    statement.kind = StatementKind::MemoryLoad;
+    statement.memory_hex = hexadecimal;
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          start,
+          "FSIM-SV-SEM-083",
+          start.text + " requires SystemVerilog-2017");
+    }
+    expect(
+        TokenKind::LeftParen,
+        "'(' after " + start.text,
+        "FSIM-SV-PARSE-159");
+    statement.memory_file = parse_expression();
+    expect(
+        TokenKind::Comma,
+        "',' after read-memory file name",
+        "FSIM-SV-PARSE-160");
+    statement.memory_target = parse_expression();
+    if (match(TokenKind::Comma)) {
+      statement.memory_start = parse_expression();
+      if (match(TokenKind::Comma)) {
+        statement.memory_finish = parse_expression();
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after read-memory arguments",
+        "FSIM-SV-PARSE-161");
+    expect(
+        TokenKind::Semicolon,
+        "';' after read-memory task",
+        "FSIM-SV-PARSE-162");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   if (keyword("$fclose")) {
     const auto start = advance();
     Statement statement;

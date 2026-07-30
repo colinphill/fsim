@@ -688,9 +688,6 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
         "']' after queue dimension",
         "FSIM-SV-PARSE-155");
   } else {
-    container.kind =
-        SystemVerilogContainerKind::AssociativeArray;
-    Type index_type;
     const auto built_in =
         keyword("byte") || keyword("shortint")
         || keyword("longint") || keyword("time")
@@ -699,47 +696,86 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
         || keyword("signed") || keyword("unsigned")
         || at(TokenKind::LeftBracket);
     if (built_in) {
-      index_type = parse_parameter_type();
+      container.kind =
+          SystemVerilogContainerKind::AssociativeArray;
+      container.associative_index_type =
+          std::make_shared<Type>(parse_parameter_type());
+      expect(
+          TokenKind::RightBracket,
+          "']' after associative-array index type",
+          "FSIM-SV-PARSE-157");
     } else if (keyword("string")) {
       const auto unsupported = advance();
       error(
           unsupported,
           "FSIM-SV-SEM-082",
           "string associative-array indices are not supported");
-    } else if (
-        at(TokenKind::Identifier)
-        && !keyword_reserved(keyword_set_, current().text)) {
-      if (current().text == "$") {
-        error(
-            current(),
-            "FSIM-SV-SEM-078",
-            "wildcard associative-array indices are not supported");
-        (void)advance();
-      } else {
-        index_type = parse_named_type();
-      }
-    } else {
-      const auto unsupported = advance();
+      expect(
+          TokenKind::RightBracket,
+          "']' after associative-array index type",
+          "FSIM-SV-PARSE-157");
+      return true;
+    } else if (at(TokenKind::Star)) {
       error(
-          unsupported,
+          current(),
           "FSIM-SV-SEM-078",
-          "associative-array indices require an integral built-in or "
-          "visible named packed type");
-    }
-    expect(
-        TokenKind::RightBracket,
-        "']' after associative-array index type",
-        "FSIM-SV-PARSE-157");
-    if (index_type.domain == ValueDomain::String) {
-      error(
-          start,
-          "FSIM-SV-SEM-082",
-          "string associative-array indices are not supported");
-    } else if (
-        index_type.domain != ValueDomain::Unknown
-        || !index_type.named_type.empty()) {
-      container.associative_index_type =
-          std::make_shared<Type>(std::move(index_type));
+          "wildcard associative-array indices are not supported");
+      (void)advance();
+      expect(
+          TokenKind::RightBracket,
+          "']' after associative-array index type",
+          "FSIM-SV-PARSE-157");
+      return true;
+    } else {
+      auto left = parse_expression();
+      if (match(TokenKind::Colon)) {
+        auto right = parse_expression();
+        expect(
+            TokenKind::RightBracket,
+            "']' after static unpacked range",
+            "FSIM-SV-PARSE-158");
+        container.kind =
+            SystemVerilogContainerKind::StaticArray;
+        const auto left_value = simple_integer_constant(left);
+        const auto right_value = simple_integer_constant(right);
+        if (left_value && right_value) {
+          container.static_range = PackedRange{
+              *left_value,
+              *right_value,
+              *left_value >= *right_value};
+        }
+        container.static_range_expression =
+            PackedRangeExpression{
+                std::move(left),
+                std::move(right),
+                cover(start.span, previous().span),
+                std::nullopt};
+      } else {
+        expect(
+            TokenKind::RightBracket,
+            "']' after associative-array index type",
+            "FSIM-SV-PARSE-157");
+        if (left.kind == ExpressionKind::Identifier) {
+          container.kind =
+              SystemVerilogContainerKind::AssociativeArray;
+          Type index_type{
+              ValueDomain::Unknown,
+              left.text,
+              std::nullopt,
+              false};
+          index_type.named_type = left.text;
+          index_type.named_type_span = left.span;
+          container.associative_index_type =
+              std::make_shared<Type>(std::move(index_type));
+        } else {
+          error(
+              start,
+              "FSIM-SV-SEM-078",
+              "static unpacked arrays require a left:right range; "
+              "associative arrays require an integral index type");
+          return true;
+        }
+      }
     }
   }
   container.span = cover(start.span, previous().span);
@@ -748,8 +784,8 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
     error(
         start,
         "FSIM-SV-SEM-077",
-        "dynamic arrays, queues, and associative arrays require "
-        "SystemVerilog-2017");
+        "dynamic arrays, queues, associative arrays, and static unpacked "
+        "arrays require SystemVerilog-2017");
   }
   if (type.spelling == "wire"
       || type.domain == ValueDomain::String

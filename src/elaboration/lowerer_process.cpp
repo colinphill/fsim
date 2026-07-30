@@ -975,6 +975,7 @@ Lowerer::Lowerer(
                 statement.kind == StatementKind::Display
                 || statement.kind == StatementKind::FileClose
                 || statement.kind == StatementKind::FileDisplay
+                || statement.kind == StatementKind::MemoryLoad
                 || statement.kind == StatementKind::Report
                 || statement.kind == StatementKind::TaskCall
                 || statement.kind == StatementKind::ProcedureCall) {
@@ -1168,6 +1169,100 @@ Lowerer::Lowerer(
                     statement.output_minimum_width,
                     statement.output_left_justify,
                     statement.output_zero_pad});
+            break;
+        }
+        case StatementKind::MemoryLoad: {
+            if (language_
+                    != frontend::Language::SystemVerilog2017) {
+                report(
+                    "FSIM-ELAB-SVMEMORY-001",
+                    "$readmemb/$readmemh requires "
+                    "SystemVerilog-2017",
+                    statement.span);
+                break;
+            }
+            const auto path =
+                lower_string_expression(statement.memory_file);
+            if (!path) {
+                report(
+                    "FSIM-ELAB-SVMEMORY-002",
+                    "read-memory file name must be a string expression",
+                    statement.memory_file.span);
+                break;
+            }
+            if (statement.memory_target.kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-SVMEMORY-003",
+                    "read-memory target must be a direct static-array "
+                    "object",
+                    statement.memory_target.span);
+                break;
+            }
+            const auto target =
+                lower_container_expression(
+                    statement.memory_target);
+            const auto* source_type =
+                object_type(statement.memory_target.text);
+            const auto runtime_type =
+                source_type
+                    ? container_type(
+                          *source_type,
+                          statement.memory_target.span)
+                    : std::nullopt;
+            if (!target || !runtime_type) {
+                break;
+            }
+            if (!runtime_type->fixed) {
+                report(
+                    "FSIM-ELAB-SVMEMORY-003",
+                    "$readmemb/$readmemh target must be a bounded static "
+                    "unpacked array",
+                    statement.memory_target.span);
+                break;
+            }
+            const auto lower_bound =
+                [&](const std::optional<Expression>& expression)
+                    -> std::optional<RegisterId> {
+                  if (!expression) {
+                    return std::nullopt;
+                  }
+                  auto result = lower_expression(*expression, 32);
+                  if (!result) {
+                    return std::nullopt;
+                  }
+                  if (register_width(*result) != 32) {
+                    *result = resize_register(
+                        *result, 32,
+                        is_signed_expression(*expression));
+                  }
+                  return result;
+                };
+            const auto start =
+                lower_bound(statement.memory_start);
+            const auto finish =
+                lower_bound(statement.memory_finish);
+            if ((statement.memory_start && !start)
+                || (statement.memory_finish && !finish)) {
+                report(
+                    "FSIM-ELAB-SVMEMORY-004",
+                    "read-memory start and finish must be integral "
+                    "expressions",
+                    statement.span);
+                break;
+            }
+            process_.operations.emplace_back(
+                LoadMemory{
+                    *target, *path, start, finish,
+                    statement.memory_hex});
+            if (const auto object =
+                    container_objects_.find(
+                        statement.memory_target.text);
+                object != container_objects_.end()) {
+                process_.operations.emplace_back(
+                    WriteContainerObject{
+                        object->second, *target});
+            }
             break;
         }
         case StatementKind::Display: {

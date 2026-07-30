@@ -42,6 +42,15 @@ namespace {
     if (value.type.associative) {
       result += value.keys[index].to_msb_string();
       result += "=>";
+    } else if (value.type.fixed) {
+      const auto declared_index =
+          value.type.index_left >= value.type.index_right
+              ? static_cast<std::int64_t>(value.type.index_left)
+                    - static_cast<std::int64_t>(index)
+              : static_cast<std::int64_t>(value.type.index_left)
+                    + static_cast<std::int64_t>(index);
+      result += std::to_string(declared_index);
+      result += ":";
     }
     result += value.elements[index].to_msb_string();
   }

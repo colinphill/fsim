@@ -421,6 +421,33 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           }
           return static_cast<std::size_t>(aval);
         };
+    const auto fixed_offset =
+        [&](const runtime::simir::ContainerValue& target,
+            const std::uint64_t aval,
+            const std::uint64_t bval) {
+          if (bval != 0) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "static-array index must be a known 32-bit integral value"};
+          }
+          const auto sought = static_cast<std::int32_t>(
+              static_cast<std::uint32_t>(aval));
+          const auto low = std::min(
+              target.type.index_left, target.type.index_right);
+          const auto high = std::max(
+              target.type.index_left, target.type.index_right);
+          if (sought < low || sought > high) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "static-array index is out of range"};
+          }
+          return static_cast<std::size_t>(
+              target.type.index_left >= target.type.index_right
+                  ? static_cast<std::int64_t>(
+                        target.type.index_left) - sought
+                  : static_cast<std::int64_t>(sought)
+                        - target.type.index_left);
+        };
     const auto require_same =
         [&](const runtime::simir::ContainerValue& left,
             const runtime::simir::ContainerValue& right) {
@@ -499,12 +526,15 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             std::get_if<runtime::simir::ResizeContainer>(
                 &operation)) {
       auto& target = registers.at(resize->target);
-      if (target.type.queue || target.type.associative) {
+      if (target.type.queue || target.type.associative
+          || target.type.fixed) {
         throw runtime::simir::InterpreterError{
             process, instruction,
             target.type.queue
                 ? "new[size] cannot resize a queue"
-                : "new[size] cannot resize an associative array"};
+                : target.type.associative
+                      ? "new[size] cannot resize an associative array"
+                      : "new[size] cannot resize a static array"};
       }
       const auto size = index(
           input0_aval, input0_bval, false,
@@ -564,9 +594,12 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         }
         return 0;
       }
-      const auto at = index(
-          input0_aval, input0_bval, read->signed_index,
-          "container index");
+      const auto at =
+          source.type.fixed
+              ? fixed_offset(source, input0_aval, input0_bval)
+              : index(
+                    input0_aval, input0_bval, read->signed_index,
+                    "container index");
       if (at >= source.elements.size()) {
         throw runtime::simir::InterpreterError{
             process, instruction,
@@ -601,9 +634,12 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         }
         return 0;
       }
-      const auto at = index(
-          input0_aval, input0_bval, write->signed_index,
-          "container index");
+      const auto at =
+          target.type.fixed
+              ? fixed_offset(target, input0_aval, input0_bval)
+              : index(
+                    input0_aval, input0_bval, write->signed_index,
+                    "container index");
       if (at >= target.elements.size()) {
         throw runtime::simir::InterpreterError{
             process, instruction,
@@ -625,9 +661,66 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           target.elements.erase(target.elements.begin() + at);
         }
       } else {
+        if (target.type.fixed) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "delete() cannot clear a static array"};
+        }
         target.elements.clear();
         target.keys.clear();
       }
+    } else if (const auto* load =
+                   std::get_if<runtime::simir::LoadMemory>(
+                       &operation)) {
+      const auto known_optional =
+          [&](const std::optional<runtime::simir::RegisterId> source,
+              const std::uint64_t aval,
+              const std::uint64_t bval,
+              const std::string_view role)
+              -> std::optional<std::int32_t> {
+            if (!source) {
+              return std::nullopt;
+            }
+            if (bval != 0) {
+              throw runtime::simir::InterpreterError{
+                  process, instruction,
+                  std::string{role}
+                      + " must be a known 32-bit integral value"};
+            }
+            return static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(aval));
+          };
+      const auto handle = state.context->open_file(
+          state.executor->string_registers_.at(load->path), "r");
+      std::string text;
+      try {
+        while (!state.context->file_end_of_file(handle)) {
+          std::uint32_t count{};
+          auto line =
+              state.context->read_file_line(handle, count);
+          if (text.size() + line.size()
+              > runtime::simir::maximum_memory_file_bytes) {
+            throw std::length_error{
+                "read-memory file exceeds the 1 MiB limit"};
+          }
+          text += line;
+        }
+        state.context->close_file(handle);
+      } catch (...) {
+        try {
+          state.context->close_file(handle);
+        } catch (...) {
+        }
+        throw;
+      }
+      runtime::simir::load_memory_text(
+          registers.at(load->target), text, load->hexadecimal,
+          known_optional(
+              load->start, input0_aval, input0_bval,
+              "read-memory start"),
+          known_optional(
+              load->finish, input1_aval, input1_bval,
+              "read-memory finish"));
     } else if (const auto* exists =
                    std::get_if<runtime::simir::ContainerExists>(
                        &operation)) {

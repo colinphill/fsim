@@ -610,12 +610,17 @@ validate_process(const Process &process,
               record_use(operation.index, index);
               if (operation.source
                   < process.container_register_types.size()
-                  && process.container_register_types[
-                         operation.source].associative) {
+                  && (process.container_register_types[
+                          operation.source].associative
+                      || process.container_register_types[
+                             operation.source].fixed)) {
                 constrain_width(
                     operation.index,
                     process.container_register_types[
-                        operation.source].index_width,
+                            operation.source].fixed
+                        ? 32U
+                        : process.container_register_types[
+                              operation.source].index_width,
                     index);
               }
               record_definition(operation.destination, index);
@@ -632,12 +637,17 @@ validate_process(const Process &process,
               record_use(operation.index, index);
               if (operation.target
                   < process.container_register_types.size()
-                  && process.container_register_types[
-                         operation.target].associative) {
+                  && (process.container_register_types[
+                          operation.target].associative
+                      || process.container_register_types[
+                             operation.target].fixed)) {
                 constrain_width(
                     operation.index,
                     process.container_register_types[
-                        operation.target].index_width,
+                            operation.target].fixed
+                        ? 32U
+                        : process.container_register_types[
+                              operation.target].index_width,
                     index);
               }
               record_use(operation.source, index);
@@ -694,6 +704,30 @@ validate_process(const Process &process,
                     process.container_register_types[
                         operation.source].index_width,
                     index);
+              }
+            },
+            [&](const LoadMemory& operation) {
+              result.uses_containers = true;
+              result.uses_strings = true;
+              result.uses_files = true;
+              validate_container_register(
+                  operation.target, index, "target");
+              validate_string_register(
+                  operation.path, index, "path");
+              if (operation.target
+                      < process.container_register_types.size()
+                  && !process.container_register_types[
+                          operation.target].fixed) {
+                reject(
+                    process, index,
+                    "LoadMemory target must be a fixed static array");
+              }
+              for (const auto source :
+                   {operation.start, operation.finish}) {
+                if (source) {
+                  record_use(*source, index);
+                  constrain_width(*source, 32U, index);
+                }
               }
             },
             [&](const PushContainer& operation) {

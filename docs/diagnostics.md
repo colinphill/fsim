@@ -528,6 +528,11 @@ therefore excluded.
 | `FSIM-SV-PARSE-155` | error | Expected `]` after a SystemVerilog queue dimension. |
 | `FSIM-SV-PARSE-156` | error | Expected `;` after a supported container method call. |
 | `FSIM-SV-PARSE-157` | error | Expected `]` after a SystemVerilog associative-array index type. |
+| `FSIM-SV-PARSE-158` | error | Expected `]` after a SystemVerilog static unpacked-array range. |
+| `FSIM-SV-PARSE-159` | error | Expected `(` after `$readmemb` or `$readmemh`. |
+| `FSIM-SV-PARSE-160` | error | Expected `,` after a read-memory file name. |
+| `FSIM-SV-PARSE-161` | error | Expected `)` after read-memory arguments. |
+| `FSIM-SV-PARSE-162` | error | Expected `;` after a read-memory task. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -719,6 +724,7 @@ therefore excluded.
 | `FSIM-SV-SEM-080` | error | A bounded SystemVerilog container declares more than one unpacked dimension. |
 | `FSIM-SV-SEM-081` | error | A supported container method has the wrong argument count. |
 | `FSIM-SV-SEM-082` | error | An associative array uses a string index type. |
+| `FSIM-SV-SEM-083` | error | `$readmemb` or `$readmemh` is used outside SystemVerilog-2017. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -1052,6 +1058,12 @@ therefore excluded.
 | `FSIM-ELAB-SVCONTAINER-017` | error | An associative-array traversal argument width does not match the index type. |
 | `FSIM-ELAB-SVCONTAINER-018` | error | `delete(index)` is used on a non-associative container. |
 | `FSIM-ELAB-SVCONTAINER-019` | error | A queue-only push or pop method is used on another container kind. |
+| `FSIM-ELAB-SVCONTAINER-020` | error | Static unpacked-array bounds are not locally constant signed 32-bit values spanning 1 through 4,096 elements. |
+| `FSIM-ELAB-SVCONTAINER-021` | error | `delete()` is used to clear a fixed static unpacked array. |
+| `FSIM-ELAB-SVMEMORY-001` | error | `$readmemb` or `$readmemh` is lowered outside SystemVerilog-2017. |
+| `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
+| `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |
+| `FSIM-ELAB-SVMEMORY-004` | error | A read-memory start or finish argument is not a 32-bit integral expression. |
 | `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
 | `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
 | `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |

@@ -761,6 +761,10 @@ using namespace elaboration_detail;
                     variable.type.systemverilog_container->kind
                     == frontend::SystemVerilogContainerKind::
                         AssociativeArray;
+                type.fixed =
+                    variable.type.systemverilog_container->kind
+                    == frontend::SystemVerilogContainerKind::
+                        StaticArray;
                 if (type.associative) {
                     const auto& index_type =
                         variable.type.systemverilog_container
@@ -821,6 +825,67 @@ using namespace elaboration_detail;
                         static_cast<std::uint32_t>(
                             *maximum_index + 1);
                 }
+                if (type.fixed) {
+                    const auto& range =
+                        variable.type.systemverilog_container
+                            ->static_range_expression;
+                    std::string left_error;
+                    std::string right_error;
+                    const auto left_value =
+                        range
+                            ? evaluate_systemverilog_constant_expression(
+                                  range->left, {},
+                                  parameter_environment, left_error)
+                            : std::nullopt;
+                    const auto right_value =
+                        range
+                            ? evaluate_systemverilog_constant_expression(
+                                  range->right, {},
+                                  parameter_environment, right_error)
+                            : std::nullopt;
+                    const auto left =
+                        left_value
+                            ? left_value->integer_value()
+                            : std::nullopt;
+                    const auto right =
+                        right_value
+                            ? right_value->integer_value()
+                            : std::nullopt;
+                    const auto in_int32 =
+                        [](const std::int64_t value) {
+                          return value
+                                  >= std::numeric_limits<
+                                      std::int32_t>::min()
+                              && value
+                                  <= std::numeric_limits<
+                                      std::int32_t>::max();
+                        };
+                    const auto valid_bounds =
+                        left && right && in_int32(*left)
+                        && in_int32(*right);
+                    const auto count =
+                        valid_bounds
+                            ? static_cast<std::uint64_t>(
+                                  *left >= *right
+                                      ? *left - *right
+                                      : *right - *left)
+                                  + 1U
+                            : 0U;
+                    if (!valid_bounds || count == 0
+                        || count > maximum_container_elements) {
+                        report(
+                            "FSIM-ELAB-SVCONTAINER-020",
+                            "static unpacked-array bounds must specialize "
+                            "to 32-bit integral values spanning 1..4096 "
+                            "elements",
+                            variable.type.systemverilog_container->span);
+                        continue;
+                    }
+                    type.index_left =
+                        static_cast<std::int32_t>(*left);
+                    type.index_right =
+                        static_cast<std::int32_t>(*right);
+                }
                 if (variable.initializer) {
                     report(
                         "FSIM-ELAB-SVCONTAINER-012",
@@ -844,7 +909,7 @@ using namespace elaboration_detail;
                         id, full_name, type, variable.span});
                 design_.container_objects_.push_back(
                     ContainerObject{
-                        full_name, ContainerValue{type, {}, {}}});
+                        full_name, default_container_value(type)});
                 local_container_objects.emplace(
                     variable.name, id);
                 local_container_objects.emplace(

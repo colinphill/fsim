@@ -295,6 +295,7 @@ struct ContainerOperationLowerer {
   void lower(const runtime::simir::DeleteContainer&);
   void lower(const runtime::simir::ContainerExists&);
   void lower(const runtime::simir::TraverseContainer&);
+  void lower(const runtime::simir::LoadMemory&);
   void lower(const runtime::simir::PushContainer&);
   void lower(const runtime::simir::PopContainer&);
 

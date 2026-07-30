@@ -2,10 +2,22 @@
 #include "simir_internal.hpp"
 
 #include <algorithm>
+#include <charconv>
 
 namespace fsim::runtime::simir {
 
 namespace {
+
+[[nodiscard]] std::size_t fixed_element_count(
+    const ContainerType& type) {
+  const auto distance =
+      type.index_left >= type.index_right
+          ? static_cast<std::int64_t>(type.index_left)
+                - type.index_right
+          : static_cast<std::int64_t>(type.index_right)
+                - type.index_left;
+  return static_cast<std::size_t>(distance + 1);
+}
 
 [[noreturn]] void container_error(
     const ProcessId process,
@@ -47,6 +59,40 @@ namespace {
         std::string{role} + " is too large");
   }
   return static_cast<std::size_t>(word.aval);
+}
+
+[[nodiscard]] std::int32_t known_fixed_index(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const PackedLogic4& value) {
+  const auto word = value.low_word();
+  if (word.width == 0 || word.width > 32 || word.bval != 0) {
+    container_error(
+        process, instruction,
+        "static-array index must be a known 32-bit integral value");
+  }
+  return static_cast<std::int32_t>(
+      static_cast<std::uint32_t>(word.aval));
+}
+
+[[nodiscard]] std::size_t fixed_offset(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const ContainerType& type,
+    const PackedLogic4& value) {
+  const auto index =
+      known_fixed_index(process, instruction, value);
+  const auto low = std::min(type.index_left, type.index_right);
+  const auto high = std::max(type.index_left, type.index_right);
+  if (index < low || index > high) {
+    container_error(
+        process, instruction,
+        "static-array index is out of range");
+  }
+  return static_cast<std::size_t>(
+      type.index_left >= type.index_right
+          ? static_cast<std::int64_t>(type.index_left) - index
+          : static_cast<std::int64_t>(index) - type.index_left);
 }
 
 void require_same_type(
@@ -156,11 +202,25 @@ void validate_container_value(const ContainerValue& value) {
   }
   if (!value.type.queue && value.type.maximum_elements) {
     throw std::invalid_argument{
-        "a dynamic array cannot have a queue bound"};
+        "a non-queue container cannot have a queue bound"};
   }
-  if (value.type.queue && value.type.associative) {
+  if (static_cast<unsigned>(value.type.queue)
+          + static_cast<unsigned>(value.type.associative)
+          + static_cast<unsigned>(value.type.fixed)
+      > 1U) {
     throw std::invalid_argument{
-        "a SimIR container cannot be both queue and associative"};
+        "a SimIR container kind must be unambiguous"};
+  }
+  if (value.type.fixed) {
+    const auto count = fixed_element_count(value.type);
+    if (count == 0 || count > maximum_container_elements) {
+      throw std::length_error{
+          "SimIR static array exceeds its element limit"};
+    }
+    if (value.elements.size() != count) {
+      throw std::invalid_argument{
+          "SimIR static-array storage does not match its declared range"};
+    }
   }
   if (value.type.associative) {
     if (value.type.index_width == 0
@@ -207,16 +267,260 @@ PackedLogic4 default_container_element(
       type.element_width, 0, 0);
 }
 
+ContainerValue default_container_value(
+    const ContainerType& type) {
+  ContainerValue result;
+  result.type = type;
+  if (type.fixed) {
+    const auto count = fixed_element_count(type);
+    if (count > maximum_container_elements) {
+      throw std::length_error{
+          "SimIR static array exceeds its element limit"};
+    }
+    if (type.element_width == 0
+        || type.element_width > 64) {
+      throw std::invalid_argument{
+          "SimIR container element width must be in 1..64"};
+    }
+    const auto initial =
+        type.two_state
+            ? default_container_element(type)
+            : PackedLogic4{type.element_width, Logic4::x};
+    result.elements.assign(count, initial);
+  }
+  validate_container_value(result);
+  return result;
+}
+
+void load_memory_text(
+    ContainerValue& target,
+    const std::string_view text,
+    const bool hexadecimal,
+    const std::optional<std::int32_t> start,
+    const std::optional<std::int32_t> finish) {
+  validate_container_value(target);
+  if (!target.type.fixed) {
+    throw std::invalid_argument{
+        "$readmemb/$readmemh target must be a static unpacked array"};
+  }
+  if (text.size() > maximum_memory_file_bytes) {
+    throw std::length_error{
+        "read-memory file exceeds the 1 MiB limit"};
+  }
+
+  std::vector<std::string> tokens;
+  std::string token;
+  bool line_comment{};
+  bool block_comment{};
+  for (std::size_t index = 0; index < text.size(); ++index) {
+    const auto character = text[index];
+    const auto next =
+        index + 1U < text.size() ? text[index + 1U] : '\0';
+    if (line_comment) {
+      if (character == '\n') {
+        line_comment = false;
+      }
+      continue;
+    }
+    if (block_comment) {
+      if (character == '*' && next == '/') {
+        block_comment = false;
+        ++index;
+      }
+      continue;
+    }
+    if (character == '/' && next == '/') {
+      if (!token.empty()) {
+        tokens.push_back(std::move(token));
+        token.clear();
+      }
+      line_comment = true;
+      ++index;
+      continue;
+    }
+    if (character == '/' && next == '*') {
+      if (!token.empty()) {
+        tokens.push_back(std::move(token));
+        token.clear();
+      }
+      block_comment = true;
+      ++index;
+      continue;
+    }
+    if (std::isspace(
+            static_cast<unsigned char>(character)) != 0) {
+      if (!token.empty()) {
+        tokens.push_back(std::move(token));
+        token.clear();
+      }
+      continue;
+    }
+    token.push_back(character);
+  }
+  if (block_comment) {
+    throw std::invalid_argument{
+        "unterminated block comment in read-memory file"};
+  }
+  if (!token.empty()) {
+    tokens.push_back(std::move(token));
+  }
+
+  const auto range_low =
+      std::min(target.type.index_left, target.type.index_right);
+  const auto range_high =
+      std::max(target.type.index_left, target.type.index_right);
+  const auto first = start.value_or(range_low);
+  const auto last = finish.value_or(range_high);
+  const auto in_declared_range =
+      [&](const std::int64_t index) {
+        return index >= range_low && index <= range_high;
+      };
+  if (!in_declared_range(first) || !in_declared_range(last)) {
+    throw std::out_of_range{
+        "read-memory start/finish is outside the target range"};
+  }
+  const auto step = first <= last ? 1 : -1;
+  const auto in_window =
+      [&](const std::int64_t index) {
+        return step > 0
+            ? index >= first && index <= last
+            : index <= first && index >= last;
+      };
+  auto current = static_cast<std::int64_t>(first);
+
+  const auto parse_address =
+      [](const std::string_view digits) -> std::int32_t {
+        std::string normalized;
+        normalized.reserve(digits.size());
+        for (const auto character : digits) {
+          if (character != '_') {
+            normalized.push_back(character);
+          }
+        }
+        if (normalized.empty()) {
+          throw std::invalid_argument{
+              "empty @address in read-memory file"};
+        }
+        std::uint32_t value{};
+        const auto [end, error] = std::from_chars(
+            normalized.data(),
+            normalized.data() + normalized.size(),
+            value, 16);
+        if (error != std::errc{}
+            || end != normalized.data() + normalized.size()) {
+          throw std::invalid_argument{
+              "invalid @address in read-memory file"};
+        }
+        return static_cast<std::int32_t>(value);
+      };
+  const auto parse_data =
+      [&](const std::string_view digits) {
+        std::string bits;
+        bits.reserve(
+            digits.size() * (hexadecimal ? 4U : 1U));
+        const auto append_unknown =
+            [&](const char state) {
+              bits.append(hexadecimal ? 4U : 1U, state);
+            };
+        for (const auto raw : digits) {
+          if (raw == '_') {
+            continue;
+          }
+          const auto character = static_cast<char>(
+              std::tolower(static_cast<unsigned char>(raw)));
+          if (character == 'x') {
+            append_unknown('X');
+            continue;
+          }
+          if (character == 'z' || character == '?') {
+            append_unknown('Z');
+            continue;
+          }
+          unsigned value{};
+          if (character >= '0' && character <= '9') {
+            value = static_cast<unsigned>(character - '0');
+          } else if (
+              character >= 'a' && character <= 'f') {
+            value =
+                static_cast<unsigned>(character - 'a' + 10);
+          } else {
+            throw std::invalid_argument{
+                "invalid digit in read-memory data token"};
+          }
+          if ((!hexadecimal && value > 1U)
+              || (hexadecimal && value > 15U)) {
+            throw std::invalid_argument{
+                "digit does not match read-memory radix"};
+          }
+          if (hexadecimal) {
+            for (int bit = 3; bit >= 0; --bit) {
+              bits.push_back(
+                  ((value >> bit) & 1U) != 0 ? '1' : '0');
+            }
+          } else {
+            bits.push_back(value != 0 ? '1' : '0');
+          }
+        }
+        if (bits.empty()) {
+          throw std::invalid_argument{
+              "empty data token in read-memory file"};
+        }
+        if (bits.size() > target.type.element_width) {
+          bits.erase(
+              0, bits.size() - target.type.element_width);
+        } else if (bits.size() < target.type.element_width) {
+          bits.insert(
+              0, target.type.element_width - bits.size(), '0');
+        }
+        if (target.type.two_state) {
+          std::ranges::replace(bits, 'X', '0');
+          std::ranges::replace(bits, 'Z', '0');
+        }
+        return PackedLogic4::from_msb_string(bits);
+      };
+
+  for (const auto& item : tokens) {
+    if (item.starts_with('@')) {
+      current = parse_address(
+          std::string_view{item}.substr(1));
+      if (!in_declared_range(current)
+          || !in_window(current)) {
+        throw std::out_of_range{
+            "read-memory @address is outside the selected range"};
+      }
+      continue;
+    }
+    if (!in_declared_range(current)
+        || !in_window(current)) {
+      throw std::out_of_range{
+          "read-memory data exceeds the selected range"};
+    }
+    const auto offset =
+        target.type.index_left >= target.type.index_right
+            ? static_cast<std::size_t>(
+                  static_cast<std::int64_t>(
+                      target.type.index_left) - current)
+            : static_cast<std::size_t>(
+                  static_cast<std::int64_t>(current)
+                  - target.type.index_left);
+    target.elements[offset] = parse_data(item);
+    current += step;
+  }
+}
+
 void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ResizeContainer& operation) {
   auto& target = get_container_register(process, operation.target);
-  if (target.type.queue || target.type.associative) {
+  if (target.type.queue || target.type.associative
+      || target.type.fixed) {
     container_error(
         process.program.id, process.pc,
         target.type.queue
             ? "new[size] cannot resize a queue"
-            : "new[size] cannot resize an associative array");
+            : target.type.associative
+                  ? "new[size] cannot resize an associative array"
+                  : "new[size] cannot resize a static array");
   }
   const auto size = known_index(
       process.program.id, process.pc,
@@ -304,6 +608,14 @@ void Interpreter::Impl::execute_container(
     ++process.pc;
     return;
   }
+  if (source.type.fixed) {
+    get_register(process, operation.destination) =
+        source.elements[fixed_offset(
+            process.program.id, process.pc, source.type,
+            get_register(process, operation.index))];
+    ++process.pc;
+    return;
+  }
   const auto index = known_index(
       process.program.id, process.pc,
       get_register(process, operation.index),
@@ -352,6 +664,13 @@ void Interpreter::Impl::execute_container(
     ++process.pc;
     return;
   }
+  if (target.type.fixed) {
+    target.elements[fixed_offset(
+        process.program.id, process.pc, target.type,
+        get_register(process, operation.index))] = source;
+    ++process.pc;
+    return;
+  }
   const auto index = known_index(
       process.program.id, process.pc,
       get_register(process, operation.index),
@@ -383,8 +702,72 @@ void Interpreter::Impl::execute_container(
       target.elements.erase(target.elements.begin() + at);
     }
   } else {
+    if (target.type.fixed) {
+      container_error(
+          process.program.id, process.pc,
+          "delete() cannot clear a static array");
+    }
     target.elements.clear();
     target.keys.clear();
+  }
+  ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const LoadMemory& operation) {
+  auto& target =
+      get_container_register(process, operation.target);
+  const auto optional_integer =
+      [&](const std::optional<RegisterId> source,
+          const std::string_view role)
+          -> std::optional<std::int32_t> {
+        if (!source) {
+          return std::nullopt;
+        }
+        const auto& value = get_register(process, *source);
+        const auto word = value.low_word();
+        if (word.width != 32 || word.bval != 0) {
+          container_error(
+              process.program.id, process.pc,
+              std::string{role}
+                  + " must be a known 32-bit integral value");
+        }
+        return static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(word.aval));
+      };
+  const auto handle = open_file(
+      process.program.id,
+      get_string_register(process, operation.path), "r");
+  std::string text;
+  try {
+    while (!file_end_of_file(process.program.id, handle)) {
+      std::uint32_t count{};
+      auto line = read_file_line(
+          process.program.id, handle, count);
+      if (text.size() + line.size()
+          > maximum_memory_file_bytes) {
+        throw std::length_error{
+            "read-memory file exceeds the 1 MiB limit"};
+      }
+      text += line;
+    }
+    close_file(process.program.id, handle);
+  } catch (...) {
+    try {
+      close_file(process.program.id, handle);
+    } catch (...) {
+    }
+    throw;
+  }
+  try {
+    load_memory_text(
+        target, text, operation.hexadecimal,
+        optional_integer(operation.start, "read-memory start"),
+        optional_integer(operation.finish, "read-memory finish"));
+  } catch (const std::exception& error) {
+    container_error(
+        process.program.id, process.pc, error.what());
   }
   ++process.pc;
 }

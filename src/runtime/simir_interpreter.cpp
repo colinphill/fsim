@@ -170,10 +170,8 @@ ProcessId Interpreter::add_process(Process process) {
   state.container_registers.reserve(
       process.container_register_count);
   for (const auto& type : process.container_register_types) {
-    ContainerValue value;
-    value.type = type;
-    validate_container_value(value);
-    state.container_registers.push_back(std::move(value));
+    state.container_registers.push_back(
+        default_container_value(type));
   }
   state.random_state = Impl::initial_random_state(
       impl_->root_seed, id);

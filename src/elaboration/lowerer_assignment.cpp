@@ -530,10 +530,14 @@ using namespace elaboration_detail;
                     && statement.value.operands.front().text
                             == "new";
                 if (is_new) {
-                    if (runtime_type->associative) {
+                    if (runtime_type->associative
+                        || runtime_type->fixed) {
                         report(
                             "FSIM-ELAB-SVCONTAINER-014",
-                            "new[size] cannot resize an associative array",
+                            runtime_type->fixed
+                                ? "new[size] cannot resize a static array"
+                                : "new[size] cannot resize an associative "
+                                  "array",
                             statement.value.span);
                         return;
                     }
@@ -568,8 +572,11 @@ using namespace elaboration_detail;
                     runtime_type->associative
                         ? static_cast<std::size_t>(
                               runtime_type->index_width)
-                        : infer_width(statement.target.operands[1])
-                              .value_or(std::size_t{32});
+                        : runtime_type->fixed
+                              ? std::size_t{32}
+                              : infer_width(
+                                    statement.target.operands[1])
+                                    .value_or(std::size_t{32});
                 const auto* index_type =
                     runtime_type->associative
                         ? source_type->systemverilog_container
@@ -591,8 +598,9 @@ using namespace elaboration_detail;
                         *value,
                         runtime_type->associative
                             ? runtime_type->signed_indices
-                            : is_signed_expression(
-                                  statement.target.operands[1])});
+                            : runtime_type->fixed
+                                  || is_signed_expression(
+                                      statement.target.operands[1])});
             } else {
                 report(
                     "FSIM-ELAB-SVCONTAINER-011",

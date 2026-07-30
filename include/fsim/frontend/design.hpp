@@ -216,6 +216,7 @@ enum class SystemVerilogContainerKind {
   DynamicArray,
   Queue,
   AssociativeArray,
+  StaticArray,
 };
 
 struct Type;
@@ -235,6 +236,10 @@ struct SystemVerilogContainerInfo {
   // the recursive Type representation value-copyable while retaining the
   // index width, state domain, signedness, and named-type provenance.
   std::shared_ptr<Type> associative_index_type;
+  // Present for a static unpacked `[left:right]` dimension. Expressions remain
+  // specialization-aware until elaboration produces a bounded dense layout.
+  std::optional<PackedRange> static_range;
+  std::optional<PackedRangeExpression> static_range_expression;
   SourceSpan span;
 };
 
@@ -712,6 +717,7 @@ enum class StatementKind {
   Display,
   FileClose,
   FileDisplay,
+  MemoryLoad,
   ContainerMethod,
   MonitorControl,
   Report,
@@ -861,6 +867,11 @@ struct Statement {
   // ordinary output values. FileDisplay reuses the output formatting fields;
   // FileClose uses only this expression.
   Expression file_handle;
+  Expression memory_file;
+  Expression memory_target;
+  std::optional<Expression> memory_start;
+  std::optional<Expression> memory_finish;
+  bool memory_hex{};
   // Multi-conversion and additional unformatted arguments retain source
   // order here. The legacy singular fields above remain the compact form for
   // one conversion and one value.

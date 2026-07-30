@@ -405,6 +405,7 @@ struct Interpreter::Impl {
   void execute_container(ProcessState&, const DeleteContainer&);
   void execute_container(ProcessState&, const ContainerExists&);
   void execute_container(ProcessState&, const TraverseContainer&);
+  void execute_container(ProcessState&, const LoadMemory&);
   void execute_container(ProcessState&, const PushContainer&);
   void execute_container(ProcessState&, const PopContainer&);
 

@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/simir.hpp"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -209,6 +210,107 @@ void test_simir_containers() {
               == value(8, 2),
       "first/next/last/previous traverse canonical key order");
 
+  ContainerType static_type;
+  static_type.element_width = 8;
+  static_type.fixed = true;
+  static_type.index_left = 2;
+  static_type.index_right = -1;
+  auto static_initial = default_container_value(static_type);
+  require(
+      static_initial.elements.size() == 4
+          && static_initial.elements.front().to_msb_string()
+              == "XXXXXXXX",
+      "four-state static arrays materialize their full declared range "
+      "with X defaults");
+  auto oversized_static_type = static_type;
+  oversized_static_type.index_left =
+      std::numeric_limits<std::int32_t>::min();
+  oversized_static_type.index_right =
+      std::numeric_limits<std::int32_t>::max();
+  try {
+    (void)default_container_value(oversized_static_type);
+    require(false, "oversized static type must fail before allocation");
+  } catch (const std::length_error&) {
+  }
+  Interpreter fixed;
+  const auto fixed_object = fixed.add_container_object(
+      {"fixed", static_initial});
+  Process fixed_process;
+  fixed_process.id = 0;
+  fixed_process.name = "fixed";
+  fixed_process.register_count = 3;
+  fixed_process.container_register_count = 2;
+  fixed_process.container_register_types = {
+      static_type, static_type};
+  fixed_process.debug_locals = {
+      {"selected", "byte", 2, 8, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}}};
+  fixed_process.operations = {
+      LoadConstant{
+          0, value(32, static_cast<std::uint32_t>(-1))},
+      LoadConstant{1, value(8, 0x5a)},
+      ContainerWrite{0, 0, 1, true},
+      ContainerRead{2, 0, 0, true},
+      CopyContainerRegister{1, 0},
+      WriteContainerObject{fixed_object, 1},
+      Halt{}};
+  (void)fixed.add_process(std::move(fixed_process));
+  require(
+      fixed.run().status == RunStatus::completed
+          && fixed.read_debug_local(0, 0) == value(8, 0x5a)
+          && fixed.container_object_value(fixed_object)
+                 .elements[3]
+              == value(8, 0x5a),
+      "descending signed static indices map to dense declared-order "
+      "storage and whole copies preserve every element");
+
+  ContainerType memory_type;
+  memory_type.element_width = 8;
+  memory_type.fixed = true;
+  memory_type.index_left = 3;
+  memory_type.index_right = 0;
+  auto memory = default_container_value(memory_type);
+  load_memory_text(
+      memory,
+      "a5 /* inline */ xz\n@3 0f // tail\n",
+      true);
+  require(
+      memory.elements[0].to_msb_string() == "00001111"
+          && memory.elements[1].to_msb_string()
+              == "XXXXXXXX"
+          && memory.elements[2].to_msb_string()
+              == "XXXXZZZZ"
+          && memory.elements[3].to_msb_string()
+              == "10100101",
+      "$readmemh semantics retain comments, @addresses, and exact X/Z "
+      "nibbles while default addresses increase numerically");
+  load_memory_text(
+      memory, "10z1 0011", false, 1, 0);
+  require(
+      memory.elements[2].to_msb_string()
+              == "000010Z1"
+          && memory.elements[3].to_msb_string()
+              == "00000011",
+      "$readmemb optional bounds use declared indices and retain Z bits");
+  try {
+    load_memory_text(memory, "@7 00", true);
+    require(false, "out-of-range read-memory address must fail");
+  } catch (const std::out_of_range&) {
+  }
+  try {
+    load_memory_text(memory, "2", false);
+    require(false, "invalid binary read-memory digit must fail");
+  } catch (const std::invalid_argument&) {
+  }
+  try {
+    load_memory_text(
+        memory,
+        std::string(maximum_memory_file_bytes + 1U, '0'),
+        false);
+    require(false, "oversized read-memory input must fail");
+  } catch (const std::length_error&) {
+  }
+
   const auto expect_failure =
       [&](const ContainerType& type,
           std::vector<Operation> operations,
@@ -270,6 +372,24 @@ void test_simir_containers() {
        DeleteContainer{0, 0},
        Halt{}},
       "requires an associative array");
+  expect_failure(
+      static_type,
+      {LoadConstant{
+           0,
+           PackedLogic4::from_aval_bval(32, 1, 1)},
+       ContainerRead{1, 0, 0, true},
+       Halt{}},
+      "known 32-bit integral value");
+  expect_failure(
+      static_type,
+      {LoadConstant{0, value(32, 3)},
+       ContainerRead{1, 0, 0, true},
+       Halt{}},
+      "static-array index is out of range");
+  expect_failure(
+      static_type,
+      {DeleteContainer{0, std::nullopt}, Halt{}},
+      "cannot clear a static array");
 
   ContainerType limited_type = associative_type;
   limited_type.index_width = 13;
