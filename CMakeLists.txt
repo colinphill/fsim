@@ -323,6 +323,7 @@ add_library(
     src/runtime/simir.cpp
     src/runtime/simir_arithmetic.cpp
     src/runtime/simir_execution.cpp
+    src/runtime/simir_files.cpp
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
     src/runtime/simir_logic.cpp
@@ -507,6 +508,7 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit_module.cpp
       src/compiler/llvm_jit_operations_control.cpp
       src/compiler/llvm_jit_operations_logic.cpp
+      src/compiler/llvm_jit_operations_file.cpp
       src/compiler/llvm_jit_operations_output.cpp
       src/compiler/llvm_jit_operations_signal.cpp
       src/compiler/llvm_jit_operations_string.cpp

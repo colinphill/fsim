@@ -197,7 +197,8 @@ std::optional<BuiltProject> build_project(
       std::move(systemc_roots),
       selected_seed,
       config.project.random_seed,
-      hit};
+      hit,
+      config.base_directory};
 }
 
 

@@ -19,6 +19,7 @@ struct Simulation::Impl {
         interpreter(built.design.create_interpreter(
             runtime::SchedulerOptions{max_deltas, 32},
             built.seed)) {
+    interpreter->set_file_root(built.file_root);
     if (!built.design.systemc_processes().empty()
         && !built.systemc_hierarchy) {
       throw std::logic_error{

@@ -16,6 +16,7 @@ add_executable(
   frontend/frontend_vhdl_package_generic_tests.cpp
   frontend/frontend_statement_tests.cpp
   frontend/frontend_generate_output_tests.cpp
+  frontend/frontend_file_tests.cpp
 )
 fsim_configure_test(fsim_frontend_tests)
 target_link_libraries(fsim_frontend_tests PRIVATE fsim_frontend)
@@ -96,6 +97,7 @@ add_executable(
   elaboration/elaborator_vhdl_generic_subprogram_test.cpp
   elaboration/elaborator_vhdl_component_test.cpp
   elaboration/elaborator_vhdl_configuration_test.cpp
+  elaboration/elaborator_sv_file_test.cpp
 )
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
@@ -534,6 +536,25 @@ set_tests_properties(
     fsim.application.sv_mutable_strings
     PROPERTIES
       LABELS "fast;strings;tasks;timing;systemverilog;cache;debugger"
+  )
+
+  add_executable(
+    fsim_sv_file_application_tests
+    app/sv_file_application_test.cpp
+  )
+  fsim_configure_test(fsim_sv_file_application_tests)
+  target_link_libraries(
+    fsim_sv_file_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_files
+    COMMAND fsim_sv_file_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_files
+    PROPERTIES
+      LABELS "fast;files;strings;tasks;timing;systemverilog;cache;debugger"
   )
 
   add_executable(

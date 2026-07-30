@@ -734,6 +734,47 @@ using namespace elaboration_detail;
             visible_types.emplace(
                 path + "." + variable.name, &variable.type);
             if (variable.type.domain
+                == frontend::ValueDomain::Integer) {
+                const frontend::SignalDeclaration declaration{
+                    variable.name,
+                    variable.type,
+                    frontend::PortDirection::Unknown,
+                    false,
+                    variable.span};
+                const auto signal =
+                    add_owned_signal(declaration, path, local);
+                if (signal && variable.initializer) {
+                    std::string error;
+                    const auto value =
+                        evaluate_systemverilog_constant_expression(
+                            *variable.initializer,
+                            {},
+                            parameter_environment,
+                            error);
+                    const auto converted =
+                        value
+                            ? convert_systemverilog_parameter_value(
+                                  *value, variable.type, error)
+                            : std::nullopt;
+                    if (!converted || !converted->known()) {
+                        report(
+                            "FSIM-ELAB-SVFILE-008",
+                            "module integer initializer for '"
+                                + path + "." + variable.name
+                                + "' is not a known 32-bit constant: "
+                                + error,
+                            variable.span);
+                    } else {
+                        design_.signals_[*signal].initial_value =
+                            PackedLogic4::from_aval_bval(
+                                converted->width,
+                                converted->bits,
+                                0);
+                    }
+                }
+                continue;
+            }
+            if (variable.type.domain
                 != frontend::ValueDomain::String) {
                 report(
                     "FSIM-ELAB-SVSTRING-016",

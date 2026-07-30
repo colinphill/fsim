@@ -118,6 +118,12 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     runtime.string_index = string_index;
     runtime.string_replace_byte = string_replace_byte;
     runtime.write_string_output = write_string_output;
+    runtime.file_open = file_open;
+    runtime.file_close = file_close;
+    runtime.file_write = file_write;
+    runtime.file_read_line = file_read_line;
+    runtime.file_end_of_file = file_end_of_file;
+    runtime.file_error = file_error;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -210,6 +216,12 @@ LlvmProcessExecutor::LlvmProcessExecutor(
                 process_.id,
                 error.instruction(),
                 "mutable string runtime callback failed");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              file_callback_failure:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "text file runtime callback failed");
         }
         throw;
       } catch (...) {

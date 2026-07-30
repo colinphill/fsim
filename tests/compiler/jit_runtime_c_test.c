@@ -141,7 +141,19 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, load_string) == 352,
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, write_string_output) == 424,
     "runtime string-output helper was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 432,
+_Static_assert(offsetof(fsim_jit_runtime_v1, file_open) == 432,
+               "runtime file-open helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, file_close) == 440,
+               "runtime file-close helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, file_write) == 448,
+               "runtime file-write helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, file_read_line) == 456,
+               "runtime file-read helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, file_end_of_file) == 464,
+               "runtime file-EOF helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, file_error) == 472,
+               "runtime file-error helper was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 480,
                "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
@@ -581,6 +593,12 @@ int main(void) {
       write_projected_slice,
       write_projected_waveform,
       write_projected_waveform_slice,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
       NULL,
       NULL,
       NULL,

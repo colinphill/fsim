@@ -26,7 +26,6 @@
 
 namespace fsim::compiler::llvm_detail {
 
-
 using runtime::Logic9;
 using runtime::simir::Assert;
 using runtime::simir::Binary;
@@ -107,8 +106,6 @@ using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
 
-
-
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
 };
@@ -133,6 +130,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
@@ -151,7 +149,6 @@ void lower_process(llvm::Module &module, const std::string &symbol,
   function->getArg(0)->setName("runtime");
   function->getArg(1)->setName("frame");
   function->getArg(2)->setName("result");
-
   auto *entry = llvm::BasicBlock::Create(context, "entry", function);
   llvm::IRBuilder<> builder(entry);
   auto *runtime_argument = function->getArg(0);
@@ -988,6 +985,10 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         module, builder, registers, context, i32, i64,
         context_pointer, process.id, instruction,
         runtime_type, runtime_argument,
+        runtime_error_if, branch_to_next};
+    FileOperationLowerer file_lowerer{
+        builder, registers, context, i32, i64, context_pointer, process.id,
+        instruction, runtime_type, runtime_argument,
         runtime_error_if, branch_to_next};
     SignalOperationLowerer signal_lowerer{
         builder,
@@ -1982,9 +1983,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   FSIM_JIT_FRAME_STATE_COMPLETED, next_instruction);
             },
             [&](const auto& operation) {
-              if constexpr (requires {
-                              string_lowerer.lower(operation);
-                            }) {
+              if constexpr (
+                  requires { file_lowerer.lower(operation); }) {
+                file_lowerer.lower(operation);
+              } else if constexpr (
+                  requires { string_lowerer.lower(operation); }) {
                 string_lowerer.lower(operation);
               } else {
                 llvm_unreachable(
@@ -1993,7 +1996,5 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             }},
         process.operations[index]);
   }
-
 }
-
 }  // namespace fsim::compiler::llvm_detail

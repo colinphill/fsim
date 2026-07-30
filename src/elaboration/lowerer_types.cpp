@@ -762,6 +762,17 @@ using namespace elaboration_detail;
                     collect_identifiers(value.value, output);
                 }
                 break;
+            case StatementKind::FileClose:
+                collect_identifiers(
+                    statement.file_handle, output);
+                break;
+            case StatementKind::FileDisplay:
+                collect_identifiers(
+                    statement.file_handle, output);
+                if (statement.output_format) {
+                    collect_identifiers(statement.value, output);
+                }
+                break;
             case StatementKind::MonitorControl:
                 break;
             case StatementKind::EventTrigger:

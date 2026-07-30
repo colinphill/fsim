@@ -5,6 +5,32 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+namespace {
+
+[[nodiscard]] runtime::simir::OutputFormat runtime_output_format(
+    const frontend::OutputFormat source) {
+  switch (source) {
+  case frontend::OutputFormat::Binary:
+    return runtime::simir::OutputFormat::binary;
+  case frontend::OutputFormat::Hexadecimal:
+    return runtime::simir::OutputFormat::hexadecimal;
+  case frontend::OutputFormat::Octal:
+    return runtime::simir::OutputFormat::octal;
+  case frontend::OutputFormat::Decimal:
+    return runtime::simir::OutputFormat::decimal;
+  case frontend::OutputFormat::Character:
+    return runtime::simir::OutputFormat::character;
+  case frontend::OutputFormat::String:
+    return runtime::simir::OutputFormat::string;
+  case frontend::OutputFormat::Hierarchy:
+  case frontend::OutputFormat::Time:
+    break;
+  }
+  throw std::logic_error{"invalid frontend output format"};
+}
+
+}  // namespace
+
 Lowerer::Lowerer(
         ElaboratedDesign& design,
         const std::unordered_map<std::string, SignalId>& signals,
@@ -889,6 +915,8 @@ Lowerer::Lowerer(
                 kind = DebugPointKind::assertion;
             } else if (
                 statement.kind == StatementKind::Display
+                || statement.kind == StatementKind::FileClose
+                || statement.kind == StatementKind::FileDisplay
                 || statement.kind == StatementKind::Report
                 || statement.kind == StatementKind::TaskCall
                 || statement.kind == StatementKind::ProcedureCall) {
@@ -970,29 +998,118 @@ Lowerer::Lowerer(
             process_.operations.emplace_back(
                 MonitorControl{statement.monitor_enabled});
             break;
+        case StatementKind::FileClose: {
+            const auto* type =
+                statement.file_handle.kind
+                        == ExpressionKind::Identifier
+                    ? object_type(statement.file_handle.text)
+                    : nullptr;
+            if (type == nullptr
+                || type->domain
+                    != frontend::ValueDomain::Integer) {
+                report(
+                    "FSIM-ELAB-SVFILE-001",
+                    "$fclose handle must be a 32-bit integer expression",
+                    statement.file_handle.span);
+                break;
+            }
+            auto handle =
+                lower_expression(statement.file_handle, 32);
+            if (!handle) {
+                break;
+            }
+            if (register_width(*handle) != 32) {
+                *handle = resize_register(
+                    *handle,
+                    32,
+                    is_signed_expression(statement.file_handle));
+            }
+            process_.operations.emplace_back(FileClose{*handle});
+            break;
+        }
+        case StatementKind::FileDisplay: {
+            const auto* type =
+                statement.file_handle.kind
+                        == ExpressionKind::Identifier
+                    ? object_type(statement.file_handle.text)
+                    : nullptr;
+            if (type == nullptr
+                || type->domain
+                    != frontend::ValueDomain::Integer) {
+                report(
+                    "FSIM-ELAB-SVFILE-001",
+                    "file output handle must be a 32-bit integer "
+                    "expression",
+                    statement.file_handle.span);
+                break;
+            }
+            auto handle =
+                lower_expression(statement.file_handle, 32);
+            if (!handle) {
+                break;
+            }
+            if (register_width(*handle) != 32) {
+                *handle = resize_register(
+                    *handle,
+                    32,
+                    is_signed_expression(statement.file_handle));
+            }
+            if (!statement.output_format) {
+                process_.operations.emplace_back(
+                    FileWriteLiteral{
+                        *handle,
+                        statement.output_text,
+                        statement.output_newline});
+                break;
+            }
+            if (*statement.output_format
+                    == frontend::OutputFormat::String
+                && is_string_expression(statement.value)) {
+                const auto source =
+                    lower_string_expression(statement.value);
+                if (source) {
+                    process_.operations.emplace_back(
+                        FileWriteString{
+                            *handle,
+                            *source,
+                            statement.output_prefix,
+                            statement.output_suffix,
+                            statement.output_newline});
+                }
+                break;
+            }
+            const auto width =
+                infer_width(statement.value).value_or(
+                    std::size_t{32});
+            const auto source =
+                lower_expression(statement.value, width);
+            if (!source) {
+                report(
+                    "FSIM-ELAB-SVFILE-007",
+                    "formatted file output value cannot be lowered",
+                    statement.value.span);
+                break;
+            }
+            const auto format =
+                runtime_output_format(*statement.output_format);
+            process_.operations.emplace_back(
+                FileWriteFormatted{
+                    *handle,
+                    *source,
+                    static_cast<std::uint32_t>(width),
+                    format,
+                    statement.output_prefix,
+                    statement.output_suffix,
+                    statement.output_newline,
+                    format == runtime::simir::OutputFormat::decimal
+                        && is_signed_expression(statement.value),
+                    statement.output_suppress_leading_zero,
+                    statement.output_minimum_width,
+                    statement.output_left_justify,
+                    statement.output_zero_pad});
+            break;
+        }
         case StatementKind::Display: {
-            const auto runtime_output_format =
-                [](const frontend::OutputFormat source) {
-                    switch (source) {
-                    case frontend::OutputFormat::Binary:
-                        return runtime::simir::OutputFormat::binary;
-                    case frontend::OutputFormat::Hexadecimal:
-                        return runtime::simir::OutputFormat::hexadecimal;
-                    case frontend::OutputFormat::Octal:
-                        return runtime::simir::OutputFormat::octal;
-                    case frontend::OutputFormat::Decimal:
-                        return runtime::simir::OutputFormat::decimal;
-                    case frontend::OutputFormat::Character:
-                        return runtime::simir::OutputFormat::character;
-                    case frontend::OutputFormat::String:
-                        return runtime::simir::OutputFormat::string;
-                    case frontend::OutputFormat::Hierarchy:
-                    case frontend::OutputFormat::Time:
-                        break;
-                    }
-                    throw std::logic_error{
-                        "invalid frontend output format"};
-                };
             if (statement.output_monitor) {
                 if (statement.output_values.empty()
                     && !statement.output_format) {

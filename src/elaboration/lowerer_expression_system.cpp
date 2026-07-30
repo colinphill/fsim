@@ -9,6 +9,171 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
+        const auto lower_handle =
+            [&](const Expression& handle)
+                -> std::optional<RegisterId> {
+              const auto* type =
+                  handle.kind == ExpressionKind::Identifier
+                      ? object_type(handle.text)
+                      : nullptr;
+              const bool integer_handle =
+                  handle.kind == ExpressionKind::IntegerLiteral
+                  || (type != nullptr
+                      && type->domain
+                          == frontend::ValueDomain::Integer)
+                  || (handle.kind == ExpressionKind::Call
+                      && (handle.text == "$fopen"
+                          || handle.text == "$fgets"
+                          || handle.text == "$feof"
+                          || handle.text == "$ferror"))
+                  || is_integer_expression(handle);
+              if (!integer_handle) {
+                report(
+                    "FSIM-ELAB-SVFILE-001",
+                    "a file handle must be a 32-bit integer expression",
+                    handle.span);
+                return std::nullopt;
+              }
+              auto value = lower_expression(handle, 32);
+              if (value && register_width(*value) != 32) {
+                *value = resize_register(
+                    *value, 32, is_signed_expression(handle));
+              }
+              return value;
+            };
+        const auto string_target =
+            [&](const Expression& target)
+                -> std::optional<std::pair<
+                    StringRegisterId,
+                    std::optional<StringObjectId>>> {
+              if (target.kind != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-SVFILE-002",
+                    "a file read/error target must be a whole string "
+                    "object or automatic local",
+                    target.span);
+                return std::nullopt;
+              }
+              if (const auto local =
+                      string_locals_.find(target.text);
+                  local != string_locals_.end()) {
+                return std::pair{
+                    local->second,
+                    std::optional<StringObjectId>{}};
+              }
+              if (const auto object =
+                      string_objects_.find(target.text);
+                  object != string_objects_.end()) {
+                return std::pair{
+                    allocate_string_register(),
+                    std::optional{object->second}};
+              }
+              report(
+                  "FSIM-ELAB-SVFILE-002",
+                  "unknown file string target '" + target.text + "'",
+                  target.span);
+              return std::nullopt;
+            };
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$fopen") {
+          if (language_
+                  != frontend::Language::SystemVerilog2017
+              || expression.operands.size() != 2
+              || !is_string_expression(expression.operands[0])
+              || !is_string_expression(expression.operands[1])) {
+            report(
+                "FSIM-ELAB-SVFILE-003",
+                "$fopen requires SystemVerilog byte-string filename and "
+                "mode expressions",
+                expression.span);
+            return std::nullopt;
+          }
+          const auto path =
+              lower_string_expression(expression.operands[0]);
+          const auto mode =
+              lower_string_expression(expression.operands[1]);
+          if (!path || !mode) {
+            return std::nullopt;
+          }
+          const auto destination =
+              allocate_register(32, frontend::ValueDomain::Bit2);
+          process_.operations.emplace_back(
+              FileOpen{destination, *path, *mode});
+          return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$fgets") {
+          if (language_
+                  != frontend::Language::SystemVerilog2017
+              || expression.operands.size() != 2) {
+            report(
+                "FSIM-ELAB-SVFILE-004",
+                "$fgets requires a string target and integer handle",
+                expression.span);
+            return std::nullopt;
+          }
+          const auto target = string_target(expression.operands[0]);
+          const auto handle = lower_handle(expression.operands[1]);
+          if (!target || !handle) {
+            return std::nullopt;
+          }
+          const auto destination =
+              allocate_register(32, frontend::ValueDomain::Bit2);
+          process_.operations.emplace_back(
+              FileReadLine{destination, *handle, target->first});
+          if (target->second) {
+            process_.operations.emplace_back(
+                WriteStringObject{*target->second, target->first});
+          }
+          return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$feof") {
+          if (language_
+                  != frontend::Language::SystemVerilog2017
+              || expression.operands.size() != 1) {
+            report(
+                "FSIM-ELAB-SVFILE-005",
+                "$feof requires one integer handle",
+                expression.span);
+            return std::nullopt;
+          }
+          const auto handle = lower_handle(expression.operands[0]);
+          if (!handle) {
+            return std::nullopt;
+          }
+          const auto destination =
+              allocate_register(32, frontend::ValueDomain::Bit2);
+          process_.operations.emplace_back(
+              FileEndOfFile{destination, *handle});
+          return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$ferror") {
+          if (language_
+                  != frontend::Language::SystemVerilog2017
+              || expression.operands.size() != 2) {
+            report(
+                "FSIM-ELAB-SVFILE-006",
+                "$ferror requires an integer handle and string target",
+                expression.span);
+            return std::nullopt;
+          }
+          const auto handle = lower_handle(expression.operands[0]);
+          const auto target = string_target(expression.operands[1]);
+          if (!handle || !target) {
+            return std::nullopt;
+          }
+          const auto destination =
+              allocate_register(32, frontend::ValueDomain::Bit2);
+          process_.operations.emplace_back(
+              FileErrorStatus{destination, *handle, target->first});
+          if (target->second) {
+            process_.operations.emplace_back(
+                WriteStringObject{*target->second, target->first});
+          }
+          return destination;
+        }
         if (expression.kind == ExpressionKind::Call
             && (expression.text == "$dimensions"
                 || expression.text == "$unpacked_dimensions")) {

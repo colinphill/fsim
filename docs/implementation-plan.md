@@ -3736,6 +3736,54 @@ warnings-as-errors Debug regression passed all 56 configured tests in 68.76
 seconds, and Release passed all 56 configured tests in 31.25 seconds on
 2026-07-30. No CI state was inspected.
 
+### Sixty-ninth feature batch — bounded SystemVerilog text files
+
+Same-language SystemVerilog-2017 now executes bounded `$fopen`, `$fclose`,
+`$fdisplay`, `$fwrite`, `$fgets`, `$feof`, and `$ferror`. Module and automatic
+`integer` values carry opaque monotonically allocated handles; the simulator
+owns every host stream and rejects zero, unknown, closed, and foreign-process
+handles without exposing host descriptors. Accepted modes are `r`, `w`, `a`,
+`r+`, `w+`, and `a+`. Paths must be relative to the manifest directory and
+remain beneath its canonical root, including through existing symlinks.
+
+Writes flush deterministically, explicit close distinguishes ordinary EOF
+state from an actual close failure, and the per-simulation table closes all
+remaining streams on destruction. `$fgets` copies one text line into a
+bounded mutable string, including a present newline, and returns its byte
+count; EOF and retained file-error text are queryable separately. Filenames,
+lines, and string output share the 4,096-byte runtime-string bound.
+`$fdisplay`/`$fwrite` admit literal output or exactly one
+`%b`/`%h`/`%o`/`%d`/`%c`/`%s` conversion.
+
+Stable SimIR operations describe open, close, literal/formatted/string writes,
+line reads, EOF, and error status. Six append-only plain-C callbacks follow
+the mutable-string ABI tail and pass only process/instruction IDs, HDL handle
+bits, and scalar results. Generated LLVM O0/O2 code delegates storage and
+metadata interpretation to the application executor, contains callback
+failures at the current source instruction, and never embeds `FILE*`, C++
+stream/filesystem objects, descriptors, or addresses.
+
+File calls retain debugger call safe points and automatic integer handles
+remain live across task suspension, stop, inspection, and resume. Native
+cache schema 22 records the `simir-text-file-v1` semantic marker and every
+operation field, literal byte, register dependency, format, and source
+provenance. External file contents are deliberately excluded: editing an
+input file produces warm hits while changing the HDL output literal
+invalidates only the owning module.
+
+Binary I/O, standard input/output descriptor aliases, seek/tell/rewind,
+multichannel descriptors, arbitrary format lists, `$readmem*`, VHDL TextIO,
+mixed-language handles, unrestricted host paths, and dynamic containers
+remain outside this bounded slice.
+
+The focused warnings-as-errors frontend, runtime, elaboration, LLVM,
+application, diagnostic-catalog, and source-budget gates passed. The catalog
+covers 1,102 production codes and the source gate covers 276 authored files
+with an empty allowlist and a maximum of 2,000 lines. The exact LLVM 22.1.8
+warnings-as-errors Debug regression passed all 57 configured tests in 68.89
+seconds, and Release passed all 57 configured tests in 30.72 seconds on
+2026-07-30. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

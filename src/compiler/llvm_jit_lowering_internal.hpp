@@ -195,6 +195,62 @@ private:
   void check(llvm::Value* status, std::string_view label);
 };
 
+struct FileOperationLowerer {
+  llvm::IRBuilder<>& builder;
+  std::vector<RegisterSlot>& registers;
+  llvm::LLVMContext& context;
+  llvm::Type* i32;
+  llvm::Type* i64;
+  llvm::Value* context_pointer;
+  std::uint32_t process;
+  std::uint32_t instruction;
+  std::array<llvm::Value*, 6> callbacks;
+  std::array<llvm::FunctionType*, 6> callback_types;
+  std::function<void(
+      llvm::Value*,
+      JitGeneratedRuntimeErrorReason,
+      std::string_view)> runtime_error_if;
+  std::function<void()> branch_to_next;
+
+  FileOperationLowerer(
+      llvm::IRBuilder<>& builder,
+      std::vector<RegisterSlot>& registers,
+      llvm::LLVMContext& context,
+      llvm::Type* i32,
+      llvm::Type* i64,
+      llvm::Value* context_pointer,
+      std::uint32_t process,
+      std::uint32_t instruction,
+      llvm::StructType* runtime_type,
+      llvm::Value* runtime_argument,
+      std::function<void(
+          llvm::Value*,
+          JitGeneratedRuntimeErrorReason,
+          std::string_view)> runtime_error_if,
+      std::function<void()> branch_to_next);
+
+  void lower(const runtime::simir::FileOpen& operation);
+  void lower(const runtime::simir::FileClose& operation);
+  void lower(const runtime::simir::FileWriteLiteral& operation);
+  void lower(const runtime::simir::FileWriteFormatted& operation);
+  void lower(const runtime::simir::FileWriteString& operation);
+  void lower(const runtime::simir::FileReadLine& operation);
+  void lower(const runtime::simir::FileEndOfFile& operation);
+  void lower(const runtime::simir::FileErrorStatus& operation);
+
+private:
+  void lower_handle_only(
+      runtime::simir::RegisterId handle,
+      std::size_t callback,
+      std::string_view label);
+  void lower_result(
+      runtime::simir::RegisterId destination,
+      runtime::simir::RegisterId handle,
+      std::size_t callback,
+      std::string_view label);
+  void check(llvm::Value* status, std::string_view label);
+};
+
 struct ControlFlowOperationLowerer {
   llvm::IRBuilder<>& builder;
   std::vector<RegisterSlot>& registers;

@@ -883,6 +883,131 @@ std::optional<Statement> VerilogParser::parse_statement() {
     return statement;
   }
 
+  if (keyword("$fclose")) {
+    const auto start = advance();
+    Statement statement;
+    statement.kind = StatementKind::FileClose;
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          start,
+          "FSIM-SV-SEM-074",
+          "$fclose requires SystemVerilog-2017");
+    }
+    expect(
+        TokenKind::LeftParen,
+        "'(' after $fclose",
+        "FSIM-SV-PARSE-148");
+    statement.file_handle = parse_expression();
+    expect(
+        TokenKind::RightParen,
+        "')' after $fclose handle",
+        "FSIM-SV-PARSE-149");
+    expect(
+        TokenKind::Semicolon,
+        "';' after $fclose",
+        "FSIM-SV-PARSE-150");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
+  if (keyword("$fdisplay") || keyword("$fwrite")) {
+    const bool newline = keyword("$fdisplay");
+    const auto start = advance();
+    const std::string task_name = start.text;
+    Statement statement;
+    statement.kind = StatementKind::FileDisplay;
+    statement.output_newline = newline;
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          start,
+          "FSIM-SV-SEM-074",
+          task_name + " requires SystemVerilog-2017");
+    }
+    expect(
+        TokenKind::LeftParen,
+        "'(' after " + task_name,
+        "FSIM-SV-PARSE-151");
+    statement.file_handle = parse_expression();
+    expect(
+        TokenKind::Comma,
+        "',' after " + task_name + " file handle",
+        "FSIM-SV-PARSE-152");
+    if (!at(TokenKind::StringLiteral)) {
+      error(
+          current(),
+          "FSIM-SV-SEM-076",
+          task_name
+              + " requires a literal format and at most one value");
+      (void)parse_expression();
+    } else {
+      const auto format_token = advance();
+      auto parsed_format = parse_output_format(
+          decoded_string_literal_text(format_token));
+      std::vector<Expression> values;
+      while (match(TokenKind::Comma)) {
+        values.push_back(parse_expression());
+      }
+      const auto consumes_value =
+          [](const OutputFormat format) {
+            return format != OutputFormat::Hierarchy
+                && format != OutputFormat::Time;
+          };
+      const auto required_values =
+          static_cast<std::size_t>(std::ranges::count_if(
+              parsed_format.conversions,
+              [&consumes_value](const auto& conversion) {
+                return consumes_value(conversion.format);
+              }));
+      const bool unsupported_conversion =
+          std::ranges::any_of(
+              parsed_format.conversions,
+              [](const auto& conversion) {
+                return conversion.format == OutputFormat::Hierarchy
+                    || conversion.format == OutputFormat::Time;
+              });
+      if (!parsed_format.valid || unsupported_conversion
+          || parsed_format.conversions.size() > 1
+          || values.size() > 1
+          || values.size() != required_values) {
+        error(
+            format_token,
+            "FSIM-SV-SEM-076",
+            task_name
+                + " supports a literal or one %b/%h/%o/%d/%c/%s "
+                  "conversion with exactly one value");
+      } else if (parsed_format.conversions.empty()) {
+        statement.output_text =
+            std::move(parsed_format.trailing_text);
+      } else {
+        auto& conversion = parsed_format.conversions.front();
+        statement.output_format = conversion.format;
+        statement.output_prefix = std::move(conversion.prefix);
+        statement.output_suffix =
+            std::move(parsed_format.trailing_text);
+        statement.output_suppress_leading_zero =
+            conversion.suppress_leading_zero;
+        statement.output_minimum_width =
+            conversion.minimum_width;
+        statement.output_left_justify =
+            conversion.left_justify;
+        statement.output_zero_pad = conversion.zero_pad;
+        if (!values.empty()) {
+          statement.value = std::move(values.front());
+        }
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after " + task_name + " arguments",
+        "FSIM-SV-PARSE-153");
+    expect(
+        TokenKind::Semicolon,
+        "';' after " + task_name,
+        "FSIM-SV-PARSE-154");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   if (keyword("$monitoron") || keyword("$monitoroff")) {
     const auto start = advance();
     const bool enabled = start.text == "$monitoron";

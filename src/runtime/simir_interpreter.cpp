@@ -11,6 +11,10 @@ Interpreter::~Interpreter() = default;
 Interpreter::Interpreter(Interpreter &&) noexcept = default;
 Interpreter &Interpreter::operator=(Interpreter &&) noexcept = default;
 
+void Interpreter::set_file_root(std::filesystem::path root) {
+  impl_->set_file_root(std::move(root));
+}
+
 SignalId Interpreter::add_signal(Signal signal) {
   if (impl_->started) {
     throw std::logic_error("cannot add a SimIR signal after start");

@@ -98,7 +98,9 @@ static_assert(
 static_assert(offsetof(fsim_jit_runtime_v1, load_string) == 352);
 static_assert(
     offsetof(fsim_jit_runtime_v1, write_string_output) == 424);
-static_assert(sizeof(fsim_jit_runtime_v1) == 432);
+static_assert(offsetof(fsim_jit_runtime_v1, file_open) == 432);
+static_assert(offsetof(fsim_jit_runtime_v1, file_error) == 472);
+static_assert(sizeof(fsim_jit_runtime_v1) == 480);
 static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
 static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
 static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
@@ -121,6 +123,9 @@ constexpr auto kJitFrameV1PrefixSize =
 constexpr auto kJitRuntimeLogic9Size =
     static_cast<std::uint32_t>(
         offsetof(fsim_jit_runtime_v1, load_string));
+constexpr auto kJitRuntimeStringSize =
+    static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, file_open));
 
 class PersistentLlvmObjectCache final : public llvm::ObjectCache {
 public:
@@ -331,6 +336,7 @@ struct LlvmJit::Impl {
     bool uses_monitor_control{};
     bool uses_random_value{};
     bool uses_strings{};
+    bool uses_files{};
   };
 
   struct NativeEntry {
@@ -497,6 +503,7 @@ void LlvmJit::add_process_module(
         validated.uses_monitor_control,
         validated.uses_random_value,
         validated.uses_strings,
+        validated.uses_files,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -1013,7 +1020,7 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_strings) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size < kJitRuntimeStringSize) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include mutable-string "
           "callbacks");
@@ -1031,6 +1038,21 @@ LlvmJit::resume(const JitProcessHandle process,
       throw LlvmJitError(
           "JIT runtime ABI requires mutable-string callbacks for this "
           "process");
+    }
+  }
+  if (entry.info.uses_files) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include text-file callbacks");
+    }
+    if (runtime.file_open == nullptr
+        || runtime.file_close == nullptr
+        || runtime.file_write == nullptr
+        || runtime.file_read_line == nullptr
+        || runtime.file_end_of_file == nullptr
+        || runtime.file_error == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires text-file callbacks for this process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {

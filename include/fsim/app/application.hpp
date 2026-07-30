@@ -58,6 +58,8 @@ struct BuiltProject {
   std::uint64_t seed{1};
   bool entropy_seed{};
   bool cache_hit{};
+  /// Manifest directory used as the sandbox root for HDL file operations.
+  std::filesystem::path file_root;
 };
 
 /// Parse all HDL source files in deterministic manifest order. Independent

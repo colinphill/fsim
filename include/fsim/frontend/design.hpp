@@ -680,6 +680,8 @@ enum class StatementKind {
   WaitUntil,
   EventTrigger,
   Display,
+  FileClose,
+  FileDisplay,
   MonitorControl,
   Report,
   Pause,
@@ -824,6 +826,10 @@ struct Statement {
   bool output_zero_pad{};
   bool output_monitor{};
   bool monitor_enabled{};
+  // Bounded SystemVerilog file tasks keep the integral handle separate from
+  // ordinary output values. FileDisplay reuses the output formatting fields;
+  // FileClose uses only this expression.
+  Expression file_handle;
   // Multi-conversion and additional unformatted arguments retain source
   // order here. The legacy singular fields above remain the compact form for
   // one conversion and one value.

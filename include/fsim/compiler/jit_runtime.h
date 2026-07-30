@@ -461,6 +461,51 @@ typedef struct fsim_jit_runtime_v1 {
       uint64_t suffix_size,
       uint32_t newline,
       uint32_t postponed);
+
+  /*
+   * Append-only bounded text-file helpers. Each instruction's immutable
+   * operation metadata identifies string/value registers and formatting.
+   * Only HDL handle values and scalar results cross this ABI; host streams,
+   * descriptors, filesystem objects, and addresses remain embedding-owned.
+   */
+  uint32_t (*file_open)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t* result);
+  uint32_t (*file_close)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint64_t handle_aval,
+      uint64_t handle_bval);
+  uint32_t (*file_write)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint64_t handle_aval,
+      uint64_t handle_bval);
+  uint32_t (*file_read_line)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint64_t handle_aval,
+      uint64_t handle_bval,
+      uint32_t* result);
+  uint32_t (*file_end_of_file)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint64_t handle_aval,
+      uint64_t handle_bval,
+      uint32_t* result);
+  uint32_t (*file_error)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint64_t handle_aval,
+      uint64_t handle_bval,
+      uint32_t* result);
 } fsim_jit_runtime_v1;
 
 /*

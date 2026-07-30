@@ -7,7 +7,8 @@ add_executable(
   fsim_runtime_tests
   runtime_tests.cpp
   runtime_value_tests.cpp
-  runtime_execution_tests.cpp
+    runtime_execution_tests.cpp
+    runtime_file_tests.cpp
   runtime_executor_tests.cpp
   runtime_timing_tests.cpp
 )

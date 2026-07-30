@@ -37,6 +37,14 @@ using runtime::simir::DynamicIndex;
 using runtime::simir::DynamicInsert;
 using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
+using runtime::simir::FileClose;
+using runtime::simir::FileEndOfFile;
+using runtime::simir::FileErrorStatus;
+using runtime::simir::FileOpen;
+using runtime::simir::FileReadLine;
+using runtime::simir::FileWriteFormatted;
+using runtime::simir::FileWriteLiteral;
+using runtime::simir::FileWriteString;
 using runtime::simir::FormatDisplay;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
@@ -168,6 +176,8 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     return "call-stack return target is invalid";
   case JitGeneratedRuntimeErrorReason::string_callback_failure:
     return "mutable string runtime callback failed";
+  case JitGeneratedRuntimeErrorReason::file_callback_failure:
+    return "text file runtime callback failed";
   }
   return "unknown generated runtime error";
 }
@@ -198,6 +208,7 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept {
   case JitGeneratedRuntimeErrorReason::call_stack_underflow:
   case JitGeneratedRuntimeErrorReason::call_stack_target:
   case JitGeneratedRuntimeErrorReason::string_callback_failure:
+  case JitGeneratedRuntimeErrorReason::file_callback_failure:
     return reason;
   }
   return std::nullopt;
@@ -644,6 +655,73 @@ validate_process(const Process &process,
               record_use(operation.source, index);
               constrain_width(operation.index, 32U, index);
               constrain_width(operation.source, 8U, index);
+            },
+            [&](const FileOpen& operation) {
+              result.uses_files = true;
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.path, index, "path");
+              validate_string_register(
+                  operation.mode, index, "mode");
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+            },
+            [&](const FileClose& operation) {
+              result.uses_files = true;
+              record_use(operation.handle, index);
+              constrain_width(operation.handle, 32U, index);
+            },
+            [&](const FileWriteLiteral& operation) {
+              result.uses_files = true;
+              record_use(operation.handle, index);
+              constrain_width(operation.handle, 32U, index);
+            },
+            [&](const FileWriteFormatted& operation) {
+              result.uses_files = true;
+              if (operation.width == 0 || operation.width > 64) {
+                reject(
+                    process, index,
+                    "FileWriteFormatted width must be in [1, 64]");
+              }
+              record_use(operation.handle, index);
+              constrain_width(operation.handle, 32U, index);
+              record_use(operation.source, index);
+              constrain_width(operation.source, operation.width, index);
+            },
+            [&](const FileWriteString& operation) {
+              result.uses_files = true;
+              result.uses_strings = true;
+              record_use(operation.handle, index);
+              constrain_width(operation.handle, 32U, index);
+              validate_string_register(
+                  operation.source, index, "source");
+            },
+            [&](const FileReadLine& operation) {
+              result.uses_files = true;
+              result.uses_strings = true;
+              record_use(operation.handle, index);
+              constrain_width(operation.handle, 32U, index);
+              validate_string_register(
+                  operation.target, index, "target");
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+            },
+            [&](const FileEndOfFile& operation) {
+              result.uses_files = true;
+              record_use(operation.handle, index);
+              constrain_width(operation.handle, 32U, index);
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+            },
+            [&](const FileErrorStatus& operation) {
+              result.uses_files = true;
+              result.uses_strings = true;
+              record_use(operation.handle, index);
+              constrain_width(operation.handle, 32U, index);
+              validate_string_register(
+                  operation.target, index, "target");
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
             },
             [&](const StringDisplay& operation) {
               result.uses_strings = true;

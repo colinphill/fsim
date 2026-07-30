@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -22,9 +23,12 @@ namespace fsim::runtime::simir {
 using RegisterId = std::uint32_t;
 using StringRegisterId = std::uint32_t;
 using StringObjectId = std::uint32_t;
+using FileHandle = std::uint32_t;
 using SignalId = std::uint32_t;
 using ProcessId = std::uint32_t;
 using InstructionIndex = std::uint32_t;
+
+enum class OutputFormat : std::uint8_t;
 
 struct LoadConstant {
   RegisterId destination{};
@@ -123,6 +127,64 @@ struct StringReplaceByte {
   RegisterId index{};
   RegisterId source{};
   bool signed_index{true};
+};
+
+/// Open one manifest-root-relative text file. Host stream and descriptor
+/// identities remain owned by the interpreter execution context.
+struct FileOpen {
+  RegisterId destination{};
+  StringRegisterId path{};
+  StringRegisterId mode{};
+};
+
+struct FileClose {
+  RegisterId handle{};
+};
+
+struct FileWriteLiteral {
+  RegisterId handle{};
+  std::string text;
+  bool newline{true};
+};
+
+struct FileWriteFormatted {
+  RegisterId handle{};
+  RegisterId source{};
+  std::uint32_t width{};
+  OutputFormat format{};
+  std::string prefix;
+  std::string suffix;
+  bool newline{true};
+  bool signed_decimal{};
+  bool suppress_leading_zero{};
+  std::uint32_t minimum_width{};
+  bool left_justify{};
+  bool zero_pad{};
+};
+
+struct FileWriteString {
+  RegisterId handle{};
+  StringRegisterId source{};
+  std::string prefix;
+  std::string suffix;
+  bool newline{true};
+};
+
+struct FileReadLine {
+  RegisterId destination{};
+  RegisterId handle{};
+  StringRegisterId target{};
+};
+
+struct FileEndOfFile {
+  RegisterId destination{};
+  RegisterId handle{};
+};
+
+struct FileErrorStatus {
+  RegisterId destination{};
+  RegisterId handle{};
+  StringRegisterId target{};
 };
 
 struct UnaryNot {
@@ -765,7 +827,10 @@ using Operation =
                  SignalLastEvent, SignalActive, CopyRegister,
                  LoadStringConstant, CopyStringRegister, ReadStringObject,
                  WriteStringObject, ConcatenateStrings, CompareStrings,
-                 StringLength, StringIndex, StringReplaceByte, UnaryNot,
+                 StringLength, StringIndex, StringReplaceByte, FileOpen,
+                 FileClose, FileWriteLiteral, FileWriteFormatted,
+                 FileWriteString, FileReadLine, FileEndOfFile,
+                 FileErrorStatus, UnaryNot,
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
                  Shift, Extract, DynamicExtract, Concatenate, Binary, Insert,
                  DynamicInsert,
@@ -881,6 +946,49 @@ public:
   virtual void write_string_object(StringObjectId, std::string_view) {
     throw std::logic_error{
         "alternate process executor cannot write string objects"};
+  }
+
+  [[nodiscard]] virtual FileHandle open_file(
+      std::string_view, std::string_view) {
+    throw std::logic_error{
+        "alternate process executor does not support file open"};
+  }
+  virtual void close_file(FileHandle) {
+    throw std::logic_error{
+        "alternate process executor does not support file close"};
+  }
+  virtual void write_file(
+      FileHandle, std::string_view, bool) {
+    throw std::logic_error{
+        "alternate process executor does not support file writes"};
+  }
+  virtual void write_file_formatted(
+      FileHandle,
+      std::string_view,
+      std::string_view,
+      OutputFormat,
+      const PackedLogic4&,
+      bool,
+      bool,
+      std::uint32_t,
+      bool,
+      bool) {
+    throw std::logic_error{
+        "alternate process executor does not support formatted file writes"};
+  }
+  [[nodiscard]] virtual std::string read_file_line(
+      FileHandle, std::uint32_t&) {
+    throw std::logic_error{
+        "alternate process executor does not support file reads"};
+  }
+  [[nodiscard]] virtual bool file_end_of_file(FileHandle) {
+    throw std::logic_error{
+        "alternate process executor does not support file status"};
+  }
+  [[nodiscard]] virtual std::string file_error(
+      FileHandle, bool&) {
+    throw std::logic_error{
+        "alternate process executor does not support file errors"};
   }
 
   /// Allocation-free single-word access used by generated scalar/vector code.
@@ -1362,6 +1470,10 @@ public:
   [[nodiscard]] SignalId add_signal(Signal signal);
   [[nodiscard]] StringObjectId add_string_object(StringObject object);
   [[nodiscard]] ProcessId add_process(Process process);
+
+  /// Restrict all HDL file operations to paths below this root. Must be set
+  /// before start; an empty root leaves file operations disabled.
+  void set_file_root(std::filesystem::path root);
 
   /// Replace one process's reference evaluator with an alternate executor.
   ///

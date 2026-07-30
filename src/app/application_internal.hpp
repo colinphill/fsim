@@ -126,6 +126,8 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       const std::string_view status) const;
 
   static void capture_failure(CallbackState& state) noexcept;
+  static void capture_file_failure(
+      CallbackState&, std::uint32_t, std::uint32_t) noexcept;
 
   static std::uint32_t load_string(
       void*, std::uint32_t, const char*, std::uint64_t) noexcept;
@@ -154,6 +156,27 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
   static std::uint32_t write_string_output(
       void*, std::uint32_t, std::uint32_t, const char*, std::uint64_t,
       const char*, std::uint64_t, std::uint32_t, std::uint32_t) noexcept;
+  static std::uint32_t file_open(
+      void*, std::uint32_t, std::uint32_t, std::uint32_t*) noexcept;
+  static std::uint32_t file_close(
+      void*, std::uint32_t, std::uint32_t,
+      std::uint64_t, std::uint64_t) noexcept;
+  static std::uint32_t file_write(
+      void*, std::uint32_t, std::uint32_t,
+      std::uint64_t, std::uint64_t) noexcept;
+  static std::uint32_t file_read_line(
+      void*, std::uint32_t, std::uint32_t,
+      std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
+  static std::uint32_t file_end_of_file(
+      void*, std::uint32_t, std::uint32_t,
+      std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
+  static std::uint32_t file_error(
+      void*, std::uint32_t, std::uint32_t,
+      std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
+  static runtime::simir::FileHandle checked_file_handle(
+      std::uint64_t aval, std::uint64_t bval);
+  static const runtime::simir::Operation& callback_operation(
+      const CallbackState&, std::uint32_t, std::uint32_t);
 
   static std::uint64_t read_signal(
       void* context,

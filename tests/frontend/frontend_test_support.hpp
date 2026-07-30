@@ -73,5 +73,6 @@ void test_conditional_generate_hierarchy();
 void test_systemverilog_named_events();
 void test_verilog_literal_display();
 void test_systemverilog_random_functions();
+void test_systemverilog_text_files();
 
 } // namespace fsim::tests::frontend

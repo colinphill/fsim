@@ -518,6 +518,13 @@ therefore excluded.
 | `FSIM-SV-PARSE-145` | error | Expected `endtask` after a bounded SystemVerilog task body. |
 | `FSIM-SV-PARSE-146` | error | Expected `)` after a bounded SystemVerilog task call argument list. |
 | `FSIM-SV-PARSE-147` | error | Expected `;` after a bounded SystemVerilog task call. |
+| `FSIM-SV-PARSE-148` | error | Expected `(` after `$fclose`. |
+| `FSIM-SV-PARSE-149` | error | Expected `)` after a `$fclose` handle. |
+| `FSIM-SV-PARSE-150` | error | Expected `;` after `$fclose`. |
+| `FSIM-SV-PARSE-151` | error | Expected `(` after `$fdisplay` or `$fwrite`. |
+| `FSIM-SV-PARSE-152` | error | Expected `,` after a file-output handle. |
+| `FSIM-SV-PARSE-153` | error | Expected `)` after file-output arguments. |
+| `FSIM-SV-PARSE-154` | error | Expected `;` after `$fdisplay` or `$fwrite`. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -700,6 +707,9 @@ therefore excluded.
 | `FSIM-SV-SEM-070` | error | A bounded task contains a nonblocking/intra-assignment control, `$stop`, or `$finish`. |
 | `FSIM-SV-SEM-071` | error | A bounded task return statement incorrectly supplies a value. |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
+| `FSIM-SV-SEM-074` | error | A bounded text-file system function or task appears outside SystemVerilog-2017 input. |
+| `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
+| `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -710,7 +720,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-009` | error | Unsupported procedural statement. |
 | `FSIM-SV-UNSUPPORTED-010` | error | ANSI port default expressions are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-011` | error | Declaration initializers are parsed but not executable. |
-| `FSIM-SV-UNSUPPORTED-012` | error | Integer objects are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-017` | error | A `case` statement uses an unsupported `unique`, `unique0`, or `priority` qualifier. |
 | `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
@@ -1007,6 +1016,14 @@ therefore excluded.
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |
+| `FSIM-ELAB-SVFILE-001` | error | A bounded SystemVerilog text-file handle is not a 32-bit integer expression. |
+| `FSIM-ELAB-SVFILE-002` | error | A file read/error target is not a whole mutable string object or automatic local. |
+| `FSIM-ELAB-SVFILE-003` | error | `$fopen` does not have bounded SystemVerilog byte-string filename and mode operands. |
+| `FSIM-ELAB-SVFILE-004` | error | `$fgets` does not have a mutable string target and integer handle. |
+| `FSIM-ELAB-SVFILE-005` | error | `$feof` does not have one integer handle. |
+| `FSIM-ELAB-SVFILE-006` | error | `$ferror` does not have an integer handle and mutable string target. |
+| `FSIM-ELAB-SVFILE-007` | error | A bounded formatted file-output value cannot be lowered. |
+| `FSIM-ELAB-SVFILE-008` | error | A module integer initializer is not a known 32-bit constant. |
 | `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
 | `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
 | `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |

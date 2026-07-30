@@ -610,11 +610,6 @@ void VerilogParser::parse_optional_net_type(Type& type) {
   } else if (keyword_token.text == "integer") {
     type.domain = ValueDomain::Integer;
     type.is_signed = true;
-    error(
-        keyword_token,
-        "FSIM-SV-UNSUPPORTED-012",
-        "integer objects are parsed but not executable in this frontend "
-        "slice");
   } else {
     type.domain = ValueDomain::Logic4;
   }

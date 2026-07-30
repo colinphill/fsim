@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <set>
@@ -271,6 +272,17 @@ struct Interpreter::Impl {
     std::vector<ProjectedTransaction> transactions;
   };
 
+  struct FileState {
+    ProcessId owner{};
+    std::filesystem::path path;
+    std::string mode;
+    std::unique_ptr<std::fstream> stream;
+    std::string last_error;
+    bool closed{};
+    bool readable{};
+    bool writable{};
+  };
+
   explicit Impl(
       SchedulerOptions options,
       const std::uint64_t seed);
@@ -279,6 +291,9 @@ struct Interpreter::Impl {
   std::uint64_t root_seed{1};
   std::vector<Signal> signals;
   std::vector<StringObject> string_objects;
+  std::filesystem::path file_root;
+  std::map<FileHandle, FileState> files;
+  FileHandle next_file_handle{1};
   std::vector<PackedLogic4> driven_values;
   std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
   std::vector<std::optional<PackedLogic4>> external_driver_values;
@@ -335,6 +350,28 @@ struct Interpreter::Impl {
 
   [[nodiscard]] const StringObject&
   get_string_object(StringObjectId id) const;
+
+  void set_file_root(std::filesystem::path root);
+  [[nodiscard]] FileHandle open_file(
+      ProcessId process,
+      std::string_view path,
+      std::string_view mode);
+  [[nodiscard]] FileState& checked_file(
+      ProcessId process, FileHandle handle);
+  void close_file(ProcessId process, FileHandle handle);
+  void write_file(
+      ProcessId process,
+      FileHandle handle,
+      std::string_view text,
+      bool newline);
+  [[nodiscard]] std::string read_file_line(
+      ProcessId process,
+      FileHandle handle,
+      std::uint32_t& count);
+  [[nodiscard]] bool file_end_of_file(
+      ProcessId process, FileHandle handle);
+  [[nodiscard]] std::string file_error(
+      ProcessId process, FileHandle handle, bool& has_error);
 
   [[nodiscard]] static ValueKind register_value_kind(
       const ProcessState& process,

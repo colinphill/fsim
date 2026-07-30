@@ -322,6 +322,31 @@ Expression VerilogParser::parse_primary() {
       expression = Expression{ExpressionKind::Call, canonical,
                               std::move(arguments),
                               cover(name.span, previous().span)};
+      const auto require_file_call =
+          [&](const std::size_t arity,
+              const std::string_view description) {
+            if (language_ != Language::SystemVerilog2017) {
+              error(
+                  name,
+                  "FSIM-SV-SEM-074",
+                  canonical + " requires SystemVerilog-2017");
+            }
+            if (expression.operands.size() != arity) {
+              error(
+                  name,
+                  "FSIM-SV-SEM-075",
+                  canonical + " requires " + std::string{description});
+            }
+          };
+      if (canonical == "$fopen") {
+        require_file_call(2, "a filename and text mode");
+      } else if (canonical == "$fgets") {
+        require_file_call(2, "a string target and file handle");
+      } else if (canonical == "$feof") {
+        require_file_call(1, "one file handle");
+      } else if (canonical == "$ferror") {
+        require_file_call(2, "a file handle and string target");
+      }
       return parse_postfix(std::move(expression));
     }
     if (canonical == "$urandom" || canonical == "$random") {

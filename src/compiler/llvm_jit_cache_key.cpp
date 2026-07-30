@@ -36,6 +36,14 @@ using runtime::simir::DynamicIndex;
 using runtime::simir::DynamicInsert;
 using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
+using runtime::simir::FileClose;
+using runtime::simir::FileEndOfFile;
+using runtime::simir::FileErrorStatus;
+using runtime::simir::FileOpen;
+using runtime::simir::FileReadLine;
+using runtime::simir::FileWriteFormatted;
+using runtime::simir::FileWriteLiteral;
+using runtime::simir::FileWriteString;
 using runtime::simir::FormatDisplay;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
@@ -107,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v21";
+    "fsim-llvm-native-object-v22";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -181,6 +189,7 @@ void add_dynamic_index_key(
   add_key_u64(
       builder, "string-register-count", process.string_register_count);
   builder.add("mutable-string-semantics", "simir-string-layout-v1");
+  builder.add("text-file-semantics", "simir-text-file-v1");
   add_key_u64(
       builder,
       "mutable-string-byte-limit",
@@ -347,6 +356,78 @@ void add_dynamic_index_key(
                   builder,
                   "signed-index",
                   value.signed_index ? 1U : 0U);
+            },
+            [&](const FileOpen& value) {
+              builder.add("operation", "FileOpen");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "path", value.path);
+              add_key_u64(builder, "mode", value.mode);
+            },
+            [&](const FileClose& value) {
+              builder.add("operation", "FileClose");
+              add_key_u64(builder, "handle", value.handle);
+            },
+            [&](const FileWriteLiteral& value) {
+              builder.add("operation", "FileWriteLiteral");
+              add_key_u64(builder, "handle", value.handle);
+              builder.add("text", value.text);
+              add_key_u64(
+                  builder, "newline", value.newline ? 1U : 0U);
+            },
+            [&](const FileWriteFormatted& value) {
+              builder.add("operation", "FileWriteFormatted");
+              add_key_u64(builder, "handle", value.handle);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "width", value.width);
+              add_key_u64(
+                  builder, "format",
+                  static_cast<std::uint64_t>(value.format));
+              builder.add("prefix", value.prefix);
+              builder.add("suffix", value.suffix);
+              add_key_u64(
+                  builder, "newline", value.newline ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "signed-decimal",
+                  value.signed_decimal ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "suppress-leading-zero",
+                  value.suppress_leading_zero ? 1U : 0U);
+              add_key_u64(
+                  builder, "minimum-width", value.minimum_width);
+              add_key_u64(
+                  builder,
+                  "left-justify",
+                  value.left_justify ? 1U : 0U);
+              add_key_u64(
+                  builder, "zero-pad", value.zero_pad ? 1U : 0U);
+            },
+            [&](const FileWriteString& value) {
+              builder.add("operation", "FileWriteString");
+              add_key_u64(builder, "handle", value.handle);
+              add_key_u64(builder, "source", value.source);
+              builder.add("prefix", value.prefix);
+              builder.add("suffix", value.suffix);
+              add_key_u64(
+                  builder, "newline", value.newline ? 1U : 0U);
+            },
+            [&](const FileReadLine& value) {
+              builder.add("operation", "FileReadLine");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "handle", value.handle);
+              add_key_u64(builder, "target", value.target);
+            },
+            [&](const FileEndOfFile& value) {
+              builder.add("operation", "FileEndOfFile");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "handle", value.handle);
+            },
+            [&](const FileErrorStatus& value) {
+              builder.add("operation", "FileErrorStatus");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "handle", value.handle);
+              add_key_u64(builder, "target", value.target);
             },
             [&](const UnaryNot &value) {
               builder.add("operation", "UnaryNot");
