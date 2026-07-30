@@ -1,12 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#include <iostream>
+
 namespace fsim::app {
 using namespace application_detail;
 
 std::optional<CheckedProject> check_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics) {
+  const bool trace_scoped_locals =
+      config.project.name == "scoped-local-application-test";
+  const auto trace =
+      [&](const std::string_view phase) {
+        if (trace_scoped_locals) {
+          std::cerr << "scoped_locals check_project: "
+                    << phase << '\n';
+        }
+      };
+  trace("grouping sources");
   std::vector<ParseGroup> groups;
   std::map<std::string, std::size_t> combined_groups;
   std::size_t systemc_source_count = 0;
@@ -90,6 +102,7 @@ std::optional<CheckedProject> check_project(
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
+  trace("sources grouped");
 
   std::vector<std::optional<ParsedSnapshot>> parsed_inputs(
       groups.size());
@@ -104,15 +117,19 @@ std::optional<CheckedProject> check_project(
   workers.reserve(job_count);
   for (std::size_t worker = 0; worker < job_count; ++worker) {
     workers.push_back(std::async(std::launch::async, [&] {
+      trace("parser worker started");
       while (true) {
         const auto index =
             next_input.fetch_add(1, std::memory_order_relaxed);
         if (index >= groups.size()) {
+          trace("parser worker complete");
           return;
         }
         try {
+          trace("parsing source group");
           parsed_inputs[index] =
               parse_group_snapshot(groups[index]);
+          trace("source group parsed");
         } catch (...) {
           parse_failures[index] = std::current_exception();
         }
@@ -122,6 +139,7 @@ std::optional<CheckedProject> check_project(
   for (auto& worker : workers) {
     worker.get();
   }
+  trace("parser workers joined");
 
   CheckedProject checked;
   checked.source_count = hdl_source_count + systemc_source_count;
@@ -227,6 +245,7 @@ std::optional<CheckedProject> check_project(
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
+  trace("complete");
   return checked;
 }
 
