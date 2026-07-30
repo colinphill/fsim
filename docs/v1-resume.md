@@ -10,7 +10,7 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: completed feature-batch-69 text-file
-  implementation atop feature-batch-68 checkpoint `0a3c54f`.
+  checkpoint `a3cfc73`; feature-batch-68 checkpoint `0a3c54f` precedes it.
 - The source-size refactor is complete: all 276 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
@@ -306,8 +306,8 @@ git log -5 --oneline --decorate
 ```
 
 History must contain Batch 68 commit `0a3c54f` (`feat: add bounded
-SystemVerilog runtime strings`) and a newer Batch 69 commit titled `feat: add
-bounded SystemVerilog text files`. Treat the newest pushed commit on the same
+SystemVerilog runtime strings`) and Batch 69 commit `a3cfc73` (`feat: add
+bounded SystemVerilog text files`). Treat the newest pushed commit on the same
 branch as the authoritative continuation and read this file from that
 checkout before doing work.
 
