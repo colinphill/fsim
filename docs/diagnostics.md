@@ -301,6 +301,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-227` | error | A component declaration is missing its end clause. |
 | `FSIM-VHDL-PARSE-228` | error | A component declaration is missing its terminating semicolon. |
 | `FSIM-VHDL-PARSE-229` | error | An indexed generate block configuration is missing its closing parenthesis. |
+| `FSIM-VHDL-PARSE-230` | error | A default-box generic association is missing its closing angle bracket. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -412,7 +413,6 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-046` | error | A generic function instantiation carries a `pure` or `impure` prefix. |
 | `FSIM-VHDL-UNSUPPORTED-047` | error | A bounded generic function template is impure. |
 | `FSIM-VHDL-UNSUPPORTED-050` | error | A configuration declaration contains an item outside the bounded architecture/component configuration subset. |
-| `FSIM-VHDL-UNSUPPORTED-051` | error | A component declaration uses a non-value generic outside the bounded component profile. |
 | `FSIM-VHDL-UNSUPPORTED-052` | error | A component declaration contains an unsupported declarative item. |
 
 ## Verilog and SystemVerilog frontend
@@ -951,6 +951,8 @@ therefore excluded.
 | `FSIM-ELAB-VHCOMP-011` | error | Default component binding would cross languages and requires an explicit manifest binding. |
 | `FSIM-ELAB-VHCOMP-012` | error | No equally visible component overload matches the instance associations, modes, types, or dependent widths. |
 | `FSIM-ELAB-VHCOMP-013` | error | A bounded composite component port supplies a default that cannot be materialized as an omitted port actual. |
+| `FSIM-ELAB-VHCOMP-014` | error | A component generic association selects `<>`, but the selected component formal has no usable default. |
+| `FSIM-ELAB-VHCOMP-015` | error | A selected component non-value generic actual cannot be forwarded into the bound entity profile. |
 | `FSIM-ELAB-SVTASK-001` | error | A bounded task call names no visible task. |
 | `FSIM-ELAB-SVTASK-003` | error | The visible bounded task set exceeds the representable SimIR call-stack capacity. |
 | `FSIM-ELAB-SVTASK-004` | error | More than one bounded task has the same visible name. |

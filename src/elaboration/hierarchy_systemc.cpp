@@ -839,7 +839,12 @@ using namespace elaboration_detail;
                         unit,
                         instance,
                         child_path,
-                        parameter_environment);
+                        parameter_environment,
+                        parent_domains,
+                        parent_types,
+                        unit.functions,
+                        unit.procedures,
+                        package_environment);
                 if (!configured.valid) {
                     continue;
                 }

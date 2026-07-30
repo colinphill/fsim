@@ -542,6 +542,12 @@ void VhdlParser::parse_vhdl_generic_map(
           "FSIM-VHDL-UNSUPPORTED-019",
           "open generic actuals are not implemented in this frontend "
           "slice");
+    } else if (match(TokenKind::Less)) {
+      expect(
+          TokenKind::Greater,
+          "'>' in default generic association '<>'",
+          "FSIM-VHDL-PARSE-230");
+      actual.default_box = true;
     } else {
       if (begins_unambiguous_subtype_indication()) {
         actual.type_value = parse_vhdl_type(true, true);

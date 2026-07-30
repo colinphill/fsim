@@ -30,6 +30,7 @@ struct Capture {
   fsim::runtime::RunResult result;
   std::array<std::string, 3> values;
   std::array<std::string, 2> packets;
+  std::string nonvalue;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   fsim::app::NativeCacheStatistics cache;
@@ -105,7 +106,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 4);
+  assert(project->design.specializations().size() == 5);
   for (const auto path : {
            "component_runtime_top.positional_child",
            "component_runtime_top.default_child"}) {
@@ -122,7 +123,7 @@ Capture run_once(
         [](const auto& item) {
           return item.first == "__component"
               && item.second.starts_with(
-                  "vhdl-component-binding-v3")
+                  "vhdl-component-binding-v4")
               && item.second.find(
                      "region=2;scope=;owner=work."
                      "component_runtime_profiles")
@@ -147,6 +148,38 @@ Capture run_once(
                 *project,
                 "component_runtime_top.direct_child")
                 .source_dependencies.end());
+  const auto& nonvalue = specialization(
+      *project, "component_runtime_top.nonvalue_child");
+  assert(
+      nonvalue.unit
+      == "vhdl:work.component_runtime_nonvalue(rtl)");
+  for (const auto& dependency :
+       {config.source_sets.front().files[1].string(),
+        config.source_sets.front().files[2].string()}) {
+    assert(std::ranges::find(
+               nonvalue.source_dependencies,
+               dependency)
+           != nonvalue.source_dependencies.end());
+  }
+  assert(std::ranges::any_of(
+      nonvalue.parameter_identity_values,
+      [](const auto& item) {
+        return item.first == "__component"
+            && item.second.starts_with(
+                "vhdl-component-binding-v4")
+            && item.second.find(
+                   "actual=component_t:vhdl-type-v1")
+                != std::string::npos
+            && item.second.find(
+                   "actual=component_function:vhdl-function-v1")
+                != std::string::npos
+            && item.second.find(
+                   "actual=component_procedure:vhdl-procedure-v1")
+                != std::string::npos
+            && item.second.find(
+                   "actual=component_helpers:vhdl-package-v1")
+                != std::string::npos;
+      }));
 
   Capture capture;
   for (std::size_t index = 0;
@@ -189,6 +222,14 @@ Capture run_once(
   std::array<fsim::runtime::simir::SignalId, 3> output_ids{};
   std::array<fsim::runtime::simir::SignalId, 2>
       packet_output_ids{};
+  const auto nonvalue_input = simulation.find_signal(
+      "component_runtime_top.nonvalue_input");
+  const auto nonvalue_output = simulation.find_signal(
+      "component_runtime_top.nonvalue_output");
+  assert(nonvalue_input && nonvalue_output);
+  simulation.deposit_signal(
+      *nonvalue_input,
+      fsim::runtime::PackedLogic4::from_msb_string(bits(7)));
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const auto input = simulation.find_signal(inputs[index]);
     const auto output = simulation.find_signal(outputs[index]);
@@ -224,10 +265,14 @@ Capture run_once(
         simulation.read_signal(
             packet_output_ids[index]).to_msb_string();
   }
+  capture.nonvalue =
+      simulation.read_signal(*nonvalue_output).to_msb_string();
   return capture;
 }
 
-void verify(const Capture& capture) {
+void verify(
+    const Capture& capture,
+    const std::uint32_t expected_nonvalue = 27) {
   assert(
       capture.result.status
       == fsim::runtime::RunStatus::completed);
@@ -238,6 +283,7 @@ void verify(const Capture& capture) {
   assert((capture.packets
           == std::array<std::string, 2>{
               "10101", "01010"}));
+  assert(capture.nonvalue == bits(expected_nonvalue));
   assert(std::ranges::count_if(
              capture.points,
              [](const auto& point) {
@@ -298,6 +344,28 @@ architecture rtl of component_runtime_stable is
 begin
   output_value <= input_value;
 end architecture;
+
+entity component_runtime_nonvalue is
+  generic (
+    type entity_t;
+    function entity_function(value : entity_t) return entity_t is <>;
+    procedure entity_procedure(variable value : inout entity_t) is <>;
+    package entity_helpers is new work.component_runtime_helper_template
+      generic map (<>));
+  port (
+    entity_input : in entity_t;
+    entity_output : out entity_t);
+end entity;
+architecture rtl of component_runtime_nonvalue is
+begin
+  process(entity_input)
+    variable temporary : entity_t;
+  begin
+    temporary := entity_function(entity_input);
+    entity_procedure(temporary);
+    entity_output <= temporary;
+  end process;
+end architecture;
 )";
     assert(output.good());
   }
@@ -314,6 +382,11 @@ end architecture;
     std::ofstream output(
         profiles, std::ios::binary | std::ios::trunc);
     output << R"(
+package component_runtime_helper_template is
+  generic (seed : integer := 1);
+  constant selected_seed : integer := seed;
+end package;
+
 package component_runtime_profiles is
   type packet_t is record
     )"
@@ -333,18 +406,45 @@ package component_runtime_profiles is
       component_packet_input : in packet_t;
       component_packet_output : out packet_t);
   end component;
+  component component_runtime_nonvalue is
+    generic (
+      type component_t;
+      function component_function(value : component_t)
+        return component_t is <>;
+      procedure component_procedure(
+        variable value : inout component_t) is <>;
+      package component_helpers is new
+        work.component_runtime_helper_template generic map (<>));
+    port (
+      component_input : in component_t;
+      component_output : out component_t);
+  end component;
 end package;
 )";
     assert(output.good());
   };
 
-  {
-    std::ofstream output(hierarchy, std::ios::binary);
+  const auto write_hierarchy = [&](const bool revised_function) {
+    const auto increment = revised_function ? 3 : 2;
+    std::ofstream output(
+        hierarchy, std::ios::binary | std::ios::trunc);
     output << R"(
 entity component_runtime_top is
 end entity;
 use work.component_runtime_profiles.all;
 architecture rtl of component_runtime_top is
+  function increment(value : integer) return integer is
+  begin
+    return value + )"
+           << increment
+           << R"(;
+  end function;
+  procedure triple_value(variable value : inout integer) is
+  begin
+    value := value * 3;
+  end procedure;
+  package helper_instance is new work.component_runtime_helper_template
+    generic map (seed => 4);
   signal positional_input : integer;
   signal positional_output : integer;
   signal default_input : integer;
@@ -355,6 +455,8 @@ architecture rtl of component_runtime_top is
   signal positional_packet_output : packet_t;
   signal default_packet_input : packet_t;
   signal default_packet_output : packet_t;
+  signal nonvalue_input : integer;
+  signal nonvalue_output : integer;
 begin
   positional_child: component_runtime_leaf
     generic map (5)
@@ -373,15 +475,25 @@ begin
     port map (
       input_value => direct_input,
       output_value => direct_output);
+  nonvalue_child: component_runtime_nonvalue
+    generic map (
+      component_t => integer,
+      component_function => increment,
+      component_procedure => triple_value,
+      component_helpers => helper_instance)
+    port map (
+      component_input => nonvalue_input,
+      component_output => nonvalue_output);
 end architecture;
 )";
     assert(output.good());
-  }
+  };
 
   for (const auto optimization :
        {fsim::project::Optimization::o0,
         fsim::project::Optimization::o2}) {
     write_profiles(false);
+    write_hierarchy(false);
     const auto config =
         make_config(
             directory.path,
@@ -400,6 +512,8 @@ end architecture;
     verify(warm);
     assert(reference.values == cold.values);
     assert(cold.values == warm.values);
+    assert(reference.nonvalue == cold.nonvalue);
+    assert(cold.nonvalue == warm.nonvalue);
     assert(reference.keys == cold.keys);
     assert(cold.keys == warm.keys);
 #if defined(FSIM_HAS_LLVM)
@@ -408,21 +522,51 @@ end architecture;
     assert(warm.cache.hits > 0);
     assert(warm.cache.misses == 0);
 
+    write_hierarchy(true);
+    const auto function_reference = run_once(
+        config, fsim::app::SimulationEngine::interpreter);
+    const auto function_changed = run_once(
+        config, fsim::app::SimulationEngine::compiled);
+    verify(function_reference, 30);
+    verify(function_changed, 30);
+    assert(function_reference.nonvalue
+           == function_changed.nonvalue);
+    for (const auto path : {
+             "component_runtime_top",
+             "component_runtime_top.nonvalue_child"}) {
+      assert(
+          key_for(cold, path)
+          != key_for(function_changed, path));
+    }
+    for (const auto path : {
+             "component_runtime_top.positional_child",
+             "component_runtime_top.default_child",
+             "component_runtime_top.direct_child"}) {
+      assert(
+          key_for(cold, path)
+          == key_for(function_changed, path));
+    }
+    assert(function_changed.cache.misses > 0);
+    assert(function_changed.cache.hits > 0);
+
     write_profiles(true);
     const auto changed_reference = run_once(
         config, fsim::app::SimulationEngine::interpreter);
     const auto changed = run_once(
         config, fsim::app::SimulationEngine::compiled);
-    verify(changed_reference);
-    verify(changed);
+    verify(changed_reference, 30);
+    verify(changed, 30);
     for (const auto path : {
              "component_runtime_top",
              "component_runtime_top.positional_child",
-             "component_runtime_top.default_child"}) {
-      assert(key_for(cold, path) != key_for(changed, path));
+             "component_runtime_top.default_child",
+             "component_runtime_top.nonvalue_child"}) {
+      assert(
+          key_for(function_changed, path)
+          != key_for(changed, path));
     }
     assert(
-        key_for(cold, "component_runtime_top.direct_child")
+        key_for(function_changed, "component_runtime_top.direct_child")
         == key_for(changed, "component_runtime_top.direct_child"));
 #endif
   }

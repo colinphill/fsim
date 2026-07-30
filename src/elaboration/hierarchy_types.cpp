@@ -5,8 +5,6 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
-
-
     void HierarchyBuilder::resolve_named_types(
         DesignUnit& unit,
         const NamedTypeEnvironment& imported_types,
@@ -20,6 +18,8 @@ using namespace elaboration_detail;
         }
         std::vector<unsigned char> states(
             unit.type_aliases.size(), 0);
+        std::unordered_set<std::string> active_interface_type_formals;
+        std::unordered_set<std::string> active_interface_package_formals;
         std::function<bool(frontend::Type&)> resolve_type;
         std::function<bool(std::size_t)> resolve_alias;
         const auto simple_type_name =
@@ -277,6 +277,15 @@ using namespace elaboration_detail;
                     imported_types.find(name);
                 if (imported == imported_types.end()) {
                     const auto separator = name.find('.');
+                    const auto deferred_component_type =
+                        vhdl
+                        && (active_interface_type_formals.contains(name)
+                            || (separator != std::string::npos
+                                && active_interface_package_formals.contains(
+                                    name.substr(0, separator))));
+                    if (deferred_component_type) {
+                        return true;
+                    }
                     const auto deferred_package_type =
                         vhdl
                         && separator != std::string::npos
@@ -331,12 +340,54 @@ using namespace elaboration_detail;
             };
         const auto resolve_component =
             [&](frontend::VhdlComponentDeclaration& component) {
+                active_interface_type_formals.clear();
+                active_interface_package_formals.clear();
                 for (auto& generic : component.generics) {
-                    (void)resolve_type(generic.type);
+                    switch (generic.kind) {
+                    case frontend::ParameterKind::Type:
+                        active_interface_type_formals.insert(
+                            generic.name);
+                        break;
+                    case frontend::ParameterKind::Function:
+                        if (generic.function_profile) {
+                            (void)resolve_type(
+                                generic.function_profile->return_type);
+                            for (auto& argument :
+                                 generic.function_profile->arguments) {
+                                (void)resolve_type(argument.type);
+                            }
+                        }
+                        break;
+                    case frontend::ParameterKind::Procedure:
+                        if (generic.procedure_profile) {
+                            for (auto& argument :
+                                 generic.procedure_profile->arguments) {
+                                (void)resolve_type(argument.type);
+                            }
+                        }
+                        break;
+                    case frontend::ParameterKind::Package:
+                        if (generic.package_profile) {
+                            for (auto& actual :
+                                 generic.package_profile->generic_map) {
+                                if (actual.type_value) {
+                                    (void)resolve_type(*actual.type_value);
+                                }
+                            }
+                        }
+                        active_interface_package_formals.insert(
+                            generic.name);
+                        break;
+                    case frontend::ParameterKind::Value:
+                        (void)resolve_type(generic.type);
+                        break;
+                    }
                 }
                 for (auto& port : component.ports) {
                     (void)resolve_type(port.type);
                 }
+                active_interface_type_formals.clear();
+                active_interface_package_formals.clear();
             };
         std::function<void(std::vector<Statement>&)>
             resolve_statements;
@@ -827,8 +878,6 @@ using namespace elaboration_detail;
         return result;
     }
 
-
-
     SpecializedUnit HierarchyBuilder::specialize_selected_unit(
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
@@ -1042,172 +1091,6 @@ using namespace elaboration_detail;
         return specialized;
     }
 
-
-
-    void HierarchyBuilder::finish() {
-        validate_process_drivers();
-        for (const auto& [path, binding] : bindings_) {
-            (void)binding;
-            if (!used_bindings_.contains(path)) {
-                report(
-                    "FSIM-ELAB-BIND-011",
-                    "binding instance path '" + path
-                        + "' was not found in the elaborated hierarchy",
-                    {});
-            }
-        }
-        for (const auto& [path, instance] : systemc_instances_) {
-            (void)instance;
-            if (!used_systemc_instances_.contains(path)) {
-                report(
-                    "FSIM-ELAB-BIND-033",
-                    "constructed SystemC instance path '" + path
-                        + "' was not reached from the elaborated hierarchy",
-                    {});
-            }
-        }
-    }
-
-
-
-    ResolutionKind HierarchyBuilder::native_resolution(
-        const SignalInfo& signal) {
-        if (signal.type_name == "std_logic"
-            || signal.type_name == "std_logic_vector") {
-            return ResolutionKind::std_logic;
-        }
-        if (signal.type_name == "wire"
-            || signal.type_name == "tri") {
-            return ResolutionKind::sv_wire;
-        }
-        return ResolutionKind::none;
-    }
-
-
-
-    std::optional<ResolutionKind> HierarchyBuilder::explicit_resolution(
-        const SignalId signal) {
-        const auto found = resolver_by_signal_.find(signal);
-        if (found == resolver_by_signal_.end()) {
-            return std::nullopt;
-        }
-        if (found->second == "std_logic") {
-            return ResolutionKind::std_logic;
-        }
-        if (found->second == "sv_wire") {
-            return ResolutionKind::sv_wire;
-        }
-        report(
-            "FSIM-ELAB-BIND-050",
-            "unknown resolver '" + found->second
-                + "'; expected \"std_logic\" or \"sv_wire\"",
-            {});
-        return ResolutionKind::none;
-    }
-
-
-
-    void HierarchyBuilder::set_resolution(
-        const SignalId signal,
-        const ResolutionKind resolution) {
-        design_.signal_info_.at(signal).resolution = resolution;
-        design_.signals_.at(signal).resolution = resolution;
-    }
-
-
-
-    void HierarchyBuilder::validate_process_drivers() {
-        std::unordered_map<SignalId, std::vector<ProcessId>> drivers;
-        for (const auto& process : design_.processes_) {
-            std::set<SignalId> process_outputs;
-            for (const auto& operation : process.operations) {
-                if (const auto* blocking =
-                        std::get_if<WriteBlocking>(&operation)) {
-                    process_outputs.insert(blocking->signal);
-                } else if (const auto* update =
-                               std::get_if<WriteUpdate>(&operation)) {
-                    process_outputs.insert(update->signal);
-                } else if (const auto* delayed =
-                               std::get_if<WriteAfter>(&operation)) {
-                    process_outputs.insert(delayed->signal);
-                } else if (const auto* inertial =
-                               std::get_if<WriteInertial>(&operation)) {
-                    process_outputs.insert(inertial->signal);
-                } else if (const auto* projected =
-                               std::get_if<WriteProjected>(&operation)) {
-                    process_outputs.insert(projected->signal);
-                } else if (const auto* waveform =
-                               std::get_if<WriteProjectedWaveform>(
-                                   &operation)) {
-                    process_outputs.insert(waveform->signal);
-                } else if (const auto* blocking_slice =
-                               std::get_if<WriteBlockingSlice>(
-                                   &operation)) {
-                    process_outputs.insert(blocking_slice->signal);
-                } else if (const auto* update_slice =
-                               std::get_if<WriteUpdateSlice>(
-                                   &operation)) {
-                    process_outputs.insert(update_slice->signal);
-                } else if (const auto* delayed_slice =
-                               std::get_if<WriteAfterSlice>(
-                                   &operation)) {
-                    process_outputs.insert(delayed_slice->signal);
-                } else if (const auto* inertial_slice =
-                               std::get_if<WriteInertialSlice>(
-                                   &operation)) {
-                    process_outputs.insert(inertial_slice->signal);
-                } else if (const auto* projected_slice =
-                               std::get_if<WriteProjectedSlice>(
-                                   &operation)) {
-                    process_outputs.insert(projected_slice->signal);
-                } else if (const auto* waveform_slice =
-                               std::get_if<WriteProjectedWaveformSlice>(
-                                   &operation)) {
-                    process_outputs.insert(waveform_slice->signal);
-                }
-            }
-            for (const auto signal : process_outputs) {
-                drivers[signal].push_back(process.id);
-            }
-        }
-        for (SignalId signal = 0;
-             signal < design_.signal_info_.size();
-             ++signal) {
-            const auto selected = explicit_resolution(signal);
-            set_resolution(
-                signal,
-                selected.value_or(
-                    native_resolution(
-                        design_.signal_info_.at(signal))));
-        }
-        for (const auto& [signal, processes] : drivers) {
-            if (processes.size() <= 1
-                || design_.signal_info_.at(signal).resolution
-                    != ResolutionKind::none) {
-                continue;
-            }
-            const auto& info = design_.signal_info_.at(signal);
-            if (info.type_name == "wand"
-                || info.type_name == "triand"
-                || info.type_name == "wor"
-                || info.type_name == "trior") {
-                report(
-                    "FSIM-ELAB-DRV-002",
-                    "wired-AND/OR resolution for signal '"
-                        + info.name + "' is not implemented",
-                    {});
-                continue;
-            }
-            report(
-                "FSIM-ELAB-DRV-001",
-                "unresolved variable '" + info.name
-                    + "' has multiple process drivers",
-                {});
-        }
-    }
-
-
-
     std::optional<SignalId> HierarchyBuilder::add_owned_signal(
         const frontend::SignalDeclaration& declaration,
         const std::string_view path,
@@ -1336,8 +1219,6 @@ using namespace elaboration_detail;
         return id;
     }
 
-
-
     const Binding* HierarchyBuilder::binding_for(const std::string& path) {
         const auto found = bindings_.find(path);
         if (found == bindings_.end()) {
@@ -1346,8 +1227,6 @@ using namespace elaboration_detail;
         used_bindings_.insert(path);
         return found->second;
     }
-
-
 
     const DesignUnit* HierarchyBuilder::bound_target(
         const frontend::Instance& instance,
@@ -1400,8 +1279,6 @@ using namespace elaboration_detail;
         }
         return selected;
     }
-
-
 
     void HierarchyBuilder::validate_boundary_type(
         const frontend::SignalDeclaration& port,
@@ -1651,8 +1528,6 @@ using namespace elaboration_detail;
         }
     }
 
-
-
     void HierarchyBuilder::note_boundary_driver(
         const SignalId signal,
         const Binding* binding,
@@ -1687,8 +1562,6 @@ using namespace elaboration_detail;
                 source);
         }
     }
-
-
 
     HierarchyBuilder::SignalMap HierarchyBuilder::connect_ports(
         const frontend::Instance& instance,
@@ -1811,8 +1684,6 @@ using namespace elaboration_detail;
         return aliases;
     }
 
-
-
     HierarchyBuilder::SignalMap HierarchyBuilder::connect_instance(
         const frontend::Instance& instance,
         const DesignUnit& target,
@@ -1838,8 +1709,6 @@ using namespace elaboration_detail;
             cross_language);
     }
 
-
-
     frontend::SignalDeclaration HierarchyBuilder::external_port_declaration(
         const ExternalPort& port) {
         return {
@@ -1850,8 +1719,6 @@ using namespace elaboration_detail;
             {}};
     }
 
-
-
     frontend::SignalDeclaration HierarchyBuilder::foreign_port_declaration(
         const ForeignPort& port) {
         return {
@@ -1861,8 +1728,6 @@ using namespace elaboration_detail;
             true,
             {}};
     }
-
-
 
     std::pair<HierarchyBuilder::SignalMap, HierarchyBuilder::ObjectMap> HierarchyBuilder::connect_systemc_instance(
         const frontend::Instance& instance,
@@ -1891,8 +1756,6 @@ using namespace elaboration_detail;
         }
         return {std::move(aliases), std::move(objects)};
     }
-
-
 
     HierarchyBuilder::SignalMap HierarchyBuilder::connect_foreign_child(
         const ForeignChild& child,

@@ -110,7 +110,7 @@ end architecture;
             });
         assert(identity != selected.parameter_identity_values.end());
         assert(identity->second.starts_with(
-            "vhdl-component-binding-v3;name=component_leaf"));
+            "vhdl-component-binding-v4;name=component_leaf"));
     }
     assert(std::ranges::any_of(
         specialization(
@@ -499,13 +499,208 @@ end architecture;
         composite_identity
             != composite_child.parameter_identity_values.end()
         && composite_identity->second.starts_with(
-            "vhdl-component-binding-v3")
+            "vhdl-component-binding-v4")
         && composite_identity->second.find(
                ";nominal=composite_component_types.vhd:")
             != std::string::npos
         && composite_identity->second.find(
                ":type-source=composite_component_types.vhd:")
             != std::string::npos);
+
+    auto nonvalue_template = fsim::frontend::parse_text(
+        "nonvalue_component_template.vhd",
+        R"(
+package nonvalue_component_template is
+  generic (seed : integer := 1);
+  constant selected_seed : integer := seed;
+end package;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    auto nonvalue_leaf = fsim::frontend::parse_text(
+        "nonvalue_component_leaf.vhd",
+        R"(
+entity nonvalue_component_leaf is
+  generic (
+    type entity_t;
+    function entity_function(value : entity_t) return entity_t is <>;
+    procedure entity_procedure(variable value : inout entity_t) is <>;
+    package entity_helpers is new work.nonvalue_component_template
+      generic map (<>));
+  port (
+    entity_input : in entity_t;
+    entity_output : out entity_t);
+end entity;
+architecture rtl of nonvalue_component_leaf is
+begin
+  process(entity_input)
+    variable temporary : entity_t;
+  begin
+    temporary := entity_function(entity_input);
+    entity_procedure(temporary);
+    entity_output <= temporary;
+  end process;
+end architecture;
+architecture configured of nonvalue_component_leaf is
+begin
+  process(entity_input)
+    variable temporary : entity_t;
+  begin
+    temporary := entity_function(entity_input);
+    entity_procedure(temporary);
+    entity_output <= temporary;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    auto nonvalue_top = fsim::frontend::parse_text(
+        "nonvalue_component_top.vhd",
+        R"(
+entity nonvalue_component_top is
+end entity;
+architecture rtl of nonvalue_component_top is
+  function increment(value : integer) return integer is
+  begin
+    return value + 1;
+  end function;
+  procedure double_value(variable value : inout integer) is
+  begin
+    value := value * 2;
+  end procedure;
+  package helper_instance is new work.nonvalue_component_template
+    generic map (seed => 3);
+  signal input_value : integer;
+  signal output_value : integer;
+  signal omitted_output : integer;
+  signal explicit_output : integer;
+  component nonvalue_component_leaf is
+    generic (
+      type component_t;
+      function component_function(value : component_t)
+        return component_t is <>;
+      procedure component_procedure(
+        variable value : inout component_t) is <>;
+      package component_helpers is new work.nonvalue_component_template
+        generic map (<>));
+    port (
+      component_input : in component_t;
+      component_output : out component_t);
+  end component;
+  component nonvalue_component_leaf is
+    generic (
+      type component_t;
+      function component_function(value : component_t)
+        return component_t is <>;
+      procedure component_procedure(
+        variable value : inout component_t) is <>;
+      package component_helpers is new work.nonvalue_component_template
+        generic map (<>));
+    port (
+      component_input : in bit;
+      component_output : out bit);
+  end component;
+  for configured_child : nonvalue_component_leaf
+    use entity work.nonvalue_component_leaf(configured)
+    generic map (
+      entity_t => component_t,
+      entity_function => component_function,
+      entity_procedure => component_procedure,
+      entity_helpers => component_helpers)
+    port map (
+      entity_input => component_input,
+      entity_output => component_output);
+begin
+  configured_child: nonvalue_component_leaf
+    generic map (
+      component_t => integer,
+      component_function => <>,
+      component_procedure => <>,
+      component_helpers => helper_instance)
+    port map (
+      component_input => input_value,
+      component_output => output_value);
+  omitted_child: nonvalue_component_leaf
+    generic map (
+      component_t => integer,
+      component_helpers => helper_instance)
+    port map (
+      component_input => input_value,
+      component_output => omitted_output);
+  explicit_child: nonvalue_component_leaf
+    generic map (
+      integer,
+      increment,
+      double_value,
+      helper_instance)
+    port map (input_value, explicit_output);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(
+        nonvalue_template.ok()
+        && nonvalue_leaf.ok()
+        && nonvalue_top.ok());
+    append_design(
+        nonvalue_template.design,
+        std::move(nonvalue_leaf.design));
+    append_design(
+        nonvalue_template.design,
+        std::move(nonvalue_top.design));
+    const auto nonvalue_result =
+        fsim::elaboration::elaborate(
+            nonvalue_template.design,
+            "vhdl:work.nonvalue_component_top(rtl)");
+    if (!nonvalue_result.ok()) {
+        for (const auto& diagnostic :
+             nonvalue_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(nonvalue_result.ok());
+    const auto& nonvalue_child =
+        specialization(
+            nonvalue_result,
+            "nonvalue_component_top.configured_child");
+    assert(
+        nonvalue_child.unit
+        == "vhdl:work.nonvalue_component_leaf(configured)");
+    for (const auto path : {
+             "nonvalue_component_top.omitted_child",
+             "nonvalue_component_top.explicit_child"}) {
+        assert(
+            specialization(nonvalue_result, path).unit
+                == "vhdl:work.nonvalue_component_leaf(configured)");
+    }
+    const auto nonvalue_identity = std::ranges::find_if(
+        nonvalue_child.parameter_identity_values,
+        [](const auto& value) {
+          return value.first == "__component";
+        });
+    assert(
+        nonvalue_identity
+            != nonvalue_child.parameter_identity_values.end()
+        && nonvalue_identity->second.starts_with(
+            "vhdl-component-binding-v4")
+        && nonvalue_identity->second.find(
+               "actual=component_t:vhdl-type-v1")
+            != std::string::npos
+        && nonvalue_identity->second.find(
+               "actual=component_function:vhdl-function-v1")
+            != std::string::npos
+        && nonvalue_identity->second.find(
+               "actual=component_procedure:vhdl-procedure-v1")
+            != std::string::npos
+        && nonvalue_identity->second.find(
+               "actual=component_helpers:vhdl-package-v1")
+            != std::string::npos);
+    for (const auto dependency : {
+             "nonvalue_component_top.vhd",
+             "nonvalue_component_template.vhd"}) {
+        assert(std::ranges::find(
+                   nonvalue_child.source_dependencies,
+                   dependency)
+               != nonvalue_child.source_dependencies.end());
+    }
 
     const auto hidden_sibling = elaborate_text(
         "hidden_sibling_component.vhd",
@@ -729,6 +924,173 @@ end architecture;
     assert(!missing_component_type.ok());
     assert(has_diagnostic(
         missing_component_type, "FSIM-ELAB-VHTYPE-001"));
+
+    const auto missing_nonvalue_default = elaborate_text(
+        "component_missing_nonvalue_default.vhd",
+        R"(
+entity component_missing_nonvalue_leaf is
+  generic (type entity_t);
+  port (value : in entity_t);
+end entity;
+architecture rtl of component_missing_nonvalue_leaf is
+begin
+end architecture;
+entity component_missing_nonvalue_top is
+end entity;
+architecture rtl of component_missing_nonvalue_top is
+  signal value : integer;
+  component component_missing_nonvalue_leaf is
+    generic (type component_t);
+    port (value : in component_t);
+  end component;
+begin
+  child: component_missing_nonvalue_leaf
+    generic map (<>)
+    port map (value);
+end architecture;
+)",
+        "vhdl:work.component_missing_nonvalue_top(rtl)");
+    assert(!missing_nonvalue_default.ok());
+    assert(has_diagnostic(
+        missing_nonvalue_default,
+        "FSIM-ELAB-VHCOMP-014"));
+
+    const auto nonvalue_profile_mismatch = elaborate_text(
+        "component_nonvalue_profile_mismatch.vhd",
+        R"(
+entity component_nonvalue_profile_leaf is
+  generic (
+    function entity_function(value : integer)
+      return integer is <>);
+end entity;
+architecture rtl of component_nonvalue_profile_leaf is
+begin
+end architecture;
+entity component_nonvalue_profile_top is
+end entity;
+architecture rtl of component_nonvalue_profile_top is
+  function bit_identity(value : bit) return bit is
+  begin
+    return value;
+  end function;
+  component component_nonvalue_profile_leaf is
+    generic (
+      function component_function(value : bit)
+        return bit is <>);
+  end component;
+begin
+  child: component_nonvalue_profile_leaf
+    generic map (bit_identity)
+    port map ();
+end architecture;
+)",
+        "vhdl:work.component_nonvalue_profile_top(rtl)");
+    assert(!nonvalue_profile_mismatch.ok());
+    assert(has_diagnostic(
+        nonvalue_profile_mismatch,
+        "FSIM-ELAB-VHCOMP-006"));
+
+    const auto wrong_nonvalue_kind = elaborate_text(
+        "component_wrong_nonvalue_kind.vhd",
+        R"(
+entity component_wrong_nonvalue_leaf is
+  generic (type entity_t);
+end entity;
+architecture rtl of component_wrong_nonvalue_leaf is
+begin
+end architecture;
+entity component_wrong_nonvalue_top is
+end entity;
+architecture rtl of component_wrong_nonvalue_top is
+  function value_function(value : integer) return integer is
+  begin
+    return value;
+  end function;
+  component component_wrong_nonvalue_leaf is
+    generic (type component_t);
+  end component;
+begin
+  child: component_wrong_nonvalue_leaf
+    generic map (value_function)
+    port map ();
+end architecture;
+)",
+        "vhdl:work.component_wrong_nonvalue_top(rtl)");
+    assert(!wrong_nonvalue_kind.ok());
+    assert(has_diagnostic(
+        wrong_nonvalue_kind,
+        "FSIM-ELAB-GENTYPE-003"));
+
+    const auto missing_package_actual = elaborate_text(
+        "component_missing_package_actual.vhd",
+        R"(
+package missing_package_template is
+  generic (value : integer := 1);
+end package;
+entity component_missing_package_leaf is
+  generic (
+    package entity_helpers is new work.missing_package_template
+      generic map (<>));
+end entity;
+architecture rtl of component_missing_package_leaf is
+begin
+end architecture;
+entity component_missing_package_top is
+end entity;
+architecture rtl of component_missing_package_top is
+  component component_missing_package_leaf is
+    generic (
+      package component_helpers is new work.missing_package_template
+        generic map (<>));
+  end component;
+begin
+  child: component_missing_package_leaf port map ();
+end architecture;
+)",
+        "vhdl:work.component_missing_package_top(rtl)");
+    assert(!missing_package_actual.ok());
+    assert(has_diagnostic(
+        missing_package_actual,
+        "FSIM-ELAB-VHCOMP-008"));
+
+    const auto package_profile_mismatch = elaborate_text(
+        "component_package_profile_mismatch.vhd",
+        R"(
+package first_component_template is
+  generic (value : integer := 1);
+end package;
+package second_component_template is
+  generic (value : integer := 1);
+end package;
+entity component_package_profile_leaf is
+  generic (
+    package entity_helpers is new work.first_component_template
+      generic map (<>));
+end entity;
+architecture rtl of component_package_profile_leaf is
+begin
+end architecture;
+entity component_package_profile_top is
+end entity;
+architecture rtl of component_package_profile_top is
+  package second_instance is new work.second_component_template
+    generic map (1);
+  component component_package_profile_leaf is
+    generic (
+      package component_helpers is new work.second_component_template
+        generic map (<>));
+  end component;
+begin
+  child: component_package_profile_leaf
+    generic map (second_instance)
+    port map ();
+end architecture;
+)",
+        "vhdl:work.component_package_profile_top(rtl)");
+    assert(!package_profile_mismatch.ok());
+    assert(has_diagnostic(
+        package_profile_mismatch,
+        "FSIM-ELAB-VHCOMP-006"));
 
     const auto missing_declaration = elaborate_text(
         "missing_component_declaration.vhd",

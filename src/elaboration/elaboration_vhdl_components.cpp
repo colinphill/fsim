@@ -13,14 +13,34 @@ std::string normalized_library(const DesignUnit& unit) {
     return unit.library.empty() ? "work" : unit.library;
 }
 
+std::string canonical_generic_name(
+    const std::string_view name,
+    const std::unordered_map<std::string, std::string>& names) {
+    if (const auto direct = names.find(std::string{name});
+        direct != names.end()) {
+        return direct->second;
+    }
+    const auto separator = name.find('.');
+    if (separator == std::string_view::npos) {
+        return std::string{name};
+    }
+    if (const auto prefix =
+            names.find(std::string{name.substr(0, separator)});
+        prefix != names.end()) {
+        return prefix->second
+            + std::string{name.substr(separator)};
+    }
+    return std::string{name};
+}
+
 std::string expression_profile(
     const frontend::Expression& expression,
     const std::unordered_map<std::string, std::string>& names) {
     std::ostringstream output;
     output << static_cast<int>(expression.kind) << ':';
     if (expression.kind == frontend::ExpressionKind::Identifier) {
-        const auto found = names.find(expression.text);
-        output << (found == names.end() ? expression.text : found->second);
+        output << canonical_generic_name(
+            expression.text, names);
     } else {
         output << expression.text;
     }
@@ -35,8 +55,10 @@ std::string type_profile(
     const std::unordered_map<std::string, std::string>& names) {
     std::ostringstream output;
     output << static_cast<int>(type.domain)
-           << ";spelling=" << type.spelling
-           << ";named=" << type.named_type
+           << ";spelling="
+           << canonical_generic_name(type.spelling, names)
+           << ";named="
+           << canonical_generic_name(type.named_type, names)
            << ";nominal=" << type.nominal_type
            << ";signed=" << type.is_signed;
     if (type.packed_range) {
@@ -141,8 +163,12 @@ std::string type_profile(
     }
     if (type.vhdl_array) {
         output << ";array=" << type.vhdl_array->index_subtype
-               << ':' << type.vhdl_array->element_spelling
-               << ':' << type.vhdl_array->element_named_type
+               << ':'
+               << canonical_generic_name(
+                      type.vhdl_array->element_spelling, names)
+               << ':'
+               << canonical_generic_name(
+                      type.vhdl_array->element_named_type, names)
                << ':'
                << static_cast<int>(
                       type.vhdl_array->element_domain)
@@ -158,6 +184,26 @@ std::string type_profile(
         }
     }
     return output.str();
+}
+
+bool component_generic_has_default(
+    const frontend::ParameterDeclaration& generic) {
+    switch (generic.kind) {
+    case frontend::ParameterKind::Value:
+        return generic.default_value.valid();
+    case frontend::ParameterKind::Function:
+        return generic.function_profile
+            && (generic.function_profile->default_name.has_value()
+                || generic.function_profile->default_box);
+    case frontend::ParameterKind::Procedure:
+        return generic.procedure_profile
+            && (generic.procedure_profile->default_name.has_value()
+                || generic.procedure_profile->default_box);
+    case frontend::ParameterKind::Type:
+    case frontend::ParameterKind::Package:
+        return false;
+    }
+    return false;
 }
 
 std::string type_provenance_profile(
@@ -178,6 +224,114 @@ generic_placeholders(
             "@generic" + std::to_string(index));
     }
     return result;
+}
+
+std::string generic_profile(
+    const frontend::ParameterDeclaration& generic,
+    const std::unordered_map<std::string, std::string>& names,
+    const bool include_default) {
+    std::ostringstream output;
+    const auto provenance =
+        [](const frontend::Type& type) {
+          return type.vhdl_type_declaration.empty()
+              ? std::string{"<builtin>"}
+              : type.vhdl_type_declaration;
+        };
+    output << static_cast<int>(generic.kind);
+    switch (generic.kind) {
+    case frontend::ParameterKind::Value:
+        output << ";type=" << type_profile(generic.type, names);
+        break;
+    case frontend::ParameterKind::Type:
+        output << ";unclassified";
+        break;
+    case frontend::ParameterKind::Function:
+        if (!generic.function_profile) {
+            output << ";missing-profile";
+            break;
+        }
+        output << ";pure=" << generic.function_profile->pure
+               << ";return="
+               << type_profile(
+                      generic.function_profile->return_type, names)
+               << ";return-source="
+               << provenance(
+                      generic.function_profile->return_type);
+        for (const auto& argument :
+             generic.function_profile->arguments) {
+            output << ";argument="
+                   << static_cast<int>(argument.direction)
+                   << ':' << type_profile(argument.type, names)
+                   << ":source=" << provenance(argument.type);
+        }
+        if (include_default) {
+            output << ";default=";
+            if (generic.function_profile->default_box) {
+                output << "<box>";
+            } else if (
+                generic.function_profile->default_name) {
+                output << canonical_generic_name(
+                    *generic.function_profile->default_name, names);
+            } else {
+                output << "<required>";
+            }
+        }
+        break;
+    case frontend::ParameterKind::Procedure:
+        if (!generic.procedure_profile) {
+            output << ";missing-profile";
+            break;
+        }
+        for (const auto& argument :
+             generic.procedure_profile->arguments) {
+            output << ";argument="
+                   << static_cast<int>(argument.object_class)
+                   << ':' << static_cast<int>(argument.direction)
+                   << ':' << type_profile(argument.type, names)
+                   << ":source=" << provenance(argument.type);
+        }
+        if (include_default) {
+            output << ";default=";
+            if (generic.procedure_profile->default_box) {
+                output << "<box>";
+            } else if (
+                generic.procedure_profile->default_name) {
+                output << canonical_generic_name(
+                    *generic.procedure_profile->default_name, names);
+            } else {
+                output << "<required>";
+            }
+        }
+        break;
+    case frontend::ParameterKind::Package:
+        if (!generic.package_profile) {
+            output << ";missing-profile";
+            break;
+        }
+        output << ";template="
+               << generic.package_profile->template_name
+               << ";map-box="
+               << generic.package_profile->generic_map_box;
+        for (const auto& actual :
+             generic.package_profile->generic_map) {
+            output << ";map="
+                   << (actual.name
+                           ? *actual.name
+                           : std::string{"<positional>"})
+                   << ':';
+            if (actual.default_box) {
+                output << "<box>";
+            } else if (actual.type_value) {
+                output << type_profile(*actual.type_value, names)
+                       << ":source="
+                       << provenance(*actual.type_value);
+            } else {
+                output << expression_profile(actual.value, names);
+            }
+        }
+        break;
+    }
+    return output.str();
 }
 
 std::size_t component_region_rank(
@@ -358,7 +512,7 @@ bool component_actual_profile_matches(
               return actual.name;
             },
             [](const auto& formal) {
-              return formal.default_value.valid();
+              return component_generic_has_default(formal);
             })
         || !association_shape_matches(
             declaration.ports,
@@ -436,12 +590,12 @@ bool component_declaration_matches_entity(
          ++index) {
         if (declaration.generics[index].kind
                 != entity.parameters[index].kind
-            || type_profile(
-                   declaration.generics[index].type,
-                   component_names)
-                != type_profile(
-                   entity.parameters[index].type,
-                   entity_names)) {
+            || generic_profile(
+                   declaration.generics[index],
+                   component_names, true)
+                != generic_profile(
+                   entity.parameters[index],
+                   entity_names, true)) {
             return false;
         }
     }
@@ -464,10 +618,13 @@ bool component_declaration_matches_entity(
 
 std::string component_identity(
     const frontend::VhdlComponentDeclaration& declaration,
-    const DesignUnit& target) {
+    const DesignUnit& target,
+    const std::span<
+        const std::pair<std::string, std::string>>
+        actual_identities) {
     const auto names = generic_placeholders(declaration.generics);
     std::ostringstream output;
-    output << "vhdl-component-binding-v3;name="
+    output << "vhdl-component-binding-v4;name="
            << declaration.name
            << ";region="
            << static_cast<int>(declaration.region)
@@ -478,17 +635,24 @@ std::string component_identity(
            << ";target=" << unit_identity(target);
     for (const auto& generic : declaration.generics) {
         output << ";generic=" << generic.name
-               << ':' << static_cast<int>(generic.kind)
-               << ':' << type_profile(generic.type, names)
+               << ":profile="
+               << generic_profile(generic, names, true)
                << ":type-source="
-               << type_provenance_profile(generic.type)
-               << ":default=";
-        if (generic.default_value.valid()) {
-            output << expression_profile(
-                generic.default_value, names);
-        } else {
-            output << "<required>";
+               << type_provenance_profile(generic.type);
+        if (generic.kind
+                == frontend::ParameterKind::Value) {
+            output << ":default=";
+            if (generic.default_value.valid()) {
+                output << expression_profile(
+                    generic.default_value, names);
+            } else {
+                output << "<required>";
+            }
         }
+    }
+    for (const auto& [name, identity] :
+         actual_identities) {
+        output << ";actual=" << name << ':' << identity;
     }
     for (const auto& port : declaration.ports) {
         output << ";port=" << port.name
@@ -585,7 +749,8 @@ bool normalize_associations(
           if constexpr (
               std::is_same_v<Formal,
                              frontend::ParameterDeclaration>) {
-            return formals[index].default_value.valid();
+            return component_generic_has_default(
+                formals[index]);
           } else {
             return formals[index].default_value.has_value();
           }
@@ -778,13 +943,179 @@ HierarchyBuilder::bind_vhdl_component_instance(
     const DesignUnit& unit,
     const frontend::Instance& instance,
     const std::string& path,
-    const ConstantEnvironment& parent_environment) {
+    const ConstantEnvironment& parent_environment,
+    const ConstantDomainEnvironment& parent_domains,
+    const NamedTypeEnvironment& parent_types,
+    const std::vector<frontend::FunctionDeclaration>&
+        parent_functions,
+    const std::vector<frontend::ProcedureDeclaration>&
+        parent_procedures,
+    const PackageEnvironment& parent_packages) {
     ConfiguredVhdlInstance result;
     result.instance = instance;
     if (unit.language != frontend::Language::Vhdl2008
         || !instance.vhdl_component_instance) {
         return result;
     }
+
+    struct ComponentSpecialization {
+        frontend::VhdlComponentDeclaration declaration;
+        SpecializedUnit specialized;
+    };
+    const auto specialize_component =
+        [&](const frontend::VhdlComponentDeclaration& declaration,
+            std::vector<frontend::ParameterOverride> overrides,
+            const bool retain_diagnostics)
+            -> std::optional<ComponentSpecialization> {
+          const auto diagnostic_count = diagnostics_.size();
+          for (const auto& actual : overrides) {
+              if (!actual.default_box || !actual.name) {
+                  continue;
+              }
+              const auto formal = std::ranges::find_if(
+                  declaration.generics,
+                  [&](const auto& candidate) {
+                    return candidate.name == *actual.name;
+                  });
+              if (formal == declaration.generics.end()
+                  || !component_generic_has_default(*formal)) {
+                  report(
+                      "FSIM-ELAB-VHCOMP-014",
+                      "component generic '"
+                          + (formal
+                                     == declaration.generics.end()
+                                 ? *actual.name
+                                 : formal->name)
+                          + "' has no default selected by '<>' on '"
+                          + path + "'",
+                      actual.span);
+              }
+          }
+          std::erase_if(
+              overrides,
+              [&](const auto& actual) {
+                if (!actual.default_box || !actual.name) {
+                    return false;
+                }
+                const auto formal = std::ranges::find_if(
+                    declaration.generics,
+                    [&](const auto& candidate) {
+                      return candidate.name == *actual.name;
+                    });
+                return formal != declaration.generics.end()
+                    && component_generic_has_default(*formal);
+              });
+
+          DesignUnit profile;
+          profile.kind = frontend::UnitKind::VhdlEntity;
+          profile.language = frontend::Language::Vhdl2008;
+          profile.library = unit.library;
+          profile.name = declaration.name;
+          profile.parameters = declaration.generics;
+          profile.span = declaration.span;
+          for (const auto& port : declaration.ports) {
+              profile.ports.push_back(
+                  frontend::SignalDeclaration{
+                      port.name,
+                      port.type,
+                      port.direction,
+                      true,
+                      port.span});
+          }
+
+          PackageEnvironment interface_packages;
+          std::vector<std::pair<std::string, std::string>>
+              package_identities;
+          if (std::ranges::any_of(
+                  profile.parameters,
+                  [](const auto& parameter) {
+                    return parameter.kind
+                        == frontend::ParameterKind::Package;
+                  })) {
+              bind_vhdl_interface_packages(
+                  profile,
+                  overrides,
+                  parent_packages,
+                  parent_environment,
+                  parent_domains,
+                  parent_types,
+                  parent_functions,
+                  parent_procedures,
+                  frontend::Language::Vhdl2008,
+                  interface_packages,
+                  package_identities);
+          }
+          auto nonvalue =
+              specialize_vhdl_interface_types(
+                  profile,
+                  overrides,
+                  parent_environment,
+                  parent_domains,
+                  parent_types,
+                  parent_functions,
+                  parent_procedures,
+                  frontend::Language::Vhdl2008,
+                  diagnostics_);
+          if (nonvalue.applied) {
+              resolve_named_types(
+                  nonvalue.unit, {}, true);
+          }
+          auto specialized = specialize_unit(
+              nonvalue.unit,
+              nonvalue.value_overrides,
+              parent_environment,
+              frontend::Language::Vhdl2008,
+              diagnostics_);
+          if (specialized.identity_values.empty()) {
+              specialized.identity_values =
+                  specialized.values;
+          }
+          const auto append_identity =
+              [&](const auto& identity) {
+                if (std::ranges::none_of(
+                        specialized.identity_values,
+                        [&](const auto& existing) {
+                          return existing.first
+                              == identity.first;
+                        })) {
+                    specialized.values.push_back(identity);
+                    specialized.identity_values.push_back(
+                        identity);
+                }
+              };
+          for (const auto& identity : nonvalue.values) {
+              append_identity(identity);
+          }
+          for (const auto& identity : package_identities) {
+              append_identity(identity);
+          }
+          specialized.packages =
+              std::move(interface_packages);
+
+          const bool valid =
+              diagnostics_.size() == diagnostic_count;
+          if (!valid && !retain_diagnostics) {
+              diagnostics_.erase(
+                  diagnostics_.begin()
+                      + static_cast<std::ptrdiff_t>(
+                            diagnostic_count),
+                  diagnostics_.end());
+          }
+          if (!valid) {
+              return std::nullopt;
+          }
+          auto resolved = declaration;
+          for (std::size_t index = 0;
+               index < resolved.ports.size()
+                   && index < specialized.unit.ports.size();
+               ++index) {
+              resolved.ports[index].type =
+                  specialized.unit.ports[index].type;
+          }
+          return ComponentSpecialization{
+              std::move(resolved),
+              std::move(specialized)};
+        };
 
     const auto scope = instance_scope(instance.name);
     std::vector<
@@ -847,17 +1178,40 @@ HierarchyBuilder::bind_vhdl_component_instance(
             &resolved_vhdl_entity_interface(
                 *default_entity_declaration);
     }
-    std::ranges::copy_if(
-        visible,
-        std::back_inserter(matching),
-        [&](const auto* declaration) {
-          return component_actual_profile_matches(
-                     *declaration, instance, unit)
-              && (default_entity_profile == nullptr
-                  || component_declaration_matches_entity(
-                      *declaration,
-                      *default_entity_profile));
-        });
+    for (const auto* declaration : visible) {
+        if (default_entity_profile != nullptr
+            && !component_declaration_matches_entity(
+                *declaration, *default_entity_profile)) {
+            continue;
+        }
+        std::vector<frontend::ParameterOverride>
+            candidate_actuals;
+        std::vector<Diagnostic> candidate_diagnostics;
+        if (!normalize_associations<
+                frontend::ParameterDeclaration,
+                frontend::ParameterOverride>(
+                declaration->generics,
+                instance.parameter_overrides,
+                candidate_actuals,
+                path,
+                "generic",
+                "FSIM-ELAB-VHCOMP-008",
+                [](const auto& actual) {
+                  return actual.name;
+                },
+                candidate_diagnostics)) {
+            continue;
+        }
+        auto candidate = specialize_component(
+            *declaration,
+            std::move(candidate_actuals),
+            false);
+        if (candidate
+            && component_actual_profile_matches(
+                candidate->declaration, instance, unit)) {
+            matching.push_back(declaration);
+        }
+    }
     if (matching.empty() && visible.size() == 1) {
         matching = visible;
     }
@@ -936,24 +1290,17 @@ HierarchyBuilder::bind_vhdl_component_instance(
         return result;
     }
 
-    DesignUnit component_profile;
-    component_profile.kind = frontend::UnitKind::VhdlEntity;
-    component_profile.language = frontend::Language::Vhdl2008;
-    component_profile.library = unit.library;
-    component_profile.name = component.name;
-    component_profile.parameters = component.generics;
-    component_profile.span = component.span;
-    const auto diagnostic_count = diagnostics_.size();
-    const auto specialized_component = specialize_unit(
-        component_profile,
-        normalized.parameter_overrides,
-        parent_environment,
-        frontend::Language::Vhdl2008,
-        diagnostics_);
-    if (diagnostics_.size() != diagnostic_count) {
+    auto component_specialization =
+        specialize_component(
+            component,
+            normalized.parameter_overrides,
+            true);
+    if (!component_specialization) {
         result.valid = false;
         return result;
     }
+    const auto& specialized_component =
+        component_specialization->specialized;
 
     result = configure_vhdl_component_instance(
         unit, normalized, path);
@@ -1128,10 +1475,10 @@ HierarchyBuilder::bind_vhdl_component_instance(
         }
         const auto& component_generic = component.generics[index];
         const auto& entity_generic = entity->parameters[target_index];
-        if (component_generic.kind != frontend::ParameterKind::Value
-            || entity_generic.kind != frontend::ParameterKind::Value
-            || type_profile(component_generic.type, component_names)
-                != type_profile(entity_generic.type, entity_names)) {
+        if (generic_profile(
+                component_generic, component_names, true)
+            != generic_profile(
+                entity_generic, entity_names, true)) {
             report(
                 "FSIM-ELAB-VHCOMP-006",
                 "component generic '" + component_generic.name
@@ -1185,7 +1532,10 @@ HierarchyBuilder::bind_vhdl_component_instance(
     }
 
     for (const auto& generic : component.generics) {
-        if (!specialized_component.environment.contains(generic.name)) {
+        if (generic.kind
+                == frontend::ParameterKind::Value
+            && !specialized_component.environment.contains(
+                generic.name)) {
             report(
                 "FSIM-ELAB-VHCOMP-006",
                 "component generic '" + generic.name
@@ -1197,102 +1547,182 @@ HierarchyBuilder::bind_vhdl_component_instance(
     if (!result.valid) {
         return result;
     }
-    const auto literal_actual =
+    const auto component_actual =
         [&](const std::size_t component_index,
             const std::string& target_name,
-            const frontend::SourceSpan& span) {
-          const auto value = specialized_component.environment.find(
-              component.generics[component_index].name);
-          return frontend::ParameterOverride{
-              target_name,
-              frontend::Expression{
-                  frontend::ExpressionKind::IntegerLiteral,
-                  std::to_string(value->second),
-                  {},
-                  span},
-              span};
+            const frontend::SourceSpan& span)
+            -> std::optional<frontend::ParameterOverride> {
+          const auto& formal =
+              component.generics[component_index];
+          if (formal.kind
+              == frontend::ParameterKind::Value) {
+              const auto value =
+                  specialized_component.environment.find(
+                      formal.name);
+              if (value
+                  == specialized_component.environment.end()) {
+                  return std::nullopt;
+              }
+              return frontend::ParameterOverride{
+                  target_name,
+                  frontend::Expression{
+                      frontend::ExpressionKind::IntegerLiteral,
+                      std::to_string(value->second),
+                      {},
+                      span},
+                  span};
+          }
+
+          const auto explicit_actual =
+              std::ranges::find_if(
+                  normalized.parameter_overrides,
+                  [&](const auto& actual) {
+                    return actual.name == formal.name;
+                  });
+          if (explicit_actual
+                  != normalized.parameter_overrides.end()
+              && !explicit_actual->default_box) {
+              auto actual = *explicit_actual;
+              actual.name = target_name;
+              return actual;
+          }
+
+          if (formal.kind
+              == frontend::ParameterKind::Type) {
+              const auto alias = std::ranges::find_if(
+                  specialized_component.unit.type_aliases,
+                  [&](const auto& candidate) {
+                    return candidate.name == formal.name;
+                  });
+              if (alias
+                  != specialized_component.unit.type_aliases.end()) {
+                  frontend::ParameterOverride actual;
+                  actual.name = target_name;
+                  actual.type_value = alias->type;
+                  actual.span = span;
+                  return actual;
+              }
+          } else if (
+              formal.kind
+              == frontend::ParameterKind::Function) {
+              const auto bound = std::ranges::find_if(
+                  specialized_component.unit.functions,
+                  [&](const auto& candidate) {
+                    return candidate.name == formal.name;
+                  });
+              if (bound
+                  != specialized_component.unit.functions.end()) {
+                  const auto selected = std::ranges::find_if(
+                      parent_functions,
+                      [&](const auto& candidate) {
+                        return candidate.span.source_name
+                                == bound->span.source_name
+                            && candidate.span.begin.offset
+                                == bound->span.begin.offset;
+                      });
+                  if (selected != parent_functions.end()) {
+                      return frontend::ParameterOverride{
+                          target_name,
+                          frontend::Expression{
+                              frontend::ExpressionKind::Identifier,
+                              selected->name,
+                              {},
+                              span},
+                          span};
+                  }
+              }
+          } else if (
+              formal.kind
+              == frontend::ParameterKind::Procedure) {
+              const auto bound = std::ranges::find_if(
+                  specialized_component.unit.procedures,
+                  [&](const auto& candidate) {
+                    return candidate.name == formal.name;
+                  });
+              if (bound
+                  != specialized_component.unit.procedures.end()) {
+                  const auto selected = std::ranges::find_if(
+                      parent_procedures,
+                      [&](const auto& candidate) {
+                        return candidate.span.source_name
+                                == bound->span.source_name
+                            && candidate.span.begin.offset
+                                == bound->span.begin.offset;
+                      });
+                  if (selected != parent_procedures.end()) {
+                      return frontend::ParameterOverride{
+                          target_name,
+                          frontend::Expression{
+                              frontend::ExpressionKind::Identifier,
+                              selected->name,
+                              {},
+                              span},
+                          span};
+                  }
+              }
+          }
+          report(
+              "FSIM-ELAB-VHCOMP-015",
+              "component generic '" + formal.name
+                  + "' has no forwardable selected actual on '"
+                  + path + "'",
+              span);
+          return std::nullopt;
         };
-    for (auto& actual : result.instance.parameter_overrides) {
-        if (!actual.name) {
-            continue;
-        }
-        std::optional<std::size_t> component_index;
-        if (result.configuration_rule != nullptr) {
-            const auto binding = std::ranges::find_if(
-                result.configuration_rule->binding.generic_map,
-                [&](const auto& candidate) {
-                  return candidate.name == actual.name
-                      && candidate.value.kind
-                          == frontend::ExpressionKind::Identifier;
-                });
-            if (binding
-                != result.configuration_rule->binding.generic_map.end()) {
-                const auto formal = std::ranges::find_if(
-                    component.generics,
-                    [&](const auto& candidate) {
-                      return candidate.name == binding->value.text;
-                    });
-                if (formal != component.generics.end()) {
-                    component_index = static_cast<std::size_t>(
-                        std::distance(
-                            component.generics.begin(), formal));
-                }
-            }
-        }
-        if (!component_index
-            && !explicit_generic_targets.contains(*actual.name)) {
-            const auto formal = std::ranges::find_if(
-                component.generics,
-                [&](const auto& candidate) {
-                  return candidate.name == *actual.name;
-                });
-            if (formal != component.generics.end()) {
-                component_index = static_cast<std::size_t>(
-                    std::distance(
-                        component.generics.begin(), formal));
-            }
-        }
-        if (component_index) {
-            const auto target_name =
-                entity->parameters[
-                    generic_map[*component_index]].name;
-            actual = literal_actual(
-                *component_index, target_name, actual.span);
-        }
-    }
+
+    const auto configured_actuals =
+        std::move(result.instance.parameter_overrides);
+    result.instance.parameter_overrides.clear();
+    bool forwarding_valid = true;
     for (std::size_t index = 0;
          index < component.generics.size(); ++index) {
         const auto& target_name =
             entity->parameters[generic_map[index]].name;
-        if (std::ranges::none_of(
-                result.instance.parameter_overrides,
-                [&](const auto& actual) {
-                  return actual.name == target_name;
-                })) {
-            result.instance.parameter_overrides.push_back(
-                literal_actual(
-                    index,
-                    target_name,
-                    component.generics[index].span));
-        }
-    }
-
-    for (auto& actual : result.instance.parameter_overrides) {
-        if (!actual.name
-            || explicit_generic_targets.contains(*actual.name)) {
+        const auto configured_binding =
+            result.configuration_rule == nullptr
+                ? std::span<
+                      const frontend::ParameterOverride>{}
+                : std::span{
+                      result.configuration_rule->binding.generic_map};
+        const auto binding = std::ranges::find_if(
+            configured_binding,
+            [&](const auto& actual) {
+              return actual.name == target_name;
+            });
+        const bool maps_component =
+            binding == configured_binding.end()
+            || (binding->value.kind
+                    == frontend::ExpressionKind::Identifier
+                && binding->value.text
+                    == component.generics[index].name);
+        if (!maps_component) {
             continue;
         }
-        const auto found = std::ranges::find_if(
-            component.generics,
-            [&](const auto& formal) {
-              return formal.name == *actual.name;
-            });
-        if (found != component.generics.end()) {
-            const auto index = static_cast<std::size_t>(
-                std::distance(component.generics.begin(), found));
-            actual.name =
-                entity->parameters[generic_map[index]].name;
+        if (auto actual = component_actual(
+                index,
+                target_name,
+                component.generics[index].span)) {
+            result.instance.parameter_overrides.push_back(
+                std::move(*actual));
+        } else {
+            forwarding_valid = false;
         }
+    }
+    for (const auto& actual : configured_actuals) {
+        if (!actual.name
+            || !explicit_generic_targets.contains(*actual.name)
+            || std::ranges::any_of(
+                result.instance.parameter_overrides,
+                [&](const auto& existing) {
+                  return existing.name == actual.name;
+                })) {
+            continue;
+        }
+        result.instance.parameter_overrides.push_back(actual);
+    }
+    if (!forwarding_valid) {
+        result.valid = false;
+        return result;
     }
     for (auto& actual : result.instance.connections) {
         if (!actual.port
@@ -1369,6 +1799,33 @@ HierarchyBuilder::bind_vhdl_component_instance(
         };
     for (const auto& generic : component.generics) {
         collect_type_declaration(generic.type);
+        if (generic.function_profile) {
+            collect_type_declaration(
+                generic.function_profile->return_type);
+            for (const auto& argument :
+                 generic.function_profile->arguments) {
+                collect_type_declaration(argument.type);
+            }
+        }
+        if (generic.procedure_profile) {
+            for (const auto& argument :
+                 generic.procedure_profile->arguments) {
+                collect_type_declaration(argument.type);
+            }
+        }
+        if (generic.package_profile) {
+            for (const auto& actual :
+                 generic.package_profile->generic_map) {
+                if (actual.type_value) {
+                    collect_type_declaration(
+                        *actual.type_value);
+                }
+            }
+        }
+    }
+    for (const auto& alias :
+         specialized_component.unit.type_aliases) {
+        collect_type_declaration(alias.type);
     }
     for (const auto& port : component.ports) {
         collect_type_declaration(port.type);
@@ -1387,6 +1844,10 @@ HierarchyBuilder::bind_vhdl_component_instance(
                   dependency);
           }
         };
+    for (const auto& dependency :
+         specialized_component.unit.source_dependencies) {
+        append_type_dependency(dependency);
+    }
     for (const auto& source_unit : parsed_.units) {
         for (const auto& alias : source_unit.type_aliases) {
             if (type_declarations.contains(
@@ -1413,7 +1874,10 @@ HierarchyBuilder::bind_vhdl_component_instance(
     }
     result.component_name = component.name;
     result.component_identity =
-        component_identity(component, *result.target);
+        component_identity(
+            component,
+            *result.target,
+            specialized_component.identity_values);
     if (!result.configuration_identity.empty()) {
         result.component_identity +=
             ";configuration=" + result.configuration_identity;

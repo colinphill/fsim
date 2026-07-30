@@ -52,7 +52,7 @@ architecture rtl of component_top is
   end component vector_copy;
 begin
   child: vector_copy
-    generic map (4, enabled => true)
+    generic map (4, enabled => <>)
     port map (source_value, result_value => result_value);
 end architecture;
 )",
@@ -88,6 +88,8 @@ end architecture;
           && architecture.instances.front().parameter_overrides.size() == 2
           && !architecture.instances.front()
                   .parameter_overrides.front().name
+          && architecture.instances.front()
+                 .parameter_overrides[1].default_box
           && architecture.instances.front().connections.size() == 2
           && !architecture.instances.front().connections.front().port,
       "positional and named component associations retained");
@@ -113,18 +115,30 @@ package component_profiles is
       lane : in nibble_t;
       selected_packet : in component_profiles.packet_t);
   end component;
+  component generic_leaf is
+    generic (
+      type element_t;
+      function select_value(value : integer) return integer is <>;
+      procedure update_value(variable value : inout integer)
+        is default_update;
+      package helpers is new work.helper_template generic map (<>));
+    port (value : in element_t);
+  end component;
 end package;
 
 entity visible_components is
   component entity_leaf is
+    generic (type entity_t);
     port (value : in integer);
   end component;
 end entity;
 architecture rtl of visible_components is
   component overloaded_leaf is
+    generic (type architecture_t);
     port (value : in integer);
   end component;
   component overloaded_leaf is
+    generic (type architecture_t);
     port (value : in bit);
   end component;
   for all : shared_leaf
@@ -132,6 +146,7 @@ architecture rtl of visible_components is
 begin
   local_block: block
     component scoped_leaf is
+      generic (type scoped_t);
       port (value : in integer);
     end component;
   begin
@@ -139,6 +154,7 @@ begin
   end block;
   selected: if true generate
     component generated_leaf is
+      generic (type generated_t);
       port (value : in integer);
     end component;
   begin
@@ -154,7 +170,7 @@ end architecture;
   require(
       visibility.design.units[0]
               .vhdl_component_declarations.size()
-              == 2
+              == 3
           && visibility.design.units[0]
                  .vhdl_component_declarations.front()
                  .region
@@ -174,6 +190,36 @@ end architecture;
           && composite_component.ports[3].type.named_type
               == "component_profiles.packet_t",
       "composite and selected component subtype indications retained");
+  const auto& generic_component =
+      visibility.design.units[0]
+          .vhdl_component_declarations[2];
+  require(
+      generic_component.generics.size() == 4
+          && generic_component.generics[0].kind
+              == ParameterKind::Type
+          && generic_component.generics[1].kind
+              == ParameterKind::Function
+          && generic_component.generics[1].function_profile
+          && generic_component.generics[1]
+                 .function_profile->default_box
+          && generic_component.generics[2].kind
+              == ParameterKind::Procedure
+          && generic_component.generics[2].procedure_profile
+          && generic_component.generics[2]
+                 .procedure_profile->default_name
+              == std::optional<std::string>{"default_update"}
+          && generic_component.generics[3].kind
+              == ParameterKind::Package
+          && generic_component.generics[3].package_profile
+          && generic_component.generics[3]
+                 .package_profile->template_name
+              == "work.helper_template"
+          && generic_component.generics[3]
+                 .package_profile->generic_map_box
+          && generic_component.ports.front().type.named_type
+              == "element_t",
+      "component type, function, procedure, package, defaults, and "
+      "dependent port profiles retained");
   require(
       visibility.design.units[1]
               .vhdl_component_declarations.size()
@@ -181,7 +227,11 @@ end architecture;
           && visibility.design.units[1]
                  .vhdl_component_declarations.front()
                  .region
-              == VhdlComponentDeclarationRegion::Entity,
+              == VhdlComponentDeclarationRegion::Entity
+          && visibility.design.units[1]
+                 .vhdl_component_declarations.front()
+                 .generics.front().kind
+              == ParameterKind::Type,
       "entity component ownership retained");
   const auto& visible_architecture =
       visibility.design.units[2];
@@ -193,7 +243,11 @@ end architecture;
               == "overloaded_leaf"
           && visible_architecture
                  .vhdl_component_declarations[1].name
-              == "overloaded_leaf",
+              == "overloaded_leaf"
+          && visible_architecture
+                 .vhdl_component_declarations[0]
+                 .generics.front().kind
+              == ParameterKind::Type,
       "distinct architecture component overload profiles retained");
   require(
       visible_architecture
@@ -209,13 +263,21 @@ end architecture;
                  .then_body.vhdl_component_declarations.front()
                  .region
               == VhdlComponentDeclarationRegion::Block
+          && visible_architecture.generate_regions[0]
+                 .then_body.vhdl_component_declarations.front()
+                 .generics.front().kind
+              == ParameterKind::Type
           && visible_architecture.generate_regions[1]
                  .then_body.vhdl_component_declarations.size()
               == 1
           && visible_architecture.generate_regions[1]
                  .then_body.vhdl_component_declarations.front()
                  .region
-              == VhdlComponentDeclarationRegion::Generate,
+              == VhdlComponentDeclarationRegion::Generate
+          && visible_architecture.generate_regions[1]
+                 .then_body.vhdl_component_declarations.front()
+                 .generics.front().kind
+              == ParameterKind::Type,
       "block and selected-generate component declarations retained");
 
   const auto invalid = parse_text(
@@ -249,7 +311,6 @@ end architecture;
            "FSIM-VHDL-SEM-071",
            "FSIM-VHDL-SEM-069",
            "FSIM-VHDL-SEM-068",
-           "FSIM-VHDL-UNSUPPORTED-051",
            "FSIM-VHDL-UNSUPPORTED-052"}) {
     require(
         has_code(invalid, code),

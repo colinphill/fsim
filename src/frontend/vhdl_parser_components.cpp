@@ -62,6 +62,104 @@ bool same_component_type(
       && same_packed_expression();
 }
 
+bool same_component_generic(
+    const ParameterDeclaration& left,
+    const ParameterDeclaration& right) {
+  if (left.kind != right.kind) {
+    return false;
+  }
+  if (left.kind == ParameterKind::Value) {
+    return same_component_type(left.type, right.type);
+  }
+  if (left.kind == ParameterKind::Type) {
+    return true;
+  }
+  if (left.kind == ParameterKind::Function) {
+    if (!left.function_profile
+        || !right.function_profile) {
+      return left.function_profile.has_value()
+          == right.function_profile.has_value();
+    }
+    const auto& lhs = *left.function_profile;
+    const auto& rhs = *right.function_profile;
+    if (lhs.pure != rhs.pure
+        || !same_component_type(
+            lhs.return_type, rhs.return_type)
+        || lhs.arguments.size() != rhs.arguments.size()) {
+      return false;
+    }
+    for (std::size_t index = 0;
+         index < lhs.arguments.size(); ++index) {
+      if (lhs.arguments[index].direction
+              != rhs.arguments[index].direction
+          || !same_component_type(
+              lhs.arguments[index].type,
+              rhs.arguments[index].type)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (left.kind == ParameterKind::Procedure) {
+    if (!left.procedure_profile
+        || !right.procedure_profile) {
+      return left.procedure_profile.has_value()
+          == right.procedure_profile.has_value();
+    }
+    const auto& lhs = *left.procedure_profile;
+    const auto& rhs = *right.procedure_profile;
+    if (lhs.arguments.size() != rhs.arguments.size()) {
+      return false;
+    }
+    for (std::size_t index = 0;
+         index < lhs.arguments.size(); ++index) {
+      if (lhs.arguments[index].direction
+              != rhs.arguments[index].direction
+          || lhs.arguments[index].object_class
+              != rhs.arguments[index].object_class
+          || !same_component_type(
+              lhs.arguments[index].type,
+              rhs.arguments[index].type)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (!left.package_profile
+      || !right.package_profile) {
+    return left.package_profile.has_value()
+        == right.package_profile.has_value();
+  }
+  const auto& lhs = *left.package_profile;
+  const auto& rhs = *right.package_profile;
+  if (lhs.template_name != rhs.template_name
+      || lhs.generic_map_box != rhs.generic_map_box
+      || lhs.generic_map.size() != rhs.generic_map.size()) {
+    return false;
+  }
+  for (std::size_t index = 0;
+       index < lhs.generic_map.size(); ++index) {
+    const auto& left_actual = lhs.generic_map[index];
+    const auto& right_actual = rhs.generic_map[index];
+    if (left_actual.name != right_actual.name
+        || left_actual.default_box
+            != right_actual.default_box
+        || left_actual.type_value.has_value()
+            != right_actual.type_value.has_value()
+        || (left_actual.type_value
+            && !same_component_type(
+                *left_actual.type_value,
+                *right_actual.type_value))
+        || (!left_actual.type_value
+            && !same_expression(
+                left_actual.value,
+                right_actual.value))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool same_component_profile(
     const VhdlComponentDeclaration& left,
     const VhdlComponentDeclaration& right) {
@@ -72,11 +170,9 @@ bool same_component_profile(
   for (std::size_t index = 0;
        index < left.generics.size();
        ++index) {
-    if (left.generics[index].kind
-            != right.generics[index].kind
-        || !same_component_type(
-            left.generics[index].type,
-            right.generics[index].type)) {
+    if (!same_component_generic(
+            left.generics[index],
+            right.generics[index])) {
       return false;
     }
   }
@@ -229,13 +325,6 @@ VhdlParser::parse_vhdl_component_declaration(
       profile.language = Language::Vhdl2008;
       parse_vhdl_generics(profile, previous(), true);
       for (const auto& generic : profile.parameters) {
-        if (generic.kind != ParameterKind::Value) {
-          error(
-              start,
-              "FSIM-VHDL-UNSUPPORTED-051",
-              "component declarations currently support value generics "
-              "only");
-        }
         if (std::ranges::any_of(
                 result.generics,
                 [&](const auto& existing) {

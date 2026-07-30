@@ -1158,7 +1158,14 @@ private:
         const DesignUnit& unit,
         const frontend::Instance& instance,
         const std::string& path,
-        const ConstantEnvironment& parent_environment);
+        const ConstantEnvironment& parent_environment,
+        const ConstantDomainEnvironment& parent_domains,
+        const NamedTypeEnvironment& parent_types,
+        const std::vector<frontend::FunctionDeclaration>&
+            parent_functions,
+        const std::vector<frontend::ProcedureDeclaration>&
+            parent_procedures,
+        const PackageEnvironment& parent_packages);
 
     void expand_vhdl_context_references(
         DesignUnit& unit,

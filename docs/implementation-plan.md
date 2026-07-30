@@ -3574,6 +3574,60 @@ source gate covers 263 authored files with an empty allowlist and a maximum of
 all 54 configured tests in 319.51 seconds, and Release passed all 55 configured
 tests in 132.56 seconds on 2026-07-30. No CI state was inspected.
 
+### Sixty-sixth feature batch — VHDL-2008 non-value component generics
+
+The completed ten-feature architecture-gate slice is:
+
+1. Retain component generic kinds and profiles for the existing interface
+   type, function, procedure, and package families.
+2. Parse bounded type/function/procedure/package generics in component
+   declarations across architecture, entity, package, block, and selected-
+   generate declarative regions, including explicit `<>` actuals.
+3. Resolve component interface formals in declaration order so later callable
+   profiles and dependent ports can reference earlier type and package formals.
+4. Normalize explicit, omitted-default, and box actuals against the selected
+   component declaration before target binding.
+5. Match same-language component and entity non-value generic profiles by
+   kind, callable/package profile, defaults, and formal position.
+6. Select equally visible component overloads after specializing dependent
+   ports through normalized non-value generic maps.
+7. Compose architecture specifications and recursive configuration maps
+   through renamed non-value component formals while preserving direct-entity
+   isolation.
+8. Define version-4 component identity over canonical non-value profiles,
+   selected actual identities, physical dependencies, maps, and target.
+9. Diagnose missing, ambiguous, wrong-kind, incompatible-profile, illegal
+   default/box/map, recursive, and implicit cross-language cases.
+10. Add frontend, negative, elaboration, visibility/overload/configuration,
+    runtime, debugger, interpreter/LLVM O0/O2, cold/warm, and edited-callable
+    selective-cache evidence.
+
+The executable subset remains same-language VHDL and reuses the existing
+bounded interface type, pure scalar function, time-free procedure, and generic
+package families. Component defaults are materialized independently of entity
+defaults, omitted or box callable defaults resolve to their selected parent
+actuals before forwarding, and dependent port profiles are specialized before
+overload and entity-profile filtering. Configuration maps compose by formal
+position after component normalization.
+
+Version-4 identity includes the selected type, function, procedure, and package
+actuals plus their declaration/body/template sources. Editing the selected
+function source invalidates the owning component consumer while unrelated
+value-only component and direct-entity children retain their native-cache keys.
+
+New generic families, general composite expression actuals, nested package or
+template forms, executable omitted port defaults, incremental configurations,
+mixed-language component binding, and general overload resolution remain
+outside this bounded slice.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, configuration, and component application gates passed. The
+catalog now covers 1,073 production codes and the source gate covers 264
+authored files with an empty allowlist and a maximum of 1,987 lines. The exact
+LLVM 22.1.8 warnings-as-errors Debug regression passed all 54 configured tests
+in 341.97 seconds, and Release passed all 55 configured tests in 135.92 seconds
+on 2026-07-30. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
