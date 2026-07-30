@@ -1,29 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
-#include <iostream>
-
 namespace fsim::app {
 using namespace application_detail;
 
 std::optional<BuiltProject> build_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics) {
-  const bool trace_scoped_locals =
-      config.project.name == "scoped-local-application-test";
-  const auto trace =
-      [&](const std::string_view phase) {
-        if (trace_scoped_locals) {
-          std::cerr << "scoped_locals build_project: "
-                    << phase << '\n';
-        }
-      };
-  trace("checking project");
   auto checked = check_project(config, diagnostics);
   if (!checked) {
     return std::nullopt;
   }
-  trace("project checked");
   std::vector<std::filesystem::path> systemc_plugins;
   std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
   std::string systemc_plugin_key;
@@ -79,7 +66,6 @@ std::optional<BuiltProject> build_project(
   if (!systemc_instances) {
     return std::nullopt;
   }
-  trace("bindings validated");
   std::vector<std::uint64_t> systemc_roots;
   systemc_roots.reserve(systemc_instances->size());
   for (const auto& instance : *systemc_instances) {
@@ -100,7 +86,6 @@ std::optional<BuiltProject> build_project(
             *systemc_instances,
             systemc_roots);
   }
-  trace("elaborating");
   auto elaborated = elaboration::elaborate(
       checked->parsed,
       top,
@@ -113,7 +98,6 @@ std::optional<BuiltProject> build_project(
   if (!elaborated.design || diagnostics.has_error()) {
     return std::nullopt;
   }
-  trace("elaborated");
   if (systemc_hierarchy) {
     try {
       for (const auto& instance :
@@ -154,14 +138,12 @@ std::optional<BuiltProject> build_project(
     }
   }
 
-  trace("building specialization cache keys");
   auto specialization_cache_keys =
       make_specialization_cache_keys(
           config, *checked, *elaborated.design, diagnostics);
   if (!specialization_cache_keys) {
     return std::nullopt;
   }
-  trace("building design cache key");
   const auto key = make_cache_key(
       config,
       *checked,
@@ -172,7 +154,6 @@ std::optional<BuiltProject> build_project(
   if (key.empty()) {
     return std::nullopt;
   }
-  trace("loading design cache");
   compiler::ObjectCache cache(config.build.cache_path);
   std::error_code cache_error;
   const auto existing = cache.load(key, cache_error);
@@ -193,7 +174,6 @@ std::optional<BuiltProject> build_project(
     const auto bytes = std::as_bytes(
         std::span<const char>{record.data(), record.size()});
     cache_error.clear();
-    trace("storing design cache");
     if (!cache.store(key, bytes, cache_error)) {
       diagnostics.error(
           "FSIM-CACHE-0003",
@@ -201,7 +181,6 @@ std::optional<BuiltProject> build_project(
       return std::nullopt;
     }
   }
-  trace("complete");
   const auto selected_seed =
       config.project.random_seed
           ? entropy_seed()

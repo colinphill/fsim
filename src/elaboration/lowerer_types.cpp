@@ -808,17 +808,11 @@ using namespace elaboration_detail;
                 }
                 break;
             case StatementKind::MemoryLoad:
-                collect_identifiers(
-                    statement.memory_file, output);
-                collect_identifiers(
-                    statement.memory_target, output);
-                if (statement.memory_start) {
-                    collect_identifiers(
-                        *statement.memory_start, output);
-                }
-                if (statement.memory_finish) {
-                    collect_identifiers(
-                        *statement.memory_finish, output);
+                collect_identifiers(statement.value, output);
+                collect_identifiers(statement.target, output);
+                for (const auto& argument :
+                     statement.task_arguments) {
+                    collect_identifiers(argument, output);
                 }
                 break;
             case StatementKind::MonitorControl:

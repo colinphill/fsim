@@ -209,12 +209,19 @@ endmodule
           && unit->processes[0].statements[0].kind
               == StatementKind::MemoryLoad
           && unit->processes[0].statements[0].memory_hex
-          && !unit->processes[0].statements[0].memory_start
+          && unit->processes[0].statements[0].value.kind
+              == ExpressionKind::StringLiteral
+          && unit->processes[0].statements[0].target.text == "image"
+          && unit->processes[0].statements[0].task_arguments.empty()
           && unit->processes[0].statements[1].kind
               == StatementKind::MemoryLoad
           && !unit->processes[0].statements[1].memory_hex
-          && unit->processes[0].statements[1].memory_start
-          && unit->processes[0].statements[1].memory_finish,
+          && unit->processes[0].statements[1].value.kind
+              == ExpressionKind::StringLiteral
+          && unit->processes[0].statements[1].target.text == "image"
+          && unit->processes[0].statements[1].task_arguments.size() == 2
+          && unit->processes[0].statements[1].task_arguments[0].text == "6"
+          && unit->processes[0].statements[1].task_arguments[1].text == "4",
       "$readmemh/$readmemb retain target, radix, and optional bounds");
   const auto& query_statements =
       unit->processes[0].statements;

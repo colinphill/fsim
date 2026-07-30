@@ -1202,18 +1202,6 @@ void substitute_sv_statements(
             statement.value, environment);
         substitute_systemverilog_parameters(
             statement.condition, environment);
-        substitute_systemverilog_parameters(
-            statement.memory_file, environment);
-        substitute_systemverilog_parameters(
-            statement.memory_target, environment);
-        if (statement.memory_start) {
-            substitute_systemverilog_parameters(
-                *statement.memory_start, environment);
-        }
-        if (statement.memory_finish) {
-            substitute_systemverilog_parameters(
-                *statement.memory_finish, environment);
-        }
         for (auto& argument : statement.task_arguments) {
             substitute_systemverilog_parameters(
                 argument, environment);

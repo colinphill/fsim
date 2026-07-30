@@ -1186,42 +1186,42 @@ Lowerer::Lowerer(
                 break;
             }
             const auto path =
-                lower_string_expression(statement.memory_file);
+                lower_string_expression(statement.value);
             if (!path) {
                 report(
                     "FSIM-ELAB-SVMEMORY-002",
                     "read-memory file name must be a string expression",
-                    statement.memory_file.span);
+                    statement.value.span);
                 break;
             }
-            if (statement.memory_target.kind
+            if (statement.target.kind
                     != ExpressionKind::Identifier) {
                 report(
                     "FSIM-ELAB-SVMEMORY-003",
                     "read-memory target must be a direct static-array "
                     "object",
-                    statement.memory_target.span);
+                    statement.target.span);
                 break;
             }
             if (read_only_container_objects_.contains(
-                    statement.memory_target.text)) {
+                    statement.target.text)) {
                 report(
                     "FSIM-ELAB-SVPORT-009",
                     "an input container port is read-only within its "
                     "module",
-                    statement.memory_target.span);
+                    statement.target.span);
                 break;
             }
             const auto target =
                 lower_container_expression(
-                    statement.memory_target);
+                    statement.target);
             const auto* source_type =
-                object_type(statement.memory_target.text);
+                object_type(statement.target.text);
             const auto runtime_type =
                 source_type
                     ? container_type(
                           *source_type,
-                          statement.memory_target.span)
+                          statement.target.span)
                     : std::nullopt;
             if (!target || !runtime_type) {
                 break;
@@ -1231,11 +1231,11 @@ Lowerer::Lowerer(
                     "FSIM-ELAB-SVMEMORY-003",
                     "$readmemb/$readmemh target must be a bounded static "
                     "unpacked array",
-                    statement.memory_target.span);
+                    statement.target.span);
                 break;
             }
             const auto lower_bound =
-                [&](const std::optional<Expression>& expression)
+                [&](const Expression* expression)
                     -> std::optional<RegisterId> {
                   if (!expression) {
                     return std::nullopt;
@@ -1251,12 +1251,20 @@ Lowerer::Lowerer(
                   }
                   return result;
                 };
+            const auto* start_expression =
+                statement.task_arguments.empty()
+                    ? nullptr
+                    : &statement.task_arguments[0];
+            const auto* finish_expression =
+                statement.task_arguments.size() < 2
+                    ? nullptr
+                    : &statement.task_arguments[1];
             const auto start =
-                lower_bound(statement.memory_start);
+                lower_bound(start_expression);
             const auto finish =
-                lower_bound(statement.memory_finish);
-            if ((statement.memory_start && !start)
-                || (statement.memory_finish && !finish)) {
+                lower_bound(finish_expression);
+            if ((start_expression && !start)
+                || (finish_expression && !finish)) {
                 report(
                     "FSIM-ELAB-SVMEMORY-004",
                     "read-memory start and finish must be integral "
@@ -1270,7 +1278,7 @@ Lowerer::Lowerer(
                     statement.memory_hex});
             if (const auto object =
                     container_objects_.find(
-                        statement.memory_target.text);
+                        statement.target.text);
                 object != container_objects_.end()) {
                 process_.operations.emplace_back(
                     WriteContainerObject{

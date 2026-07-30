@@ -867,10 +867,10 @@ struct Statement {
   // ordinary output values. FileDisplay reuses the output formatting fields;
   // FileClose uses only this expression.
   Expression file_handle;
-  Expression memory_file;
-  Expression memory_target;
-  std::optional<Expression> memory_start;
-  std::optional<Expression> memory_finish;
+  // MemoryLoad reuses value for the file-name expression, target for the
+  // static-array object, and the first two task_arguments for optional start
+  // and finish bounds. Keeping those operands in the common expression slots
+  // avoids inflating every recursive Statement node for one task family.
   bool memory_hex{};
   // Multi-conversion and additional unformatted arguments retain source
   // order here. The legacy singular fields above remain the compact form for

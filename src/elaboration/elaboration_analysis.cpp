@@ -52,20 +52,6 @@ void substitute_parameters(
         }
         substitute_parameters(
             statement.condition, environment, domains, language);
-        substitute_parameters(
-            statement.memory_file, environment, domains, language);
-        substitute_parameters(
-            statement.memory_target, environment, domains, language);
-        if (statement.memory_start) {
-            substitute_parameters(
-                *statement.memory_start,
-                environment, domains, language);
-        }
-        if (statement.memory_finish) {
-            substitute_parameters(
-                *statement.memory_finish,
-                environment, domains, language);
-        }
         for (auto& argument : statement.task_arguments) {
             substitute_parameters(
                 argument, environment, domains, language);
@@ -389,18 +375,6 @@ void collect_qualified_identifiers(
         }
         collect_qualified_identifiers(
             statement.condition, identifiers);
-        collect_qualified_identifiers(
-            statement.memory_file, identifiers);
-        collect_qualified_identifiers(
-            statement.memory_target, identifiers);
-        if (statement.memory_start) {
-            collect_qualified_identifiers(
-                *statement.memory_start, identifiers);
-        }
-        if (statement.memory_finish) {
-            collect_qualified_identifiers(
-                *statement.memory_finish, identifiers);
-        }
         if (statement.kind == StatementKind::TaskCall
             && statement.task_name.find("::")
                 != std::string::npos) {
@@ -758,17 +732,8 @@ void qualify_generated_statement(
         qualify_generated_expression(element.value, body_names);
     }
     qualify_generated_expression(statement.condition, body_names);
-    qualify_generated_expression(
-        statement.memory_file, body_names);
-    qualify_generated_expression(
-        statement.memory_target, body_names);
-    if (statement.memory_start) {
-        qualify_generated_expression(
-            *statement.memory_start, body_names);
-    }
-    if (statement.memory_finish) {
-        qualify_generated_expression(
-            *statement.memory_finish, body_names);
+    for (auto& argument : statement.task_arguments) {
+        qualify_generated_expression(argument, body_names);
     }
     for (auto& sensitivity : statement.sensitivities) {
         if (const auto found = body_names.find(sensitivity.signal);

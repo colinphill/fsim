@@ -9,26 +9,14 @@ Process VerilogParser::parse_initial() {
   current_procedural_names_.clear();
   Process process;
   process.kind = ProcessKind::Initial;
-  if (trace_scoped_locals_) {
-    std::cerr << "scoped_locals parser: parsing initial body\n";
-  }
   auto body = parse_statement();
-  if (trace_scoped_locals_) {
-    std::cerr << "scoped_locals parser: initial body parsed\n";
-  }
   if (body) {
     if (body->kind == StatementKind::Block
         && body->label.empty()) {
       process.variables = std::move(body->declarations);
       process.statements = std::move(body->statements);
     } else {
-      if (trace_scoped_locals_) {
-        std::cerr << "scoped_locals parser: storing labeled initial body\n";
-      }
       process.statements.push_back(std::move(*body));
-      if (trace_scoped_locals_) {
-        std::cerr << "scoped_locals parser: labeled initial body stored\n";
-      }
     }
   }
   process.span = span_from(start, previous());
@@ -799,37 +787,16 @@ std::optional<Statement> VerilogParser::parse_statement() {
     Statement block;
     block.kind = StatementKind::Block;
     block.label = opening_label;
-    if (trace_scoped_locals_) {
-      std::cerr << "scoped_locals parser: block '"
-                << (opening_label.empty() ? "<anonymous>" : opening_label)
-                << "' entered\n";
-    }
     while (!at_end() && !keyword("end")) {
       const auto before = position();
-      if (trace_scoped_locals_) {
-        std::cerr << "scoped_locals parser: block item at token "
-                  << before << " '" << current().text << "'\n";
-      }
       if (is_declaration_start()) {
         parse_procedural_declaration(block);
-        if (trace_scoped_locals_) {
-          std::cerr << "scoped_locals parser: block declaration stored\n";
-        }
       } else if (auto child = parse_statement()) {
-        if (trace_scoped_locals_) {
-          std::cerr << "scoped_locals parser: block child parsed\n";
-        }
         block.statements.push_back(std::move(*child));
-        if (trace_scoped_locals_) {
-          std::cerr << "scoped_locals parser: block child stored\n";
-        }
       }
       if (position() == before) {
         advance();
       }
-    }
-    if (trace_scoped_locals_) {
-      std::cerr << "scoped_locals parser: block items parsed\n";
     }
     expect_keyword("end", false, "FSIM-SV-PARSE-017");
     if (match(TokenKind::Colon)) {
@@ -849,9 +816,6 @@ std::optional<Statement> VerilogParser::parse_statement() {
       }
     }
     block.span = span_from(start, previous());
-    if (trace_scoped_locals_) {
-      std::cerr << "scoped_locals parser: block complete\n";
-    }
     return block;
   }
 
@@ -935,16 +899,16 @@ std::optional<Statement> VerilogParser::parse_statement() {
         TokenKind::LeftParen,
         "'(' after " + start.text,
         "FSIM-SV-PARSE-159");
-    statement.memory_file = parse_expression();
+    statement.value = parse_expression();
     expect(
         TokenKind::Comma,
         "',' after read-memory file name",
         "FSIM-SV-PARSE-160");
-    statement.memory_target = parse_expression();
+    statement.target = parse_expression();
     if (match(TokenKind::Comma)) {
-      statement.memory_start = parse_expression();
+      statement.task_arguments.push_back(parse_expression());
       if (match(TokenKind::Comma)) {
-        statement.memory_finish = parse_expression();
+        statement.task_arguments.push_back(parse_expression());
       }
     }
     expect(
