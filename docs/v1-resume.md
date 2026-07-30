@@ -9,16 +9,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-76 bounded SystemVerilog
-  unpacked-container assignment patterns on top of the feature-batch-75 query
-  system-function handoff.
+- Implementation baseline: completed feature-batch-77 bounded SystemVerilog
+  unpacked-container reduction methods on top of the feature-batch-76
+  assignment-pattern handoff.
 - The source-size refactor is complete: all 285 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 87.04 seconds, and Release passed all 59 configured
-  tests in 34.08 seconds on 2026-07-30.
-- The diagnostic catalog covers all 1,161 production codes.
+  configured tests in 41.55 seconds, and Release passed all 59 configured
+  tests in 14.05 seconds on 2026-07-30.
+- The diagnostic catalog covers all 1,166 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -77,7 +77,8 @@ not rebuilt:
   storage, manifest-confined `$readmemb`/`$readmemh`, suspending-task copy-out,
   direct same-language whole-container module-port aliases across
   nested/generated hierarchy, direct bound/size/bit/dimension system queries
-  and contextual positional/keyed assignment patterns over
+  and contextual positional/keyed assignment patterns plus exact-element-type
+  no-argument `sum`/`product`/`and`/`or`/`xor` reductions over
   objects/ports/callable values, debugger visibility, stable SimIR/native
   identities, and interpreter/LLVM O0/O2 equivalence;
 - entity-level VHDL-2008 unclassified interface type generics with
@@ -281,7 +282,13 @@ schema-28 interpreter/LLVM O0/O2/cache parity. Direct whole-container
 apostrophe-brace assignments add exact-count static positional patterns,
 resizing dynamic/queue positional patterns, typed unique-key associative
 patterns, deterministic empty clearing, atomic temporary construction,
-callable/port/suspension behavior, and schema-29 native parity. Unicode
+callable/port/suspension behavior, and schema-29 native parity. Direct
+no-argument `sum`, `product`, `and`, `or`, and `xor` methods now preserve
+the exact element type, use explicit empty identities and shared four-state
+semantics, reduce canonical storage order across every supported container
+kind, and execute through validated schema-30 SimIR plus the existing native
+container callback over objects, ports, callable values, and suspended
+locals. Unicode
 code-point semantics, multidimensional or
 aggregate/string-element containers, sliced/expression port actuals,
 cross-language container boundaries, and unrestricted allocation remain
@@ -289,38 +296,39 @@ separate release-gate work.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 77: bounded SystemVerilog unpacked-container
-reduction methods**:
+Resume with **feature batch 78: bounded SystemVerilog unpacked-container
+ordering methods**:
 
-1. Retain direct no-argument `sum()`, `product()`, `and()`, `or()`, and
-   `xor()` calls over supported one-dimensional containers as typed method HIR.
-2. Return the exact packed element width, signedness, and two-/four-state
-   domain rather than widening reductions to host integers.
-3. Reduce static arrays in declared left-to-right order and dynamic arrays or
-   queues in current index order without copying container storage.
-4. Reduce associative arrays in canonical numeric-key order so results remain
-   deterministic across insertion histories and execution engines.
-5. Define empty-container identities explicitly: zero for sum/or/xor, one for
-   product, and all ones for bitwise and.
-6. Preserve four-state arithmetic and bitwise unknown propagation using common
-   packed-value semantics for every supported element width.
-7. Support module objects, direct port aliases, automatic function/task
-   formals and locals, suspension, and nested/generated hierarchy.
-8. Add a bounded validated SimIR/native reduction operation and versioned
-   cache identity without extending the public container callback ABI unless
-   native execution requires it.
-9. Diagnose arguments/`with` clauses, noncontainer or indirect receivers,
-   unsupported element/container kinds, result misuse, and use outside
-   SystemVerilog-2017.
-10. Add frontend, elaboration, runtime, hierarchy/callable, debugger,
-    interpreter, LLVM O0/O2, cache, empty/X/Z, and negative evidence, then run
-    the scheduled gate.
+1. Retain direct no-argument `reverse()`, `sort()`, and `rsort()` calls over
+   supported one-dimensional static arrays, dynamic arrays, and queues as
+   explicit method-statement HIR.
+2. Mutate only direct writable receivers and preserve each container's exact
+   element type, size, queue bound, and object identity.
+3. Treat static storage in declared left-to-right order and dynamic/queue
+   storage in current index order before and after ordering.
+4. Define a deterministic exact-width integral comparison policy, including
+   signed versus unsigned elements and a stable total ordering for four-state
+   values.
+5. Make `reverse` permutation-only and make `sort`/`rsort` deterministic for
+   duplicate values without exposing host sort-library behavior.
+6. Support module objects, output/inout port aliases, automatic task formals
+   and locals, suspension, and nested/generated hierarchy.
+7. Add one validated mutation SimIR operation shared by the interpreter and
+   native generic container callback without extending the public ABI.
+8. Version and serialize the ordering operation and semantic policy in the
+   native-object cache key.
+9. Diagnose arguments/`with` clauses, associative/noncontainer/indirect or
+   read-only receivers, expression-result misuse, `shuffle`, unsupported
+   elements, and non-SystemVerilog use.
+10. Add frontend, elaboration, runtime, hierarchy/task/debugger,
+    interpreter, LLVM O0/O2, cache, duplicate/X/Z, and negative evidence,
+    then run the scheduled gate.
 
-Keep this batch to no-argument reductions over existing one-dimensional
-integral static, dynamic, queue, bounded-queue, and integral-key associative
-containers. `with` clauses, locator/ordering methods, multidimensional or
-aggregate/string elements, interfaces, cross-language transfer, and
-unrestricted reflection remain separate release-gate work.
+Keep this batch to no-argument deterministic ordering over existing
+one-dimensional integral static, dynamic, queue, and bounded-queue
+containers. `with` clauses, `shuffle`, associative ordering, locator methods,
+multidimensional or aggregate/string elements, interfaces, cross-language
+transfer, and unrestricted reflection remain separate release-gate work.
 
 ## Working cadence
 
@@ -374,8 +382,9 @@ bounded SystemVerilog text files`), followed by Batch 70 commit `2943a00`
 Batch 71 bounded-associative-array handoff, Batch 72 bounded-static-memory
 handoff, Batch 73 bounded-static-array-port handoff, Batch 74
 bounded-dynamic-container-port handoff, and the newest Batch 75 bounded
-unpacked-container-query handoff followed by the newest Batch 76 bounded
-assignment-pattern handoff. Treat the newest pushed commit on the same branch
+unpacked-container-query handoff, Batch 76 bounded assignment-pattern handoff,
+and the newest Batch 77 bounded reduction-method handoff. Treat the newest
+pushed commit on the same branch
 as the authoritative continuation and read this file from that checkout before
 doing work.
 
@@ -408,7 +417,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 77 below and return to focused tests until its tenth feature.
+resume Batch 78 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -426,13 +435,14 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin batch 77 at item 1 above. Do not rerun batch 76's full regression
-   unless a later change can affect container query, construction, or reduction
-   semantics,
+3. Begin batch 78 at item 1 above. Do not rerun batch 77's full regression
+   unless a later change can affect container query, construction, reduction,
+   or ordering semantics,
    object binding, runtime helpers, callable activation frames, debugger paths,
    cache identity, or execution.
-4. Keep batch-77 work within bounded no-argument SystemVerilog reduction
-   methods over supported one-dimensional integral containers.
+4. Keep batch-78 work within bounded no-argument SystemVerilog ordering
+   methods over supported one-dimensional integral static arrays, dynamic
+   arrays, and queues.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -445,8 +455,8 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 77 is in progress, extending the
-container tests as reduction-method coverage appears:
+Use a narrow test expression while batch 78 is in progress, extending the
+container tests as ordering-method coverage appears:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
@@ -454,7 +464,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 76.
+recorded 59-test inventories are clean after feature batch 77.
 
 Before declaring any row complete, consult:
 

@@ -582,6 +582,18 @@ void Lowerer::lower_container_method(
     const Statement& statement) {
   const auto& call = statement.value;
   if (call.kind == ExpressionKind::Call
+      && (call.text == ".sum"
+          || call.text == ".product"
+          || call.text == ".and"
+          || call.text == ".or"
+          || call.text == ".xor")) {
+    report(
+        "FSIM-ELAB-SVREDUCE-003",
+        "a container reduction result must be used in an expression",
+        call.span);
+    return;
+  }
+  if (call.kind == ExpressionKind::Call
       && (call.text == ".exists"
           || call.text == ".first"
           || call.text == ".last"

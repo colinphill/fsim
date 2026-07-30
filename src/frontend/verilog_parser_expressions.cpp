@@ -475,7 +475,15 @@ Expression VerilogParser::parse_primary() {
 Expression VerilogParser::parse_postfix(Expression expression) {
   for (;;) {
     if (match(TokenKind::Dot)) {
-      const auto member = expect_identifier("member name");
+      auto member = current();
+      if (member.kind == TokenKind::Identifier
+          && (member.text == "and"
+              || member.text == "or"
+              || member.text == "xor")) {
+        advance();
+      } else {
+        member = expect_identifier("member name");
+      }
       if (match(TokenKind::LeftParen)) {
         const auto receiver_span = expression.span;
         std::vector<Expression> operands;
@@ -490,6 +498,12 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             "')' after method arguments",
             "FSIM-SV-PARSE-028");
         const auto argument_count = operands.size() - 1U;
+        const bool reduction_method =
+            member.text == "sum"
+            || member.text == "product"
+            || member.text == "and"
+            || member.text == "or"
+            || member.text == "xor";
         const auto expected_arguments =
             member.text == "push_front"
                     || member.text == "push_back"
@@ -502,6 +516,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             : member.text == "size"
                     || member.text == "pop_front"
                     || member.text == "pop_back"
+                    || reduction_method
                 ? std::optional<std::size_t>{0}
             : member.text == "delete"
                 ? (argument_count <= 1
@@ -516,6 +531,20 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "container method '" + member.text + "' requires "
                   + std::to_string(*expected_arguments)
                   + " argument(s)");
+        }
+        if (reduction_method
+            && language_ != Language::SystemVerilog2017) {
+          error(
+              member,
+              "FSIM-SV-SEM-085",
+              "container reduction methods require SystemVerilog 2017");
+        }
+        if (reduction_method
+            && current().text == "with") {
+          error(
+              current(),
+              "FSIM-SV-UNSUPPORTED-039",
+              "container reduction with-clauses are not supported");
         }
         expression = Expression{
             ExpressionKind::Call,

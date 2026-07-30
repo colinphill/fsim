@@ -193,6 +193,27 @@ struct ContainerSize {
   ContainerRegisterId source{};
 };
 
+enum class ContainerReductionOperator : std::uint8_t {
+  sum,
+  product,
+  bit_and,
+  bit_or,
+  bit_xor,
+};
+
+struct ContainerReduction {
+  ContainerReductionOperator operation{
+      ContainerReductionOperator::sum};
+  RegisterId destination{};
+  ContainerRegisterId source{};
+};
+
+/// Reduce container elements in their canonical storage order. Empty
+/// containers use the SystemVerilog identity for the selected operation.
+[[nodiscard]] PackedLogic4 reduce_container_value(
+    const ContainerValue& value,
+    ContainerReductionOperator operation);
+
 struct ContainerRead {
   RegisterId destination{};
   ContainerRegisterId source{};
@@ -962,7 +983,8 @@ using Operation =
                  StringLength, StringIndex, StringReplaceByte,
                  ResizeContainer, CopyContainerRegister,
                  ReadContainerObject, WriteContainerObject,
-                 ContainerSize, ContainerRead, ContainerWrite,
+                 ContainerSize, ContainerReduction,
+                 ContainerRead, ContainerWrite,
                  DeleteContainer, ContainerExists, TraverseContainer,
                  LoadMemory, PushContainer, PopContainer, FileOpen,
                  FileClose, FileWriteLiteral, FileWriteFormatted,

@@ -728,6 +728,7 @@ therefore excluded.
 | `FSIM-SV-SEM-082` | error | An associative array uses a string index type. |
 | `FSIM-SV-SEM-083` | error | `$readmemb` or `$readmemh` is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-084` | error | An assignment pattern is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-085` | error | An unpacked-container reduction method is used outside SystemVerilog-2017. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -759,6 +760,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-036` | error | A bounded function uses an unpacked/default argument or a classic body argument declaration. |
 | `FSIM-SV-UNSUPPORTED-037` | error | A bounded task is static or omits the explicit `automatic` lifetime required by the current activation-frame implementation. |
 | `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
+| `FSIM-SV-UNSUPPORTED-039` | error | An unpacked-container reduction uses the unsupported `with` clause. |
 | `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
 
 ## Elaboration and SimIR lowering
@@ -1070,6 +1072,9 @@ therefore excluded.
 | `FSIM-ELAB-SVPATTERN-002` | error | A static pattern has the wrong element count or a dynamic pattern exceeds its container capacity. |
 | `FSIM-ELAB-SVPATTERN-003` | error | An associative pattern key is not locally constant and known or duplicates another converted key. |
 | `FSIM-ELAB-SVPATTERN-004` | error | A container assignment pattern mixes keyed and positional members or uses an unsupported `default` member. |
+| `FSIM-ELAB-SVREDUCE-001` | error | A container reduction is outside SystemVerilog-2017 or lacks a direct supported unpacked-container receiver. |
+| `FSIM-ELAB-SVREDUCE-002` | error | A container reduction method has one or more arguments. |
+| `FSIM-ELAB-SVREDUCE-003` | error | A result-producing container reduction is used as a standalone statement. |
 | `FSIM-ELAB-SVMEMORY-001` | error | `$readmemb` or `$readmemh` is lowered outside SystemVerilog-2017. |
 | `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
 | `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |

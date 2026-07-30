@@ -4193,6 +4193,52 @@ in 87.04 seconds, and Release passed all 59 tests in 34.08 seconds on
 2026-07-30. Batch 76 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Seventy-seventh feature batch — bounded SystemVerilog unpacked-container reductions
+
+SystemVerilog-2017 direct one-dimensional integral static arrays, dynamic
+arrays, unbounded and bounded queues, and integral-key associative arrays now
+accept no-argument `sum`, `product`, `and`, `or`, and `xor` methods in
+expressions. The parser retains each method as an explicit call HIR, including
+the keyword-named bitwise methods, and the expression type remains the exact
+packed element width, signedness, and two-/four-state domain.
+
+The runtime representation already stores static elements in declared
+left-to-right order, dynamic and queue elements in current index order, and
+associative elements paired with canonically sorted numeric keys. A shared
+reduction kernel scans that storage without a copy. Empty containers begin
+from an exact-width identity: zero for sum/or/xor, one for product, and all
+ones for and. Arithmetic accumulation reuses fixed-width common packed
+semantics and becomes all unknown after an X/Z operand; bitwise accumulation
+uses the common per-bit four-state truth tables.
+
+The new typed `ContainerReduction` SimIR operation carries only operator,
+destination register, and source container register. Validation constrains the
+result to the source element width and rejects invalid operation tags. The
+reference interpreter and LLVM backend share the runtime kernel through the
+existing generic container callback, so the append-only public native ABI did
+not gain a slot or address-bearing representation. Native-object schema 30
+serializes the selected reduction and changed semantics while preserving
+canonical container type, object, callable, source, and specialization
+identity.
+
+Positive evidence covers all five operations, exact signed byte and integer
+results, empty identities, arithmetic and bitwise X/Z propagation, static,
+dynamic, queue, bounded-queue, and associative storage, module objects,
+static/dynamic port aliases, generated hierarchy, automatic callable formals
+and locals after suspension, assertions, formatted output, debugger-visible
+stored results, interpreter, LLVM O0/O2, and cold/warm cache reuse. Stable
+frontend or elaboration diagnostics cover arguments, `with` clauses,
+noncontainer and indirect receivers, standalone result calls, and use outside
+SystemVerilog-2017; existing declaration diagnostics retain the bounded
+one-dimensional integral scope.
+
+The diagnostic catalog covers 1,166 production codes and the source gate
+covers 285 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 41.55 seconds, and Release passed all 59 tests in 14.05 seconds on
+2026-07-30. Batch 77 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

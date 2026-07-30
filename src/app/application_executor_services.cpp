@@ -578,6 +578,15 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                    std::get_if<runtime::simir::ContainerSize>(
                        &operation)) {
       *result_aval = registers.at(size->source).elements.size();
+    } else if (const auto* reduction =
+                   std::get_if<runtime::simir::ContainerReduction>(
+                       &operation)) {
+      const auto result = runtime::simir::reduce_container_value(
+          registers.at(reduction->source),
+          reduction->operation);
+      const auto word = result.low_word();
+      *result_aval = word.aval;
+      *result_bval = word.bval;
     } else if (const auto* read =
                    std::get_if<runtime::simir::ContainerRead>(
                        &operation)) {

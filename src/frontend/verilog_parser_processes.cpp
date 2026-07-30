@@ -1291,7 +1291,8 @@ std::optional<Statement> VerilogParser::parse_statement() {
       && contains_word(
           {"delete", "push_front", "push_back",
            "pop_front", "pop_back", "exists",
-           "first", "last", "next", "prev"},
+           "first", "last", "next", "prev",
+           "sum", "product", "and", "or", "xor"},
           current(2).text)) {
     const auto start = current();
     Statement statement;

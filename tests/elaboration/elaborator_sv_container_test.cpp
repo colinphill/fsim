@@ -67,9 +67,21 @@ module container_lowering #(
     key_t key;
     values = '{};
     assert ($size(values) == 0);
+    assert (values.sum() == 0);
+    assert (values.product() == 1);
+    assert (values.and() == -1);
+    assert (values.or() == 0);
+    assert (values.xor() == 0);
     values = '{7, 8};
+    assert (values.sum() == 15);
+    assert (values.product() == 56);
+    assert (values.and() == 0);
+    assert (values.or() == 15);
+    assert (values.xor() == 15);
     pending = '{1, 2};
     lookup = '{-1: 10, 3: 30};
+    assert (pending.sum() == 3);
+    assert (lookup.sum() == 40);
     fixed_down = '{8'h31, 8'h21, 8'h11};
     fixed_up = '{4'ha, 4'hb, 4'hc};
     assert (values[1] == 8);
@@ -153,6 +165,14 @@ endmodule
       [](const auto& operation) {
         return std::holds_alternative<TraverseContainer>(operation);
       }));
+  assert(
+      std::ranges::count_if(
+          process.operations,
+          [](const auto& operation) {
+            return std::holds_alternative<
+                ContainerReduction>(operation);
+          })
+      >= 12);
   const auto values =
       elaborated.design->container_objects()[0].id;
   const auto pending =
@@ -536,6 +556,8 @@ module container_invalid_lowering;
   initial begin
     lookup.push_back(1);
     result = lookup.sort();
+    result = result.sum();
+    lookup.sum();
     lookup[0] <= 1;
     dynamic.delete(0);
     fixed.delete();
@@ -553,6 +575,10 @@ endmodule
       rejected, "FSIM-ELAB-SVCONTAINER-003"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-008"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVREDUCE-001"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVREDUCE-003"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-013"));
   assert(has_diagnostic(

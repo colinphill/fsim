@@ -117,6 +117,12 @@ void ContainerOperationLowerer::lower(
   invoke(std::nullopt, std::nullopt, value.destination, "container.size");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerReduction& value) {
+  invoke(
+      std::nullopt, std::nullopt, value.destination,
+      "container.reduce");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerRead& value) {
   invoke(value.index, std::nullopt, value.destination, "container.read");
 }

@@ -662,6 +662,18 @@ temporary is complete does `CopyContainerRegister` replace the local or
 module-object value. No new SimIR operation, native callback, allocator
 identity, or address-bearing ABI is required.
 
+SystemVerilog direct unpacked-container `sum`, `product`, `and`, `or`, and
+`xor` methods lower to a typed `ContainerReduction` operation whose scalar
+result preserves the exact element width, state domain, and signedness.
+Container storage is already canonical: static arrays use declared order,
+dynamic arrays and queues use current index order, and associative elements
+are paired with sorted keys. The shared reduction kernel therefore scans that
+storage directly. Empty values start from the exact-width language identity;
+arithmetic uses the common unknown-propagating fixed-width kernel and bitwise
+methods use the common per-bit four-state truth tables. Native execution routes
+the operation through the existing generic container callback, so no ABI slot
+or address-bearing representation is added.
+
 `$onehot` and `$onehot0` lower to dedicated common reduction operators. They
 count exact `1` elements of the packed operand, ignore `X` and `Z` elements,
 and return a two-state bit indicating exactly one or at most one set element.

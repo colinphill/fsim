@@ -115,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v29";
+    "fsim-llvm-native-object-v30";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -225,7 +225,7 @@ void add_dynamic_index_key(
   }
   builder.add(
       "container-semantics",
-      "bounded-static-associative-v6-assignment-patterns");
+      "bounded-static-associative-v7-reductions");
   add_key_u64(
       builder,
       "container-entry-limit",
@@ -425,6 +425,14 @@ void add_dynamic_index_key(
             },
             [&](const runtime::simir::ContainerSize& value) {
               builder.add("operation", "ContainerSize");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const runtime::simir::ContainerReduction& value) {
+              builder.add("operation", "ContainerReduction");
+              add_key_u64(
+                  builder, "reduction",
+                  static_cast<std::uint64_t>(value.operation));
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "source", value.source);
             },

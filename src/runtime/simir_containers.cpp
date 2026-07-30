@@ -292,6 +292,45 @@ ContainerValue default_container_value(
   return result;
 }
 
+PackedLogic4 reduce_container_value(
+    const ContainerValue& value,
+    const ContainerReductionOperator operation) {
+  validate_container_value(value);
+  auto identity = std::uint64_t{0};
+  auto binary = BinaryOperator::add_unsigned;
+  switch (operation) {
+  case ContainerReductionOperator::sum:
+    binary = BinaryOperator::add_unsigned;
+    break;
+  case ContainerReductionOperator::product:
+    identity = 1;
+    binary = BinaryOperator::multiply_unsigned;
+    break;
+  case ContainerReductionOperator::bit_and:
+    identity =
+        value.type.element_width == 64
+            ? std::numeric_limits<std::uint64_t>::max()
+            : (UINT64_C(1) << value.type.element_width) - 1U;
+    binary = BinaryOperator::bit_and;
+    break;
+  case ContainerReductionOperator::bit_or:
+    binary = BinaryOperator::bit_or;
+    break;
+  case ContainerReductionOperator::bit_xor:
+    binary = BinaryOperator::bit_xor;
+    break;
+  default:
+    throw std::invalid_argument{
+        "invalid SimIR container reduction operator"};
+  }
+  auto result = PackedLogic4::from_aval_bval(
+      value.type.element_width, identity, 0);
+  for (const auto& element : value.elements) {
+    result = binary_value(binary, result, element);
+  }
+  return result;
+}
+
 void load_memory_text(
     ContainerValue& target,
     const std::string_view text,
@@ -588,6 +627,16 @@ void Interpreter::Impl::execute_container(
       process, operation.source).elements.size();
   get_register(process, operation.destination) =
       PackedLogic4::from_aval_bval(32, size, 0);
+  ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const ContainerReduction& operation) {
+  get_register(process, operation.destination) =
+      reduce_container_value(
+          get_container_register(process, operation.source),
+          operation.operation);
   ++process.pc;
 }
 

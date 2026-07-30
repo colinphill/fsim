@@ -331,6 +331,7 @@ void inspect_dynamic_port_aliases(
   debugger.execute({"show", "result"});
   debugger.execute({"show", "scores"});
   debugger.execute({"show", "observed_bits"});
+  debugger.execute({"show", "observed_sum"});
   assert(
       debugger_output.str().find("00100001")
           != std::string::npos
@@ -339,6 +340,10 @@ void inspect_dynamic_port_aliases(
       && debugger_output.str().find(
              "observed_bits = "
              "00000000000000000000000001000000")
+          != std::string::npos
+      && debugger_output.str().find(
+             "observed_sum = "
+             "00000000000000000000000001010011")
           != std::string::npos);
 }
 
@@ -385,6 +390,7 @@ module static_port_leaf #(
     assert ($dimensions(source) == 2);
     assert ($unpacked_dimensions(source) == 1);
     result = '{8'h10, 8'h20, 8'h30, 8'h40};
+    assert (result.sum() == 8'ha0);
     assert (result[LEFT] == 8'h10);
     assert (result[RIGHT] == 8'h40);
     assert (source[LEFT] == 8'h31);
@@ -406,12 +412,14 @@ module dynamic_port_leaf #(
     inout logic [15:0] scores[KEY],
     inout int work[]);
   int observed_bits;
+  int observed_sum;
   task automatic suspend_mutate(
       inout int target[],
       inout byte queue_target[$]);
     int scratch[];
     #1;
     scratch = '{99};
+    assert (scratch.sum() == 99);
     target = '{41, 42};
     queue_target = '{8'h21, 8'h22};
     assert ($left(target) == 0);
@@ -440,19 +448,28 @@ module dynamic_port_leaf #(
     assert ($bits(result) == 0);
     assert (source.size() == 2);
     assert (source[0] == 11);
+    assert (source.sum() == 23);
     bounded = '{};
     assert ($size(bounded) == 0);
     bounded = '{1'b0, 1'b1};
     scores = '{};
     assert ($size(scores) == 0);
+    assert (scores.sum() == 0);
+    assert (scores.product() == 1);
+    assert (scores.and() == 16'hffff);
+    assert (scores.or() == 0);
+    assert (scores.xor() == 0);
     scores = '{-1: 16'h1234, 2: 16'h5678};
+    assert (scores.sum() == 16'h68ac);
     assert (scores.first(cursor) == 1);
     assert (cursor == -1);
     assert (scores.next(cursor) == 1);
     assert (cursor == 2);
     suspend_mutate(work, result);
     observed_bits = $bits(work);
+    observed_sum = work.sum();
     assert (observed_bits == 64);
+    assert (observed_sum == 83);
     assert ($right(work) == 1);
     assert ($high(work) == 1);
     assert ($size(bounded) == 2);
@@ -519,9 +536,11 @@ module container_top;
     assert ($left(source) == 0);
     assert ($right(source) == 1);
     assert ($bits(source) == 16);
+    assert (source.sum() == 6);
     return $size(source);
   endfunction
   function automatic int lookup_count(input byte source[key_t]);
+    assert (source.sum() == 40);
     return source.size();
   endfunction
   function automatic int isolated_count(input byte source[key_t]);
@@ -553,6 +572,11 @@ module container_top;
     dynamic_source = '{11, 12};
     binary = '{8'h01, 8'b10z1, 8'h03};
     assert ($isunknown(binary[0]));
+    assert ($isunknown(binary.sum()));
+    assert ($isunknown(binary.product()));
+    assert (binary.and() == 8'h01);
+    assert (binary.or() == 8'h0b);
+    assert ($isunknown(binary.xor()));
     $readmemh("image.hex", memory);
     $readmemb("image.bin", binary, -1, 1);
     assert (memory[0] == 8'ha5);
@@ -569,11 +593,27 @@ module container_top;
     assert ($increment(binary) == -1);
     assert ($size(binary) == 3);
     assert ($bits(binary) == 24);
+    values = '{};
+    assert (values.sum() == 0);
+    assert (values.product() == 1);
+    assert (values.and() == -1);
+    assert (values.or() == 0);
+    assert (values.xor() == 0);
     values = '{7, -8};
     assert (values[1] == -8);
+    assert (values.sum() == -1);
+    assert (values.product() == -56);
+    assert (values.and() == 0);
+    assert (values.or() == -1);
+    assert (values.xor() == -1);
     lookup = '{};
     assert (lookup.size() == 0);
     lookup = '{3: 30, -1: 10};
+    assert (lookup.sum() == 40);
+    assert (lookup.product() == 44);
+    assert (lookup.and() == 10);
+    assert (lookup.or() == 30);
+    assert (lookup.xor() == 20);
     assert (lookup_count(lookup) == 2);
     assert (isolated_count(lookup) == 1);
     assert (lookup.size() == 2);
@@ -590,8 +630,18 @@ module container_top;
     mutate_lookup(lookup);
     pending = '{};
     assert (pending.size() == 0);
+    assert (pending.sum() == 0);
+    assert (pending.product() == 1);
+    assert (pending.and() == 8'hff);
+    assert (pending.or() == 0);
+    assert (pending.xor() == 0);
     pending = '{1, 2};
     mutate(pending);
+    assert (pending.sum() == 6);
+    assert (pending.product() == 8);
+    assert (pending.and() == 0);
+    assert (pending.or() == 6);
+    assert (pending.xor() == 6);
     mutate_memory(memory);
     assert (port_result[3] == 8'h32);
     assert (port_result[0] == 8'h06);
@@ -619,9 +669,9 @@ module container_top;
     assert ($bits(dynamic_work) == 64);
     assert ($dimensions(dynamic_work) == 2);
     assert ($unpacked_dimensions(dynamic_work) == 1);
-    $display("%0d:%0d:%0d:%0d",
+    $display("%0d:%0d:%0d:%0d:%0d",
              values[0], pending[0], count(pending),
-             $size(dynamic_result));
+             $size(dynamic_result), pending.sum());
   end
 endmodule
 )";
@@ -642,7 +692,7 @@ endmodule
         && reference.result.time == 3
         && reference.output
             == (std::vector<std::string>{
-                "7", ":2", ":2", ":2"}));
+                "7", ":2", ":2", ":2", ":6"}));
     assert(reference.output == compiled.output);
     assert(reference.values == compiled.values);
     assert(reference.pending == compiled.pending);

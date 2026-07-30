@@ -603,6 +603,32 @@ validate_process(const Process &process,
               record_definition(operation.destination, index);
               constrain_width(operation.destination, 32U, index);
             },
+            [&](const ContainerReduction& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.source, index, "source");
+              switch (operation.operation) {
+              case ContainerReductionOperator::sum:
+              case ContainerReductionOperator::product:
+              case ContainerReductionOperator::bit_and:
+              case ContainerReductionOperator::bit_or:
+              case ContainerReductionOperator::bit_xor:
+                break;
+              default:
+                reject(
+                    process, index,
+                    "ContainerReduction has an invalid operator");
+              }
+              record_definition(operation.destination, index);
+              if (operation.source
+                  < process.container_register_types.size()) {
+                constrain_width(
+                    operation.destination,
+                    process.container_register_types[
+                        operation.source].element_width,
+                    index);
+              }
+            },
             [&](const ContainerRead& operation) {
               result.uses_containers = true;
               validate_container_register(

@@ -39,6 +39,71 @@ void test_simir_containers() {
   queue_type.element_width = 8;
   queue_type.queue = true;
   queue_type.maximum_elements = 3;
+  const ContainerValue reduction_values{
+      queue_type,
+      {value(8, 3), value(8, 5), value(8, 7)},
+      {}};
+  require(
+      reduce_container_value(
+          reduction_values,
+          ContainerReductionOperator::sum)
+              == value(8, 15)
+          && reduce_container_value(
+                 reduction_values,
+                 ContainerReductionOperator::product)
+              == value(8, 105)
+          && reduce_container_value(
+                 reduction_values,
+                 ContainerReductionOperator::bit_and)
+              == value(8, 1)
+          && reduce_container_value(
+                 reduction_values,
+                 ContainerReductionOperator::bit_or)
+              == value(8, 7)
+          && reduce_container_value(
+                 reduction_values,
+                 ContainerReductionOperator::bit_xor)
+              == value(8, 1),
+      "container reductions retain exact element width and values");
+  const ContainerValue empty_values{queue_type, {}, {}};
+  require(
+      reduce_container_value(
+          empty_values, ContainerReductionOperator::sum)
+              == value(8, 0)
+          && reduce_container_value(
+                 empty_values,
+                 ContainerReductionOperator::product)
+              == value(8, 1)
+          && reduce_container_value(
+                 empty_values,
+                 ContainerReductionOperator::bit_and)
+              == value(8, 0xff)
+          && reduce_container_value(
+                 empty_values,
+                 ContainerReductionOperator::bit_or)
+              == value(8, 0)
+          && reduce_container_value(
+                 empty_values,
+                 ContainerReductionOperator::bit_xor)
+              == value(8, 0),
+      "empty container reductions use SystemVerilog identities");
+  const ContainerValue unknown_values{
+      queue_type,
+      {value(8, 3),
+       PackedLogic4::from_aval_bval(8, 3, 2)},
+      {}};
+  require(
+      reduce_container_value(
+          unknown_values,
+          ContainerReductionOperator::sum)
+              .to_msb_string()
+          == "XXXXXXXX"
+          && reduce_container_value(
+                 unknown_values,
+                 ContainerReductionOperator::bit_and)
+                 .to_msb_string()
+              == "000000X1",
+      "arithmetic and bitwise reductions propagate four-state values");
   Interpreter interpreter;
   const auto array_object = interpreter.add_container_object(
       {"array", ContainerValue{array_type, {}, {}}});

@@ -47,6 +47,31 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
 
+        const bool container_reduction =
+            expression.kind == ExpressionKind::Call
+            && (expression.text == ".sum"
+                || expression.text == ".product"
+                || expression.text == ".and"
+                || expression.text == ".or"
+                || expression.text == ".xor");
+        if (container_reduction
+            && (language_
+                    != frontend::Language::SystemVerilog2017
+                || expression.operands.size() != 1
+                || !is_container_expression(
+                    expression.operands.front()))) {
+            report(
+                expression.operands.size() != 1
+                    ? "FSIM-ELAB-SVREDUCE-002"
+                    : "FSIM-ELAB-SVREDUCE-001",
+                expression.operands.size() != 1
+                    ? "container reduction methods take no arguments"
+                    : "container reduction methods require a direct "
+                      "SystemVerilog unpacked-container receiver",
+                expression.span);
+            return std::nullopt;
+        }
+
         if ((expression.kind == ExpressionKind::Call
              && (expression.text == ".size"
                  || expression.text == ".exists"
@@ -55,7 +80,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                  || expression.text == ".next"
                  || expression.text == ".prev"
                  || expression.text == ".pop_front"
-                 || expression.text == ".pop_back")
+                 || expression.text == ".pop_back"
+                 || container_reduction)
              && !expression.operands.empty()
              && is_container_expression(
                  expression.operands.front()))
@@ -113,6 +139,29 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 container_type(*type, expression.span);
             if (!runtime_type) {
                 return std::nullopt;
+            }
+            if (container_reduction) {
+                auto operation =
+                    ContainerReductionOperator::sum;
+                if (expression.text == ".product") {
+                    operation =
+                        ContainerReductionOperator::product;
+                } else if (expression.text == ".and") {
+                    operation =
+                        ContainerReductionOperator::bit_and;
+                } else if (expression.text == ".or") {
+                    operation =
+                        ContainerReductionOperator::bit_or;
+                } else if (expression.text == ".xor") {
+                    operation =
+                        ContainerReductionOperator::bit_xor;
+                }
+                const auto destination =
+                    allocate_register(*width, type->domain);
+                process_.operations.emplace_back(
+                    ContainerReduction{
+                        operation, destination, *source});
+                return destination;
             }
             if (expression.kind == ExpressionKind::Call
                 && (expression.text == ".exists"

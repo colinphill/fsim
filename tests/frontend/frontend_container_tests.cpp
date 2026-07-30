@@ -78,6 +78,11 @@ module containers;
     assert ($bits(pending) == 8);
     assert ($dimensions(lookup) == 2);
     assert ($unpacked_dimensions(image) == 1);
+    assert (values.sum() == 6);
+    assert (values.product() == 6);
+    assert (pending.and() == 0);
+    assert (pending.or() == 8'hbb);
+    assert (pending.xor() == 8'h11);
   end
 endmodule
 
@@ -221,6 +226,13 @@ endmodule
           && has_query("$unpacked_dimensions"),
       "container query system functions remain explicit typed calls");
   require(
+      has_query(".sum")
+          && has_query(".product")
+          && has_query(".and")
+          && has_query(".or")
+          && has_query(".xor"),
+      "container reduction methods remain explicit no-argument calls");
+  require(
       std::ranges::count_if(
           query_statements,
           [](const auto& statement) {
@@ -355,6 +367,7 @@ module container_invalid;
   initial begin
     queue.push_back();
     queue.delete(1, 2);
+    queue.sum(1);
   end
 endmodule
 )",
@@ -367,6 +380,18 @@ endmodule
           && has_code(invalid, "FSIM-SV-SEM-082")
           && has_code(invalid, "FSIM-SV-SEM-081"),
       "unsupported dimensions, elements, and method arities diagnose");
+
+  const auto unsupported_reduction = parse_text(
+      "container-reduction-with.sv",
+      "module m; int values[]; int result; "
+      "initial result = values.sum() with (item); endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !unsupported_reduction.ok()
+          && has_code(
+              unsupported_reduction,
+              "FSIM-SV-UNSUPPORTED-039"),
+      "container reduction with-clauses diagnose explicitly");
   require(
       has_code(invalid, "FSIM-SV-UNSUPPORTED-037")
           && has_code(invalid, "FSIM-SV-UNSUPPORTED-038"),
@@ -385,13 +410,15 @@ endmodule
   const auto verilog = parse_text(
       "container-verilog.v",
       "module m; integer values[]; integer value; "
-      "initial value = '{1}; endmodule",
+      "initial begin value = '{1}; value = values.sum(); end "
+      "endmodule",
       Language::Verilog2005);
   require(
       !verilog.ok()
           && has_code(verilog, "FSIM-SV-SEM-077")
-          && has_code(verilog, "FSIM-SV-SEM-084"),
-      "containers and assignment patterns require SystemVerilog-2017");
+          && has_code(verilog, "FSIM-SV-SEM-084")
+          && has_code(verilog, "FSIM-SV-SEM-085"),
+      "containers, patterns, and reductions require SystemVerilog-2017");
 
   const auto malformed_pattern = parse_text(
       "container-pattern-invalid.sv",

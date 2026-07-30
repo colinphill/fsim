@@ -17,6 +17,22 @@ using namespace elaboration_detail;
         if (expression.kind == ExpressionKind::Aggregate) {
             return std::nullopt;
         }
+        if (expression.kind == ExpressionKind::Call
+            && expression.operands.size() == 1
+            && (expression.text == ".sum"
+                || expression.text == ".product"
+                || expression.text == ".and"
+                || expression.text == ".or"
+                || expression.text == ".xor")
+            && expression.operands.front().kind
+                == ExpressionKind::Identifier) {
+            const auto* type =
+                object_type(expression.operands.front().text);
+            return type != nullptr
+                    && type->systemverilog_container
+                ? type->width()
+                : std::nullopt;
+        }
         if (language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
             && expression.operands.size() == 1
@@ -429,6 +445,21 @@ using namespace elaboration_detail;
             }
             return is_signed_expression(expression.operands[0]);
         case ExpressionKind::Call:
+            if (expression.operands.size() == 1
+                && (expression.text == ".sum"
+                    || expression.text == ".product"
+                    || expression.text == ".and"
+                    || expression.text == ".or"
+                    || expression.text == ".xor")
+                && expression.operands.front().kind
+                    == ExpressionKind::Identifier) {
+                const auto* type =
+                    object_type(expression.operands.front().text);
+                if (type != nullptr
+                    && type->systemverilog_container) {
+                    return type->is_signed;
+                }
+            }
             if (const auto* function =
                     visible_function(expression.text)) {
                 return function->return_type.is_signed;
