@@ -10,9 +10,20 @@ VerilogParser::VerilogParser(LexResult lexed, bool system_verilog)
                                : Language::Verilog2005),
       keyword_set_(
           system_verilog ? KeywordSet::SystemVerilog2017
-                         : KeywordSet::Verilog2005) {}
+                         : KeywordSet::Verilog2005) {
+  trace_scoped_locals_ =
+      !tokens_.empty()
+      && physical_source(tokens_.front().span)
+          .ends_with("scoped_local.sv");
+  if (trace_scoped_locals_) {
+    std::cerr << "scoped_locals parser: constructed\n";
+  }
+}
 
 ParseResult VerilogParser::run() {
+  if (trace_scoped_locals_) {
+    std::cerr << "scoped_locals parser: run entered\n";
+  }
   ParsedDesign design;
   while (!at_end()) {
     if (time_declaration_start()) {
@@ -20,7 +31,13 @@ ParseResult VerilogParser::run() {
       parse_time_declaration(nullptr, declaration);
     } else if (match_keyword("module")) {
       compilation_unit_has_design_item_ = true;
+      if (trace_scoped_locals_) {
+        std::cerr << "scoped_locals parser: parsing module\n";
+      }
       design.units.push_back(parse_module(previous()));
+      if (trace_scoped_locals_) {
+        std::cerr << "scoped_locals parser: module stored\n";
+      }
     } else if (match_keyword("package")) {
       compilation_unit_has_design_item_ = true;
       auto package = parse_package(previous());
