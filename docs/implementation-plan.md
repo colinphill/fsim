@@ -448,8 +448,10 @@ and test:
 - run the smallest affected Windows-sensitive test during development, then
   require the full Linux/Windows matrix at the ten-feature regression boundary
   and for CI/workflow changes;
-- use at least eight parallel workers for every project, test-support, and
-  fetched-dependency build, including focused interim builds; and
+- use at least eight parallel workers for every local project, test-support,
+  and fetched-dependency build, including focused interim builds; GitHub
+  Actions is the explicit exception and uses two workers to avoid hosted-VM
+  memory pressure; and
 - at every tenth numbered feature batch, inspect the pushed GitHub Actions
   handoff, fix all actionable failures, rerun the affected local gates, push
   the repair, and confirm the replacement checks before continuing.
@@ -3846,7 +3848,9 @@ at the then-remote batch-68 handoff. Its LLVM and Windows jobs passed, while
 non-LLVM GCC Debug, Release, and ASan/UBSan failed at build time because two
 cache-key helpers were compiled without the `FSIM_HAS_LLVM` uses that consume
 them. The local repair conditionally compiles those helpers and changes every
-workflow build from two to eight parallel workers. The formerly failing
+workflow build from two to eight parallel workers. That workflow parallelism
+was subsequently restored to two after hosted Ubuntu runners shut down under
+the higher-memory build load. The formerly failing
 targets and their focused tests pass locally under non-LLVM Debug, Release,
 and ASan/UBSan plus exact-LLVM Debug and Release; replacement CI confirmation
 initially exposed four additional cache-key helpers with the same warning in

@@ -21,7 +21,8 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
-  two helpers and raised every workflow build from two to eight workers;
+  two helpers and initially raised every workflow build from two to eight
+  workers;
   replacement run `30553184827` exposed four more helpers with the same
   non-LLVM warning. All six are now guarded. The next replacement run
   `30553851223` reached the full Windows tests and exposed host newline
@@ -291,10 +292,11 @@ containers, and unrestricted heap behavior remain separate release-gate work.
 - Implement ten related features before the next full regression.
 - Use focused warnings-as-errors builds and targeted tests after each coherent
   change; do not run the full suite for every individual feature.
-- Use at least eight parallel workers for every project, test-support, and
-  fetched-dependency build, including interim builds. Prefer
-  `cmake --build <tree> --parallel 8` (or a larger value) and never reduce an
-  interim build to one or two workers.
+- Use at least eight parallel workers for every local project, test-support,
+  and fetched-dependency build, including interim builds. Prefer
+  `cmake --build <tree> --parallel 8` (or a larger value). GitHub Actions is
+  the explicit exception: its hosted-VM builds use `--parallel 2` to avoid
+  memory pressure.
 - At the tenth feature, run the exact LLVM 22.1.8 Debug and Release regression
   appropriate to the batch, update the plan/support/matrix documents, commit,
   and push the branch. A feature batch is not handed off as complete until its
