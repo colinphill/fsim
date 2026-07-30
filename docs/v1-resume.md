@@ -9,8 +9,9 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-68 cadence checkpoint; the
-  preceding feature-batch-67 implementation checkpoint is `2923a1e`.
+- Implementation baseline: completed feature-batch-68 implementation
+  checkpoint `0a3c54f`; the preceding feature-batch-67 implementation
+  checkpoint is `2923a1e`.
 - The source-size refactor is complete: all 270 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 1,999 lines.
@@ -303,8 +304,9 @@ git log -5 --oneline --decorate
 ```
 
 History must contain Batch 67 commit `2923a1e` (`feat: add VHDL component port
-defaults`) and the later Batch 68 runtime-string implementation. Treat a newer
-pushed commit on the same branch as the authoritative
+defaults`) and Batch 68 commit `0a3c54f` (`feat: add bounded SystemVerilog
+runtime strings`). Treat a newer pushed commit on the same branch as the
+authoritative
 continuation and read this file from that checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
