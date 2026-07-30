@@ -723,7 +723,7 @@ using namespace elaboration_detail;
             if (port.type.systemverilog_container) {
                 if (!local_container_objects.contains(
                         port.name)) {
-                    (void)add_owned_static_port(
+                    (void)add_owned_container_port(
                         port,
                         path,
                         local_container_objects,

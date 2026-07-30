@@ -30,6 +30,10 @@ struct Capture {
   fsim::runtime::simir::ContainerValue binary;
   fsim::runtime::simir::ContainerValue port_result;
   fsim::runtime::simir::ContainerValue port_shared;
+  fsim::runtime::simir::ContainerValue dynamic_result;
+  fsim::runtime::simir::ContainerValue dynamic_bounded;
+  fsim::runtime::simir::ContainerValue dynamic_scores;
+  fsim::runtime::simir::ContainerValue dynamic_work;
   std::vector<std::string> output;
   std::size_t compiled{};
 };
@@ -80,7 +84,7 @@ Capture run_once(
       });
   capture.result = simulation.run();
   const auto& objects = simulation.design().container_objects();
-  assert(objects.size() == 8);
+  assert(objects.size() == 13);
   capture.values =
       simulation.read_container_object(objects[0].id);
   capture.pending =
@@ -102,6 +106,29 @@ Capture run_once(
       simulation.read_container_object(*port_result);
   capture.port_shared =
       simulation.read_container_object(*port_shared);
+  const auto dynamic_result =
+      simulation.design().find_container(
+          "container_top.dynamic_result");
+  const auto dynamic_bounded =
+      simulation.design().find_container(
+          "container_top.dynamic_bounded");
+  const auto dynamic_scores =
+      simulation.design().find_container(
+          "container_top.dynamic_scores");
+  const auto dynamic_work =
+      simulation.design().find_container(
+          "container_top.dynamic_work");
+  assert(
+      dynamic_result && dynamic_bounded
+      && dynamic_scores && dynamic_work);
+  capture.dynamic_result =
+      simulation.read_container_object(*dynamic_result);
+  capture.dynamic_bounded =
+      simulation.read_container_object(*dynamic_bounded);
+  capture.dynamic_scores =
+      simulation.read_container_object(*dynamic_scores);
+  capture.dynamic_work =
+      simulation.read_container_object(*dynamic_work);
   return capture;
 }
 
@@ -271,6 +298,45 @@ void inspect_static_port_aliases(
           != std::string::npos);
 }
 
+void inspect_dynamic_port_aliases(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  const auto parent =
+      simulation.design().find_container(
+          "container_top.dynamic_work");
+  const auto child =
+      simulation.design().find_container(
+          "container_top.dynamic_mid.generated.child.work");
+  assert(parent && child && *parent == *child);
+  std::ostringstream debugger_output;
+  std::ostringstream debugger_error;
+  fsim::app::DebuggerControl debugger{
+      simulation, debugger_output, debugger_error};
+  debugger.execute({"scope", "dynamic_mid.generated.child"});
+  debugger.execute({"show", "source"});
+  assert(
+      debugger_error.str().empty()
+      && debugger_output.str().find(
+             "container_top.dynamic_mid.generated.child.source = []")
+          != std::string::npos);
+  const auto result = simulation.run();
+  assert(
+      result.status == fsim::runtime::RunStatus::completed
+      && result.time == 3);
+  debugger.execute({"show", "result"});
+  debugger.execute({"show", "scores"});
+  assert(
+      debugger_output.str().find("00100001")
+          != std::string::npos
+      && debugger_output.str().find("0001001000110100")
+          != std::string::npos);
+}
+
 }  // namespace
 
 int main() {
@@ -314,8 +380,65 @@ module static_port_leaf #(
   end
 endmodule
 
+module dynamic_port_leaf #(
+    parameter int LIMIT = 3,
+    parameter type KEY = logic signed [3:0]) (
+    input int source[],
+    output byte result[$],
+    inout bit bounded[$:LIMIT],
+    inout logic [15:0] scores[KEY],
+    inout int work[]);
+  task automatic suspend_mutate(
+      inout int target[],
+      inout byte queue_target[$]);
+    #1;
+    target = new[2];
+    target[0] = 41;
+    target[1] = 42;
+    queue_target.push_back(8'h21);
+    queue_target.push_back(8'h22);
+  endtask
+  initial begin
+    KEY cursor;
+    #1;
+    assert (source.size() == 2);
+    assert (source[0] == 11);
+    bounded.push_back(1);
+    bounded.push_front(0);
+    scores[-1] = 16'h1234;
+    scores[2] = 16'h5678;
+    assert (scores.first(cursor) == 1);
+    assert (cursor == -1);
+    assert (scores.next(cursor) == 1);
+    assert (cursor == 2);
+    suspend_mutate(work, result);
+  end
+endmodule
+
+module dynamic_port_mid #(
+    parameter int MAXIMUM = 3,
+    parameter type INDEX = logic signed [3:0]) (
+    input int source[],
+    output byte result[$],
+    inout bit bounded[$:MAXIMUM],
+    inout logic [15:0] scores[INDEX],
+    inout int work[]);
+  generate
+    if (MAXIMUM == 3) begin : generated
+      dynamic_port_leaf #(
+          .LIMIT(MAXIMUM), .KEY(INDEX)) child(
+          .source(source),
+          .result(result),
+          .bounded(bounded),
+          .scores(scores),
+          .work(work));
+    end
+  endgenerate
+endmodule
+
 module container_top;
   typedef logic signed [31:0] key_t;
+  typedef logic signed [3:0] dynamic_key_t;
   int values[];
   byte pending[$:2];
   byte lookup[key_t];
@@ -324,10 +447,22 @@ module container_top;
   logic [7:0] port_source[3:0];
   logic [7:0] port_result[3:0];
   bit [3:0] port_shared[-1:1];
+  int dynamic_source[];
+  byte dynamic_result[$];
+  bit dynamic_bounded[$:3];
+  logic [15:0] dynamic_scores[dynamic_key_t];
+  int dynamic_work[];
   static_port_leaf port_child(
       .source(port_source),
       .result(port_result),
       .shared(port_shared));
+  dynamic_port_mid #(
+      .MAXIMUM(3), .INDEX(dynamic_key_t)) dynamic_mid(
+      .source(dynamic_source),
+      .result(dynamic_result),
+      .bounded(dynamic_bounded),
+      .scores(dynamic_scores),
+      .work(dynamic_work));
   function automatic int count(input byte source[$:2]);
     return source.size();
   endfunction
@@ -360,6 +495,9 @@ module container_top;
     key_t key;
     port_source[3] = 8'h31;
     port_source[0] = 8'h04;
+    dynamic_source = new[2];
+    dynamic_source[0] = 11;
+    dynamic_source[1] = 12;
     $readmemh("image.hex", memory);
     $readmemb("image.bin", binary, -1, 1);
     assert (memory[0] == 8'ha5);
@@ -396,6 +534,18 @@ module container_top;
     assert (port_shared[-1] == 4'ha);
     assert (port_shared[0] == 0);
     assert (port_shared[1] == 4'hc);
+    assert (dynamic_result.size() == 2);
+    assert (dynamic_result[0] == 8'h21);
+    assert (dynamic_result[1] == 8'h22);
+    assert (dynamic_bounded.size() == 2);
+    assert (dynamic_bounded[0] == 0);
+    assert (dynamic_bounded[1] == 1);
+    assert (dynamic_scores.size() == 2);
+    assert (dynamic_scores[-1] == 16'h1234);
+    assert (dynamic_scores[2] == 16'h5678);
+    assert (dynamic_work.size() == 2);
+    assert (dynamic_work[0] == 41);
+    assert (dynamic_work[1] == 42);
     $display("%0d:%0d:%0d",
              values[0], pending[0], count(pending));
   end
@@ -426,6 +576,11 @@ endmodule
     assert(reference.binary == compiled.binary);
     assert(reference.port_result == compiled.port_result);
     assert(reference.port_shared == compiled.port_shared);
+    assert(reference.dynamic_result == compiled.dynamic_result);
+    assert(
+        reference.dynamic_bounded == compiled.dynamic_bounded);
+    assert(reference.dynamic_scores == compiled.dynamic_scores);
+    assert(reference.dynamic_work == compiled.dynamic_work);
     assert(
         compiled.pending.elements.size() == 2
         && compiled.pending.elements[0].low_word().aval == 2
@@ -468,8 +623,26 @@ endmodule
             == 0
         && compiled.port_shared.elements[2].low_word().aval
             == 0xc);
+    assert(
+        compiled.dynamic_result.elements.size() == 2
+        && compiled.dynamic_result.elements[0].low_word().aval
+            == 0x21
+        && compiled.dynamic_result.elements[1].low_word().aval
+            == 0x22
+        && !compiled.dynamic_result.type.maximum_elements);
+    assert(
+        compiled.dynamic_bounded.type.maximum_elements
+        && *compiled.dynamic_bounded.type.maximum_elements == 4
+        && compiled.dynamic_bounded.elements.size() == 2
+        && compiled.dynamic_scores.keys.size() == 2
+        && compiled.dynamic_scores.type.index_width == 4
+        && compiled.dynamic_work.elements.size() == 2
+        && compiled.dynamic_work.elements[0].low_word().aval
+            == 41
+        && compiled.dynamic_work.elements[1].low_word().aval
+            == 42);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled == 2);
+    assert(compiled.compiled == 3);
 #endif
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);
@@ -482,6 +655,10 @@ endmodule
     inspect_static_port_aliases(
         config, fsim::app::SimulationEngine::interpreter);
     inspect_static_port_aliases(
+        config, fsim::app::SimulationEngine::compiled);
+    inspect_dynamic_port_aliases(
+        config, fsim::app::SimulationEngine::interpreter);
+    inspect_dynamic_port_aliases(
         config, fsim::app::SimulationEngine::compiled);
   }
 }

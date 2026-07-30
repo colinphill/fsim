@@ -60,8 +60,17 @@ std::optional<ContainerType> Lowerer::container_type(
     result.signed_indices = index_type->is_signed;
   }
   if (type.systemverilog_container->queue_maximum) {
-    const auto maximum_index = constant_index(
-        *type.systemverilog_container->queue_maximum);
+    const auto& maximum_expression =
+        *type.systemverilog_container->queue_maximum;
+    auto maximum_index = constant_index(maximum_expression);
+    if (!maximum_index) {
+      std::string error;
+      const auto value =
+          evaluate_systemverilog_constant_expression(
+              maximum_expression, {}, {}, error);
+      maximum_index =
+          value ? value->integer_value() : std::nullopt;
+    }
     if (!maximum_index || *maximum_index < 0
         || *maximum_index >= static_cast<std::int64_t>(
             maximum_container_elements)) {
@@ -218,7 +227,7 @@ void Lowerer::lower_container_method(
           receiver.text)) {
     report(
         "FSIM-ELAB-SVPORT-009",
-        "an input static-array port is read-only within its module",
+        "an input container port is read-only within its module",
         receiver.span);
     return;
   }

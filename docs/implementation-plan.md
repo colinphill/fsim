@@ -4028,6 +4028,59 @@ in 75.86 seconds, and Release passed all 59 tests in 33.93 seconds on
 2026-07-30. Batch 73 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Seventy-fourth feature batch — bounded SystemVerilog dynamic-container ports
+
+SystemVerilog-2017 module headers now retain dynamic arrays, unbounded and
+bounded queues, and integral-key associative arrays as typed ANSI ports.
+Basic non-ANSI body declarations refine matching header placeholders without
+becoming module variables. The existing one-dimensional and integral-element
+limits remain common to local objects, callable formals, and module ports.
+
+Port specialization preserves the exact element width, two-/four-state domain,
+signedness, dynamic/queue/associative kind, optional bounded-queue maximum,
+and associative index width/domain/signedness. Value-parameter queue limits
+and named type-parameter index aliases forward through nested independently
+parameterized modules. Formal and actual runtime profiles must match exactly;
+there is no implicit kind, bound, state, width, or signedness conversion.
+
+Direct same-language whole-container actuals reuse the opaque object-ID and
+hierarchy-path aliasing introduced for static memories. Input formals are
+read-only aliases. Output and inout formals are deterministic mutable aliases
+for whole-value assignment, allocation/resizing, element mutation, queue
+insertion/deletion, associative insertion/deletion/traversal, and automatic
+task copy-out. Nested pass-through output/inout paths remain legal while
+independent sibling drivers are diagnosed.
+
+Bounded-queue limit lowering now accepts the complete specialized typed
+constant form rather than only simple decimal syntax. Associative reads,
+writes, and `exists` resize integral indices to the exact resolved index width,
+closing the non-32-bit named-index execution gap exposed by the hierarchy
+fixture. Four-bit signed keys execute in canonical numeric order through both
+the interpreter and native backend.
+
+Debugger scope discovery and `show` expose dynamic-container formals at every
+nested/generated alias path while keeping their parent object IDs opaque.
+Native-object schema 27 records the dynamic port-alias semantics and exact
+queue/index profiles without changing the append-only runtime callback ABI.
+The application fixture executes a parameterized generated hierarchy through
+interpreter and LLVM O0/O2, including input reads, bounded-queue and
+associative traversal, output/inout mutation, a suspending automatic task,
+cold/warm cache reuse, debugger aliases, and exact final parent objects with no
+process fallback.
+
+Negative evidence covers expressions/selections, missing actuals, kind,
+element, queue-bound, and associative-index mismatches, input allocation or
+descendant mutation, independent multiple drivers, and explicit mixed-language
+transfer. Frontend evidence covers all four dynamic kinds in ANSI and basic
+non-ANSI declarations.
+
+The diagnostic catalog covers 1,150 production codes and the source gate
+covers 285 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 78.04 seconds, and Release passed all 59 tests in 35.05 seconds on
+2026-07-30. Batch 74 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

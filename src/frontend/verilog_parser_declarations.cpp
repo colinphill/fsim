@@ -128,17 +128,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
             "frontend slice");
       }
       if (at(TokenKind::LeftBracket)) {
-        const auto dimension = current();
         (void)parse_optional_container_dimension(declaration.type);
-        if (declaration.type.systemverilog_container
-            && declaration.type.systemverilog_container->kind
-                != SystemVerilogContainerKind::StaticArray) {
-          error(
-              dimension,
-              "FSIM-SV-SEM-084",
-              "module container ports support only one-dimensional "
-              "static unpacked arrays");
-        }
       }
       const auto duplicate = std::find_if(
           unit.ports.begin(),
@@ -921,14 +911,6 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         || declaration_type.systemverilog_container) {
       if (declaration_type.systemverilog_container
           && spec.direction != PortDirection::Unknown) {
-        if (declaration_type.systemverilog_container->kind
-            != SystemVerilogContainerKind::StaticArray) {
-          error(
-              name,
-              "FSIM-SV-SEM-084",
-              "module container ports support only one-dimensional "
-              "static unpacked arrays");
-        }
         SignalDeclaration declaration{
             name.text,
             std::move(declaration_type),

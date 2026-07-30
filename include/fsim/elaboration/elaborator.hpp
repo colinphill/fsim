@@ -302,9 +302,9 @@ public:
     signal_paths() const;
     [[nodiscard]] std::optional<runtime::simir::ContainerObjectId>
     find_container(std::string_view name) const noexcept;
-    /// Return every debug-visible container path in lexical order. Static
-    /// array port aliases may refer to the same bounded object ID as their
-    /// connected parent object.
+    /// Return every debug-visible container path in lexical order. Container
+    /// port aliases may refer to the same bounded object ID as their connected
+    /// parent object.
     [[nodiscard]] std::vector<std::pair<
         std::string, runtime::simir::ContainerObjectId>>
     container_paths() const;

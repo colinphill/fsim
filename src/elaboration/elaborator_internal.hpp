@@ -1357,12 +1357,12 @@ private:
         const std::string_view path,
         SignalMap& local);
 
-    std::optional<ContainerType> static_port_type(
+    std::optional<ContainerType> container_port_type(
         const frontend::Type& type,
         const frontend::SourceSpan& source,
         const ConstantEnvironment& environment);
 
-    std::optional<ContainerObjectId> add_owned_static_port(
+    std::optional<ContainerObjectId> add_owned_container_port(
         const frontend::SignalDeclaration& declaration,
         const std::string_view path,
         ContainerMap& local,

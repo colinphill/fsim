@@ -1411,7 +1411,7 @@ using namespace elaboration_detail;
                 if (port.type.systemverilog_container) {
                     report(
                         "FSIM-ELAB-SVPORT-003",
-                        "static-array input ports do not support default "
+                        "container input ports do not support default "
                         "connection values",
                         connection.span);
                     continue;
@@ -1458,7 +1458,7 @@ using namespace elaboration_detail;
                 if (cross_language) {
                     report(
                         "FSIM-ELAB-SVPORT-004",
-                        "static unpacked-array ports cannot cross a "
+                        "SystemVerilog container ports cannot cross a "
                         "language boundary at '" + path + "."
                             + port.name + "'",
                         connection.span);
@@ -1468,8 +1468,8 @@ using namespace elaboration_detail;
                     != frontend::ExpressionKind::Identifier) {
                     report(
                         "FSIM-ELAB-SVPORT-005",
-                        "static-array port actuals must be direct "
-                        "whole-array objects",
+                        "container port actuals must be direct "
+                        "whole-container objects",
                         connection.value.span);
                     continue;
                 }
@@ -1478,24 +1478,24 @@ using namespace elaboration_detail;
                 if (actual == parent_containers.end()) {
                     report(
                         "FSIM-ELAB-SVPORT-006",
-                        "unknown static-array connection object '"
+                        "unknown container connection object '"
                             + connection.value.text + "' on instance '"
                             + path + "'",
                         connection.value.span);
                     continue;
                 }
                 const auto expected =
-                    static_port_type(port.type, port.span, {});
+                    container_port_type(port.type, port.span, {});
                 const auto& actual_info =
                     design_.container_object_info_.at(actual->second);
                 if (!expected || actual_info.type != *expected) {
                     if (expected) {
                         report(
                             "FSIM-ELAB-SVPORT-007",
-                            "static-array port '" + path + "."
+                            "container port '" + path + "."
                                 + port.name
-                                + "' requires an exact element type and "
-                                "left:right range match",
+                                + "' requires an exact kind, element, "
+                                "index, bound, and range match",
                             connection.span);
                     }
                     continue;
@@ -1508,7 +1508,7 @@ using namespace elaboration_detail;
                         connection.value.text)) {
                     report(
                         "FSIM-ELAB-SVPORT-009",
-                        "an input static-array port cannot be connected "
+                        "an input container port cannot be connected "
                         "to a descendant output or inout port",
                         connection.span);
                     continue;
@@ -1544,10 +1544,10 @@ using namespace elaboration_detail;
                             })) {
                         report(
                             "FSIM-ELAB-SVPORT-008",
-                            "static-array object '"
+                            "container object '"
                                 + actual_info.name
                                 + "' has multiple output/inout module "
-                                "port drivers",
+                                "container-port drivers",
                             connection.span);
                     }
                     driver_paths.push_back(path);
@@ -1643,7 +1643,7 @@ using namespace elaboration_detail;
                         std::string{
                             ports[port_index].type
                                     .systemverilog_container
-                                ? "required static-array input port '"
+                                ? "required container input port '"
                                 : "required VHDL input port '"}
                             + path + "." + ports[port_index].name
                             + "' is not associated",

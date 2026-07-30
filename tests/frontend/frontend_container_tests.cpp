@@ -76,10 +76,23 @@ module static_port_child #(
     inout logic [15:0] shared[0:2]);
 endmodule
 
-module non_ansi_static_port(source, result);
+module dynamic_port_child #(
+    parameter int LIMIT = 3,
+    parameter type KEY = logic signed [3:0]) (
+    input int source[],
+    output logic [7:0] pending[$],
+    inout bit bounded[$:LIMIT],
+    inout logic [15:0] scores[KEY]);
+endmodule
+
+module non_ansi_container_port(
+    source, result, values, pending, scores);
   parameter int LEFT = 3;
   input logic [7:0] source[LEFT:0];
   output bit [3:0] result[-1:1];
+  input int values[];
+  output logic [7:0] pending[$];
+  inout logic [15:0] scores[int];
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -210,26 +223,57 @@ endmodule
               == PortDirection::Inout,
       "ANSI static-array ports retain direction, element type, and "
       "specialization-aware bounds");
-  const auto* non_ansi_static_port =
+  const auto* dynamic_port_child =
       parsed.design.find(
-          UnitKind::VerilogModule, "non_ansi_static_port");
+          UnitKind::VerilogModule, "dynamic_port_child");
   require(
-      non_ansi_static_port != nullptr
-          && non_ansi_static_port->ports.size() == 2
-          && non_ansi_static_port->variables.empty()
-          && non_ansi_static_port->ports[0]
+      dynamic_port_child != nullptr
+          && dynamic_port_child->ports.size() == 4
+          && dynamic_port_child->ports[0]
                  .type.systemverilog_container
-          && non_ansi_static_port->ports[1]
+          && dynamic_port_child->ports[0]
+                 .type.systemverilog_container->kind
+              == SystemVerilogContainerKind::DynamicArray
+          && dynamic_port_child->ports[1]
                  .type.systemverilog_container,
-      "non-ANSI static-array declarations refine port placeholders "
-      "without becoming module variables");
+      "ANSI dynamic arrays and queues remain typed container ports");
+  require(
+      dynamic_port_child->ports[1]
+                 .type.systemverilog_container->kind
+              == SystemVerilogContainerKind::Queue
+          && dynamic_port_child->ports[2]
+                 .type.systemverilog_container->queue_maximum
+          && dynamic_port_child->ports[3]
+                 .type.systemverilog_container->kind
+              == SystemVerilogContainerKind::AssociativeArray
+          && dynamic_port_child->ports[3]
+                 .type.systemverilog_container
+                 ->associative_index_type
+          && dynamic_port_child->ports[3]
+                 .type.systemverilog_container
+                 ->associative_index_type->named_type
+              == "KEY",
+      "bounded queues and named associative index types retain "
+      "specialization-aware metadata");
+  const auto* non_ansi_container_port =
+      parsed.design.find(
+          UnitKind::VerilogModule, "non_ansi_container_port");
+  require(
+      non_ansi_container_port != nullptr
+          && non_ansi_container_port->ports.size() == 5
+          && non_ansi_container_port->variables.empty()
+          && std::ranges::all_of(
+              non_ansi_container_port->ports,
+              [](const auto& port) {
+                return port.type.systemverilog_container.has_value();
+              }),
+      "non-ANSI static and dynamic container declarations refine port "
+      "placeholders without becoming module variables");
 
   const auto invalid = parse_text(
       "container-invalid.sv",
       R"(
 module container_invalid;
-  input int dynamic_port[];
-  output int queue_port[$];
   int fixed[3];
   int nested[][];
   string strings[];
@@ -251,8 +295,7 @@ endmodule
           && has_code(invalid, "FSIM-SV-SEM-079")
           && has_code(invalid, "FSIM-SV-SEM-080")
           && has_code(invalid, "FSIM-SV-SEM-082")
-          && has_code(invalid, "FSIM-SV-SEM-081")
-          && has_code(invalid, "FSIM-SV-SEM-084"),
+          && has_code(invalid, "FSIM-SV-SEM-081"),
       "unsupported dimensions, elements, and method arities diagnose");
   require(
       has_code(invalid, "FSIM-SV-UNSUPPORTED-037")

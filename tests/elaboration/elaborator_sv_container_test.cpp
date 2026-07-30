@@ -304,6 +304,161 @@ endmodule
       && shared_value.elements[1].low_word().aval == 0
       && shared_value.elements[2].low_word().aval == 0xc);
 
+  const auto dynamic_port_parsed = fsim::frontend::parse_text(
+      "dynamic-container-ports.sv",
+      R"(
+module dynamic_port_leaf #(
+    parameter int LIMIT = 3,
+    parameter type KEY = logic signed [3:0]) (
+    input int source[],
+    output logic [7:0] result[$],
+    inout bit bounded[$:LIMIT],
+    inout logic [15:0] scores[KEY],
+    inout int work[]);
+  initial begin
+    KEY cursor;
+    #1;
+    assert (source.size() == 2);
+    assert (source[0] == 11);
+    result.push_back(8'h21);
+    result.push_back(8'h22);
+    bounded.push_back(1);
+    bounded.push_front(0);
+    scores[-1] = 16'h1234;
+    scores[2] = 16'h5678;
+    assert (scores.first(cursor) == 1);
+    assert (cursor == -1);
+    assert (scores.next(cursor) == 1);
+    assert (cursor == 2);
+    work = new[3];
+    work[0] = 31;
+    work[2] = 33;
+  end
+endmodule
+
+module dynamic_port_mid #(
+    parameter int MAXIMUM = 3,
+    parameter type INDEX = logic signed [3:0]) (
+    input int source[],
+    output logic [7:0] result[$],
+    inout bit bounded[$:MAXIMUM],
+    inout logic [15:0] scores[INDEX],
+    inout int work[]);
+  generate
+    if (MAXIMUM == 3) begin : generated
+      dynamic_port_leaf #(
+          .LIMIT(MAXIMUM), .KEY(INDEX)) child(
+          .source(source),
+          .result(result),
+          .bounded(bounded),
+          .scores(scores),
+          .work(work));
+    end
+  endgenerate
+endmodule
+
+module dynamic_port_top;
+  typedef logic signed [3:0] key_t;
+  int source[];
+  logic [7:0] result[$];
+  bit bounded[$:3];
+  logic [15:0] scores[key_t];
+  int work[];
+  dynamic_port_mid #(
+      .MAXIMUM(3), .INDEX(key_t)) mid(
+      .source(source),
+      .result(result),
+      .bounded(bounded),
+      .scores(scores),
+      .work(work));
+  initial begin
+    source = new[2];
+    source[0] = 11;
+    source[1] = 12;
+    #2;
+    assert (result.size() == 2);
+    assert (result[0] == 8'h21);
+    assert (result[1] == 8'h22);
+    assert (bounded.size() == 2);
+    assert (bounded[0] == 0);
+    assert (bounded[1] == 1);
+    assert (scores.size() == 2);
+    assert (scores[-1] == 16'h1234);
+    assert (scores[2] == 16'h5678);
+    assert (work.size() == 3);
+    assert (work[0] == 31);
+    assert (work[2] == 33);
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(dynamic_port_parsed.ok());
+  const auto dynamic_port_elaborated =
+      fsim::elaboration::elaborate(
+          dynamic_port_parsed.design, "dynamic_port_top");
+  if (!dynamic_port_elaborated.ok()) {
+    for (const auto& diagnostic :
+         dynamic_port_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(dynamic_port_elaborated.ok());
+  assert(
+      dynamic_port_elaborated.design
+          ->container_objects().size() == 5);
+  const auto dynamic_source =
+      dynamic_port_elaborated.design->find_container(
+          "dynamic_port_top.source");
+  const auto nested_dynamic_source =
+      dynamic_port_elaborated.design->find_container(
+          "dynamic_port_top.mid.generated.child.source");
+  const auto dynamic_bounded =
+      dynamic_port_elaborated.design->find_container(
+          "dynamic_port_top.bounded");
+  assert(
+      dynamic_source && nested_dynamic_source
+      && *dynamic_source == *nested_dynamic_source
+      && dynamic_bounded);
+  const auto& bounded_info =
+      dynamic_port_elaborated.design->container_objects().at(
+          *dynamic_bounded);
+  assert(
+      bounded_info.type.queue
+      && bounded_info.type.maximum_elements
+      && *bounded_info.type.maximum_elements == 4);
+  auto dynamic_port_interpreter =
+      dynamic_port_elaborated.design->create_interpreter();
+  const auto dynamic_port_result =
+      dynamic_port_interpreter->run();
+  assert(
+      dynamic_port_result.status
+          == fsim::runtime::RunStatus::completed
+      && dynamic_port_result.time == 2);
+  const auto dynamic_result =
+      dynamic_port_elaborated.design->find_container(
+          "dynamic_port_top.result");
+  const auto dynamic_scores =
+      dynamic_port_elaborated.design->find_container(
+          "dynamic_port_top.scores");
+  const auto dynamic_work =
+      dynamic_port_elaborated.design->find_container(
+          "dynamic_port_top.work");
+  assert(dynamic_result && dynamic_scores && dynamic_work);
+  assert(
+      dynamic_port_interpreter
+              ->container_object_value(*dynamic_result)
+              .elements.size()
+          == 2
+      && dynamic_port_interpreter
+              ->container_object_value(*dynamic_scores)
+              .elements.size()
+          == 2
+      && dynamic_port_interpreter
+              ->container_object_value(*dynamic_work)
+              .elements.size()
+          == 3);
+
   const auto invalid = fsim::frontend::parse_text(
       "container-invalid-lowering.sv",
       R"(
@@ -406,6 +561,80 @@ endmodule
   assert(has_diagnostic(
       rejected_ports, "FSIM-ELAB-SVPORT-009"));
 
+  const auto invalid_dynamic_ports =
+      fsim::frontend::parse_text(
+          "dynamic-container-port-invalid.sv",
+          R"(
+module dynamic_input(input int value[]);
+  initial value = new[1];
+endmodule
+
+module dynamic_output(output int value[]);
+  initial value = new[1];
+endmodule
+
+module dynamic_forward(input int value[]);
+  dynamic_output illegal_descendant(.value(value));
+endmodule
+
+module dynamic_accept(input int value[]);
+endmodule
+
+module queue_accept(input int value[$]);
+endmodule
+
+module bounded_accept #(
+    parameter int LIMIT = 3) (
+    input int value[$:LIMIT]);
+endmodule
+
+module associative_accept(
+    input int value[logic signed [3:0]]);
+endmodule
+
+module byte_dynamic_accept(input byte value[]);
+endmodule
+
+module bad_dynamic_port_top;
+  int dynamic_value[];
+  int queue_value[$];
+  int bounded_value[$:2];
+  int associative_value[logic signed [4:0]];
+  logic [7:0] four_state_value[];
+  dynamic_accept expression_actual(
+      .value(dynamic_value[0]));
+  dynamic_accept unknown_actual(.value(missing));
+  queue_accept wrong_kind(.value(dynamic_value));
+  bounded_accept #(.LIMIT(3)) wrong_bound(
+      .value(bounded_value));
+  associative_accept wrong_index(
+      .value(associative_value));
+  byte_dynamic_accept wrong_element(
+      .value(four_state_value));
+  dynamic_output first(.value(dynamic_value));
+  dynamic_output second(.value(dynamic_value));
+  dynamic_input read_only(.value(dynamic_value));
+  dynamic_forward forward(.value(dynamic_value));
+endmodule
+)",
+          fsim::frontend::Language::SystemVerilog2017);
+  assert(invalid_dynamic_ports.ok());
+  const auto rejected_dynamic_ports =
+      fsim::elaboration::elaborate(
+          invalid_dynamic_ports.design,
+          "bad_dynamic_port_top");
+  assert(!rejected_dynamic_ports.ok());
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-005"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-006"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-007"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-008"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPORT-009"));
+
   const auto mixed_parent = fsim::frontend::parse_text(
       "mixed-container-port.vhd",
       R"(
@@ -448,6 +677,58 @@ end architecture;
   assert(!mixed_rejected.ok());
   assert(has_diagnostic(
       mixed_rejected, "FSIM-ELAB-SVPORT-004"));
+
+  const auto mixed_dynamic_parent =
+      fsim::frontend::parse_text(
+          "mixed-dynamic-container-port.vhd",
+          R"(
+entity mixed_dynamic_port_top is
+end entity;
+
+architecture rtl of mixed_dynamic_port_top is
+  signal source : integer;
+  signal result : std_logic_vector(7 downto 0);
+  signal bounded : bit;
+  signal scores : std_logic_vector(15 downto 0);
+  signal work : integer;
+  component dynamic_port_leaf is
+    port (
+      source : in integer;
+      result : out std_logic_vector(7 downto 0);
+      bounded : inout bit;
+      scores : inout std_logic_vector(15 downto 0);
+      work : inout integer);
+  end component;
+begin
+  child: dynamic_port_leaf
+    port map (
+      source => source,
+      result => result,
+      bounded => bounded,
+      scores => scores,
+      work => work);
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(mixed_dynamic_parent.ok());
+  auto mixed_dynamic_design = dynamic_port_parsed.design;
+  mixed_dynamic_design.units.insert(
+      mixed_dynamic_design.units.end(),
+      mixed_dynamic_parent.design.units.begin(),
+      mixed_dynamic_parent.design.units.end());
+  const std::vector<fsim::elaboration::Binding>
+      dynamic_bindings{
+          {"mixed_dynamic_port_top.child",
+           "sv:work.dynamic_port_leaf",
+           std::nullopt}};
+  const auto mixed_dynamic_rejected =
+      fsim::elaboration::elaborate(
+          mixed_dynamic_design,
+          "vhdl:work.mixed_dynamic_port_top(rtl)",
+          dynamic_bindings);
+  assert(!mixed_dynamic_rejected.ok());
+  assert(has_diagnostic(
+      mixed_dynamic_rejected, "FSIM-ELAB-SVPORT-004"));
 }
 
 }  // namespace fsim::tests::elaboration

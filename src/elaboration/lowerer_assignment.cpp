@@ -494,7 +494,7 @@ using namespace elaboration_detail;
                     target_name)) {
                 report(
                     "FSIM-ELAB-SVPORT-009",
-                    "an input static-array port is read-only within its "
+                    "an input container port is read-only within its "
                     "module",
                     statement.target.span);
                 return;
@@ -591,7 +591,7 @@ using namespace elaboration_detail;
                         ? source_type->systemverilog_container
                               ->associative_index_type.get()
                         : nullptr;
-                const auto index = lower_expression(
+                auto index = lower_expression(
                     statement.target.operands[1],
                     index_width,
                     index_type);
@@ -599,6 +599,14 @@ using namespace elaboration_detail;
                     statement.value, *element_width, source_type);
                 if (!index || !value) {
                     return;
+                }
+                if (runtime_type->associative
+                    && register_width(*index)
+                        != runtime_type->index_width) {
+                    *index = resize_register(
+                        *index,
+                        runtime_type->index_width,
+                        runtime_type->signed_indices);
                 }
                 process_.operations.emplace_back(
                     ContainerWrite{

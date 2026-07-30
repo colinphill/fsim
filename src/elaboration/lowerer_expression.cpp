@@ -74,7 +74,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     source_expression.text)) {
                 report(
                     "FSIM-ELAB-SVPORT-009",
-                    "an input static-array port is read-only within its "
+                    "an input container port is read-only within its "
                     "module",
                     source_expression.span);
                 return std::nullopt;
@@ -134,12 +134,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 const auto* index_type =
                     type->systemverilog_container
                         ->associative_index_type.get();
-                const auto index = lower_expression(
+                auto index = lower_expression(
                     expression.operands[1],
                     runtime_type->index_width,
                     index_type);
                 if (!index) {
                     return std::nullopt;
+                }
+                if (expression.text == ".exists"
+                    && register_width(*index)
+                        != runtime_type->index_width) {
+                    *index = resize_register(
+                        *index,
+                        runtime_type->index_width,
+                        index_type->is_signed);
                 }
                 const auto destination =
                     allocate_register(
@@ -221,7 +229,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                           ? std::size_t{32}
                           : infer_width(expression.operands[1])
                                 .value_or(std::size_t{32});
-            const auto index = lower_expression(
+            auto index = lower_expression(
                 expression.operands[1],
                 index_width,
                 runtime_type->associative
@@ -230,6 +238,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     : nullptr);
             if (!index) {
                 return std::nullopt;
+            }
+            if (runtime_type->associative
+                && register_width(*index)
+                    != runtime_type->index_width) {
+                *index = resize_register(
+                    *index,
+                    runtime_type->index_width,
+                    runtime_type->signed_indices);
             }
             process_.operations.emplace_back(
                 ContainerRead{

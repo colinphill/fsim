@@ -1207,7 +1207,7 @@ Lowerer::Lowerer(
                     statement.memory_target.text)) {
                 report(
                     "FSIM-ELAB-SVPORT-009",
-                    "an input static-array port is read-only within its "
+                    "an input container port is read-only within its "
                     "module",
                     statement.memory_target.span);
                 break;
