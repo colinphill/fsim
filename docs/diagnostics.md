@@ -725,11 +725,11 @@ therefore excluded.
 | `FSIM-SV-SEM-081` | error | A supported container method has the wrong argument count. |
 | `FSIM-SV-SEM-082` | error | An associative array uses a string index type. |
 | `FSIM-SV-SEM-083` | error | `$readmemb` or `$readmemh` is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-084` | error | A module port uses a dynamic, queue, or associative unpacked container instead of a supported one-dimensional static array. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
 | `FSIM-SV-UNSUPPORTED-005` | error | A named port connection was used where a module-header declaration is required. |
-| `FSIM-SV-UNSUPPORTED-006` | error | Unpacked port dimensions are not implemented. |
 | `FSIM-SV-UNSUPPORTED-007` | error | Unpacked arrays are not implemented. |
 | `FSIM-SV-UNSUPPORTED-008` | error | Unsupported identifier-starting procedural statement. |
 | `FSIM-SV-UNSUPPORTED-009` | error | Unsupported procedural statement. |
@@ -1064,6 +1064,15 @@ therefore excluded.
 | `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
 | `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |
 | `FSIM-ELAB-SVMEMORY-004` | error | A read-memory start or finish argument is not a 32-bit integral expression. |
+| `FSIM-ELAB-SVPORT-001` | error | A SystemVerilog unpacked-array port is not a one-dimensional static integral array with an executable element width. |
+| `FSIM-ELAB-SVPORT-002` | error | Static-array port bounds are not locally constant signed 32-bit values spanning 1 through 4,096 elements. |
+| `FSIM-ELAB-SVPORT-003` | error | A static-array input port attempts to use an unsupported default connection value. |
+| `FSIM-ELAB-SVPORT-004` | error | A static unpacked-array port attempts to cross a language boundary. |
+| `FSIM-ELAB-SVPORT-005` | error | A static-array port actual is an expression, selection, or slice rather than a direct whole-array object. |
+| `FSIM-ELAB-SVPORT-006` | error | A static-array port actual is unknown, unresolved, or omitted from a required input connection. |
+| `FSIM-ELAB-SVPORT-007` | error | A static-array formal and actual differ in element width, state domain, signedness, or exact left-to-right range. |
+| `FSIM-ELAB-SVPORT-008` | error | Independent output or inout module-port paths drive the same static-array object. |
+| `FSIM-ELAB-SVPORT-009` | error | An input static-array port would be modified locally or through a descendant output/inout connection. |
 | `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
 | `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
 | `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |

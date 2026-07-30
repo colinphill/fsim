@@ -65,6 +65,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     expression.operands.front()))) {
             const auto source_expression =
                 expression.operands.front();
+            if (expression.kind == ExpressionKind::Call
+                && (expression.text == ".pop_front"
+                    || expression.text == ".pop_back")
+                && source_expression.kind
+                    == ExpressionKind::Identifier
+                && read_only_container_objects_.contains(
+                    source_expression.text)) {
+                report(
+                    "FSIM-ELAB-SVPORT-009",
+                    "an input static-array port is read-only within its "
+                    "module",
+                    source_expression.span);
+                return std::nullopt;
+            }
             const auto source =
                 lower_container_expression(source_expression);
             if (!source) {

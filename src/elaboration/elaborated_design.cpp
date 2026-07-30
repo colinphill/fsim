@@ -77,6 +77,37 @@ ElaboratedDesign::signal_paths() const {
   return result;
 }
 
+std::optional<runtime::simir::ContainerObjectId>
+ElaboratedDesign::find_container(
+    const std::string_view name) const noexcept {
+  if (const auto found =
+          container_by_name_.find(std::string{name});
+      found != container_by_name_.end()) {
+    return found->second;
+  }
+  return std::nullopt;
+}
+
+std::vector<std::pair<
+    std::string, runtime::simir::ContainerObjectId>>
+ElaboratedDesign::container_paths() const {
+  std::vector<std::pair<
+      std::string, runtime::simir::ContainerObjectId>> result;
+  result.reserve(container_by_name_.size());
+  for (const auto& [path, object] : container_by_name_) {
+    result.emplace_back(path, object);
+  }
+  std::ranges::sort(
+      result,
+      [](const auto& left, const auto& right) {
+        if (left.first != right.first) {
+          return left.first < right.first;
+        }
+        return left.second < right.second;
+      });
+  return result;
+}
+
 std::unique_ptr<runtime::simir::Interpreter>
 ElaboratedDesign::create_interpreter(
     const runtime::SchedulerOptions options,

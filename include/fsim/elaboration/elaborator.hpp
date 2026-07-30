@@ -193,6 +193,9 @@ struct ContainerObjectInfo {
     std::string name;
     runtime::simir::ContainerType type;
     frontend::SourceSpan declaration_span;
+    bool is_port{};
+    frontend::PortDirection direction{
+        frontend::PortDirection::Unknown};
 };
 
 using SpecializationId = std::uint32_t;
@@ -297,6 +300,14 @@ public:
     /// parent signal.
     [[nodiscard]] std::vector<std::pair<std::string, runtime::simir::SignalId>>
     signal_paths() const;
+    [[nodiscard]] std::optional<runtime::simir::ContainerObjectId>
+    find_container(std::string_view name) const noexcept;
+    /// Return every debug-visible container path in lexical order. Static
+    /// array port aliases may refer to the same bounded object ID as their
+    /// connected parent object.
+    [[nodiscard]] std::vector<std::pair<
+        std::string, runtime::simir::ContainerObjectId>>
+    container_paths() const;
 
     [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> create_interpreter(
         runtime::SchedulerOptions options = {},
@@ -336,6 +347,9 @@ private:
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
+    std::unordered_map<
+        std::string, runtime::simir::ContainerObjectId>
+        container_by_name_;
 };
 
 struct ElaborationResult {

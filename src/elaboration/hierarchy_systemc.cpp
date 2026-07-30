@@ -616,6 +616,7 @@ using namespace elaboration_detail;
                 specialized.unit,
                 child_path,
                 std::move(child_aliases),
+                {},
                 std::move(specialized.environment),
                 std::move(specialized.values),
                 std::move(specialized.identity_values),
@@ -630,6 +631,7 @@ using namespace elaboration_detail;
         const DesignUnit& unit,
         const std::string& path,
         SignalMap aliases,
+        ContainerMap container_aliases,
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
@@ -680,6 +682,10 @@ using namespace elaboration_detail;
         stack_.push_back(identity);
 
         SignalMap local = std::move(aliases);
+        ContainerMap local_container_objects =
+            std::move(container_aliases);
+        std::unordered_set<std::string>
+            read_only_container_objects;
         std::unordered_map<
             std::string, const frontend::Type*> visible_types;
         std::unordered_map<
@@ -714,6 +720,24 @@ using namespace elaboration_detail;
             visible_types.emplace(port.name, &port.type);
             visible_types.emplace(
                 path + "." + port.name, &port.type);
+            if (port.type.systemverilog_container) {
+                if (!local_container_objects.contains(
+                        port.name)) {
+                    (void)add_owned_static_port(
+                        port,
+                        path,
+                        local_container_objects,
+                        parameter_environment);
+                }
+                if (port.direction
+                    == frontend::PortDirection::Input) {
+                    read_only_container_objects.insert(
+                        port.name);
+                    read_only_container_objects.insert(
+                        path + "." + port.name);
+                }
+                continue;
+            }
             if (!local.contains(port.name)) {
                 (void)add_owned_signal(port, path, local);
             }
@@ -727,8 +751,6 @@ using namespace elaboration_detail;
         }
         std::unordered_map<std::string, StringObjectId>
             local_string_objects;
-        std::unordered_map<std::string, ContainerObjectId>
-            local_container_objects;
         SystemVerilogStringEnvironment string_values;
         for (const auto& variable : unit.variables) {
             visible_types.emplace(
@@ -914,6 +936,12 @@ using namespace elaboration_detail;
                     variable.name, id);
                 local_container_objects.emplace(
                     full_name, id);
+                design_.container_by_name_.emplace(
+                    full_name, id);
+                if (path == design_.top_) {
+                    design_.container_by_name_.emplace(
+                        variable.name, id);
+                }
                 continue;
             }
             if (variable.type.domain
@@ -1067,6 +1095,7 @@ using namespace elaboration_detail;
             local,
             local_string_objects,
             local_container_objects,
+            read_only_container_objects,
             visible_types,
             visible_type_marks,
             unit.functions,
@@ -1190,6 +1219,8 @@ using namespace elaboration_detail;
                 child_specialized.unit,
                 child_path,
                 local,
+                local_container_objects,
+                read_only_container_objects,
                 binding,
                 target->language != unit.language);
             if (configured.referenced_configuration != nullptr) {
@@ -1199,7 +1230,8 @@ using namespace elaboration_detail;
             instantiate(
                 child_specialized.unit,
                 child_path,
-                std::move(child_aliases),
+                std::move(child_aliases.signals),
+                std::move(child_aliases.containers),
                 std::move(child_specialized.environment),
                 std::move(child_specialized.values),
                 std::move(child_specialized.identity_values),

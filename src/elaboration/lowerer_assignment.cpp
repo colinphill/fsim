@@ -490,6 +490,15 @@ using namespace elaboration_detail;
             container_objects_.find(target_name);
         if (container_local != container_locals_.end()
             || container_object != container_objects_.end()) {
+            if (read_only_container_objects_.contains(
+                    target_name)) {
+                report(
+                    "FSIM-ELAB-SVPORT-009",
+                    "an input static-array port is read-only within its "
+                    "module",
+                    statement.target.span);
+                return;
+            }
             if (statement.assignment_kind
                     != AssignmentKind::Blocking
                 || statement.procedural_assignment_control

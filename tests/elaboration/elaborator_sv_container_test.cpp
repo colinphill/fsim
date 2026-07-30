@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iostream>
 #include <variant>
+#include <vector>
 
 namespace fsim::tests::elaboration {
 
@@ -174,6 +175,135 @@ endmodule
       && fixed_up_result.elements[1].low_word().aval == 0
       && fixed_up_result.elements[2].low_word().aval == 0xc);
 
+  const auto port_parsed = fsim::frontend::parse_text(
+      "container-ports.sv",
+      R"(
+module static_port_leaf #(
+    parameter int LEFT = 3,
+    parameter int RIGHT = 0) (
+    input logic signed [7:0] source[LEFT:RIGHT],
+    output logic signed [7:0] result[LEFT:RIGHT],
+    inout bit [3:0] shared[-1:1]);
+  initial begin
+    #1;
+    assert (source[LEFT] == 8'h31);
+    assert (source[RIGHT] == 8'h04);
+    result = source;
+    result[LEFT] = source[LEFT] + 8'h01;
+    result[RIGHT] = source[RIGHT] + 8'h02;
+    shared[-1] = 4'ha;
+    shared[1] = 4'hc;
+  end
+endmodule
+
+module static_port_mid #(
+    parameter int HIGH = 3,
+    parameter int LOW = 0) (
+    input logic signed [7:0] source[HIGH:LOW],
+    output logic signed [7:0] result[HIGH:LOW],
+    inout bit [3:0] shared[-1:1]);
+  generate
+    if (HIGH == 3) begin : generated
+      static_port_leaf #(
+          .LEFT(HIGH), .RIGHT(LOW)) child(
+          .source(source), .result(result), .shared(shared));
+    end
+  endgenerate
+endmodule
+
+module non_ansi_port_leaf(result);
+  parameter int LEFT = 2;
+  output logic [7:0] result[LEFT:0];
+  initial begin
+    #1;
+    result[LEFT] = 8'h5a;
+  end
+endmodule
+
+module static_port_top;
+  logic signed [7:0] source[3:0];
+  logic signed [7:0] result[3:0];
+  bit [3:0] shared[-1:1];
+  logic [7:0] non_ansi_result[2:0];
+  static_port_mid #(
+      .HIGH(3), .LOW(0)) mid(
+      .source(source), .result(result), .shared(shared));
+  non_ansi_port_leaf non_ansi(
+      .result(non_ansi_result));
+  initial begin
+    source[3] = 8'h31;
+    source[0] = 8'h04;
+    #2;
+    assert (result[3] == 8'h32);
+    assert (result[0] == 8'h06);
+    assert (shared[-1] == 4'ha);
+    assert (shared[0] == 0);
+    assert (shared[1] == 4'hc);
+    assert (non_ansi_result[2] == 8'h5a);
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(port_parsed.ok());
+  const auto port_elaborated = fsim::elaboration::elaborate(
+      port_parsed.design, "static_port_top");
+  if (!port_elaborated.ok()) {
+    for (const auto& diagnostic : port_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(port_elaborated.ok());
+  assert(
+      port_elaborated.design->container_objects().size() == 4);
+  const auto paths =
+      port_elaborated.design->container_paths();
+  assert(
+      std::ranges::any_of(
+          paths,
+          [](const auto& path) {
+            return path.first
+                == "static_port_top.mid.source";
+          })
+      && std::ranges::any_of(
+          paths,
+          [](const auto& path) {
+            return path.first
+                == "static_port_top.mid.generated.child.result";
+          }));
+  const auto source_id =
+      port_elaborated.design->find_container(
+          "static_port_top.source");
+  const auto child_source_id =
+      port_elaborated.design->find_container(
+          "static_port_top.mid.generated.child.source");
+  assert(source_id && child_source_id);
+  assert(*source_id == *child_source_id);
+  auto port_interpreter =
+      port_elaborated.design->create_interpreter();
+  const auto port_result = port_interpreter->run();
+  assert(
+      port_result.status
+          == fsim::runtime::RunStatus::completed
+      && port_result.time == 2);
+  const auto result_id =
+      port_elaborated.design->find_container(
+          "static_port_top.result");
+  const auto shared_id =
+      port_elaborated.design->find_container(
+          "static_port_top.shared");
+  assert(result_id && shared_id);
+  const auto& result_value =
+      port_interpreter->container_object_value(*result_id);
+  const auto& shared_value =
+      port_interpreter->container_object_value(*shared_id);
+  assert(
+      result_value.elements[0].low_word().aval == 0x32
+      && result_value.elements[3].low_word().aval == 0x06
+      && shared_value.elements[0].low_word().aval == 0xa
+      && shared_value.elements[1].low_word().aval == 0
+      && shared_value.elements[2].low_word().aval == 0xc);
+
   const auto invalid = fsim::frontend::parse_text(
       "container-invalid-lowering.sv",
       R"(
@@ -226,6 +356,98 @@ endmodule
       rejected, "FSIM-ELAB-SVCONTAINER-014"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVMEMORY-003"));
+
+  const auto invalid_ports = fsim::frontend::parse_text(
+      "container-port-invalid.sv",
+      R"(
+module bad_input(
+    input logic [7:0] memory[3:0]);
+  initial memory[3] = 8'hff;
+endmodule
+
+module incompatible(
+    input logic [7:0] memory[0:3]);
+endmodule
+
+module output_driver(
+    output logic [7:0] memory[3:0]);
+  initial memory[3] = 8'h01;
+endmodule
+
+module input_forward(
+    input logic [7:0] memory[3:0]);
+  output_driver illegal_descendant(.memory(memory));
+endmodule
+
+module bad_port_top;
+  logic [7:0] memory[3:0];
+  bad_input input_child(.memory(memory));
+  incompatible wrong_range(.memory(memory));
+  incompatible expression_actual(.memory(memory[3]));
+  incompatible unknown_actual(.memory(missing));
+  output_driver first(.memory(memory));
+  output_driver second(.memory(memory));
+  input_forward forward(.memory(memory));
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(invalid_ports.ok());
+  const auto rejected_ports = fsim::elaboration::elaborate(
+      invalid_ports.design, "bad_port_top");
+  assert(!rejected_ports.ok());
+  assert(has_diagnostic(
+      rejected_ports, "FSIM-ELAB-SVPORT-005"));
+  assert(has_diagnostic(
+      rejected_ports, "FSIM-ELAB-SVPORT-006"));
+  assert(has_diagnostic(
+      rejected_ports, "FSIM-ELAB-SVPORT-007"));
+  assert(has_diagnostic(
+      rejected_ports, "FSIM-ELAB-SVPORT-008"));
+  assert(has_diagnostic(
+      rejected_ports, "FSIM-ELAB-SVPORT-009"));
+
+  const auto mixed_parent = fsim::frontend::parse_text(
+      "mixed-container-port.vhd",
+      R"(
+entity mixed_port_top is
+end entity;
+
+architecture rtl of mixed_port_top is
+  signal source : std_logic_vector(7 downto 0);
+  signal result : std_logic_vector(7 downto 0);
+  signal shared : std_logic_vector(3 downto 0);
+  component static_port_leaf is
+    port (
+      source : in std_logic_vector(7 downto 0);
+      result : out std_logic_vector(7 downto 0);
+      shared : inout std_logic_vector(3 downto 0));
+  end component;
+begin
+  child: static_port_leaf
+    port map (
+      source => source,
+      result => result,
+      shared => shared);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(mixed_parent.ok());
+  auto mixed_design = port_parsed.design;
+  mixed_design.units.insert(
+      mixed_design.units.end(),
+      mixed_parent.design.units.begin(),
+      mixed_parent.design.units.end());
+  const std::vector<fsim::elaboration::Binding> bindings{
+      {"mixed_port_top.child",
+       "sv:work.static_port_leaf",
+       std::nullopt}};
+  const auto mixed_rejected = fsim::elaboration::elaborate(
+      mixed_design,
+      "vhdl:work.mixed_port_top(rtl)",
+      bindings);
+  assert(!mixed_rejected.ok());
+  assert(has_diagnostic(
+      mixed_rejected, "FSIM-ELAB-SVPORT-004"));
 }
 
 }  // namespace fsim::tests::elaboration

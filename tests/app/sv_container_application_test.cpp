@@ -28,6 +28,8 @@ struct Capture {
   fsim::runtime::simir::ContainerValue lookup;
   fsim::runtime::simir::ContainerValue memory;
   fsim::runtime::simir::ContainerValue binary;
+  fsim::runtime::simir::ContainerValue port_result;
+  fsim::runtime::simir::ContainerValue port_shared;
   std::vector<std::string> output;
   std::size_t compiled{};
 };
@@ -78,7 +80,7 @@ Capture run_once(
       });
   capture.result = simulation.run();
   const auto& objects = simulation.design().container_objects();
-  assert(objects.size() == 5);
+  assert(objects.size() == 8);
   capture.values =
       simulation.read_container_object(objects[0].id);
   capture.pending =
@@ -89,6 +91,17 @@ Capture run_once(
       simulation.read_container_object(objects[3].id);
   capture.binary =
       simulation.read_container_object(objects[4].id);
+  const auto port_result =
+      simulation.design().find_container(
+          "container_top.port_result");
+  const auto port_shared =
+      simulation.design().find_container(
+          "container_top.port_shared");
+  assert(port_result && port_shared);
+  capture.port_result =
+      simulation.read_container_object(*port_result);
+  capture.port_shared =
+      simulation.read_container_object(*port_shared);
   return capture;
 }
 
@@ -220,6 +233,44 @@ void inspect_static_suspended(
       && resumed.time == 3);
 }
 
+void inspect_static_port_aliases(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  const auto parent =
+      simulation.design().find_container(
+          "container_top.port_result");
+  const auto child =
+      simulation.design().find_container(
+          "container_top.port_child.result");
+  assert(parent && child && *parent == *child);
+  std::ostringstream debugger_output;
+  std::ostringstream debugger_error;
+  fsim::app::DebuggerControl debugger{
+      simulation, debugger_output, debugger_error};
+  debugger.execute({"scope", "port_child"});
+  debugger.execute({"show", "source"});
+  assert(
+      debugger_error.str().empty()
+      && debugger_output.str().find(
+             "container_top.port_child.source = [3:")
+          != std::string::npos);
+  const auto result = simulation.run();
+  assert(
+      result.status == fsim::runtime::RunStatus::completed
+      && result.time == 3);
+  debugger.execute({"show", "result"});
+  assert(
+      debugger_output.str().find("3:00110010")
+          != std::string::npos
+      && debugger_output.str().find("0:00000110")
+          != std::string::npos);
+}
+
 }  // namespace
 
 int main() {
@@ -245,6 +296,24 @@ int main() {
   {
     std::ofstream output(source, std::ios::binary);
     output << R"(
+module static_port_leaf #(
+    parameter int LEFT = 3,
+    parameter int RIGHT = 0) (
+    input logic [7:0] source[LEFT:RIGHT],
+    output logic [7:0] result[LEFT:RIGHT],
+    inout bit [3:0] shared[-1:1]);
+  initial begin
+    #1;
+    assert (source[LEFT] == 8'h31);
+    assert (source[RIGHT] == 8'h04);
+    result = source;
+    result[LEFT] = source[LEFT] + 8'h01;
+    result[RIGHT] = source[RIGHT] + 8'h02;
+    shared[-1] = 4'ha;
+    shared[1] = 4'hc;
+  end
+endmodule
+
 module container_top;
   typedef logic signed [31:0] key_t;
   int values[];
@@ -252,6 +321,13 @@ module container_top;
   byte lookup[key_t];
   logic [7:0] memory[3:0];
   logic [7:0] binary[-1:1];
+  logic [7:0] port_source[3:0];
+  logic [7:0] port_result[3:0];
+  bit [3:0] port_shared[-1:1];
+  static_port_leaf port_child(
+      .source(port_source),
+      .result(port_result),
+      .shared(port_shared));
   function automatic int count(input byte source[$:2]);
     return source.size();
   endfunction
@@ -282,6 +358,8 @@ module container_top;
   endtask
   initial begin
     key_t key;
+    port_source[3] = 8'h31;
+    port_source[0] = 8'h04;
     $readmemh("image.hex", memory);
     $readmemb("image.bin", binary, -1, 1);
     assert (memory[0] == 8'ha5);
@@ -313,6 +391,11 @@ module container_top;
     pending.push_back(2);
     mutate(pending);
     mutate_memory(memory);
+    assert (port_result[3] == 8'h32);
+    assert (port_result[0] == 8'h06);
+    assert (port_shared[-1] == 4'ha);
+    assert (port_shared[0] == 0);
+    assert (port_shared[1] == 4'hc);
     $display("%0d:%0d:%0d",
              values[0], pending[0], count(pending));
   end
@@ -341,6 +424,8 @@ endmodule
     assert(reference.lookup == compiled.lookup);
     assert(reference.memory == compiled.memory);
     assert(reference.binary == compiled.binary);
+    assert(reference.port_result == compiled.port_result);
+    assert(reference.port_shared == compiled.port_shared);
     assert(
         compiled.pending.elements.size() == 2
         && compiled.pending.elements[0].low_word().aval == 2
@@ -372,8 +457,19 @@ endmodule
             == "000010Z1"
         && compiled.binary.elements[2].to_msb_string()
             == "00000011");
+    assert(
+        compiled.port_result.elements[0].low_word().aval
+            == 0x32
+        && compiled.port_result.elements[3].low_word().aval
+            == 0x06
+        && compiled.port_shared.elements[0].low_word().aval
+            == 0xa
+        && compiled.port_shared.elements[1].low_word().aval
+            == 0
+        && compiled.port_shared.elements[2].low_word().aval
+            == 0xc);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled == 1);
+    assert(compiled.compiled == 2);
 #endif
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);
@@ -382,6 +478,10 @@ endmodule
     inspect_static_suspended(
         config, fsim::app::SimulationEngine::interpreter);
     inspect_static_suspended(
+        config, fsim::app::SimulationEngine::compiled);
+    inspect_static_port_aliases(
+        config, fsim::app::SimulationEngine::interpreter);
+    inspect_static_port_aliases(
         config, fsim::app::SimulationEngine::compiled);
   }
 }

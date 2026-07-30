@@ -74,7 +74,8 @@ DebuggerSession::DebuggerSession(
        error_(error),
        trace_(trace),
        scope_(simulation.design().top()),
-       signal_paths_(simulation.design().signal_paths())  {
+       signal_paths_(simulation.design().signal_paths()),
+       container_paths_(simulation.design().container_paths())  {
     observer_ = simulation_.add_signal_change_hook(
         [this](
             const SignalId signal,
@@ -299,7 +300,14 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
     const auto prefix = std::string(path) + ".";
     return std::any_of(
         signal_paths_.begin(), signal_paths_.end(),
-        [&](const auto& entry) { return entry.first.starts_with(prefix); });
+        [&](const auto& entry) {
+          return entry.first.starts_with(prefix);
+        })
+        || std::any_of(
+            container_paths_.begin(), container_paths_.end(),
+            [&](const auto& entry) {
+              return entry.first.starts_with(prefix);
+            });
   }
 
 [[nodiscard]] std::optional<std::string> DebuggerSession::resolve_scope(
@@ -375,10 +383,12 @@ DebuggerSession::resolve_string_object(
 DebuggerSession::resolve_container_object(
     const std::string_view name) const {
   const auto relative = scope_ + "." + std::string{name};
-  for (const auto& object : simulation_.design().container_objects()) {
-    if (object.name == name || object.name == relative) {
-      return std::pair{object.name, object.id};
-    }
+  if (const auto object =
+          simulation_.design().find_container(relative)) {
+    return std::pair{relative, *object};
+  }
+  if (const auto object = simulation_.design().find_container(name)) {
+    return std::pair{std::string{name}, *object};
   }
   return std::nullopt;
 }
@@ -435,6 +445,19 @@ void DebuggerSession::scopes_command(const std::vector<std::string>& command)  {
       if (const auto separator = remainder.find('.');
           separator != std::string_view::npos) {
         children.insert(prefix + std::string(remainder.substr(0, separator)));
+      }
+    }
+    for (const auto& [path, object] : container_paths_) {
+      (void)object;
+      if (!path.starts_with(prefix)) {
+        continue;
+      }
+      const auto remainder =
+          std::string_view{path}.substr(prefix.size());
+      if (const auto separator = remainder.find('.');
+          separator != std::string_view::npos) {
+        children.insert(
+            prefix + std::string(remainder.substr(0, separator)));
       }
     }
     if (children.empty()) {

@@ -3976,6 +3976,58 @@ in 71.78 seconds, and Release passed all 59 tests in 32.63 seconds on
 2026-07-30. Batch 72 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Seventy-third feature batch — bounded SystemVerilog static-array ports
+
+SystemVerilog-2017 module headers now retain one-dimensional locally constant
+static unpacked integral arrays as typed ANSI ports. Basic non-ANSI header
+placeholders are refined by matching body declarations without becoming
+module variables. Dynamic arrays, queues, associative arrays, extra unpacked
+dimensions, and nonintegral elements remain rejected at this boundary.
+
+Port specialization preserves the packed element width, two-/four-state
+domain, signedness, and exact signed 32-bit left/right unpacked bounds.
+Same-language direct whole-array actuals must match that complete runtime
+profile. Expressions, selected elements, slices, missing objects, mismatched
+ranges or directions, mixed-language transfer, and independent sibling
+output/inout drivers receive stable diagnostics rather than being flattened or
+implicitly converted.
+
+The hierarchy builder now carries a container alias map independently from
+packed-signal aliases. Input formals use read-only object aliases; output and
+inout formals use deterministic mutable aliases. Nested pass-through aliases
+are distinguished from independent multiple drivers, so generated child
+instances can read elements, copy whole values, suspend, and write parent
+memories without allocating duplicate storage. Attempts to assign, pop,
+delete, or load memory through an input formal fail during lowering.
+
+Elaborated designs retain every canonical container hierarchy path and expose
+path lookup separately from the unique owned-object inventory. Debugger scope
+discovery and `show` therefore render a child formal with its declared indices
+while retaining the same opaque container ID as the parent actual. No vector,
+allocator, element address, or packed-signal reinterpretation enters SimIR or
+the native ABI.
+
+Native-object schema 26 records the changed static-container port-alias
+semantics while preserving fixed type, operation, object-ID, callable, source,
+and specialization identity. The standalone container fixture executes a
+two-module parameterized hierarchy through the reference interpreter and
+native LLVM O0/O2, including whole-array input-to-output copy, output/inout
+element mutation after delay suspension, debugger child-scope lookup, cache
+use, and exact final parent objects without fallback.
+
+Frontend evidence covers ANSI and non-ANSI retention plus unsupported dynamic
+port kinds. Elaboration evidence covers independently parameterized
+ascending/descending formal and actual ranges, nested generated hierarchy,
+opaque alias identity, input protection, incompatible ranges, expressions,
+missing objects, multiple drivers, and explicit mixed-language rejection.
+
+The diagnostic catalog covers 1,151 production codes and the source gate
+covers 285 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 75.86 seconds, and Release passed all 59 tests in 33.93 seconds on
+2026-07-30. Batch 73 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

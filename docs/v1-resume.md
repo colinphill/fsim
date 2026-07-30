@@ -9,16 +9,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-72 bounded static unpacked
-  arrays and memory loading on top of the feature-batch-71 associative-array
-  handoff.
-- The source-size refactor is complete: all 284 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-73 bounded same-language
+  SystemVerilog static-array module ports on top of the feature-batch-72
+  static-memory handoff.
+- The source-size refactor is complete: all 285 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 71.78 seconds, and Release passed all 59 configured
-  tests in 32.63 seconds on 2026-07-30.
-- The diagnostic catalog covers all 1,142 production codes.
+  configured tests in 75.86 seconds, and Release passed all 59 configured
+  tests in 33.93 seconds on 2026-07-30.
+- The diagnostic catalog covers all 1,151 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -43,7 +43,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, strings, text files, dynamic arrays/queues/integral-key associative arrays, one-dimensional static memories with `$readmem*`, automatic integral/string/container functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, static-array module boundaries, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, strings, text files, dynamic arrays/queues/integral-key associative arrays, one-dimensional static memories with `$readmem*`, direct same-language static-array module ports, automatic integral/string/container functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, dynamic-container and cross-language array boundaries, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -241,7 +241,7 @@ document merely because the parser accepts a related form.
 Python automation remains explicitly post-v1. It must later wrap the same
 opaque native session/object model already used by Tcl.
 
-## Completed batches 68 through 72
+## Completed batches 68 through 73
 
 Bounded same-language SystemVerilog mutable strings now execute through the
 reference interpreter and native LLVM O0/O2 without fallback. Module objects,
@@ -261,44 +261,49 @@ callback behavior. Locally constant one-dimensional integral static arrays now
 add ascending/descending dense storage, bit-zero/four-state-X defaults,
 automatic function/task copy and suspension behavior, declared-index debugger
 rendering, and manifest-confined bounded `$readmemb`/`$readmemh` with comments,
-addresses, optional ranges, and exact X/Z state. Unicode code-point semantics,
-multidimensional or aggregate/string-element containers, module-port and
-mixed-language boundaries, and unrestricted allocation remain separate
-release-gate work.
+addresses, optional ranges, and exact X/Z state. Direct ANSI and basic
+non-ANSI same-language static-array module ports now preserve exact
+specialized ranges/types, read-only input and deterministic output/inout
+aliases, nested/generated hierarchy, whole-array coherence, debugger paths,
+and interpreter/LLVM O0/O2/cache behavior. Unicode code-point semantics,
+multidimensional or aggregate/string-element containers, dynamic-container
+ports, cross-language array boundaries, and unrestricted allocation remain
+separate release-gate work.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 73: bounded SystemVerilog static-array module
-ports**:
+Resume with **feature batch 74: bounded SystemVerilog dynamic-container
+module ports**:
 
-1. Retain one-dimensional locally constant unpacked array ports as a distinct
-   typed ANSI and supported non-ANSI HIR family.
-2. Preserve exact element type, left/right bounds, direction, signedness, and
-   state domain through module specialization.
-3. Resolve direct same-language whole-array actuals without flattening them
-   into packed signals or exposing container storage identities.
-4. Execute input value copy and deterministic output/inout copy-back or alias
-   semantics at the supported hierarchy boundary.
-5. Keep child procedural element reads/writes and whole-array copies coherent
-   with parent module memory objects.
-6. Support ascending/descending and independently parameterized compatible
-   formal/actual declarations with exact range legality.
-7. Extend stable port/binding metadata, debugger hierarchy views, SimIR object
-   transfer, and native-cache identity.
-8. Preserve recursive hierarchy, generated instances, process suspension,
-   call safe points, and interpreter/native scheduling behavior.
-9. Diagnose incompatible bounds/types/directions, expressions or slices,
-   multidimensional/aggregate/string elements, mixed-language transfer,
-   unresolved actuals, and illegal drivers.
-10. Add frontend, negative, elaboration, recursive hierarchy, interpreter,
-    LLVM O0/O2, debugger, cache, direction, copy, and generated-instance
+1. Retain dynamic-array, queue, bounded-queue, and integral-key associative
+   module ports as distinct typed ANSI and supported non-ANSI HIR families.
+2. Preserve exact element/index type, queue bound, signedness, and state
+   domains through specialization.
+3. Resolve direct same-language whole-container actuals without flattening
+   them into packed signals or exposing storage identities.
+4. Define read-only input and deterministic output/inout alias or copy-back
+   behavior for allocation, resizing, insertion, deletion, and traversal.
+5. Keep child element/method operations and whole-container copies coherent
+   with parent objects across process suspension and task safe points.
+6. Support compatible independently parameterized queue limits and named
+   integral associative-index aliases with exact legality.
+7. Extend stable port/binding metadata, debugger hierarchy views, SimIR
+   object transfer, and native-cache identity for every dynamic kind.
+8. Preserve nested/generated hierarchy, process scheduling, native fallback
+   isolation, and cold/warm cache behavior.
+9. Diagnose incompatible types/kinds/bounds, expressions or selections,
+   mixed-language transfer, unresolved actuals, input mutation, illegal
+   allocation, and independent multiple drivers.
+10. Add frontend, negative, elaboration, nested/generated hierarchy,
+    interpreter, LLVM O0/O2, debugger, cache, mutation, copy, and suspension
     evidence, then run the scheduled gate.
 
 Keep this batch to direct same-language SystemVerilog whole-object ports over
-one-dimensional integral-element static arrays with locally constant bounds
-and at most 4,096 elements. Array slices, expressions, multidimensional or
-aggregate/string-element arrays, interfaces, cross-language memories, and
-unrestricted storage remain separate release-gate work.
+bounded one-dimensional integral dynamic arrays, queues, and integral-key
+associative arrays with at most 4,096 elements. Slices, expressions,
+multidimensional or aggregate/string-element containers, interfaces,
+cross-language transfer, and unrestricted storage remain separate
+release-gate work.
 
 ## Working cadence
 
@@ -349,10 +354,10 @@ History must contain Batch 68 commit `0a3c54f` (`feat: add bounded
 SystemVerilog runtime strings`) and Batch 69 commit `a3cfc73` (`feat: add
 bounded SystemVerilog text files`), followed by Batch 70 commit `2943a00`
 (`feat: add bounded SystemVerilog dynamic containers`) and the newest pushed
-Batch 71 bounded-associative-array handoff, followed by the newest Batch 72
-bounded-static-memory handoff. Treat the newest pushed commit on the same
-branch as the authoritative continuation and read this file from that checkout
-before doing work.
+Batch 71 bounded-associative-array handoff, Batch 72 bounded-static-memory
+handoff, and the newest Batch 73 bounded-static-array-port handoff. Treat the
+newest pushed commit on the same branch as the authoritative continuation and
+read this file from that checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -383,7 +388,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 73 below and return to focused tests until its tenth feature.
+resume Batch 74 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -401,13 +406,13 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin batch 73 at item 1 above. Do not rerun batch 72's full regression
-   unless a later change can affect string/file/container/memory storage, runtime
-   helpers, callable activation frames, debugger values, cache identity, or
-   execution.
-4. Keep batch-73 work within bounded same-language SystemVerilog direct
-   whole-object ports over one-dimensional constant-range integral-element
-   static arrays.
+3. Begin batch 74 at item 1 above. Do not rerun batch 73's full regression
+   unless a later change can affect container object binding, hierarchy
+   aliases, runtime helpers, callable activation frames, debugger paths, cache
+   identity, or execution.
+4. Keep batch-74 work within bounded same-language SystemVerilog direct
+   whole-object ports over one-dimensional integral dynamic arrays, queues,
+   and associative arrays.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -420,8 +425,8 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 73 is in progress, extending the
-container and hierarchy tests as static-array port coverage appears:
+Use a narrow test expression while batch 74 is in progress, extending the
+container and hierarchy tests as dynamic-container port coverage appears:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
@@ -429,7 +434,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 72.
+recorded 59-test inventories are clean after feature batch 73.
 
 Before declaring any row complete, consult:
 

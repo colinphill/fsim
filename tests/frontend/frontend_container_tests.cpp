@@ -67,6 +67,20 @@ module containers;
       values[0] = pending.pop_back();
   end
 endmodule
+
+module static_port_child #(
+    parameter int LEFT = 3,
+    parameter int RIGHT = 0) (
+    input logic signed [7:0] source[LEFT:RIGHT],
+    output bit [3:0] result[-1:1],
+    inout logic [15:0] shared[0:2]);
+endmodule
+
+module non_ansi_static_port(source, result);
+  parameter int LEFT = 3;
+  input logic [7:0] source[LEFT:0];
+  output bit [3:0] result[-1:1];
+endmodule
 )",
       Language::SystemVerilog2017);
   require(parsed.ok(), "bounded container syntax parses");
@@ -173,11 +187,49 @@ endmodule
           && unit->tasks[0].statements[4].kind
               == StatementKind::ContainerMethod,
       "mutating queue methods remain explicit statements");
+  const auto* static_port_child =
+      parsed.design.find(
+          UnitKind::VerilogModule, "static_port_child");
+  require(
+      static_port_child != nullptr
+          && static_port_child->ports.size() == 3
+          && static_port_child->ports[0].is_port
+          && static_port_child->ports[0].direction
+              == PortDirection::Input
+          && static_port_child->ports[0]
+                 .type.systemverilog_container
+          && static_port_child->ports[0]
+                 .type.systemverilog_container->kind
+              == SystemVerilogContainerKind::StaticArray
+          && static_port_child->ports[0]
+                 .type.systemverilog_container
+                 ->static_range_expression
+          && static_port_child->ports[1].direction
+              == PortDirection::Output
+          && static_port_child->ports[2].direction
+              == PortDirection::Inout,
+      "ANSI static-array ports retain direction, element type, and "
+      "specialization-aware bounds");
+  const auto* non_ansi_static_port =
+      parsed.design.find(
+          UnitKind::VerilogModule, "non_ansi_static_port");
+  require(
+      non_ansi_static_port != nullptr
+          && non_ansi_static_port->ports.size() == 2
+          && non_ansi_static_port->variables.empty()
+          && non_ansi_static_port->ports[0]
+                 .type.systemverilog_container
+          && non_ansi_static_port->ports[1]
+                 .type.systemverilog_container,
+      "non-ANSI static-array declarations refine port placeholders "
+      "without becoming module variables");
 
   const auto invalid = parse_text(
       "container-invalid.sv",
       R"(
 module container_invalid;
+  input int dynamic_port[];
+  output int queue_port[$];
   int fixed[3];
   int nested[][];
   string strings[];
@@ -199,7 +251,8 @@ endmodule
           && has_code(invalid, "FSIM-SV-SEM-079")
           && has_code(invalid, "FSIM-SV-SEM-080")
           && has_code(invalid, "FSIM-SV-SEM-082")
-          && has_code(invalid, "FSIM-SV-SEM-081"),
+          && has_code(invalid, "FSIM-SV-SEM-081")
+          && has_code(invalid, "FSIM-SV-SEM-084"),
       "unsupported dimensions, elements, and method arities diagnose");
   require(
       has_code(invalid, "FSIM-SV-UNSUPPORTED-037")

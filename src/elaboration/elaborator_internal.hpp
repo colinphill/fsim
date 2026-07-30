@@ -719,6 +719,8 @@ public:
             string_objects,
         const std::unordered_map<std::string, ContainerObjectId>&
             container_objects,
+        const std::unordered_set<std::string>&
+            read_only_container_objects,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_types,
         const std::unordered_map<
@@ -1035,6 +1037,8 @@ private:
         string_objects_;
     const std::unordered_map<std::string, ContainerObjectId>&
         container_objects_;
+    const std::unordered_set<std::string>&
+        read_only_container_objects_;
     const std::unordered_map<
         std::string, const frontend::Type*>& visible_types_;
     const std::unordered_map<
@@ -1168,7 +1172,14 @@ public:
 
 private:
     using SignalMap = std::unordered_map<std::string, SignalId>;
+    using ContainerMap =
+        std::unordered_map<std::string, ContainerObjectId>;
     using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
+
+    struct PortAliases {
+        SignalMap signals;
+        ContainerMap containers;
+    };
 
     struct ConfiguredVhdlInstance {
         frontend::Instance instance;
@@ -1346,6 +1357,17 @@ private:
         const std::string_view path,
         SignalMap& local);
 
+    std::optional<ContainerType> static_port_type(
+        const frontend::Type& type,
+        const frontend::SourceSpan& source,
+        const ConstantEnvironment& environment);
+
+    std::optional<ContainerObjectId> add_owned_static_port(
+        const frontend::SignalDeclaration& declaration,
+        const std::string_view path,
+        ContainerMap& local,
+        const ConstantEnvironment& environment);
+
     const Binding* binding_for(const std::string& path);
 
     const DesignUnit* bound_target(
@@ -1368,20 +1390,26 @@ private:
         const frontend::SourceSpan& source,
         const bool cross_language);
 
-    SignalMap connect_ports(
+    PortAliases connect_ports(
         const frontend::Instance& instance,
         const std::vector<frontend::SignalDeclaration>& ports,
         const std::string& path,
         const SignalMap& parent_signals,
+        const ContainerMap& parent_containers,
+        const std::unordered_set<std::string>&
+            parent_read_only_containers,
         const Binding* binding,
         const bool cross_language,
         const bool require_input_connections = false);
 
-    SignalMap connect_instance(
+    PortAliases connect_instance(
         const frontend::Instance& instance,
         const DesignUnit& target,
         const std::string& path,
         const SignalMap& parent_signals,
+        const ContainerMap& parent_containers,
+        const std::unordered_set<std::string>&
+            parent_read_only_containers,
         const Binding* binding,
         const bool cross_language);
 
@@ -1427,6 +1455,7 @@ private:
         const DesignUnit& unit,
         const std::string& path,
         SignalMap aliases,
+        ContainerMap container_aliases,
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
@@ -1461,6 +1490,8 @@ private:
     std::unordered_map<SignalId, std::size_t> boundary_driver_count_;
     std::unordered_set<SignalId> cross_language_boundary_signals_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
+    std::unordered_map<ContainerObjectId, std::vector<std::string>>
+        container_boundary_driver_paths_;
 };
 
 } // namespace fsim::elaboration

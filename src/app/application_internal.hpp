@@ -894,6 +894,9 @@ class DebuggerSession final {
   TraceState* trace_{};
   std::string scope_;
   std::vector<std::pair<std::string, SignalId>> signal_paths_;
+  std::vector<std::pair<
+      std::string, runtime::simir::ContainerObjectId>>
+      container_paths_;
   std::vector<DebugBreakpoint> breakpoints_;
   std::optional<DebugBreakpointHit> hit_;
   std::optional<runtime::simir::ExecutionPoint> current_execution_point_;

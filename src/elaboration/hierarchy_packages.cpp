@@ -82,6 +82,7 @@ HierarchyBuilder::HierarchyBuilder(
             specialized.unit,
             design_.top_,
             {},
+            {},
             std::move(specialized.environment),
             std::move(specialized.values),
             std::move(specialized.identity_values),

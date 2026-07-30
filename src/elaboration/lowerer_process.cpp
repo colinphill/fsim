@@ -38,6 +38,8 @@ Lowerer::Lowerer(
             string_objects,
         const std::unordered_map<std::string, ContainerObjectId>&
             container_objects,
+        const std::unordered_set<std::string>&
+            read_only_container_objects,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_types,
         const std::unordered_map<
@@ -50,6 +52,8 @@ Lowerer::Lowerer(
           signals_(signals),
           string_objects_(string_objects),
           container_objects_(container_objects),
+          read_only_container_objects_(
+              read_only_container_objects),
           visible_types_(visible_types),
           visible_type_marks_(visible_type_marks),
           functions_(functions),
@@ -1196,6 +1200,15 @@ Lowerer::Lowerer(
                     "FSIM-ELAB-SVMEMORY-003",
                     "read-memory target must be a direct static-array "
                     "object",
+                    statement.memory_target.span);
+                break;
+            }
+            if (read_only_container_objects_.contains(
+                    statement.memory_target.text)) {
+                report(
+                    "FSIM-ELAB-SVPORT-009",
+                    "an input static-array port is read-only within its "
+                    "module",
                     statement.memory_target.span);
                 break;
             }

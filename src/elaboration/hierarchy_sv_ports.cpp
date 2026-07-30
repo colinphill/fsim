@@ -1,0 +1,395 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "elaborator_internal.hpp"
+
+namespace fsim::elaboration {
+using namespace runtime::simir;
+using namespace elaboration_detail;
+
+std::optional<ContainerType> HierarchyBuilder::static_port_type(
+    const frontend::Type& type,
+    const frontend::SourceSpan& source,
+    const ConstantEnvironment& environment) {
+  const auto width = type.width();
+  if (!type.systemverilog_container
+      || type.systemverilog_container->kind
+          != frontend::SystemVerilogContainerKind::StaticArray
+      || !width || *width == 0 || *width > 64
+      || !type.packed_members.empty()
+      || type.domain == frontend::ValueDomain::String
+      || type.domain == frontend::ValueDomain::Unknown) {
+    report(
+        "FSIM-ELAB-SVPORT-001",
+        "SystemVerilog unpacked-array ports require a one-dimensional "
+        "static array of integral elements with width in 1..64",
+        source);
+    return std::nullopt;
+  }
+  const auto& range =
+      type.systemverilog_container->static_range_expression;
+  std::string left_error;
+  std::string right_error;
+  const auto left_value =
+      range
+          ? evaluate_systemverilog_constant_expression(
+                range->left, {}, environment, left_error)
+          : std::nullopt;
+  const auto right_value =
+      range
+          ? evaluate_systemverilog_constant_expression(
+                range->right, {}, environment, right_error)
+          : std::nullopt;
+  const auto left =
+      left_value ? left_value->integer_value() : std::nullopt;
+  const auto right =
+      right_value ? right_value->integer_value() : std::nullopt;
+  const auto in_int32 =
+      [](const std::int64_t value) {
+        return value >= std::numeric_limits<std::int32_t>::min()
+            && value <= std::numeric_limits<std::int32_t>::max();
+      };
+  const auto valid_bounds =
+      left && right && in_int32(*left) && in_int32(*right);
+  const auto count =
+      valid_bounds
+          ? static_cast<std::uint64_t>(
+                *left >= *right
+                    ? *left - *right
+                    : *right - *left)
+                + 1U
+          : 0U;
+  if (!valid_bounds || count == 0
+      || count > maximum_container_elements) {
+    report(
+        "FSIM-ELAB-SVPORT-002",
+        "static-array port bounds must specialize to signed 32-bit "
+        "values spanning 1..4096 elements",
+        type.systemverilog_container->span);
+    return std::nullopt;
+  }
+  ContainerType result;
+  result.element_width = static_cast<std::uint32_t>(*width);
+  result.two_state = is_two_state_domain(type.domain);
+  result.signed_elements = type.is_signed;
+  result.fixed = true;
+  result.index_left = static_cast<std::int32_t>(*left);
+  result.index_right = static_cast<std::int32_t>(*right);
+  return result;
+}
+
+std::optional<ContainerObjectId>
+HierarchyBuilder::add_owned_static_port(
+    const frontend::SignalDeclaration& declaration,
+    const std::string_view path,
+    ContainerMap& local,
+    const ConstantEnvironment& environment) {
+  if (const auto existing = local.find(declaration.name);
+      existing != local.end()) {
+    return existing->second;
+  }
+  const auto type = static_port_type(
+      declaration.type, declaration.span, environment);
+  if (!type) {
+    return std::nullopt;
+  }
+  const auto index = design_.container_objects_.size();
+  const auto id = static_cast<ContainerObjectId>(index);
+  if (static_cast<std::size_t>(id) != index) {
+    throw std::length_error{
+        "too many elaborated container objects"};
+  }
+  const auto full_name =
+      std::string{path} + "." + declaration.name;
+  design_.container_object_info_.push_back(
+      ContainerObjectInfo{
+          id,
+          full_name,
+          *type,
+          declaration.span,
+          true,
+          declaration.direction});
+  design_.container_objects_.push_back(
+      ContainerObject{
+          full_name, default_container_value(*type)});
+  local.emplace(declaration.name, id);
+  local.emplace(full_name, id);
+  design_.container_by_name_.emplace(full_name, id);
+  if (path == design_.top_) {
+    design_.container_by_name_.emplace(declaration.name, id);
+  }
+  return id;
+}
+
+void HierarchyBuilder::validate_boundary_type(
+    const frontend::SignalDeclaration& port,
+    const SignalInfo& actual,
+    const std::string& path,
+    const frontend::SourceSpan& source,
+    const bool cross_language) {
+  const auto separator = port.type.spelling.find_last_of('.');
+  const auto simple_type_name =
+      port.type.spelling.substr(
+          separator == std::string::npos ? 0 : separator + 1);
+  if (!port.type.packed_range
+      && !port.type.packed_range_expression
+      && (simple_type_name == "bit_vector"
+          || simple_type_name == "std_logic_vector"
+          || simple_type_name == "std_ulogic_vector")) {
+    report(
+        "FSIM-ELAB-VHARRAY-005",
+        "VHDL array port '" + path + "." + port.name
+            + "' requires a concrete non-null index constraint",
+        source);
+    return;
+  }
+  const auto unsupported_domain =
+      [](const frontend::ValueDomain domain) {
+        return domain == frontend::ValueDomain::Unknown;
+      };
+  if (unsupported_domain(port.type.domain)
+      || unsupported_domain(actual.source_domain)) {
+    report(
+        "FSIM-ELAB-BIND-019",
+        "unsupported value domain on boundary '"
+            + path + "." + port.name + "'",
+        source);
+    return;
+  }
+  if (cross_language
+      && (!port.type.packed_members.empty()
+          || !actual.packed_members.empty())) {
+    report(
+        "FSIM-ELAB-BIND-049",
+        "packed aggregate boundary '" + path + "." + port.name
+            + "' requires a same-language scalar/vector wrapper",
+        source);
+    return;
+  }
+  const bool port_record =
+      !port.type.packed_members.empty()
+      && !port.type.nominal_type.empty();
+  const bool actual_record =
+      !actual.packed_members.empty()
+      && !actual.nominal_type.empty();
+  if (!cross_language
+      && (port_record || actual_record)
+      && (!port_record || !actual_record
+          || port.type.nominal_type != actual.nominal_type)) {
+    report(
+        "FSIM-ELAB-BIND-057",
+        "VHDL record boundary '" + path + "." + port.name
+            + "' requires the same nominal record type",
+        source);
+    return;
+  }
+  const bool port_array = port.type.vhdl_array.has_value();
+  const bool actual_array = actual.vhdl_array.has_value();
+  if (cross_language && (port_array || actual_array)) {
+    report(
+        "FSIM-ELAB-BIND-055",
+        "VHDL array boundary '" + path + "." + port.name
+            + "' requires a same-language scalar/vector wrapper",
+        source);
+    return;
+  }
+  if (!cross_language
+      && (port_array || actual_array)
+      && (!port_array || !actual_array
+          || port.type.nominal_type != actual.nominal_type)) {
+    report(
+        "FSIM-ELAB-BIND-056",
+        "VHDL array boundary '" + path + "." + port.name
+            + "' requires the same nominal array type",
+        source);
+    return;
+  }
+  const bool port_enumeration =
+      !port.type.enumeration_literals.empty();
+  const bool actual_enumeration =
+      !actual.enumeration_literals.empty();
+  if (cross_language && (port_enumeration || actual_enumeration)) {
+    report(
+        "FSIM-ELAB-BIND-052",
+        "VHDL enumeration boundary '" + path + "." + port.name
+            + "' requires a same-language scalar/vector wrapper",
+        source);
+    return;
+  }
+  if (!cross_language
+      && (port_enumeration || actual_enumeration)
+      && (!port_enumeration || !actual_enumeration
+          || port.type.nominal_type != actual.nominal_type)) {
+    report(
+        "FSIM-ELAB-BIND-053",
+        "VHDL enumeration boundary '" + path + "." + port.name
+            + "' requires the same nominal enumeration type",
+        source);
+    return;
+  }
+  if (!cross_language && port_enumeration && actual_enumeration) {
+    const auto bounds =
+        [](const std::optional<frontend::EnumerationRange>& range,
+           const std::size_t literal_count) {
+          if (!range) {
+            return std::pair{
+                std::int64_t{0},
+                static_cast<std::int64_t>(literal_count - 1U)};
+          }
+          return std::pair{
+              std::min(range->left, range->right),
+              std::max(range->left, range->right)};
+        };
+    const auto port_bounds =
+        bounds(
+            port.type.enumeration_range,
+            port.type.enumeration_literals.size());
+    const auto actual_bounds =
+        bounds(
+            actual.enumeration_range,
+            actual.enumeration_literals.size());
+    const auto contains =
+        [](const auto& outer, const auto& inner) {
+          return outer.first <= inner.first
+              && outer.second >= inner.second;
+        };
+    const bool compatible =
+        port.direction == frontend::PortDirection::Input
+            ? contains(port_bounds, actual_bounds)
+        : port.direction == frontend::PortDirection::Output
+            ? contains(actual_bounds, port_bounds)
+            : port_bounds == actual_bounds;
+    if (!compatible) {
+      report(
+          "FSIM-ELAB-BIND-054",
+          "enumeration subtype ranges on boundary '" + path + "."
+              + port.name
+              + "' cannot guarantee a range-safe alias",
+          source);
+    }
+  }
+  const auto width = port.type.width().value_or(1);
+  if (width != actual.width) {
+    report(
+        "FSIM-ELAB-BIND-020",
+        "width mismatch on '" + path + "." + port.name + "': "
+            + std::to_string(width) + " versus "
+            + std::to_string(actual.width),
+        source);
+  }
+  if (port.type.is_signed != actual.is_signed && width > 1) {
+    report(
+        "FSIM-ELAB-BIND-021",
+        "signedness mismatch on '" + path + "." + port.name + "'",
+        source);
+  }
+  if (port.type.domain == frontend::ValueDomain::Integer
+      || actual.source_domain == frontend::ValueDomain::Integer) {
+    const auto bounds =
+        [](const std::optional<frontend::IntegerRange>& range) {
+          if (!range) {
+            return std::pair{
+                std::numeric_limits<std::int32_t>::min(),
+                std::numeric_limits<std::int32_t>::max()};
+          }
+          return std::pair{
+              static_cast<std::int32_t>(
+                  std::min(range->left, range->right)),
+              static_cast<std::int32_t>(
+                  std::max(range->left, range->right))};
+        };
+    const auto port_bounds = bounds(port.type.integer_range);
+    const auto actual_bounds = bounds(actual.integer_range);
+    const auto contains =
+        [](const auto& outer, const auto& inner) {
+          return outer.first <= inner.first
+              && outer.second >= inner.second;
+        };
+    const bool compatible =
+        port.direction == frontend::PortDirection::Input
+            ? contains(port_bounds, actual_bounds)
+        : port.direction == frontend::PortDirection::Output
+            ? contains(actual_bounds, port_bounds)
+            : port_bounds == actual_bounds;
+    if (!compatible) {
+      report(
+          "FSIM-ELAB-BIND-051",
+          "integer subtype ranges on boundary '" + path + "."
+              + port.name
+              + "' cannot guarantee a range-safe alias",
+          source);
+    }
+  }
+  const auto lossy_into_two_state =
+      [](const frontend::ValueDomain destination,
+         const frontend::ValueDomain source_domain) {
+        return is_two_state_domain(destination)
+            && !is_two_state_domain(source_domain);
+      };
+  const bool lossy =
+      port.direction == frontend::PortDirection::Output
+          ? lossy_into_two_state(
+                actual.source_domain, port.type.domain)
+          : lossy_into_two_state(
+                port.type.domain, actual.source_domain);
+  if (lossy) {
+    report(
+        "FSIM-ELAB-BIND-022",
+        "implicit lossy conversion into a 2-state boundary at '"
+            + path + "." + port.name + "' is forbidden",
+        source);
+  }
+}
+
+HierarchyBuilder::PortAliases HierarchyBuilder::connect_instance(
+    const frontend::Instance& instance,
+    const DesignUnit& target,
+    const std::string& path,
+    const SignalMap& parent_signals,
+    const ContainerMap& parent_containers,
+    const std::unordered_set<std::string>&
+        parent_read_only_containers,
+    const Binding* binding,
+    const bool cross_language) {
+  const auto* ports = unit_ports(parsed_, target);
+  if (ports == nullptr) {
+    report(
+        "FSIM-ELAB-002",
+        "architecture '" + target.name
+            + "' has no matching entity",
+        target.span);
+    return {};
+  }
+  return connect_ports(
+      instance,
+      *ports,
+      path,
+      parent_signals,
+      parent_containers,
+      parent_read_only_containers,
+      binding,
+      cross_language,
+      target.language == frontend::Language::Vhdl2008);
+}
+
+frontend::SignalDeclaration
+HierarchyBuilder::external_port_declaration(
+    const ExternalPort& port) {
+  return {
+      port.name,
+      port.type,
+      port.direction,
+      true,
+      {}};
+}
+
+frontend::SignalDeclaration
+HierarchyBuilder::foreign_port_declaration(
+    const ForeignPort& port) {
+  return {
+      port.name,
+      port.type,
+      port.direction,
+      true,
+      {}};
+}
+
+}  // namespace fsim::elaboration

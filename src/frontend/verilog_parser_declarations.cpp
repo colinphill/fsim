@@ -129,10 +129,16 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       }
       if (at(TokenKind::LeftBracket)) {
         const auto dimension = current();
-        error(dimension, "FSIM-SV-UNSUPPORTED-006",
-              "unpacked port dimensions are not implemented in this "
-              "frontend slice");
-        skip_balanced(TokenKind::LeftBracket, TokenKind::RightBracket);
+        (void)parse_optional_container_dimension(declaration.type);
+        if (declaration.type.systemverilog_container
+            && declaration.type.systemverilog_container->kind
+                != SystemVerilogContainerKind::StaticArray) {
+          error(
+              dimension,
+              "FSIM-SV-SEM-084",
+              "module container ports support only one-dimensional "
+              "static unpacked arrays");
+        }
       }
       const auto duplicate = std::find_if(
           unit.ports.begin(),
@@ -913,6 +919,36 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 
     if (declaration_type.domain == ValueDomain::String
         || declaration_type.systemverilog_container) {
+      if (declaration_type.systemverilog_container
+          && spec.direction != PortDirection::Unknown) {
+        if (declaration_type.systemverilog_container->kind
+            != SystemVerilogContainerKind::StaticArray) {
+          error(
+              name,
+              "FSIM-SV-SEM-084",
+              "module container ports support only one-dimensional "
+              "static unpacked arrays");
+        }
+        SignalDeclaration declaration{
+            name.text,
+            std::move(declaration_type),
+            spec.direction,
+            true,
+            span_from(start, previous())};
+        if (!non_ansi_ports_.contains(declaration.name)
+            || !body_port_declarations_.insert(
+                    declaration.name).second) {
+          error(
+              name,
+              "FSIM-SV-SEM-004",
+              "duplicate port declaration '" + declaration.name + "'");
+        }
+        update_or_add_port(unit, std::move(declaration));
+        if (!match(TokenKind::Comma)) {
+          break;
+        }
+        continue;
+      }
       const auto duplicate_variable = std::ranges::any_of(
           unit.variables,
           [&](const VariableDeclaration& variable) {

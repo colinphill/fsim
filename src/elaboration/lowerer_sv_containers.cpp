@@ -207,6 +207,21 @@ void Lowerer::lower_container_method(
     return;
   }
   const auto& receiver = call.operands.front();
+  const auto mutates_receiver =
+      call.text == ".delete"
+      || call.text == ".push_front"
+      || call.text == ".push_back"
+      || call.text == ".pop_front"
+      || call.text == ".pop_back";
+  if (mutates_receiver
+      && read_only_container_objects_.contains(
+          receiver.text)) {
+    report(
+        "FSIM-ELAB-SVPORT-009",
+        "an input static-array port is read-only within its module",
+        receiver.span);
+    return;
+  }
   const auto target = lower_container_expression(receiver);
   const auto* type = object_type(receiver.text);
   if (!target || type == nullptr) {
