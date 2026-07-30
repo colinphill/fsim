@@ -795,7 +795,7 @@ Type VerilogParser::parse_parameter_type() {
   if (keyword("string")) {
     (void)advance();
     type.spelling = "string";
-    type.domain = ValueDomain::Unknown;
+    type.domain = ValueDomain::String;
     type.is_signed = false;
     return type;
   }

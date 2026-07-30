@@ -879,6 +879,14 @@ SpecializedUnit specialize_unit(
             diagnostics,
             source.language);
     }
+    for (auto& variable : result.unit.variables) {
+        substitute_parameters(
+            variable,
+            result.environment,
+            domains,
+            diagnostics,
+            source.language);
+    }
     for (auto& function : result.unit.functions) {
         substitute_parameters(
             function.return_type,

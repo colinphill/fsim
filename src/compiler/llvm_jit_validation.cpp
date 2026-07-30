@@ -23,10 +23,13 @@ using runtime::simir::Branch;
 using runtime::simir::Call;
 using runtime::simir::CallStack;
 using runtime::simir::Concatenate;
+using runtime::simir::ConcatenateStrings;
+using runtime::simir::CompareStrings;
 using runtime::simir::ConditionalSelect;
 using runtime::simir::CountOnes;
 using runtime::simir::CountBits;
 using runtime::simir::CopyRegister;
+using runtime::simir::CopyStringRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::Display;
 using runtime::simir::DynamicExtract;
@@ -45,6 +48,7 @@ using runtime::simir::IntegerUnary;
 using runtime::simir::IntegerUnaryOperator;
 using runtime::simir::Jump;
 using runtime::simir::LoadConstant;
+using runtime::simir::LoadStringConstant;
 using runtime::simir::LogicalBinary;
 using runtime::simir::LogicalBinaryOperator;
 using runtime::simir::LogicalNot;
@@ -55,9 +59,15 @@ using runtime::simir::Operation;
 using runtime::simir::Pause;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
+using runtime::simir::ReadStringObject;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
+using runtime::simir::StringRegisterId;
+using runtime::simir::StringIndex;
+using runtime::simir::StringLength;
+using runtime::simir::StringDisplay;
+using runtime::simir::StringReplaceByte;
 using runtime::simir::RandomValue;
 using runtime::simir::Report;
 using runtime::simir::Return;
@@ -94,7 +104,9 @@ using runtime::simir::WriteProjectedWaveformSlice;
 using runtime::simir::WriteUpdate;
 using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
+using runtime::simir::WriteStringObject;
 using runtime::simir::Yield;
+using runtime::simir::maximum_string_bytes;
 
 
 template <class... Ts> struct Overloaded : Ts... {
@@ -154,6 +166,8 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
     return "call-stack underflow";
   case JitGeneratedRuntimeErrorReason::call_stack_target:
     return "call-stack return target is invalid";
+  case JitGeneratedRuntimeErrorReason::string_callback_failure:
+    return "mutable string runtime callback failed";
   }
   return "unknown generated runtime error";
 }
@@ -183,6 +197,7 @@ decode_generated_runtime_error(const std::uint64_t value) noexcept {
   case JitGeneratedRuntimeErrorReason::call_stack_overflow:
   case JitGeneratedRuntimeErrorReason::call_stack_underflow:
   case JitGeneratedRuntimeErrorReason::call_stack_target:
+  case JitGeneratedRuntimeErrorReason::string_callback_failure:
     return reason;
   }
   return std::nullopt;
@@ -297,6 +312,19 @@ validate_process(const Process &process,
              std::string{role} + " register ID is out of range");
     }
   };
+
+  const auto validate_string_register =
+      [&](const StringRegisterId id,
+          const std::size_t instruction,
+          const std::string_view role) {
+        if (id >= process.string_register_count) {
+          reject(
+              process,
+              instruction,
+              std::string{role}
+                  + " string register ID is out of range");
+        }
+      };
 
   const auto find_root = [&](const RegisterId id) {
     auto root = id;
@@ -543,6 +571,89 @@ validate_process(const Process &process,
               record_use(operation.source, index);
               unify_registers(
                   operation.destination, operation.source, index);
+            },
+            [&](const LoadStringConstant& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.destination, index, "destination");
+              if (operation.value.size() > maximum_string_bytes) {
+                reject(
+                    process,
+                    index,
+                    "LoadStringConstant exceeds the byte limit");
+              }
+            },
+            [&](const CopyStringRegister& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.destination, index, "destination");
+              validate_string_register(
+                  operation.source, index, "source");
+            },
+            [&](const ReadStringObject& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.destination, index, "destination");
+              (void)operation.object;
+            },
+            [&](const WriteStringObject& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.source, index, "source");
+              (void)operation.object;
+            },
+            [&](const ConcatenateStrings& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.destination, index, "destination");
+              for (const auto operand : operation.operands) {
+                validate_string_register(
+                    operand, index, "source");
+              }
+            },
+            [&](const CompareStrings& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.lhs, index, "left");
+              validate_string_register(
+                  operation.rhs, index, "right");
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 1U, index);
+            },
+            [&](const StringLength& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.source, index, "source");
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+            },
+            [&](const StringIndex& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.source, index, "source");
+              record_use(operation.index, index);
+              constrain_width(operation.index, 32U, index);
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 8U, index);
+            },
+            [&](const StringReplaceByte& operation) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.target, index, "target");
+              record_use(operation.index, index);
+              record_use(operation.source, index);
+              constrain_width(operation.index, 32U, index);
+              constrain_width(operation.source, 8U, index);
+            },
+            [&](const StringDisplay& operation) {
+              result.uses_strings = true;
+              result.uses_output = result.uses_output
+                  || !operation.postponed;
+              result.uses_postponed_output =
+                  result.uses_postponed_output
+                  || operation.postponed;
+              validate_string_register(
+                  operation.source, index, "source");
             },
             [&](const UnaryNot &operation) {
               record_definition(operation.destination, index);

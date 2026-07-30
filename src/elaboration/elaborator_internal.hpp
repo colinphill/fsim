@@ -715,6 +715,8 @@ public:
     Lowerer(
         ElaboratedDesign& design,
         const std::unordered_map<std::string, SignalId>& signals,
+        const std::unordered_map<std::string, StringObjectId>&
+            string_objects,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_types,
         const std::unordered_map<
@@ -908,6 +910,14 @@ private:
         const std::size_t expected_width,
         const frontend::Type* expected_type = nullptr);
 
+    std::optional<StringRegisterId> lower_string_expression(
+        const Expression& expression);
+
+    [[nodiscard]] bool is_string_expression(
+        const Expression& expression) const;
+
+    StringRegisterId allocate_string_register();
+
     ExpressionAttempt lower_primary_expression(
         const Expression& expression,
         std::size_t expected_width,
@@ -1009,6 +1019,8 @@ private:
 
     ElaboratedDesign& design_;
     const std::unordered_map<std::string, SignalId>& signals_;
+    const std::unordered_map<std::string, StringObjectId>&
+        string_objects_;
     const std::unordered_map<
         std::string, const frontend::Type*>& visible_types_;
     const std::unordered_map<
@@ -1019,9 +1031,12 @@ private:
     std::vector<Diagnostic>& diagnostics_;
     Process process_;
     RegisterId next_register_{};
+    StringRegisterId next_string_register_{};
     std::vector<std::size_t> register_widths_;
     std::vector<frontend::ValueDomain> register_domains_;
     std::unordered_map<std::string, RegisterId> locals_;
+    std::unordered_map<std::string, StringRegisterId>
+        string_locals_;
     std::unordered_map<std::string, bool> local_signed_;
     std::unordered_map<
         std::string, std::optional<frontend::PackedRange>>
@@ -1048,7 +1063,11 @@ private:
     struct FunctionFrame {
         const frontend::FunctionDeclaration* source{};
         RegisterId result{};
+        StringRegisterId string_result{};
+        bool result_is_string{};
         std::vector<RegisterId> arguments;
+        std::vector<StringRegisterId> string_arguments;
+        std::vector<bool> argument_is_string;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};
@@ -1068,6 +1087,8 @@ private:
     struct TaskFrame {
         const frontend::TaskDeclaration* source{};
         std::vector<RegisterId> arguments;
+        std::vector<StringRegisterId> string_arguments;
+        std::vector<bool> argument_is_string;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};

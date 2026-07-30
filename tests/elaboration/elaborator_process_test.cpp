@@ -1564,6 +1564,109 @@ endmodule
             ->signal_value(*wildcard_latched)
             .to_msb_string()
         == "1");
+
+    const auto mutable_strings = fsim::frontend::parse_text(
+        "mutable_strings.sv",
+        R"(
+module mutable_strings;
+  string title = "fsim";
+  function automatic string decorate(input string value);
+    string suffix = "-v1";
+    return {value, suffix};
+  endfunction
+  task automatic remember(
+      input string value,
+      output string copied);
+    string temporary;
+    #1;
+    temporary = {value, "!"};
+    copied = temporary;
+  endtask
+  initial begin : worker
+    string copy;
+    remember(decorate(title), copy);
+    if (copy != "")
+      copy[0] = "F";
+    if (copy.len() == 8)
+      title = copy;
+    $display("%s", title);
+    $finish;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(mutable_strings.ok());
+    const auto elaborated_strings =
+        fsim::elaboration::elaborate(
+            mutable_strings.design, "sv:work.mutable_strings");
+    assert(elaborated_strings.ok());
+    assert(
+        elaborated_strings.design->string_objects().size() == 1
+        && elaborated_strings.design->string_objects()[0].name
+            == "mutable_strings.title");
+    const auto string_id =
+        elaborated_strings.design->string_objects()[0].id;
+    auto string_interpreter =
+        elaborated_strings.design->create_interpreter();
+    std::vector<std::string> string_output;
+    string_interpreter->set_output_hook(
+        [&](const auto,
+            const std::string_view text,
+            const bool,
+            const auto,
+            const auto) {
+          string_output.emplace_back(text);
+        });
+    const auto string_result = string_interpreter->run();
+    assert(
+        string_result.status
+            == fsim::runtime::RunStatus::stopped
+        && string_interpreter->string_object_value(string_id)
+            == "Fsim-v1!"
+        && string_output
+            == std::vector<std::string>{"Fsim-v1!"}
+        && string_result.time == 1);
+
+    const auto nonblocking_string =
+        fsim::frontend::parse_text(
+            "nonblocking_string.sv",
+            R"(
+module nonblocking_string;
+  string value;
+  initial value <= "bad";
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(nonblocking_string.ok());
+    const auto rejected_nonblocking_string =
+        fsim::elaboration::elaborate(
+            nonblocking_string.design,
+            "sv:work.nonblocking_string");
+    assert(!rejected_nonblocking_string.ok());
+    assert(has_diagnostic(
+        rejected_nonblocking_string,
+        "FSIM-ELAB-SVSTRING-013"));
+
+    const auto oversize_source =
+        std::string{"module oversize_string; string value = \""}
+        + std::string(
+            fsim::runtime::simir::maximum_string_bytes + 1U,
+            'x')
+        + "\"; endmodule";
+    const auto oversize_string =
+        fsim::frontend::parse_text(
+            "oversize_string.sv",
+            oversize_source,
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(oversize_string.ok());
+    const auto rejected_oversize_string =
+        fsim::elaboration::elaborate(
+            oversize_string.design,
+            "sv:work.oversize_string");
+    assert(!rejected_oversize_string.ok());
+    assert(has_diagnostic(
+        rejected_oversize_string,
+        "FSIM-ELAB-SVSTRING-007"));
 }
 
 } // namespace fsim::tests::elaboration

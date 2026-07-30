@@ -33,6 +33,24 @@ SignalId Interpreter::add_signal(Signal signal) {
   return id;
 }
 
+StringObjectId Interpreter::add_string_object(StringObject object) {
+  if (impl_->started) {
+    throw std::logic_error{
+        "cannot add a SimIR string object after start"};
+  }
+  if (object.initial_value.size() > maximum_string_bytes) {
+    throw std::length_error{"SimIR string object exceeds byte limit"};
+  }
+  const auto id =
+      static_cast<StringObjectId>(impl_->string_objects.size());
+  if (static_cast<std::size_t>(id)
+      != impl_->string_objects.size()) {
+    throw std::length_error{"too many SimIR string objects"};
+  }
+  impl_->string_objects.push_back(std::move(object));
+  return id;
+}
+
 ProcessId Interpreter::add_process(Process process) {
   if (impl_->started) {
     throw std::logic_error("cannot add a SimIR process after start");
@@ -75,6 +93,19 @@ ProcessId Interpreter::add_process(Process process) {
       throw std::invalid_argument{"duplicate SimIR debug-local name"};
     }
   }
+  std::set<std::string> string_local_names;
+  for (const auto& local : process.debug_string_locals) {
+    if (local.name.empty()
+        || local.register_id >= process.string_register_count) {
+      throw std::invalid_argument{
+          "invalid SimIR string debug-local metadata"};
+    }
+    if (!string_local_names.insert(local.name).second
+        || local_names.contains(local.name)) {
+      throw std::invalid_argument{
+          "duplicate SimIR debug-local name"};
+    }
+  }
   std::set<SignalId> outputs;
   for (const auto& operation : process.operations) {
     const auto signal = output_signal(operation);
@@ -93,6 +124,7 @@ ProcessId Interpreter::add_process(Process process) {
 
   Impl::ProcessState state;
   state.registers.assign(process.register_count, PackedLogic4{});
+  state.string_registers.assign(process.string_register_count, {});
   state.random_state = Impl::initial_random_state(
       impl_->root_seed, id);
   state.waiting_on_static = !process.initialize;
@@ -231,6 +263,21 @@ const PackedLogic4 &Interpreter::signal_value(SignalId signal) const {
   return impl_->get_signal(signal).initial_value;
 }
 
+const std::string& Interpreter::string_object_value(
+    const StringObjectId object) const {
+  return impl_->get_string_object(object).initial_value;
+}
+
+void Interpreter::deposit_string_object(
+    const StringObjectId object,
+    const std::string_view value) {
+  if (value.size() > maximum_string_bytes) {
+    throw std::length_error{
+        "SimIR string object exceeds byte limit"};
+  }
+  impl_->get_string_object(object).initial_value = value;
+}
+
 const PackedLogic4& Interpreter::driver_value(
     const ProcessId process,
     const SignalId signal) const {
@@ -255,6 +302,21 @@ PackedLogic4 Interpreter::read_debug_local(
     throw std::logic_error{"SimIR debug local has not been initialized"};
   }
   return value;
+}
+
+std::string Interpreter::read_debug_string_local(
+    const ProcessId process,
+    const std::size_t local_index) const {
+  auto& state = impl_->get_process(process);
+  if (local_index >= state.program.debug_string_locals.size()) {
+    throw std::out_of_range{"invalid SimIR string debug-local index"};
+  }
+  const auto& local =
+      state.program.debug_string_locals[local_index];
+  if (state.executor) {
+    return state.executor->read_string_register(local.register_id);
+  }
+  return state.string_registers.at(local.register_id);
 }
 
 bool Interpreter::stopped_by_design() const noexcept {

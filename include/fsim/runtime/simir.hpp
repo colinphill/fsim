@@ -20,6 +20,8 @@
 namespace fsim::runtime::simir {
 
 using RegisterId = std::uint32_t;
+using StringRegisterId = std::uint32_t;
+using StringObjectId = std::uint32_t;
 using SignalId = std::uint32_t;
 using ProcessId = std::uint32_t;
 using InstructionIndex = std::uint32_t;
@@ -61,6 +63,66 @@ struct SignalActive {
 struct CopyRegister {
   RegisterId destination{};
   RegisterId source{};
+};
+
+inline constexpr std::size_t maximum_string_bytes = 4096;
+
+/// Construct a process-local byte string from immutable SimIR literal bytes.
+struct LoadStringConstant {
+  StringRegisterId destination{};
+  std::string value;
+};
+
+/// Value-copy one process-local byte string.
+struct CopyStringRegister {
+  StringRegisterId destination{};
+  StringRegisterId source{};
+};
+
+/// Read or replace one module-owned mutable string object.
+struct ReadStringObject {
+  StringRegisterId destination{};
+  StringObjectId object{};
+};
+
+struct WriteStringObject {
+  StringObjectId object{};
+  StringRegisterId source{};
+};
+
+/// Concatenate byte strings in source order.
+struct ConcatenateStrings {
+  StringRegisterId destination{};
+  std::vector<StringRegisterId> operands;
+};
+
+/// Compare two byte strings and produce a known scalar logic result.
+struct CompareStrings {
+  RegisterId destination{};
+  StringRegisterId lhs{};
+  StringRegisterId rhs{};
+  bool not_equal{};
+};
+
+/// Produce a known 32-bit two-state byte count.
+struct StringLength {
+  RegisterId destination{};
+  StringRegisterId source{};
+};
+
+/// Read or replace one byte selected by a known, in-range integral index.
+struct StringIndex {
+  RegisterId destination{};
+  StringRegisterId source{};
+  RegisterId index{};
+  bool signed_index{true};
+};
+
+struct StringReplaceByte {
+  StringRegisterId target{};
+  RegisterId index{};
+  RegisterId source{};
+  bool signed_index{true};
 };
 
 struct UnaryNot {
@@ -617,6 +679,14 @@ struct FormatDisplay {
   bool zero_pad{};
 };
 
+struct StringDisplay {
+  StringRegisterId source{};
+  std::string prefix;
+  std::string suffix;
+  bool newline{true};
+  bool postponed{};
+};
+
 /// Emit the current global simulation tick between literal prefix/suffix
 /// text. The tick is captured when this operation executes.
 struct TimeDisplay {
@@ -692,7 +762,10 @@ struct Halt {};
 
 using Operation =
     std::variant<LoadConstant, ReadSignal, SignalEvent, SignalLastValue,
-                 SignalLastEvent, SignalActive, CopyRegister, UnaryNot,
+                 SignalLastEvent, SignalActive, CopyRegister,
+                 LoadStringConstant, CopyStringRegister, ReadStringObject,
+                 WriteStringObject, ConcatenateStrings, CompareStrings,
+                 StringLength, StringIndex, StringReplaceByte, UnaryNot,
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
                  Shift, Extract, DynamicExtract, Concatenate, Binary, Insert,
                  DynamicInsert,
@@ -711,7 +784,8 @@ using Operation =
                  WriteProjectedWaveformDynamicSlice,
                  WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
                  Call, Return, Branch, DebugPoint, Assert, Display, FormatDisplay,
-                 TimeDisplay, MonitorInstall, MonitorControl, RandomValue,
+                 StringDisplay, TimeDisplay, MonitorInstall, MonitorControl,
+                 RandomValue,
                  Report, Pause, Stop, Halt>;
 
 enum class ResolutionKind : std::uint8_t {
@@ -730,6 +804,11 @@ struct Signal {
   PackedLogic4 initial_value;
   ResolutionKind resolution{ResolutionKind::none};
   ValueKind value_kind{ValueKind::logic4};
+};
+
+struct StringObject {
+  std::string name;
+  std::string initial_value;
 };
 
 struct Sensitivity {
@@ -751,11 +830,19 @@ struct DebugLocal {
   std::vector<std::string> enumeration_literals;
 };
 
+struct DebugStringLocal {
+  std::string name;
+  StringRegisterId register_id{};
+  SourceLocation source;
+};
+
 struct Process {
   ProcessId id{};
   std::string name;
   std::size_t register_count{};
+  std::size_t string_register_count{};
   std::vector<DebugLocal> debug_locals;
+  std::vector<DebugStringLocal> debug_string_locals;
   std::vector<Sensitivity> static_sensitivity;
   std::vector<Operation> operations;
   std::vector<ValueKind> register_value_kinds;
@@ -785,6 +872,16 @@ public:
 
   [[nodiscard]] virtual PackedLogic4 read_signal(SignalId signal) const = 0;
   virtual void write_blocking(SignalId signal, PackedLogic4 value) = 0;
+
+  [[nodiscard]] virtual std::string
+  read_string_object(StringObjectId) const {
+    throw std::logic_error{
+        "alternate process executor cannot read string objects"};
+  }
+  virtual void write_string_object(StringObjectId, std::string_view) {
+    throw std::logic_error{
+        "alternate process executor cannot write string objects"};
+  }
 
   /// Allocation-free single-word access used by generated scalar/vector code.
   ///
@@ -1180,6 +1277,19 @@ public:
     throw std::logic_error{
         "alternate process executor does not expose writable registers"};
   }
+
+  [[nodiscard]] virtual std::string
+  read_string_register(StringRegisterId) const {
+    throw std::logic_error{
+        "alternate process executor does not expose string registers"};
+  }
+
+  virtual void write_string_register(
+      StringRegisterId, std::string_view) {
+    throw std::logic_error{
+        "alternate process executor does not expose writable string "
+        "registers"};
+  }
 };
 
 class InterpreterError : public std::runtime_error {
@@ -1250,6 +1360,7 @@ public:
   Interpreter &operator=(const Interpreter &) = delete;
 
   [[nodiscard]] SignalId add_signal(Signal signal);
+  [[nodiscard]] StringObjectId add_string_object(StringObject object);
   [[nodiscard]] ProcessId add_process(Process process);
 
   /// Replace one process's reference evaluator with an alternate executor.
@@ -1281,11 +1392,17 @@ public:
                              SimulationTick delay, StableOrder order = 0);
 
   [[nodiscard]] const PackedLogic4 &signal_value(SignalId signal) const;
+  [[nodiscard]] const std::string&
+  string_object_value(StringObjectId object) const;
+  void deposit_string_object(
+      StringObjectId object, std::string_view value);
   /// Return one process-owned driver slot. For an unresolved signal this is
   /// the single underlying driven value.
   [[nodiscard]] const PackedLogic4& driver_value(
       ProcessId process, SignalId signal) const;
   [[nodiscard]] PackedLogic4 read_debug_local(
+      ProcessId process, std::size_t local_index) const;
+  [[nodiscard]] std::string read_debug_string_local(
       ProcessId process, std::size_t local_index) const;
   /// True once a language-level Stop operation (`$finish` or equivalent) has
   /// executed. External scheduler stop requests do not set this flag.

@@ -144,6 +144,57 @@ struct ValueOperationLowerer {
   void lower(const runtime::simir::ConditionalSelect& operation);
 };
 
+struct StringOperationLowerer {
+  llvm::Module& module;
+  llvm::IRBuilder<>& builder;
+  std::vector<RegisterSlot>& registers;
+  llvm::LLVMContext& context;
+  llvm::Type* i32;
+  llvm::Type* i64;
+  llvm::Value* context_pointer;
+  std::uint32_t process;
+  std::uint32_t instruction;
+  std::array<llvm::Value*, 10> callbacks;
+  std::array<llvm::FunctionType*, 10> callback_types;
+  std::function<void(
+      llvm::Value*,
+      JitGeneratedRuntimeErrorReason,
+      std::string_view)> runtime_error_if;
+  std::function<void()> branch_to_next;
+
+  StringOperationLowerer(
+      llvm::Module& module,
+      llvm::IRBuilder<>& builder,
+      std::vector<RegisterSlot>& registers,
+      llvm::LLVMContext& context,
+      llvm::Type* i32,
+      llvm::Type* i64,
+      llvm::Value* context_pointer,
+      std::uint32_t process,
+      std::uint32_t instruction,
+      llvm::StructType* runtime_type,
+      llvm::Value* runtime_argument,
+      std::function<void(
+          llvm::Value*,
+          JitGeneratedRuntimeErrorReason,
+          std::string_view)> runtime_error_if,
+      std::function<void()> branch_to_next);
+
+  void lower(const runtime::simir::LoadStringConstant& operation);
+  void lower(const runtime::simir::CopyStringRegister& operation);
+  void lower(const runtime::simir::ReadStringObject& operation);
+  void lower(const runtime::simir::WriteStringObject& operation);
+  void lower(const runtime::simir::ConcatenateStrings& operation);
+  void lower(const runtime::simir::CompareStrings& operation);
+  void lower(const runtime::simir::StringLength& operation);
+  void lower(const runtime::simir::StringIndex& operation);
+  void lower(const runtime::simir::StringReplaceByte& operation);
+  void lower(const runtime::simir::StringDisplay& operation);
+
+private:
+  void check(llvm::Value* status, std::string_view label);
+};
+
 struct ControlFlowOperationLowerer {
   llvm::IRBuilder<>& builder;
   std::vector<RegisterSlot>& registers;

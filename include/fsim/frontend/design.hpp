@@ -38,6 +38,7 @@ enum class ValueDomain {
   Logic9,
   Boolean,
   Integer,
+  String,
 };
 
 struct PackedRange {
@@ -1061,6 +1062,10 @@ struct DesignUnit {
   std::vector<ParameterDeclaration> parameters;
   std::vector<SignalDeclaration> ports;
   std::vector<SignalDeclaration> signals;
+  // SystemVerilog module-scope variable objects that do not have net/signal
+  // semantics. Mutable strings live here so later DesignIR lowering can give
+  // them stable object identities without pretending they are packed nets.
+  std::vector<VariableDeclaration> variables;
   std::vector<FunctionDeclaration> functions;
   std::vector<TaskDeclaration> tasks;
   std::vector<ProcedureDeclaration> procedures;

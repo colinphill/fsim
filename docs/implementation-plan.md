@@ -3697,6 +3697,45 @@ files with an empty allowlist and a maximum of 1,999 lines. The exact LLVM
 70.73 seconds, and Release passed all 55 configured tests in 32.00 seconds on
 2026-07-30. No CI state was inspected.
 
+### Sixty-eighth feature batch — bounded SystemVerilog runtime strings
+
+Mutable `string` module objects, automatic locals, function results/formals,
+and task formals now use a distinct byte-string runtime domain. Stable
+elaborated object and SimIR register IDs drive bounded value-copy storage for
+literals, empty initialization, blocking assignment, concatenation,
+equality/inequality, byte indexing and replacement, `len()`, `%s` output,
+nested automatic functions, and suspending-task copy-out. Values persist
+across native wait/resume boundaries and every object is limited to 4,096
+bytes. Oversize construction, invalid indices, mixed equality, incompatible
+calls, nonblocking or timed writes, and mixed-language boundaries produce
+deterministic diagnostics.
+
+The append-only plain-C JIT runtime ABI adds string operations after the
+previous 352-byte tail without exposing C++ string or allocator layout.
+Generated LLVM O0/O2 processes use executor-owned string registers and
+operation callbacks for object access, copies, concatenation, comparison,
+length, indexing, replacement, and output. Callback failures remain contained
+and return a generated execution status with the current source instruction.
+The versioned native-object key records string register layout, exact literal
+bytes, every string operation field, the 4,096-byte bound, and transitive
+callable/source provenance.
+
+Debugger `locals` and `show` render escaped live string values, including
+suspended automatic task locals. Module strings accept bounded `deposit`;
+`force` is rejected explicitly because retained strings are objects rather
+than resolved signals. The application differential proves interpreter,
+LLVM O0, and LLVM O2 output/final-object parity, native compilation without
+fallback, two cold stores followed by two warm hits, and selective
+invalidation of only the module whose literal changes.
+
+The focused warnings-as-errors frontend, runtime, elaboration, LLVM,
+application, diagnostic-catalog, and source-budget gates passed. The catalog
+covers 1,085 production codes and the source gate covers 270 authored files
+with an empty allowlist and a maximum of 1,999 lines. The exact LLVM 22.1.8
+warnings-as-errors Debug regression passed all 56 configured tests in 68.76
+seconds, and Release passed all 56 configured tests in 31.25 seconds on
+2026-07-30. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

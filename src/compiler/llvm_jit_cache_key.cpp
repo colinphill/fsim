@@ -22,10 +22,13 @@ using runtime::simir::BinaryOperator;
 using runtime::simir::Branch;
 using runtime::simir::Call;
 using runtime::simir::Concatenate;
+using runtime::simir::ConcatenateStrings;
+using runtime::simir::CompareStrings;
 using runtime::simir::ConditionalSelect;
 using runtime::simir::CountOnes;
 using runtime::simir::CountBits;
 using runtime::simir::CopyRegister;
+using runtime::simir::CopyStringRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::Display;
 using runtime::simir::DynamicExtract;
@@ -44,6 +47,7 @@ using runtime::simir::IntegerUnary;
 using runtime::simir::IntegerUnaryOperator;
 using runtime::simir::Jump;
 using runtime::simir::LoadConstant;
+using runtime::simir::LoadStringConstant;
 using runtime::simir::LogicalBinary;
 using runtime::simir::LogicalBinaryOperator;
 using runtime::simir::LogicalNot;
@@ -54,6 +58,7 @@ using runtime::simir::Operation;
 using runtime::simir::Pause;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
+using runtime::simir::ReadStringObject;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
@@ -67,6 +72,10 @@ using runtime::simir::SignalEvent;
 using runtime::simir::SignalLastEvent;
 using runtime::simir::SignalLastValue;
 using runtime::simir::Stop;
+using runtime::simir::StringDisplay;
+using runtime::simir::StringIndex;
+using runtime::simir::StringLength;
+using runtime::simir::StringReplaceByte;
 using runtime::simir::TimeDisplay;
 using runtime::simir::UnaryNot;
 using runtime::simir::UnknownBranchPolicy;
@@ -93,11 +102,12 @@ using runtime::simir::WriteProjectedWaveformSlice;
 using runtime::simir::WriteUpdate;
 using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateSlice;
+using runtime::simir::WriteStringObject;
 using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v20";
+    "fsim-llvm-native-object-v21";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -168,6 +178,13 @@ void add_dynamic_index_key(
   add_key_u64(builder, "process-id", process.id);
   builder.add("process-name", process.name);
   add_key_u64(builder, "register-count", process.register_count);
+  add_key_u64(
+      builder, "string-register-count", process.string_register_count);
+  builder.add("mutable-string-semantics", "simir-string-layout-v1");
+  add_key_u64(
+      builder,
+      "mutable-string-byte-limit",
+      runtime::simir::maximum_string_bytes);
   add_key_u64(
       builder,
       "register-value-kind-count",
@@ -268,6 +285,68 @@ void add_dynamic_index_key(
               builder.add("operation", "CopyRegister");
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "source", value.source);
+            },
+            [&](const LoadStringConstant& value) {
+              builder.add("operation", "LoadStringConstant");
+              add_key_u64(builder, "destination", value.destination);
+              builder.add("literal-bytes", value.value);
+            },
+            [&](const CopyStringRegister& value) {
+              builder.add("operation", "CopyStringRegister");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const ReadStringObject& value) {
+              builder.add("operation", "ReadStringObject");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "object", value.object);
+            },
+            [&](const WriteStringObject& value) {
+              builder.add("operation", "WriteStringObject");
+              add_key_u64(builder, "object", value.object);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const ConcatenateStrings& value) {
+              builder.add("operation", "ConcatenateStrings");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(
+                  builder, "operand-count", value.operands.size());
+              for (const auto operand : value.operands) {
+                add_key_u64(builder, "operand", operand);
+              }
+            },
+            [&](const CompareStrings& value) {
+              builder.add("operation", "CompareStrings");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "lhs", value.lhs);
+              add_key_u64(builder, "rhs", value.rhs);
+              add_key_u64(
+                  builder, "not-equal", value.not_equal ? 1U : 0U);
+            },
+            [&](const StringLength& value) {
+              builder.add("operation", "StringLength");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+            },
+            [&](const StringIndex& value) {
+              builder.add("operation", "StringIndex");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "index", value.index);
+              add_key_u64(
+                  builder,
+                  "signed-index",
+                  value.signed_index ? 1U : 0U);
+            },
+            [&](const StringReplaceByte& value) {
+              builder.add("operation", "StringReplaceByte");
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "index", value.index);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder,
+                  "signed-index",
+                  value.signed_index ? 1U : 0U);
             },
             [&](const UnaryNot &value) {
               builder.add("operation", "UnaryNot");
@@ -704,6 +783,18 @@ void add_dynamic_index_key(
                   "zero-pad",
                   value.zero_pad ? 1U : 0U);
             },
+            [&](const StringDisplay& value) {
+              builder.add("operation", "StringDisplay");
+              add_key_u64(builder, "source", value.source);
+              builder.add("prefix", value.prefix);
+              builder.add("suffix", value.suffix);
+              add_key_u64(
+                  builder, "newline", value.newline ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "postponed",
+                  value.postponed ? 1U : 0U);
+            },
             [&](const MonitorInstall& value) {
               builder.add("operation", "MonitorInstall");
               add_key_u64(
@@ -960,11 +1051,13 @@ void add_dynamic_index_key(
 [[nodiscard]] JitProcessFrameLayout
 make_frame_layout(const std::string_view cache_key,
                   const std::size_t register_count,
+                  const std::size_t string_register_count,
                   const bool uses_logic9) {
   return {
       cache_key_word(cache_key, 0),
       cache_key_word(cache_key, 16),
       static_cast<std::uint32_t>(register_count),
+      static_cast<std::uint32_t>(string_register_count),
       uses_logic9,
   };
 }

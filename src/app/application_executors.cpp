@@ -24,6 +24,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
       register_logic9_plane3_.resize(layout.register_count);
     }
     register_initialized_.resize(layout.register_count);
+    string_registers_.resize(layout.string_register_count);
     jit_.initialize_frame(
         handle_,
         frame_,
@@ -43,6 +44,7 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     }
 
     CallbackState callback_state{
+        this,
         &context,
         &process_,
         signal_widths_,
@@ -106,6 +108,16 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     runtime.write_projected_waveform_slice_logic9 =
         write_projected_waveform_slice_logic9;
     runtime.write_formatted_logic9 = write_formatted_logic9;
+    runtime.load_string = load_string;
+    runtime.copy_string = copy_string;
+    runtime.read_string_object = read_string_object;
+    runtime.write_string_object = write_string_object;
+    runtime.concatenate_strings = concatenate_strings;
+    runtime.compare_strings = compare_strings;
+    runtime.string_length = string_length;
+    runtime.string_index = string_index;
+    runtime.string_replace_byte = string_replace_byte;
+    runtime.write_string_output = write_string_output;
 
     fsim_jit_resume_result_v1 result{};
     result.abi_version = FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1;
@@ -192,6 +204,12 @@ LlvmProcessExecutor::LlvmProcessExecutor(
                 process_.id,
                 error.instruction(),
                 "call-stack return target is invalid");
+          case compiler::JitGeneratedRuntimeErrorReason::
+              string_callback_failure:
+            throw runtime::simir::InterpreterError(
+                process_.id,
+                error.instruction(),
+                "mutable string runtime callback failed");
         }
         throw;
       } catch (...) {
@@ -365,6 +383,26 @@ void LlvmProcessExecutor::write_register(
     register_initialized_[id] = 1;
   }
 
+[[nodiscard]] std::string LlvmProcessExecutor::read_string_register(
+    const runtime::simir::StringRegisterId id) const {
+  if (id >= string_registers_.size()) {
+    throw compiler::LlvmJitError{
+        "compiled process string-register request is out of range"};
+  }
+  return string_registers_[id];
+}
+
+void LlvmProcessExecutor::write_string_register(
+    const runtime::simir::StringRegisterId id,
+    const std::string_view value) {
+  if (id >= string_registers_.size()
+      || value.size() > runtime::simir::maximum_string_bytes) {
+    throw compiler::LlvmJitError{
+        "compiled process string-register write is out of range"};
+  }
+  string_registers_[id] = value;
+}
+
 template <typename Boundary>
 void LlvmProcessExecutor::require_boundary(
     const runtime::simir::InstructionIndex instruction,
@@ -382,6 +420,297 @@ void LlvmProcessExecutor::capture_failure(CallbackState& state) noexcept  {
       state.failure = std::current_exception();
     }
   }
+
+std::uint32_t LlvmProcessExecutor::load_string(
+    void* context,
+    const std::uint32_t destination,
+    const char* bytes,
+    const std::uint64_t byte_count) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    if (state.executor == nullptr
+        || byte_count > runtime::simir::maximum_string_bytes
+        || (byte_count != 0 && bytes == nullptr)) {
+      throw std::logic_error{"invalid generated string-load callback"};
+    }
+    state.executor->write_string_register(
+        destination,
+        std::string_view{bytes, static_cast<std::size_t>(byte_count)});
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::copy_string(
+    void* context,
+    const std::uint32_t destination,
+    const std::uint32_t source) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    state.executor->write_string_register(
+        destination,
+        state.executor->read_string_register(source));
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::read_string_object(
+    void* context,
+    const std::uint32_t destination,
+    const std::uint32_t object) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    state.executor->write_string_register(
+        destination, state.context->read_string_object(object));
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::write_string_object(
+    void* context,
+    const std::uint32_t object,
+    const std::uint32_t source) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    state.context->write_string_object(
+        object, state.executor->read_string_register(source));
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::concatenate_strings(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t destination,
+    const std::uint32_t* operands,
+    const std::uint32_t operand_count) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    if (state.process == nullptr || process != state.process->id
+        || (operand_count != 0 && operands == nullptr)) {
+      throw std::logic_error{
+          "invalid generated string-concatenation callback"};
+    }
+    std::string result;
+    for (std::uint32_t index = 0; index < operand_count; ++index) {
+      const auto value =
+          state.executor->read_string_register(operands[index]);
+      if (value.size()
+          > runtime::simir::maximum_string_bytes - result.size()) {
+        throw runtime::simir::InterpreterError(
+            state.process->id,
+            instruction,
+            "string concatenation exceeds 4096-byte limit");
+      }
+      result += value;
+    }
+    state.executor->write_string_register(destination, result);
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::compare_strings(
+    void* context,
+    const std::uint32_t lhs,
+    const std::uint32_t rhs,
+    const std::uint32_t not_equal,
+    std::uint32_t* result) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    if (result == nullptr || not_equal > 1) {
+      throw std::logic_error{"invalid generated string-compare callback"};
+    }
+    const bool equal =
+        state.executor->read_string_register(lhs)
+        == state.executor->read_string_register(rhs);
+    *result = equal != (not_equal != 0) ? 1U : 0U;
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::string_length(
+    void* context,
+    const std::uint32_t source,
+    std::uint32_t* result) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    if (result == nullptr) {
+      throw std::logic_error{"invalid generated string-length callback"};
+    }
+    *result = static_cast<std::uint32_t>(
+        state.executor->read_string_register(source).size());
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::string_index(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t source,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    const std::uint32_t signed_index,
+    std::uint32_t* result) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    const auto& value = state.executor->string_registers_.at(source);
+    if (state.process == nullptr || process != state.process->id
+        || result == nullptr || signed_index > 1 || index_bval != 0) {
+      throw runtime::simir::InterpreterError(
+          state.process->id,
+          instruction,
+          "string index contains X or Z");
+    }
+    const auto raw = static_cast<std::uint32_t>(index_aval);
+    const auto index = signed_index != 0
+        ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
+        : static_cast<std::int64_t>(raw);
+    if (index < 0
+        || static_cast<std::uint64_t>(index) >= value.size()) {
+      throw runtime::simir::InterpreterError(
+          state.process->id,
+          instruction,
+          "string index is outside the current byte range");
+    }
+    *result = static_cast<unsigned char>(
+        value[static_cast<std::size_t>(index)]);
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::string_replace_byte(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t target,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    const std::uint32_t signed_index,
+    const std::uint64_t source_aval,
+    const std::uint64_t source_bval) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    auto& value = state.executor->string_registers_.at(target);
+    if (state.process == nullptr || process != state.process->id
+        || signed_index > 1 || index_bval != 0) {
+      throw runtime::simir::InterpreterError(
+          state.process->id,
+          instruction,
+          "string index contains X or Z");
+    }
+    const auto raw = static_cast<std::uint32_t>(index_aval);
+    const auto selected = signed_index != 0
+        ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
+        : static_cast<std::int64_t>(raw);
+    if (selected < 0
+        || static_cast<std::uint64_t>(selected) >= value.size()) {
+      throw runtime::simir::InterpreterError(
+          state.process->id,
+          instruction,
+          "string index is outside the current byte range");
+    }
+    if (source_bval != 0) {
+      throw runtime::simir::InterpreterError(
+          state.process->id,
+          instruction,
+          "string replacement byte contains X or Z");
+    }
+    value[static_cast<std::size_t>(selected)] =
+        static_cast<char>(source_aval & UINT64_C(0xff));
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
+
+std::uint32_t LlvmProcessExecutor::write_string_output(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t source,
+    const char* prefix,
+    const std::uint64_t prefix_size,
+    const char* suffix,
+    const std::uint64_t suffix_size,
+    const std::uint32_t newline,
+    const std::uint32_t postponed) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return 1;
+  }
+  try {
+    if (state.process == nullptr || process != state.process->id
+        || (prefix_size != 0 && prefix == nullptr)
+        || (suffix_size != 0 && suffix == nullptr)
+        || newline > 1 || postponed > 1) {
+      throw std::logic_error{"invalid generated string-output callback"};
+    }
+    std::string text{prefix, static_cast<std::size_t>(prefix_size)};
+    text += state.executor->read_string_register(source);
+    text.append(suffix, static_cast<std::size_t>(suffix_size));
+    if (postponed != 0) {
+      state.context->postpone_display(text, newline != 0);
+    } else {
+      state.context->display(text, newline != 0);
+    }
+    return 0;
+  } catch (...) {
+    capture_failure(state);
+    return 1;
+  }
+}
 
 std::uint64_t LlvmProcessExecutor::read_signal(
     void* context,
@@ -1653,92 +1982,6 @@ std::uint64_t LlvmProcessExecutor::random_value(
       return std::numeric_limits<std::uint64_t>::max();
     }
   }
-
-#endif
-
-SystemCProcessExecutor::SystemCProcessExecutor(
-     std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
-     const std::uint64_t process)
-     : hierarchy_(std::move(hierarchy)), process_(process)  {
-    if (!hierarchy_) {
-      throw std::invalid_argument{
-          "SystemC process executor requires a hierarchy registry"};
-    }
-  }
-
-[[nodiscard]] runtime::simir::ProcessResumeResult SystemCProcessExecutor::resume(
-    runtime::simir::ProcessExecutionContext& context,
-    runtime::simir::InstructionIndex)  {
-    const auto suspension =
-        hierarchy_->invoke_process(process_, context);
-    runtime::simir::ProcessResumeResult result{0, 1};
-    switch (suspension.kind) {
-    case systemc::MethodSuspendKind::halt:
-      result.external.kind =
-          runtime::simir::ExternalSuspendKind::halt;
-      break;
-    case systemc::MethodSuspendKind::static_sensitivity:
-      result.external.kind =
-          runtime::simir::ExternalSuspendKind::wait_sensitivity;
-      break;
-    case systemc::MethodSuspendKind::wait_for:
-      result.external.kind =
-          suspension.delay_ticks == 0
-              ? runtime::simir::ExternalSuspendKind::yield
-              : runtime::simir::ExternalSuspendKind::wait_for;
-      result.external.delay = suspension.delay_ticks;
-      break;
-    case systemc::MethodSuspendKind::wait_event:
-      result.external.kind =
-          runtime::simir::ExternalSuspendKind::wait_on;
-      result.external.wait_all = suspension.wait_all;
-      result.external.sensitivity.reserve(
-          suspension.event_signals.size());
-      for (const auto event : suspension.event_signals) {
-        result.external.sensitivity.push_back(
-            {event, runtime::simir::EdgeKind::any});
-      }
-      break;
-    }
-    return result;
-  }
-
-void SystemCProcessExecutor::update_channel(
-    const std::uint64_t channel,
-    runtime::simir::ProcessExecutionContext& context)  {
-    hierarchy_->invoke_primitive_channel(channel, context);
-  }
-
-[[nodiscard]] std::string_view report_severity_name(
-    const runtime::simir::AssertionSeverity severity) noexcept  {
-  switch (severity) {
-  case runtime::simir::AssertionSeverity::note:
-    return "note";
-  case runtime::simir::AssertionSeverity::warning:
-    return "warning";
-  case runtime::simir::AssertionSeverity::error:
-    return "error";
-  case runtime::simir::AssertionSeverity::failure:
-    return "failure";
-  }
-  return "error";
-}
-
-[[nodiscard]] std::uint64_t entropy_seed()  {
-  std::random_device source;
-  const auto high = static_cast<std::uint64_t>(source());
-  const auto low = static_cast<std::uint64_t>(source());
-  return (high << 32U) ^ low;
-}
-
-#if defined(FSIM_HAS_LLVM)
-
-[[nodiscard]] compiler::JitOptimizationLevel jit_optimization(
-    const project::Optimization optimization) noexcept  {
-  return optimization == project::Optimization::o0
-      ? compiler::JitOptimizationLevel::o0
-      : compiler::JitOptimizationLevel::o2;
-}
 
 #endif
 

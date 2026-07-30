@@ -1350,6 +1350,9 @@ void substitute_systemverilog_parameters(
     for (auto& signal : unit.signals) {
         substitute_sv_type(signal.type, environment);
     }
+    for (auto& variable : unit.variables) {
+        substitute_sv_variable(variable, environment);
+    }
     for (auto& function : unit.functions) {
         substitute_sv_function(function, environment);
     }

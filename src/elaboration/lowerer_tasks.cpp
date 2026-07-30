@@ -157,7 +157,17 @@ void Lowerer::lower_task_call(const Statement& statement) {
 
     if (!frame.allocated) {
         frame.arguments.reserve(task.arguments.size());
+        frame.string_arguments.reserve(task.arguments.size());
+        frame.argument_is_string.reserve(task.arguments.size());
         for (const auto& argument : task.arguments) {
+            if (argument.type.domain
+                == frontend::ValueDomain::String) {
+                frame.arguments.push_back({});
+                frame.string_arguments.push_back(
+                    allocate_string_register());
+                frame.argument_is_string.push_back(true);
+                continue;
+            }
             const auto width = argument.type.width();
             if (!width || *width == 0 || *width > 64) {
                 report(
@@ -170,6 +180,8 @@ void Lowerer::lower_task_call(const Statement& statement) {
             frame.arguments.push_back(allocate_register(
                 static_cast<std::size_t>(*width),
                 argument.type.domain));
+            frame.string_arguments.push_back({});
+            frame.argument_is_string.push_back(false);
         }
         frame.allocated = true;
     }
@@ -177,6 +189,25 @@ void Lowerer::lower_task_call(const Statement& statement) {
     for (std::size_t index = 0;
          index < task.arguments.size(); ++index) {
         const auto& formal = task.arguments[index];
+        if (frame.argument_is_string[index]) {
+            if (formal.direction
+                == frontend::PortDirection::Output) {
+                process_.operations.emplace_back(
+                    LoadStringConstant{
+                        frame.string_arguments[index], {}});
+                continue;
+            }
+            const auto actual =
+                lower_string_expression(
+                    statement.task_arguments[index]);
+            if (!actual) {
+                return;
+            }
+            process_.operations.emplace_back(
+                CopyStringRegister{
+                    frame.string_arguments[index], *actual});
+            continue;
+        }
         const auto width =
             static_cast<std::size_t>(*formal.type.width());
         if (formal.direction == frontend::PortDirection::Output) {
@@ -230,6 +261,24 @@ void Lowerer::lower_task_call(const Statement& statement) {
         const auto temporary =
             "@task_copyout_" + std::to_string(task_index)
             + "_" + std::to_string(index);
+        if (frame.argument_is_string[index]) {
+            string_locals_.insert_or_assign(
+                temporary, frame.string_arguments[index]);
+            local_types_.insert_or_assign(
+                temporary, &formal.type);
+            Statement copy_out;
+            copy_out.kind = StatementKind::Assignment;
+            copy_out.assignment_kind = AssignmentKind::Blocking;
+            copy_out.target = statement.task_arguments[index];
+            copy_out.value = Expression{
+                ExpressionKind::Identifier,
+                temporary,
+                {},
+                statement.span};
+            copy_out.span = statement.span;
+            lower_assignment(copy_out);
+            continue;
+        }
         locals_.insert_or_assign(
             temporary, frame.arguments[index]);
         local_signed_.insert_or_assign(
@@ -285,6 +334,7 @@ void Lowerer::lower_task_body(const std::size_t task_index) {
     frame.lowered = true;
 
     auto saved_locals = std::move(locals_);
+    auto saved_string_locals = std::move(string_locals_);
     auto saved_signed = std::move(local_signed_);
     auto saved_ranges = std::move(local_ranges_);
     auto saved_integer_ranges =
@@ -296,6 +346,7 @@ void Lowerer::lower_task_body(const std::size_t task_index) {
     auto saved_return_jumps = std::move(task_return_jumps_);
     const auto saved_active = active_task_;
     locals_.clear();
+    string_locals_.clear();
     local_signed_.clear();
     local_ranges_.clear();
     local_integer_ranges_.clear();
@@ -322,6 +373,23 @@ void Lowerer::lower_task_body(const std::size_t task_index) {
     for (std::size_t index = 0;
          index < frame.source->arguments.size(); ++index) {
         const auto& argument = frame.source->arguments[index];
+        if (frame.argument_is_string[index]) {
+            string_locals_.insert_or_assign(
+                argument.name, frame.string_arguments[index]);
+            local_types_.insert_or_assign(
+                argument.name, &argument.type);
+            process_.debug_string_locals.push_back(
+                DebugStringLocal{
+                    scoped_local_name(argument.name),
+                    frame.string_arguments[index],
+                    SourceLocation{
+                        argument.span.source_name,
+                        static_cast<std::uint32_t>(
+                            argument.span.begin.line),
+                        static_cast<std::uint32_t>(
+                            argument.span.begin.column)}});
+            continue;
+        }
         bind(
             argument.name,
             argument.type,
@@ -376,6 +444,7 @@ void Lowerer::lower_task_body(const std::size_t task_index) {
     local_ranges_ = std::move(saved_ranges);
     local_signed_ = std::move(saved_signed);
     locals_ = std::move(saved_locals);
+    string_locals_ = std::move(saved_string_locals);
 }
 
 void Lowerer::diagnose_task_cycles() {

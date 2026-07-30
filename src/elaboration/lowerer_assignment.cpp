@@ -484,6 +484,103 @@ using namespace elaboration_detail;
         }
 
         auto target_name = base->text;
+        const auto string_local =
+            string_locals_.find(target_name);
+        const auto string_object =
+            string_objects_.find(target_name);
+        if (string_local != string_locals_.end()
+            || string_object != string_objects_.end()) {
+            if (statement.assignment_kind
+                    != AssignmentKind::Blocking
+                || statement.procedural_assignment_control
+                    != frontend::ProceduralAssignmentControl::None) {
+                report(
+                    "FSIM-ELAB-SVSTRING-013",
+                    "string assignments must be blocking and time-free",
+                    statement.span);
+                return;
+            }
+            if (statement.target.kind
+                == ExpressionKind::Identifier) {
+                const auto value =
+                    lower_string_expression(statement.value);
+                if (!value) {
+                    report(
+                        "FSIM-ELAB-SVSTRING-014",
+                        "string assignment requires a string value",
+                        statement.value.span);
+                    return;
+                }
+                if (string_local != string_locals_.end()) {
+                    process_.operations.emplace_back(
+                        CopyStringRegister{
+                            string_local->second, *value});
+                } else {
+                    process_.operations.emplace_back(
+                        WriteStringObject{
+                            string_object->second, *value});
+                }
+                return;
+            }
+            if (statement.target.kind != ExpressionKind::Index
+                || statement.target.operands.size() != 2) {
+                report(
+                    "FSIM-ELAB-SVSTRING-015",
+                    "string targets support only whole-value or byte-index "
+                    "blocking assignment",
+                    statement.target.span);
+                return;
+            }
+            StringRegisterId target{};
+            if (string_local != string_locals_.end()) {
+                target = string_local->second;
+            } else {
+                target = allocate_string_register();
+                process_.operations.emplace_back(
+                    ReadStringObject{
+                        target, string_object->second});
+            }
+            const auto index_width =
+                infer_width(statement.target.operands[1])
+                    .value_or(std::size_t{32});
+            const auto index =
+                lower_expression(
+                    statement.target.operands[1],
+                    index_width);
+            std::optional<RegisterId> byte;
+            if (statement.value.kind
+                    == ExpressionKind::StringLiteral
+                && statement.value.decoded_string
+                && statement.value.decoded_string->size() == 1) {
+                byte = allocate_register(
+                    8, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(
+                    LoadConstant{
+                        *byte,
+                        unsigned_value(
+                            static_cast<unsigned char>(
+                                statement.value.decoded_string->front()),
+                            8)});
+            } else {
+                byte = lower_expression(statement.value, 8);
+            }
+            if (!index || !byte) {
+                return;
+            }
+            process_.operations.emplace_back(
+                StringReplaceByte{
+                    target,
+                    *index,
+                    *byte,
+                    is_signed_expression(
+                        statement.target.operands[1])});
+            if (string_object != string_objects_.end()) {
+                process_.operations.emplace_back(
+                    WriteStringObject{
+                        string_object->second, target});
+            }
+            return;
+        }
         if (!locals_.contains(target_name)
             && !signals_.contains(target_name)) {
             if (const auto selected =

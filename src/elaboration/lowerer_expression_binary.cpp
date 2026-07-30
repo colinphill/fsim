@@ -11,6 +11,38 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
         const frontend::Type*) {
         if (expression.kind == ExpressionKind::Binary
             && expression.operands.size() == 2
+            && (expression.text == "=="
+                || expression.text == "!=")
+            && (is_string_expression(expression.operands[0])
+                || is_string_expression(expression.operands[1]))) {
+            if (!is_string_expression(expression.operands[0])
+                || !is_string_expression(expression.operands[1])) {
+                report(
+                    "FSIM-ELAB-SVSTRING-012",
+                    "string equality requires two string operands",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto lhs =
+                lower_string_expression(expression.operands[0]);
+            const auto rhs =
+                lower_string_expression(expression.operands[1]);
+            if (!lhs || !rhs) {
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(
+                    1, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                CompareStrings{
+                    destination,
+                    *lhs,
+                    *rhs,
+                    expression.text == "!="});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2
             && (expression.text == "&&"
                 || expression.text == "||")) {
             const auto lhs_width =

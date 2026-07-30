@@ -18,6 +18,11 @@ ElaboratedDesign::signals() const noexcept {
   return signal_info_;
 }
 
+const std::vector<StringObjectInfo>&
+ElaboratedDesign::string_objects() const noexcept {
+  return string_object_info_;
+}
+
 const std::vector<runtime::simir::Process>&
 ElaboratedDesign::processes() const noexcept {
   return processes_;
@@ -75,6 +80,9 @@ ElaboratedDesign::create_interpreter(
       std::make_unique<runtime::simir::Interpreter>(options, seed);
   for (const auto& signal : signals_) {
     (void)interpreter->add_signal(signal);
+  }
+  for (const auto& object : string_objects_) {
+    (void)interpreter->add_string_object(object);
   }
   for (const auto& process : processes_) {
     (void)interpreter->add_process(process);

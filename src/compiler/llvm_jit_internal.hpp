@@ -47,6 +47,7 @@ struct ValidatedProcess {
   bool uses_monitor_install{};
   bool uses_monitor_control{};
   bool uses_random_value{};
+  bool uses_strings{};
 };
 
 [[nodiscard]] bool valid_symbol(std::string_view symbol) noexcept;
@@ -79,6 +80,7 @@ decode_generated_runtime_error(std::uint64_t value) noexcept;
 [[nodiscard]] JitProcessFrameLayout make_frame_layout(
     std::string_view cache_key,
     std::size_t register_count,
+    std::size_t string_register_count,
     bool uses_logic9);
 
 void lower_process(

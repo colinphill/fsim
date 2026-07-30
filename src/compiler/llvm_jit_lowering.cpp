@@ -132,7 +132,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -983,6 +984,11 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         branch_to_next,
         runtime_error_if,
         dynamic_offset};
+    StringOperationLowerer string_lowerer{
+        module, builder, registers, context, i32, i64,
+        context_pointer, process.id, instruction,
+        runtime_type, runtime_argument,
+        runtime_error_if, branch_to_next};
     SignalOperationLowerer signal_lowerer{
         builder,
         registers,
@@ -1975,9 +1981,15 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                   FSIM_JIT_RESUME_STATUS_COMPLETED, instruction, 0,
                   FSIM_JIT_FRAME_STATE_COMPLETED, next_instruction);
             },
-            [&](const auto &) {
-              llvm_unreachable(
-                  "unsupported operations were rejected before lowering");
+            [&](const auto& operation) {
+              if constexpr (requires {
+                              string_lowerer.lower(operation);
+                            }) {
+                string_lowerer.lower(operation);
+              } else {
+                llvm_unreachable(
+                    "unsupported operations were rejected before lowering");
+              }
             }},
         process.operations[index]);
   }

@@ -729,12 +729,10 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-031` | error | A procedural `for` loop does not declare an inline `int` or `integer` index. |
 | `FSIM-SV-UNSUPPORTED-032` | error | A nonblocking assignment uses a repeated event control, which is not executable yet. |
 | `FSIM-SV-UNSUPPORTED-033` | error | A bounded function is static or omits the explicit `automatic` lifetime required by the current activation-frame implementation. |
-| `FSIM-SV-UNSUPPORTED-034` | error | A bounded function return or argument type is not integral. |
 | `FSIM-SV-UNSUPPORTED-035` | error | A bounded function formal uses `ref`, `output`, or `inout` instead of `input`. |
 | `FSIM-SV-UNSUPPORTED-036` | error | A bounded function uses an unpacked/default argument or a classic body argument declaration. |
 | `FSIM-SV-UNSUPPORTED-037` | error | A bounded task is static or omits the explicit `automatic` lifetime required by the current activation-frame implementation. |
 | `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
-| `FSIM-SV-UNSUPPORTED-039` | error | A bounded task formal is not integral. |
 | `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
 
 ## Elaboration and SimIR lowering
@@ -1013,6 +1011,19 @@ therefore excluded.
 | `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
 | `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |
 | `FSIM-ELAB-SVSTRING-004` | error | A SystemVerilog string parameter was associated across a mixed-language boundary instead of through a same-language wrapper. |
+| `FSIM-ELAB-SVSTRING-005` | error | A runtime string variable is duplicated in one automatic scope. |
+| `FSIM-ELAB-SVSTRING-006` | error | A runtime string literal has no retained decoded byte value. |
+| `FSIM-ELAB-SVSTRING-007` | error | A runtime string literal, initializer, object, or concatenation exceeds the 4,096-byte v1 limit. |
+| `FSIM-ELAB-SVSTRING-008` | error | A runtime string expression references an unknown string object. |
+| `FSIM-ELAB-SVSTRING-009` | error | A runtime string concatenation has no operands. |
+| `FSIM-ELAB-SVSTRING-010` | error | A runtime string concatenation or value context contains a non-string operand. |
+| `FSIM-ELAB-SVSTRING-011` | error | A runtime string function call has an unknown or incompatible callable profile. |
+| `FSIM-ELAB-SVSTRING-012` | error | Runtime string equality or inequality mixes string and non-string operands. |
+| `FSIM-ELAB-SVSTRING-013` | error | A runtime string assignment is nonblocking or has a timing/event control. |
+| `FSIM-ELAB-SVSTRING-014` | error | A whole-string assignment has a non-string right-hand side. |
+| `FSIM-ELAB-SVSTRING-015` | error | A runtime string assignment target is neither a whole object nor one byte index. |
+| `FSIM-ELAB-SVSTRING-016` | error | A retained module variable is not in the supported runtime string domain. |
+| `FSIM-ELAB-SVSTRING-017` | error | A module string initializer is not a supported bounded static string expression. |
 | `FSIM-ELAB-SVTYPEPARAM-001` | error | A required SystemVerilog type parameter or local type parameter has no data-type actual/default. |
 | `FSIM-ELAB-SVTYPEPARAM-002` | error | A SystemVerilog value parameter received a data-type actual. |
 | `FSIM-ELAB-SVTYPEPARAM-003` | error | A SystemVerilog type-parameter actual/default is invisible or outside the bounded packed integral subset. |

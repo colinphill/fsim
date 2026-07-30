@@ -9,16 +9,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-67 cadence checkpoint; the
-  preceding feature-batch-66 checkpoint is `8822c79`.
-- The source-size refactor is complete: all 265 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-68 cadence checkpoint; the
+  preceding feature-batch-67 implementation checkpoint is `2923a1e`.
+- The source-size refactor is complete: all 270 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 1,999 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 55
-  configured tests in 70.73 seconds, and Release passed all 55 configured
-  tests in 32.00 seconds on 2026-07-30.
-- The diagnostic catalog covers all 1,074 production codes.
-- No CI state was inspected during feature batch 67 or this handoff.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 56
+  configured tests in 68.76 seconds, and Release passed all 56 configured
+  tests in 31.25 seconds on 2026-07-30.
+- The diagnostic catalog covers all 1,085 production codes.
+- No CI state was inspected during feature batch 68 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -30,7 +30,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, automatic integral functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, byte-oriented mutable string objects and callable values, automatic integral/string functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, files/dynamic containers, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -141,9 +141,10 @@ document merely because the parser accepts a related form.
   including general or nested generic package units, nested/composite generic
   subprograms, dependent type declarations, and broader unconstrained-object
   cases.
-- Complete SystemVerilog runtime mutable strings, type actuals beyond the
-  bounded same-language packed subset, widths above 64 bits,
-  genvar-dependent typed constants, and remaining LRM expression typing.
+- Complete SystemVerilog strings beyond the bounded byte-oriented subset,
+  type actuals beyond the bounded same-language packed subset, widths above
+  64 bits, genvar-dependent typed constants, and remaining LRM expression
+  typing.
 - Retain source/debug metadata for every remaining executable construct.
 - Make the semantic differential harness compare interpreter, O0, and O2
   final state, assertions, scheduling observations, failures, and normalized
@@ -190,7 +191,7 @@ document merely because the parser accepts a related form.
   assignment semantics.
 - Complete general delays/events, fork/join, named events, and NBA/delta
   matrices.
-- Complete mutable strings and add files, dynamic/associative arrays, queues,
+- Complete general strings and add files, dynamic/associative arrays, queues,
   and `$readmem*`.
 
 ### 5. Complete mixed-language and SystemC semantics
@@ -219,44 +220,51 @@ document merely because the parser accepts a related form.
 Python automation remains explicitly post-v1. It must later wrap the same
 opaque native session/object model already used by Tcl.
 
+## Completed batch 68
+
+Bounded same-language SystemVerilog mutable strings now execute through the
+reference interpreter and native LLVM O0/O2 without fallback. Module objects,
+automatic function/task values, suspending-task frames, debugger reads and
+bounded deposits, append-only plain-C helpers, exact semantic cache identity,
+and cold/warm/selective-invalidation evidence are complete. Values remain
+byte-oriented and limited to 4,096 bytes; files, Unicode code-point semantics,
+dynamic containers, general methods, mixed-language boundaries, and general
+heap allocation remain separate release-gate work.
+
 ## Next ten-feature batch
 
-Resume with **feature batch 68: bounded SystemVerilog runtime mutable
-strings**:
+Resume with **feature batch 69: bounded SystemVerilog text files**:
 
-1. Retain `string` module variables, automatic locals, function results, and
-   task/function formals as a distinct mutable runtime type rather than an
-   immutable parameter spelling.
-2. Parse bounded declarations, initialization, blocking assignment, literals,
-   concatenation, equality/inequality, indexing, and the `len()` method with
-   targeted recovery outside the slice.
-3. Define deterministic byte-string storage, empty initialization, value-copy
-   assignment, bounds behavior, and a per-object 4,096-byte v1 limit.
-4. Add stable DesignIR/SimIR string object and register identities without
-   exposing allocator or C++ object layout through the native runtime ABI.
-5. Lower module variables and automatic activation-frame locals through
-   nested nonrecursive functions and suspending tasks, preserving values
-   across wait/resume and deferred copy-out.
-6. Extend interpreter operations and append-only JIT runtime helpers for
-   construct, copy, concatenate, compare, index, length, and destruction.
-7. Preserve debugger source points, live string locals/formals, escaped value
-   rendering, deposit/force legality, and safe-point inspection across
-   suspended frames.
-8. Include literal bytes, callable provenance, object layout/version, and
-   transitive helper semantics in native-cache identity without embedding
-   addresses.
-9. Diagnose unsupported dynamic allocation, oversize values, invalid indices,
-   recursive callable use, incompatible formals, nonblocking string writes,
-   and mixed-language string boundaries.
-10. Add frontend, negative, elaboration, interpreter, LLVM O0/O2, task/function
-    suspension, debugger, output/callback, cold/warm, and edited-literal
-    selective-cache evidence, then run the scheduled gate.
+1. Retain module and automatic `integer` file handles with explicit invalid
+   and closed states, without exposing host descriptors through SimIR or the
+   native ABI.
+2. Parse bounded `$fopen`, `$fclose`, `$fdisplay`, `$fwrite`, `$fgets`,
+   `$feof`, and `$ferror` forms with targeted recovery outside the slice.
+3. Resolve manifest-relative paths through the existing project path policy
+   and diagnose unsupported modes, inaccessible paths, and stale handles.
+4. Define deterministic per-simulation file ownership, open order, flushing,
+   close-on-session-destruction, and interpreter/native lifecycle behavior.
+5. Support byte-string filenames, line reads into bounded mutable strings,
+   literal or one-value formatted writes, and the existing 4,096-byte bound.
+6. Add stable SimIR file operations and append-only plain-C runtime helpers
+   without embedding `FILE*`, stream objects, descriptors, or addresses.
+7. Preserve file operations as debugger safe points and specify behavior
+   across stop/resume and suspending automatic tasks.
+8. Include operation forms, modes, literal bytes, source provenance, and file
+   helper semantic versions in native-object keys while excluding external
+   file contents from compilation identity.
+9. Diagnose mixed-language handles, unsupported concurrent/shared access,
+   invalid result targets, recursive misuse, binary positioning, and broader
+   descriptor/multichannel behavior.
+10. Add frontend, negative, elaboration, interpreter, LLVM O0/O2, lifecycle,
+    debugger, output, cache, and isolated-filesystem evidence, then run the
+    scheduled gate.
 
-Keep this batch to byte-oriented same-language SystemVerilog strings in module
-procedural code and the existing bounded automatic function/task families.
-Unicode code-point semantics, classes, DPI, files, queues/dynamic arrays,
-associative containers, regex-style methods, mixed-language boundaries, and
-general heap allocation remain separate release-gate work.
+Keep this batch to same-language SystemVerilog text files in isolated test
+directories. Binary I/O, arbitrary format lists, stdin/stdout descriptor
+aliases, seek/tell/rewind, multichannel descriptors, VHDL TextIO, `$readmem*`,
+mixed-language handles, and unrestricted host filesystem access remain
+separate release-gate work.
 
 ## Working cadence
 
@@ -295,7 +303,8 @@ git log -5 --oneline --decorate
 ```
 
 History must contain Batch 67 commit `2923a1e` (`feat: add VHDL component port
-defaults`). Treat a newer pushed commit on the same branch as the authoritative
+defaults`) and the later Batch 68 runtime-string implementation. Treat a newer
+pushed commit on the same branch as the authoritative
 continuation and read this file from that checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
@@ -327,7 +336,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-   resume Batch 68 below and return to focused tests until its tenth feature.
+resume Batch 69 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -343,15 +352,13 @@ For a clean-context restart:
 1. Use `docs/v1-resume.md` as the entry point, `docs/feature-matrix.md` as the
    release authority, and `docs/implementation-plan.md` only when historical
    detail is needed.
-2. Confirm the branch is `codex/resumable-jit` and history contains
-   `feat: add VHDL non-value component generics`.
-3. Begin batch 68 at item 1 above. Do not rerun batch 67's full regression
-   unless a later change can
-   affect string storage/runtime helpers, callable activation frames,
-   debugger values, cache identity, or runtime behavior.
-4. Keep batch-68 work within bounded same-language SystemVerilog mutable
-   strings. Record intentional scope changes in this handoff before
-   implementation.
+2. Confirm the branch is `codex/resumable-jit` and history contains the
+   bounded SystemVerilog runtime-string implementation.
+3. Begin batch 69 at item 1 above. Do not rerun batch 68's full regression
+   unless a later change can affect string/file storage, runtime helpers,
+   callable activation frames, debugger values, cache identity, or execution.
+4. Keep batch-69 work within bounded same-language SystemVerilog text files.
+   Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
    and push.
@@ -359,22 +366,20 @@ For a clean-context restart:
 The existing exact-LLVM build trees on the recorded development host are:
 
 ```sh
-cmake --build build/gcc-debug --parallel 8
-cmake --build build/gcc-release --parallel 8
+cmake --build build/llvm22-ninja-debug --parallel 8
+cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 68 is in progress, for example:
+Use a narrow test expression while batch 69 is in progress, extending it with
+the new file tests as they appear:
 
 ```sh
-ctest --test-dir build/gcc-debug --output-on-failure \
-  -R 'fsim\.(frontend|elaboration|llvm|application\.(sv_functions|sv_tasks|sv_suspending_tasks)|source-line-budget)'
+ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
+  -R 'fsim\.(frontend|elaboration|llvm|application\.sv_mutable_strings|source-line-budget)'
 ```
 
-The current host used warnings-as-errors Unix Makefiles trees at
-`build/gcc-debug` and `build/gcc-release` because Ninja was unavailable; both
-link the exact LLVM 22.1.8 backend. The portable Ninja commands above remain
-the preferred bootstrap when Ninja is installed. Both recorded 55-test
-inventories are clean after feature batch 67.
+Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
+recorded 56-test inventories are clean after feature batch 68.
 
 Before declaring any row complete, consult:
 

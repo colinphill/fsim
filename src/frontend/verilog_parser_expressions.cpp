@@ -398,6 +398,26 @@ Expression VerilogParser::parse_postfix(Expression expression) {
   for (;;) {
     if (match(TokenKind::Dot)) {
       const auto member = expect_identifier("member name");
+      if (match(TokenKind::LeftParen)) {
+        const auto receiver_span = expression.span;
+        std::vector<Expression> operands;
+        operands.push_back(std::move(expression));
+        if (!at(TokenKind::RightParen)) {
+          do {
+            operands.push_back(parse_expression());
+          } while (match(TokenKind::Comma));
+        }
+        expect(
+            TokenKind::RightParen,
+            "')' after method arguments",
+            "FSIM-SV-PARSE-028");
+        expression = Expression{
+            ExpressionKind::Call,
+            "." + member.text,
+            std::move(operands),
+            cover(receiver_span, previous().span)};
+        continue;
+      }
       expression.text += '.';
       expression.text += member.text;
       expression.span = cover(expression.span, member.span);

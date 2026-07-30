@@ -28,6 +28,21 @@ struct Interpreter::Impl::ExecutionContext final
     return owner.get_signal(signal).initial_value.low_word();
   }
 
+  [[nodiscard]] std::string
+  read_string_object(const StringObjectId object) const override {
+    return owner.get_string_object(object).initial_value;
+  }
+
+  void write_string_object(
+      const StringObjectId object,
+      const std::string_view value) override {
+    if (value.size() > maximum_string_bytes) {
+      throw std::length_error{
+          "SimIR string object exceeds byte limit"};
+    }
+    owner.get_string_object(object).initial_value = value;
+  }
+
   [[nodiscard]] Logic9Word
   read_signal_logic9_word(const SignalId signal) const override {
     return owner.get_signal(signal).initial_value.logic9_low_word();
@@ -894,6 +909,35 @@ void Interpreter::Impl::execute(ProcessId id) {
             fail(process, error.what());
           }
         };
+    const auto known_string_index =
+        [&](const RegisterId index_register,
+            const bool signed_index,
+            const std::size_t size) -> std::size_t {
+          const auto& value =
+              get_register(process, index_register);
+          if (value.width() == 0 || value.width() > 64) {
+            fail(
+                process,
+                "string index must be a nonempty value of at most 64 bits");
+          }
+          const auto word = value.low_word();
+          if (word.bval != 0) {
+            fail(process, "string index contains X or Z");
+          }
+          if (signed_index && word.width != 0
+              && word.width < 64
+              && ((word.aval >> (word.width - 1U)) & 1U) != 0) {
+            fail(process, "string index is negative");
+          }
+          if (signed_index && word.width == 64
+              && (word.aval >> 63U) != 0) {
+            fail(process, "string index is negative");
+          }
+          if (word.aval >= size) {
+            fail(process, "string index is outside the byte range");
+          }
+          return static_cast<std::size_t>(word.aval);
+        };
     std::visit(
         Overloaded{
             [&](const LoadConstant &op) {
@@ -962,6 +1006,93 @@ void Interpreter::Impl::execute(ProcessId id) {
                       get_register(process, op.source),
                       register_value_kind(
                           process, op.destination));
+              ++process.pc;
+            },
+            [&](const LoadStringConstant& op) {
+              if (op.value.size() > maximum_string_bytes) {
+                fail(process, "string literal exceeds 4096-byte limit");
+              }
+              get_string_register(process, op.destination) = op.value;
+              ++process.pc;
+            },
+            [&](const CopyStringRegister& op) {
+              get_string_register(process, op.destination) =
+                  get_string_register(process, op.source);
+              ++process.pc;
+            },
+            [&](const ReadStringObject& op) {
+              get_string_register(process, op.destination) =
+                  get_string_object(op.object).initial_value;
+              ++process.pc;
+            },
+            [&](const WriteStringObject& op) {
+              get_string_object(op.object).initial_value =
+                  get_string_register(process, op.source);
+              ++process.pc;
+            },
+            [&](const ConcatenateStrings& op) {
+              std::string result;
+              for (const auto operand : op.operands) {
+                const auto& value =
+                    get_string_register(process, operand);
+                if (value.size()
+                    > maximum_string_bytes - result.size()) {
+                  fail(
+                      process,
+                      "string concatenation exceeds 4096-byte limit");
+                }
+                result += value;
+              }
+              get_string_register(process, op.destination) =
+                  std::move(result);
+              ++process.pc;
+            },
+            [&](const CompareStrings& op) {
+              const bool equal =
+                  get_string_register(process, op.lhs)
+                  == get_string_register(process, op.rhs);
+              get_register(process, op.destination) =
+                  PackedLogic4{
+                      1,
+                      equal != op.not_equal
+                          ? Logic4::one
+                          : Logic4::zero};
+              ++process.pc;
+            },
+            [&](const StringLength& op) {
+              const auto size =
+                  get_string_register(process, op.source).size();
+              get_register(process, op.destination) =
+                  PackedLogic4::from_aval_bval(
+                      32, static_cast<std::uint32_t>(size), 0);
+              ++process.pc;
+            },
+            [&](const StringIndex& op) {
+              const auto& source =
+                  get_string_register(process, op.source);
+              const auto index =
+                  known_string_index(
+                      op.index, op.signed_index, source.size());
+              get_register(process, op.destination) =
+                  PackedLogic4::from_aval_bval(
+                      8,
+                      static_cast<unsigned char>(source[index]),
+                      0);
+              ++process.pc;
+            },
+            [&](const StringReplaceByte& op) {
+              auto& target =
+                  get_string_register(process, op.target);
+              const auto index =
+                  known_string_index(
+                      op.index, op.signed_index, target.size());
+              const auto byte =
+                  get_register(process, op.source).low_word();
+              if (byte.bval != 0) {
+                fail(process, "string replacement byte contains X or Z");
+              }
+              target[index] =
+                  static_cast<char>(byte.aval & UINT64_C(0xff));
               ++process.pc;
             },
             [&](const UnaryNot &op) {
@@ -1532,6 +1663,38 @@ void Interpreter::Impl::execute(ProcessId id) {
                   op.minimum_width,
                   op.left_justify,
                   op.zero_pad);
+              if (op.postponed) {
+                scheduler.schedule(
+                    SchedulerPhase::postponed,
+                    process.program.id,
+                    [this,
+                     process_id = process.program.id,
+                     text = std::move(text),
+                     newline = op.newline](Scheduler& runtime) {
+                      if (output_hook) {
+                        output_hook(
+                            process_id,
+                            text,
+                            newline,
+                            runtime.now(),
+                            runtime.delta());
+                      }
+                    });
+              } else if (output_hook) {
+                output_hook(
+                    process.program.id,
+                    text,
+                    op.newline,
+                    scheduler.now(),
+                    scheduler.delta());
+              }
+              ++process.pc;
+            },
+            [&](const StringDisplay& op) {
+              auto text =
+                  op.prefix
+                  + get_string_register(process, op.source)
+                  + op.suffix;
               if (op.postponed) {
                 scheduler.schedule(
                     SchedulerPhase::postponed,

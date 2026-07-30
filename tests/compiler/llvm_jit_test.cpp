@@ -86,6 +86,10 @@ int main() {
       JitOptimizationLevel::o0, "display_o0");
   test_display_at_level(
       JitOptimizationLevel::o2, "display_o2");
+  test_strings_at_level(
+      JitOptimizationLevel::o0, "strings_o0");
+  test_strings_at_level(
+      JitOptimizationLevel::o2, "strings_o2");
   test_logic9_at_level(
       JitOptimizationLevel::o0, "logic9_o0");
   test_logic9_at_level(

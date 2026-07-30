@@ -35,6 +35,7 @@ void test_simir_alternate_executor_context_and_boundaries();
 void test_simir_alternate_executor_dynamic_wait();
 void test_simir_timed_dynamic_wait_rearm();
 void test_simir_nested_calls();
+void test_simir_mutable_strings();
 void test_simir_alternate_executor_scheduled_word_writes();
 void test_simir_alternate_executor_zero_delay_and_frame();
 void test_simir_alternate_executor_cpp_exception_containment();

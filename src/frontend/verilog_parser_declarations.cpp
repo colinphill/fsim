@@ -652,7 +652,7 @@ void VerilogParser::parse_optional_range(Type& type) {
 
 [[nodiscard]] bool VerilogParser::is_declaration_start() const  {
   return is_direction_keyword() || is_net_type_keyword()
-      || is_named_type_reference_start();
+      || keyword("string") || is_named_type_reference_start();
 }
 
 void VerilogParser::parse_event_declaration(
@@ -718,6 +718,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       parse_optional_net_type(spec.type);
     }
     require_default_port_net_type(current(), explicit_type);
+  } else if (keyword("string")) {
+    spec.type = parse_parameter_type();
   } else if (is_named_type_reference_start()) {
     spec.type = parse_named_type();
   } else {
@@ -736,14 +738,58 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             "unpacked arrays are not implemented in this frontend slice");
       skip_balanced(TokenKind::LeftBracket, TokenKind::RightBracket);
     }
+    std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
-      const auto initializer = parse_expression();
+      initializer = parse_expression();
+    }
+    if (initializer
+        && spec.type.domain != ValueDomain::String) {
       error(
           name,
           "FSIM-SV-UNSUPPORTED-011",
           "declaration initializers are not executable in this frontend "
           "slice");
-      (void)initializer;
+      initializer.reset();
+    }
+
+    if (spec.type.domain == ValueDomain::String) {
+      const auto duplicate_variable = std::ranges::any_of(
+          unit.variables,
+          [&](const VariableDeclaration& variable) {
+            return variable.name == name.text;
+          });
+      const auto object_conflict = std::ranges::any_of(
+          unit.signals,
+          [&](const SignalDeclaration& signal) {
+            return signal.name == name.text;
+          });
+      const auto port_conflict = std::ranges::any_of(
+          unit.ports,
+          [&](const SignalDeclaration& port) {
+            return port.name == name.text;
+          });
+      const auto parameter_conflict = std::ranges::any_of(
+          unit.parameters,
+          [&](const ParameterDeclaration& parameter) {
+            return parameter.name == name.text;
+          });
+      if (duplicate_variable || object_conflict || port_conflict
+          || parameter_conflict) {
+        error(
+            name,
+            "FSIM-SV-SEM-006",
+            "duplicate string variable declaration '" + name.text + "'");
+      } else {
+        unit.variables.push_back(VariableDeclaration{
+            name.text,
+            spec.type,
+            std::move(initializer),
+            span_from(start, previous())});
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+      continue;
     }
 
     SignalDeclaration declaration{
@@ -832,7 +878,9 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
   Type type = default_verilog_type();
-  if (is_named_type_reference_start()) {
+  if (keyword("string")) {
+    type = parse_parameter_type();
+  } else if (is_named_type_reference_start()) {
     type = parse_named_type();
   } else {
     parse_optional_net_type(type);

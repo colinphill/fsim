@@ -104,8 +104,15 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       const runtime::simir::RegisterId id,
       const PackedLogic4& value) override;
 
+  [[nodiscard]] std::string read_string_register(
+      runtime::simir::StringRegisterId id) const override;
+  void write_string_register(
+      runtime::simir::StringRegisterId id,
+      std::string_view value) override;
+
  private:
   struct CallbackState {
+    LlvmProcessExecutor* executor{};
     runtime::simir::ProcessExecutionContext* context{};
     const runtime::simir::Process* process{};
     std::span<const std::uint32_t> signal_widths;
@@ -119,6 +126,34 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       const std::string_view status) const;
 
   static void capture_failure(CallbackState& state) noexcept;
+
+  static std::uint32_t load_string(
+      void*, std::uint32_t, const char*, std::uint64_t) noexcept;
+  static std::uint32_t copy_string(
+      void*, std::uint32_t, std::uint32_t) noexcept;
+  static std::uint32_t read_string_object(
+      void*, std::uint32_t, std::uint32_t) noexcept;
+  static std::uint32_t write_string_object(
+      void*, std::uint32_t, std::uint32_t) noexcept;
+  static std::uint32_t concatenate_strings(
+      void*, std::uint32_t, std::uint32_t, std::uint32_t,
+      const std::uint32_t*, std::uint32_t) noexcept;
+  static std::uint32_t compare_strings(
+      void*, std::uint32_t, std::uint32_t, std::uint32_t,
+      std::uint32_t*) noexcept;
+  static std::uint32_t string_length(
+      void*, std::uint32_t, std::uint32_t*) noexcept;
+  static std::uint32_t string_index(
+      void*, std::uint32_t, std::uint32_t, std::uint32_t,
+      std::uint64_t, std::uint64_t, std::uint32_t,
+      std::uint32_t*) noexcept;
+  static std::uint32_t string_replace_byte(
+      void*, std::uint32_t, std::uint32_t, std::uint32_t,
+      std::uint64_t, std::uint64_t, std::uint32_t,
+      std::uint64_t, std::uint64_t) noexcept;
+  static std::uint32_t write_string_output(
+      void*, std::uint32_t, std::uint32_t, const char*, std::uint64_t,
+      const char*, std::uint64_t, std::uint32_t, std::uint32_t) noexcept;
 
   static std::uint64_t read_signal(
       void* context,
@@ -462,6 +497,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
   std::vector<std::uint64_t> register_logic9_plane2_;
   std::vector<std::uint64_t> register_logic9_plane3_;
   std::vector<std::uint8_t> register_initialized_;
+  std::vector<std::string> string_registers_;
 };
 
 [[nodiscard]] compiler::JitOptimizationLevel jit_optimization(
@@ -756,6 +792,10 @@ class DebuggerSession final {
 
   [[nodiscard]] std::optional<std::pair<std::string, SignalId>>
   resolve_signal(const std::string_view name);
+
+  [[nodiscard]] std::optional<std::pair<
+      std::string, runtime::simir::StringObjectId>>
+  resolve_string_object(std::string_view name) const;
 
   [[nodiscard]] std::optional<SimulationTick> command_time(
       const std::string_view text);

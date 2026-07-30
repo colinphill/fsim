@@ -200,6 +200,7 @@ if(FSIM_WITH_LLVM)
       compiler/llvm_jit_cache_test.cpp
       compiler/llvm_jit_logic9_test.cpp
       compiler/llvm_jit_display_test.cpp
+      compiler/llvm_jit_string_test.cpp
   )
   fsim_configure_test(fsim_llvm_tests)
   target_link_libraries(
@@ -512,6 +513,27 @@ set_tests_properties(
     fsim.application.sv_suspending_tasks
     PROPERTIES
       LABELS "fast;tasks;timing;systemverilog;cache"
+  )
+
+  add_executable(
+    fsim_sv_mutable_string_application_tests
+    app/sv_mutable_string_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_sv_mutable_string_application_tests
+  )
+  target_link_libraries(
+    fsim_sv_mutable_string_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_mutable_strings
+    COMMAND fsim_sv_mutable_string_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_mutable_strings
+    PROPERTIES
+      LABELS "fast;strings;tasks;timing;systemverilog;cache;debugger"
   )
 
   add_executable(

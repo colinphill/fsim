@@ -121,6 +121,8 @@ struct TestRuntime {
   std::vector<std::uint32_t> random_instructions;
   std::vector<InertialWrite> inertial_writes;
   std::vector<ProjectedWrite> projected_writes;
+  std::array<std::string, 32> strings;
+  std::array<std::string, 8> string_objects;
 };
 
 [[nodiscard]] inline std::uint64_t low_mask(std::uint32_t width);
@@ -666,6 +668,167 @@ extern "C" inline void write_projected_waveform_slice(
   }
 }
 
+extern "C" inline std::uint32_t load_string(
+    void* opaque,
+    const std::uint32_t destination,
+    const char* bytes,
+    const std::uint64_t size) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(destination < runtime.strings.size());
+  assert(size <= maximum_string_bytes);
+  runtime.strings[destination].assign(
+      bytes, static_cast<std::size_t>(size));
+  return 0;
+}
+
+extern "C" inline std::uint32_t copy_string(
+    void* opaque,
+    const std::uint32_t destination,
+    const std::uint32_t source) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.strings.at(destination) = runtime.strings.at(source);
+  return 0;
+}
+
+extern "C" inline std::uint32_t read_string_object(
+    void* opaque,
+    const std::uint32_t destination,
+    const std::uint32_t object) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.strings.at(destination) = runtime.string_objects.at(object);
+  return 0;
+}
+
+extern "C" inline std::uint32_t write_string_object(
+    void* opaque,
+    const std::uint32_t object,
+    const std::uint32_t source) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  runtime.string_objects.at(object) = runtime.strings.at(source);
+  return 0;
+}
+
+extern "C" inline std::uint32_t concatenate_strings(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t,
+    const std::uint32_t destination,
+    const std::uint32_t* operands,
+    const std::uint32_t count) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  std::string result;
+  for (std::uint32_t index = 0; index < count; ++index) {
+    result += runtime.strings.at(operands[index]);
+  }
+  if (result.size() > maximum_string_bytes) {
+    return 1;
+  }
+  runtime.strings.at(destination) = std::move(result);
+  return 0;
+}
+
+extern "C" inline std::uint32_t compare_strings(
+    void* opaque,
+    const std::uint32_t lhs,
+    const std::uint32_t rhs,
+    const std::uint32_t not_equal,
+    std::uint32_t* result) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  *result = (runtime.strings.at(lhs) == runtime.strings.at(rhs))
+          != (not_equal != 0);
+  return 0;
+}
+
+extern "C" inline std::uint32_t string_length(
+    void* opaque,
+    const std::uint32_t source,
+    std::uint32_t* result) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  *result = static_cast<std::uint32_t>(
+      runtime.strings.at(source).size());
+  return 0;
+}
+
+extern "C" inline std::uint32_t string_index(
+    void* opaque,
+    const std::uint32_t,
+    const std::uint32_t,
+    const std::uint32_t source,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    const std::uint32_t signed_index,
+    std::uint32_t* result) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  const auto raw = static_cast<std::uint32_t>(index_aval);
+  const auto index = signed_index != 0
+      ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
+      : static_cast<std::int64_t>(raw);
+  if (index_bval != 0 || index < 0
+      || static_cast<std::uint64_t>(index)
+          >= runtime.strings.at(source).size()) {
+    return 1;
+  }
+  *result = static_cast<unsigned char>(
+      runtime.strings.at(source).at(index));
+  return 0;
+}
+
+extern "C" inline std::uint32_t string_replace_byte(
+    void* opaque,
+    const std::uint32_t process,
+    const std::uint32_t instruction,
+    const std::uint32_t target,
+    const std::uint64_t index_aval,
+    const std::uint64_t index_bval,
+    const std::uint32_t signed_index,
+    const std::uint64_t source_aval,
+    const std::uint64_t source_bval) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  std::uint32_t unused = 0;
+  if (source_bval != 0
+      || string_index(
+             opaque,
+             process,
+             instruction,
+             target,
+             index_aval,
+             index_bval,
+             signed_index,
+             &unused)
+          != 0) {
+    return 1;
+  }
+  const auto index = signed_index != 0
+      ? static_cast<std::size_t>(
+            static_cast<std::int32_t>(index_aval))
+      : static_cast<std::size_t>(
+            static_cast<std::uint32_t>(index_aval));
+  runtime.strings.at(target).at(index) =
+      static_cast<char>(source_aval & UINT64_C(0xff));
+  return 0;
+}
+
+extern "C" inline std::uint32_t write_string_output(
+    void* opaque,
+    const std::uint32_t process,
+    const std::uint32_t source,
+    const char* prefix,
+    const std::uint64_t prefix_size,
+    const char* suffix,
+    const std::uint64_t suffix_size,
+    const std::uint32_t newline,
+    const std::uint32_t postponed) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  std::string text{prefix, static_cast<std::size_t>(prefix_size)};
+  text += runtime.strings.at(source);
+  text.append(suffix, static_cast<std::size_t>(suffix_size));
+  (postponed != 0 ? runtime.postponed_output : runtime.output)
+      .push_back(std::move(text));
+  runtime.output_processes.push_back(process);
+  runtime.output_newlines.push_back(newline != 0);
+  return 0;
+}
+
 [[nodiscard]] inline fsim_jit_runtime_v1 abi(TestRuntime &runtime) {
   fsim_jit_runtime_v1 result{};
   result.abi_version = FSIM_JIT_RUNTIME_ABI_VERSION_V1;
@@ -718,6 +881,16 @@ extern "C" inline void write_projected_waveform_slice(
   result.write_projected_waveform_slice_logic9 =
       &write_projected_waveform_slice_logic9;
   result.write_formatted_logic9 = &write_formatted_logic9;
+  result.load_string = &load_string;
+  result.copy_string = &copy_string;
+  result.read_string_object = &read_string_object;
+  result.write_string_object = &write_string_object;
+  result.concatenate_strings = &concatenate_strings;
+  result.compare_strings = &compare_strings;
+  result.string_length = &string_length;
+  result.string_index = &string_index;
+  result.string_replace_byte = &string_replace_byte;
+  result.write_string_output = &write_string_output;
   return result;
 }
 
@@ -943,6 +1116,9 @@ void test_logic9_at_level(
 void test_persistent_object_cache();
 void test_rejections();
 void test_display_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_strings_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 

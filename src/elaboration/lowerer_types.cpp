@@ -27,7 +27,9 @@ using namespace elaboration_detail;
         }
         if (expression.kind == ExpressionKind::Index
             && expression.operands.size() == 2) {
-            return std::size_t{1};
+            return is_string_expression(expression.operands.front())
+                ? std::size_t{8}
+                : std::size_t{1};
         }
         if (expression.kind == ExpressionKind::Slice
             && expression.operands.size() == 3) {
@@ -146,6 +148,11 @@ using namespace elaboration_detail;
                 return width;
             }
             return infer_width(expression.operands[2]);
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == ".len"
+            && expression.operands.size() == 1) {
+            return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call
             && expression.text == "$isunknown") {
@@ -786,6 +793,10 @@ using namespace elaboration_detail;
         register_widths_.push_back(width);
         register_domains_.push_back(domain);
         return id;
+    }
+
+    StringRegisterId Lowerer::allocate_string_register() {
+        return next_string_register_++;
     }
 
 

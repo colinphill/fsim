@@ -95,7 +95,10 @@ static_assert(
     offsetof(fsim_jit_runtime_v1, read_signal_logic9) == 232);
 static_assert(
     offsetof(fsim_jit_runtime_v1, write_formatted_logic9) == 344);
-static_assert(sizeof(fsim_jit_runtime_v1) == 352);
+static_assert(offsetof(fsim_jit_runtime_v1, load_string) == 352);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, write_string_output) == 424);
+static_assert(sizeof(fsim_jit_runtime_v1) == 432);
 static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
 static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
 static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
@@ -115,6 +118,9 @@ constexpr auto kJitRuntimeV1PrefixSize =
 constexpr auto kJitFrameV1PrefixSize =
     static_cast<std::uint32_t>(
         offsetof(fsim_jit_frame_v1, register_logic9_plane2));
+constexpr auto kJitRuntimeLogic9Size =
+    static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, load_string));
 
 class PersistentLlvmObjectCache final : public llvm::ObjectCache {
 public:
@@ -324,6 +330,7 @@ struct LlvmJit::Impl {
     bool uses_monitor_install{};
     bool uses_monitor_control{};
     bool uses_random_value{};
+    bool uses_strings{};
   };
 
   struct NativeEntry {
@@ -461,6 +468,7 @@ void LlvmJit::add_process_module(
         make_frame_layout(
             cache_key,
             entry.process->register_count,
+            entry.process->string_register_count,
             validated.uses_logic9),
         static_cast<std::uint32_t>(entry.process->operations.size()),
         validated.requires_resume,
@@ -488,6 +496,7 @@ void LlvmJit::add_process_module(
         validated.uses_monitor_install,
         validated.uses_monitor_control,
         validated.uses_random_value,
+        validated.uses_strings,
     };
     process_keys.push_back(cache_key);
     prepared.push_back(
@@ -829,7 +838,8 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_write_projected_waveform_slice) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, read_signal_logic9)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include "
           "write_projected_waveform_slice");
@@ -968,7 +978,8 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.uses_random_value) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, write_inertial)) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include random_value");
     }
@@ -978,7 +989,7 @@ LlvmJit::resume(const JitProcessHandle process,
     }
   }
   if (entry.info.frame_layout.uses_logic9) {
-    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+    if (runtime.struct_size < kJitRuntimeLogic9Size) {
       throw LlvmJitError(
           "JIT runtime ABI structure does not include Logic9 callbacks");
     }
@@ -999,6 +1010,27 @@ LlvmJit::resume(const JitProcessHandle process,
         || runtime.write_formatted_logic9 == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires Logic9 callbacks for this process");
+    }
+  }
+  if (entry.info.uses_strings) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include mutable-string "
+          "callbacks");
+    }
+    if (runtime.load_string == nullptr
+        || runtime.copy_string == nullptr
+        || runtime.read_string_object == nullptr
+        || runtime.write_string_object == nullptr
+        || runtime.concatenate_strings == nullptr
+        || runtime.compare_strings == nullptr
+        || runtime.string_length == nullptr
+        || runtime.string_index == nullptr
+        || runtime.string_replace_byte == nullptr
+        || runtime.write_string_output == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires mutable-string callbacks for this "
+          "process");
     }
   }
   if (frame.abi_version != FSIM_JIT_FRAME_ABI_VERSION_V1) {

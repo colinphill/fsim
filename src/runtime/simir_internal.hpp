@@ -183,6 +183,7 @@ struct Interpreter::Impl {
     Process program;
     InstructionIndex pc{};
     std::vector<PackedLogic4> registers;
+    std::vector<std::string> string_registers;
     std::unique_ptr<ProcessExecutor> executor;
     std::vector<Sensitivity> dynamic_sensitivity;
     std::vector<bool> dynamic_triggered;
@@ -277,6 +278,7 @@ struct Interpreter::Impl {
   Scheduler scheduler;
   std::uint64_t root_seed{1};
   std::vector<Signal> signals;
+  std::vector<StringObject> string_objects;
   std::vector<PackedLogic4> driven_values;
   std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
   std::vector<std::optional<PackedLogic4>> external_driver_values;
@@ -324,6 +326,15 @@ struct Interpreter::Impl {
 
   [[nodiscard]] PackedLogic4 &get_register(ProcessState &process,
                                            RegisterId id);
+
+  [[nodiscard]] std::string& get_string_register(
+      ProcessState& process,
+      StringRegisterId id);
+
+  [[nodiscard]] StringObject& get_string_object(StringObjectId id);
+
+  [[nodiscard]] const StringObject&
+  get_string_object(StringObjectId id) const;
 
   [[nodiscard]] static ValueKind register_value_kind(
       const ProcessState& process,

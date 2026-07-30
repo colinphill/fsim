@@ -8,6 +8,8 @@ using namespace elaboration_detail;
 Lowerer::Lowerer(
         ElaboratedDesign& design,
         const std::unordered_map<std::string, SignalId>& signals,
+        const std::unordered_map<std::string, StringObjectId>&
+            string_objects,
         const std::unordered_map<
             std::string, const frontend::Type*>& visible_types,
         const std::unordered_map<
@@ -18,6 +20,7 @@ Lowerer::Lowerer(
         std::vector<Diagnostic>& diagnostics)
         : design_(design),
           signals_(signals),
+          string_objects_(string_objects),
           visible_types_(visible_types),
           visible_type_marks_(visible_type_marks),
           functions_(functions),
@@ -36,9 +39,11 @@ Lowerer::Lowerer(
         process_kind_ = source.kind;
         hierarchy_ = std::string{hierarchy};
         next_register_ = 0;
+        next_string_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
+        string_locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();
@@ -166,15 +171,18 @@ Lowerer::Lowerer(
         lower_pending_procedures();
         lower_pending_functions();
         process_.register_count = next_register_;
+        process_.string_register_count = next_string_register_;
         process_.register_value_kinds.reserve(register_domains_.size());
         for (const auto domain : register_domains_) {
             process_.register_value_kinds.push_back(
                 value_kind(domain));
         }
         next_register_ = 0;
+        next_string_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
+        string_locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();
@@ -198,9 +206,11 @@ Lowerer::Lowerer(
         language_ = language;
         process_kind_ = ProcessKind::VhdlProcess;
         next_register_ = 0;
+        next_string_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
+        string_locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();
@@ -240,15 +250,18 @@ Lowerer::Lowerer(
         lower_pending_procedures();
         lower_pending_functions();
         process_.register_count = next_register_;
+        process_.string_register_count = next_string_register_;
         process_.register_value_kinds.reserve(register_domains_.size());
         for (const auto domain : register_domains_) {
             process_.register_value_kinds.push_back(
                 value_kind(domain));
         }
         next_register_ = 0;
+        next_string_register_ = 0;
         register_widths_.clear();
         register_domains_.clear();
         locals_.clear();
+        string_locals_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();
@@ -503,6 +516,47 @@ Lowerer::Lowerer(
         pending.reserve(variables.size());
         std::unordered_set<std::string> declared_here;
         for (const auto& variable : variables) {
+            if (variable.type.domain
+                == frontend::ValueDomain::String) {
+                if (!declared_here.emplace(variable.name).second) {
+                    report(
+                        "FSIM-ELAB-SVSTRING-005",
+                        "duplicate string variable in the same scope '"
+                            + variable.name + "'",
+                        variable.span);
+                    continue;
+                }
+                const auto register_id =
+                    allocate_string_register();
+                string_locals_.insert_or_assign(
+                    variable.name, register_id);
+                local_types_.insert_or_assign(
+                    variable.name, &variable.type);
+                process_.debug_string_locals.push_back(
+                    DebugStringLocal{
+                        scoped_local_name(variable.name),
+                        register_id,
+                        SourceLocation{
+                            variable.span.source_name,
+                            static_cast<std::uint32_t>(
+                                variable.span.begin.line),
+                            static_cast<std::uint32_t>(
+                                variable.span.begin.column)}});
+                if (variable.initializer) {
+                    const auto value =
+                        lower_string_expression(
+                            *variable.initializer);
+                    if (value) {
+                        process_.operations.emplace_back(
+                            CopyStringRegister{
+                                register_id, *value});
+                    }
+                } else {
+                    process_.operations.emplace_back(
+                        LoadStringConstant{register_id, {}});
+                }
+                continue;
+            }
             const auto width = variable.type.width();
             if (!width || *width == 0) {
                 report(
@@ -707,6 +761,7 @@ Lowerer::Lowerer(
 
     void Lowerer::lower_block(const Statement& statement) {
         auto outer_locals = locals_;
+        auto outer_string_locals = string_locals_;
         auto outer_signed = local_signed_;
         auto outer_ranges = local_ranges_;
         auto outer_integer_ranges = local_integer_ranges_;
@@ -717,6 +772,7 @@ Lowerer::Lowerer(
         lower_statements(statement.statements);
         local_scope_.pop_back();
         locals_ = std::move(outer_locals);
+        string_locals_ = std::move(outer_string_locals);
         local_signed_ = std::move(outer_signed);
         local_ranges_ = std::move(outer_ranges);
         local_integer_ranges_ =
@@ -1063,6 +1119,25 @@ Lowerer::Lowerer(
                                 output.zero_pad});
                         continue;
                     }
+                    if (output.format
+                            == frontend::OutputFormat::String
+                        && is_string_expression(output.value)) {
+                        const auto source =
+                            lower_string_expression(output.value);
+                        if (!source) {
+                            continue;
+                        }
+                        process_.operations.emplace_back(
+                            StringDisplay{
+                                *source,
+                                output.prefix,
+                                last
+                                    ? statement.output_trailing_text
+                                    : std::string{},
+                                last && statement.output_newline,
+                                statement.output_postponed});
+                        continue;
+                    }
                     const auto width =
                         infer_width(output.value)
                             .value_or(std::size_t{32});
@@ -1098,6 +1173,22 @@ Lowerer::Lowerer(
                 break;
             }
             if (statement.output_format) {
+                if (*statement.output_format
+                        == frontend::OutputFormat::String
+                    && is_string_expression(statement.value)) {
+                    const auto source =
+                        lower_string_expression(statement.value);
+                    if (source) {
+                        process_.operations.emplace_back(
+                            StringDisplay{
+                                *source,
+                                statement.output_prefix,
+                                statement.output_suffix,
+                                statement.output_newline,
+                                statement.output_postponed});
+                    }
+                    break;
+                }
                 const auto width =
                     infer_width(statement.value)
                         .value_or(std::size_t{32});

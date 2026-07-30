@@ -725,6 +725,75 @@ using namespace elaboration_detail;
                 path + "." + signal.name, &signal.type);
             (void)add_owned_signal(signal, path, local);
         }
+        std::unordered_map<std::string, StringObjectId>
+            local_string_objects;
+        SystemVerilogStringEnvironment string_values;
+        for (const auto& variable : unit.variables) {
+            visible_types.emplace(
+                variable.name, &variable.type);
+            visible_types.emplace(
+                path + "." + variable.name, &variable.type);
+            if (variable.type.domain
+                != frontend::ValueDomain::String) {
+                report(
+                    "FSIM-ELAB-SVSTRING-016",
+                    "module variable '" + path + "."
+                        + variable.name
+                        + "' is not a supported string object",
+                    variable.span);
+                continue;
+            }
+            SystemVerilogStringValue initial;
+            initial.source = variable.span;
+            if (variable.initializer) {
+                std::string error;
+                const auto value =
+                    evaluate_systemverilog_string_expression(
+                        *variable.initializer,
+                        string_values,
+                        {},
+                        error);
+                if (!value) {
+                    report(
+                        "FSIM-ELAB-SVSTRING-017",
+                        "cannot evaluate module string initializer for '"
+                            + path + "." + variable.name
+                            + "': " + error,
+                        variable.span);
+                    continue;
+                }
+                initial = *value;
+            }
+            if (initial.bytes.size()
+                > maximum_string_bytes) {
+                report(
+                    "FSIM-ELAB-SVSTRING-007",
+                    "module string initializer exceeds the 4096-byte "
+                    "limit",
+                    variable.span);
+                continue;
+            }
+            const auto index =
+                design_.string_objects_.size();
+            const auto id =
+                static_cast<StringObjectId>(index);
+            if (static_cast<std::size_t>(id) != index) {
+                throw std::length_error{
+                    "too many elaborated string objects"};
+            }
+            const auto full_name =
+                path + "." + variable.name;
+            design_.string_object_info_.push_back(
+                StringObjectInfo{id, full_name, variable.span});
+            design_.string_objects_.push_back(
+                StringObject{full_name, initial.bytes});
+            local_string_objects.emplace(
+                variable.name, id);
+            local_string_objects.emplace(
+                full_name, id);
+            string_values.emplace(
+                variable.name, std::move(initial));
+        }
 
         const auto specialization_index = design_.specializations_.size();
         const auto specialization_id =
@@ -772,6 +841,7 @@ using namespace elaboration_detail;
         Lowerer lowerer{
             design_,
             local,
+            local_string_objects,
             visible_types,
             visible_type_marks,
             unit.functions,

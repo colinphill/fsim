@@ -1596,4 +1596,101 @@ void test_simir_alternate_executor_validation() {
   }
 }
 
+void test_simir_mutable_strings() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  const auto object = interpreter.add_string_object(
+      StringObject{"top.title", {}});
+
+  Process process;
+  process.id = 0;
+  process.name = "mutable_strings";
+  process.register_count = 5;
+  process.string_register_count = 4;
+  process.debug_locals = {
+      DebugLocal{
+          "equal", "logic", 0, 1, {}, {}, {},
+          ValueKind::logic4, {}},
+      DebugLocal{
+          "length", "int", 1, 32, {}, {}, {},
+          ValueKind::logic4, {}},
+      DebugLocal{
+          "first", "byte", 3, 8, {}, {}, {},
+          ValueKind::logic4, {}},
+  };
+  process.debug_string_locals = {
+      DebugStringLocal{"copy", 3, {}},
+  };
+  process.operations = {
+      LoadStringConstant{0, "fsim"},
+      LoadStringConstant{1, "-v1"},
+      ConcatenateStrings{2, {0, 1}},
+      WriteStringObject{object, 2},
+      ReadStringObject{3, object},
+      CompareStrings{0, 2, 3, false},
+      StringLength{1, 3},
+      LoadConstant{
+          2, PackedLogic4::from_aval_bval(32, 0, 0)},
+      StringIndex{3, 3, 2, true},
+      LoadConstant{
+          4, PackedLogic4::from_aval_bval(8, 'F', 0)},
+      StringReplaceByte{3, 2, 4, true},
+      WriteStringObject{object, 3},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed
+          && interpreter.string_object_value(object) == "Fsim-v1",
+      "mutable string object read, value-copy, concatenation, index, and "
+      "replacement");
+  require(
+      interpreter.read_debug_local(0, 0).to_msb_string() == "1"
+          && interpreter.read_debug_local(0, 1).low_word().aval == 7
+          && interpreter.read_debug_local(0, 2).low_word().aval == 'f'
+          && interpreter.read_debug_string_local(0, 0) == "Fsim-v1",
+      "mutable string comparison, length, indexing, and debugger values");
+
+  try {
+    Interpreter invalid;
+    (void)invalid.add_string_object(
+        StringObject{
+            "oversize",
+            std::string(maximum_string_bytes + 1, 'x')});
+    throw std::runtime_error{"oversize string object was accepted"};
+  } catch (const std::length_error& error) {
+    require(
+        std::string_view{error.what()}.find("byte limit")
+            != std::string_view::npos,
+        "oversize string object diagnostic");
+  }
+
+  Interpreter invalid_index;
+  Process bad;
+  bad.id = 0;
+  bad.name = "invalid_string_index";
+  bad.register_count = 2;
+  bad.string_register_count = 1;
+  bad.operations = {
+      LoadStringConstant{0, "x"},
+      LoadConstant{
+          0, PackedLogic4::from_aval_bval(32, 1, 0)},
+      StringIndex{1, 0, 0, true},
+      Halt{},
+  };
+  (void)invalid_index.add_process(std::move(bad));
+  try {
+    (void)invalid_index.run();
+    throw std::runtime_error{"out-of-range string index was accepted"};
+  } catch (const InterpreterError& error) {
+    require(
+        std::string_view{error.what()}.find("outside the byte range")
+            != std::string_view::npos,
+        "out-of-range string index diagnostic");
+  }
+}
+
 } // namespace fsim::tests::runtime

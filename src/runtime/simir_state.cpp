@@ -66,6 +66,32 @@ Interpreter::Impl::get_process(ProcessId id) {
     return process.registers[id];
   }
 
+[[nodiscard]] std::string& Interpreter::Impl::get_string_register(
+    ProcessState& process,
+    const StringRegisterId id) {
+  if (id >= process.string_registers.size()) {
+    throw InterpreterError(
+        process.program.id, process.pc, "invalid string register ID");
+  }
+  return process.string_registers[id];
+}
+
+[[nodiscard]] StringObject& Interpreter::Impl::get_string_object(
+    const StringObjectId id) {
+  if (id >= string_objects.size()) {
+    throw std::out_of_range{"invalid SimIR string object ID"};
+  }
+  return string_objects[id];
+}
+
+[[nodiscard]] const StringObject& Interpreter::Impl::get_string_object(
+    const StringObjectId id) const {
+  if (id >= string_objects.size()) {
+    throw std::out_of_range{"invalid SimIR string object ID"};
+  }
+  return string_objects[id];
+}
+
 [[nodiscard]] ValueKind Interpreter::Impl::register_value_kind(
     const ProcessState& process,
     const RegisterId id)  {

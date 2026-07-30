@@ -484,6 +484,10 @@ void substitute_systemverilog_strings(
     for (auto& signal : unit.signals) {
         substitute_type(signal.type, environment, integer_environment);
     }
+    for (auto& variable : unit.variables) {
+        substitute_variable(
+            variable, environment, integer_environment);
+    }
     substitute_statements(
         unit.concurrent_statements,
         environment,

@@ -390,6 +390,77 @@ typedef struct fsim_jit_runtime_v1 {
       uint32_t instruction,
       uint32_t width,
       const fsim_jit_logic9_word_v1* value);
+
+  /*
+   * Append-only mutable-string helpers. Generated code passes only stable
+   * register/object IDs and immutable byte spans; storage ownership and
+   * allocator layout remain entirely on the embedding side of this C ABI.
+   * Every helper returns zero on success and nonzero after containing an
+   * embedding failure. Scalar results are written through the final pointer.
+   */
+  uint32_t (*load_string)(
+      void* context,
+      uint32_t destination,
+      const char* bytes,
+      uint64_t byte_count);
+  uint32_t (*copy_string)(
+      void* context,
+      uint32_t destination,
+      uint32_t source);
+  uint32_t (*read_string_object)(
+      void* context,
+      uint32_t destination,
+      uint32_t object);
+  uint32_t (*write_string_object)(
+      void* context,
+      uint32_t object,
+      uint32_t source);
+  uint32_t (*concatenate_strings)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t destination,
+      const uint32_t* operands,
+      uint32_t operand_count);
+  uint32_t (*compare_strings)(
+      void* context,
+      uint32_t lhs,
+      uint32_t rhs,
+      uint32_t not_equal,
+      uint32_t* result);
+  uint32_t (*string_length)(
+      void* context,
+      uint32_t source,
+      uint32_t* result);
+  uint32_t (*string_index)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t source,
+      uint64_t index_aval,
+      uint64_t index_bval,
+      uint32_t signed_index,
+      uint32_t* result);
+  uint32_t (*string_replace_byte)(
+      void* context,
+      uint32_t process,
+      uint32_t instruction,
+      uint32_t target,
+      uint64_t index_aval,
+      uint64_t index_bval,
+      uint32_t signed_index,
+      uint64_t source_aval,
+      uint64_t source_bval);
+  uint32_t (*write_string_output)(
+      void* context,
+      uint32_t process,
+      uint32_t source,
+      const char* prefix,
+      uint64_t prefix_size,
+      const char* suffix,
+      uint64_t suffix_size,
+      uint32_t newline,
+      uint32_t postponed);
 } fsim_jit_runtime_v1;
 
 /*

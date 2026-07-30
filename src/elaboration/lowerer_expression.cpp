@@ -47,6 +47,52 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
 
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == ".len"
+            && expression.operands.size() == 1
+            && is_string_expression(
+                expression.operands.front())) {
+            const auto source =
+                lower_string_expression(
+                    expression.operands.front());
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(
+                    32, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                StringLength{destination, *source});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Index
+            && expression.operands.size() == 2
+            && is_string_expression(expression.operands.front())) {
+            const auto source =
+                lower_string_expression(
+                    expression.operands.front());
+            const auto index_width =
+                infer_width(expression.operands[1])
+                    .value_or(std::size_t{32});
+            const auto index =
+                lower_expression(
+                    expression.operands[1], index_width);
+            if (!source || !index) {
+                return std::nullopt;
+            }
+            const auto destination =
+                allocate_register(
+                    8, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                StringIndex{
+                    destination,
+                    *source,
+                    *index,
+                    is_signed_expression(
+                        expression.operands[1])});
+            return destination;
+        }
+
         const auto enumeration_context_compatible =
             [&](const frontend::Type* source_type) {
               if (language_

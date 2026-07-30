@@ -25,12 +25,6 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
   }
 
   function.return_type = parse_parameter_type();
-  if (function.return_type.spelling == "string") {
-    error(
-        previous(),
-        "FSIM-SV-UNSUPPORTED-034",
-        "function return types are limited to integral values");
-  }
   const auto name = expect_identifier("function name");
   function.name = name.text;
 
@@ -82,13 +76,6 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
       } else {
         type = inherited_type;
       }
-      if (type.spelling == "string") {
-        error(
-            current(),
-            "FSIM-SV-UNSUPPORTED-034",
-            "function arguments are limited to integral values");
-      }
-
       const auto argument_name =
           expect_identifier("function argument name");
       if (!current_function_arguments_.insert(
@@ -357,11 +344,6 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
         type = inherited_type;
       }
       have_inherited_formal = true;
-      if (type.spelling == "string") {
-        error(current(), "FSIM-SV-UNSUPPORTED-039",
-              "task arguments are limited to integral values");
-      }
-
       const auto argument_name = expect_identifier("task argument name");
       if (!current_procedural_names_.insert(argument_name.text).second) {
         error(argument_name, "FSIM-SV-SEM-067",

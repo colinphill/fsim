@@ -3,6 +3,37 @@
 
 namespace fsim::app::application_detail {
 
+namespace {
+
+[[nodiscard]] std::string escaped_string(
+    const std::string_view value) {
+  constexpr char digits[] = "0123456789abcdef";
+  std::string result{"\""};
+  for (const auto byte : value) {
+    const auto character = static_cast<unsigned char>(byte);
+    switch (character) {
+    case '\\': result += "\\\\"; break;
+    case '"': result += "\\\""; break;
+    case '\n': result += "\\n"; break;
+    case '\r': result += "\\r"; break;
+    case '\t': result += "\\t"; break;
+    default:
+      if (character >= 0x20 && character <= 0x7e) {
+        result.push_back(static_cast<char>(character));
+      } else {
+        result += "\\x";
+        result.push_back(digits[character >> 4U]);
+        result.push_back(digits[character & 0x0fU]);
+      }
+      break;
+    }
+  }
+  result.push_back('"');
+  return result;
+}
+
+}  // namespace
+
 DebuggerSession::ExecutionGuard::~ExecutionGuard() {
   executing = false;
 }
@@ -82,6 +113,13 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       return;
     }
     if (command[0] == "show" && command.size() == 2) {
+      if (const auto object = resolve_string_object(command[1])) {
+        output_ << object->first << " = "
+                << escaped_string(
+                       simulation_.read_string_object(object->second))
+                << '\n';
+        return;
+      }
       if (const auto signal = resolve_signal(command[1])) {
         const auto& info =
             simulation_.design().signals().at(signal->second);
@@ -98,6 +136,21 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
     }
     if ((command[0] == "deposit" || command[0] == "force")
         && command.size() == 3) {
+      if (const auto object = resolve_string_object(command[1])) {
+        if (command[0] == "force") {
+          output_
+              << "force is not supported for mutable string objects; "
+                 "use deposit\n";
+        } else if (
+            command[2].size()
+            > runtime::simir::maximum_string_bytes) {
+          output_ << "string deposit exceeds the 4096-byte limit\n";
+        } else {
+          simulation_.deposit_string_object(
+              object->second, command[2]);
+        }
+        return;
+      }
       modify_signal(command);
       return;
     }
@@ -270,6 +323,19 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
     return std::nullopt;
   }
 
+[[nodiscard]] std::optional<std::pair<
+    std::string, runtime::simir::StringObjectId>>
+DebuggerSession::resolve_string_object(
+    const std::string_view name) const {
+  const auto relative = scope_ + "." + std::string{name};
+  for (const auto& object : simulation_.design().string_objects()) {
+    if (object.name == name || object.name == relative) {
+      return std::pair{object.name, object.id};
+    }
+  }
+  return std::nullopt;
+}
+
 [[nodiscard]] std::optional<SimulationTick> DebuggerSession::command_time(
     const std::string_view text)  {
     std::string time_error;
@@ -393,7 +459,8 @@ void DebuggerSession::show_locals()  {
     const auto process_id = current_execution_point_->process;
     const auto& process =
         simulation_.design().processes().at(process_id);
-    if (process.debug_locals.empty()) {
+    if (process.debug_locals.empty()
+        && process.debug_string_locals.empty()) {
       output_ << "(no locals)\n";
       return;
     }
@@ -405,6 +472,16 @@ void DebuggerSession::show_locals()  {
       output_ << local.name << " = "
               << format_value(
                      value, local.enumeration_literals)
+              << '\n';
+    }
+    for (std::size_t index = 0;
+         index < process.debug_string_locals.size();
+         ++index) {
+      const auto& local = process.debug_string_locals[index];
+      output_ << local.name << " = "
+              << escaped_string(
+                     simulation_.read_process_string_local(
+                         process_id, index))
               << '\n';
     }
   }

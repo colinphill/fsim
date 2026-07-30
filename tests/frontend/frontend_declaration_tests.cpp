@@ -435,6 +435,95 @@ endmodule
               == ExpressionKind::Concatenation,
       "string HIR retains type, locality, expression, and decoded bytes");
 
+  const auto mutable_strings = parse_text(
+      "mutable-strings.sv",
+      R"(
+module mutable_strings;
+  string title = "fsim";
+  string empty;
+
+  function automatic string decorate(input string value);
+    string suffix = "!";
+    return {value, suffix};
+  endfunction
+
+  task automatic remember(input string value, output string copied);
+    string temporary;
+    temporary = value;
+    copied = temporary;
+  endtask
+
+  initial begin : worker
+    string scratch = {title, "-local"};
+    title = decorate(scratch);
+    if (title != "")
+      title[0] = "F";
+    if (title.len() == 0)
+      title = empty;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      mutable_strings.ok(),
+      "bounded mutable string syntax must parse without integral-type "
+      "fallback diagnostics");
+  const auto* mutable_unit =
+      mutable_strings.design.find(
+          UnitKind::VerilogModule, "mutable_strings");
+  require(
+      mutable_unit != nullptr
+          && mutable_unit->variables.size() == 2
+          && mutable_unit->variables[0].type.domain
+              == ValueDomain::String
+          && mutable_unit->variables[0].initializer
+          && mutable_unit->variables[0].initializer->decoded_string
+              == std::optional<std::string>{"fsim"}
+          && !mutable_unit->variables[1].initializer,
+      "module string variables retain distinct type and initialization");
+  require(
+      mutable_unit != nullptr
+          && mutable_unit->functions.size() == 1
+          && mutable_unit->functions[0].return_type.domain
+              == ValueDomain::String
+          && mutable_unit->functions[0].arguments.size() == 1
+          && mutable_unit->functions[0].arguments[0].type.domain
+              == ValueDomain::String
+          && mutable_unit->functions[0].variables.size() == 1
+          && mutable_unit->functions[0].variables[0].type.domain
+              == ValueDomain::String,
+      "string function result, formal, and automatic local retain typing");
+  require(
+      mutable_unit != nullptr
+          && mutable_unit->tasks.size() == 1
+          && mutable_unit->tasks[0].arguments.size() == 2
+          && mutable_unit->tasks[0].arguments[0].type.domain
+              == ValueDomain::String
+          && mutable_unit->tasks[0].arguments[1].type.domain
+              == ValueDomain::String
+          && mutable_unit->tasks[0].variables.size() == 1
+          && mutable_unit->tasks[0].variables[0].type.domain
+              == ValueDomain::String,
+      "string task formals and automatic local retain typing");
+  require(
+      mutable_unit != nullptr
+          && mutable_unit->processes.size() == 1
+          && mutable_unit->processes[0].statements.size() == 1
+          && mutable_unit->processes[0].statements[0]
+                 .declarations.size() == 1
+          && mutable_unit->processes[0].statements[0]
+                 .declarations[0].type.domain
+              == ValueDomain::String
+          && mutable_unit->processes[0].statements[0]
+                 .statements.size() == 3
+          && mutable_unit->processes[0].statements[0]
+                 .statements[2].condition.operands[0].kind
+              == ExpressionKind::Call
+          && mutable_unit->processes[0].statements[0]
+                 .statements[2].condition.operands[0].text
+              == ".len",
+      "block string declarations and len method retain executable HIR");
+
   const auto invalid_string_escape = parse_text(
       "invalid-string-escape.sv",
       R"(
@@ -1163,10 +1252,10 @@ endmodule
   };
   require(has_code("FSIM-SV-UNSUPPORTED-037") &&
               has_code("FSIM-SV-UNSUPPORTED-038") &&
-              has_code("FSIM-SV-UNSUPPORTED-039") &&
               has_code("FSIM-SV-SEM-067") && has_code("FSIM-SV-SEM-068") &&
               has_code("FSIM-SV-SEM-070") && has_code("FSIM-SV-SEM-071"),
-          "task lifetime, formal, body, return, and closing-name diagnostics");
+          "task lifetime, ref formal, body, return, and closing-name "
+          "diagnostics");
 
   const auto duplicate = parse_text("duplicate_tasks.sv",
                                     R"(

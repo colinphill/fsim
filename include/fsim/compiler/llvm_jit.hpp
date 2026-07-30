@@ -80,6 +80,7 @@ struct JitProcessFrameLayout {
   std::uint64_t layout_id_low{};
   std::uint64_t layout_id_high{};
   std::uint32_t register_count{};
+  std::uint32_t string_register_count{};
   bool uses_logic9{};
 
   friend bool operator==(JitProcessFrameLayout,
@@ -124,6 +125,7 @@ enum class JitGeneratedRuntimeErrorReason : std::uint8_t {
   call_stack_overflow,
   call_stack_underflow,
   call_stack_target,
+  string_callback_failure,
 };
 
 /// A failure deliberately reported by generated SimIR code.

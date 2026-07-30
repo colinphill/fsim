@@ -136,7 +136,12 @@ _Static_assert(
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, write_formatted_logic9) == 344,
     "runtime exact formatting callback was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 352,
+_Static_assert(offsetof(fsim_jit_runtime_v1, load_string) == 352,
+               "runtime string helpers were not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, write_string_output) == 424,
+    "runtime string-output helper was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 432,
                "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
@@ -576,6 +581,16 @@ int main(void) {
       write_projected_slice,
       write_projected_waveform,
       write_projected_waveform_slice,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
       NULL,
       NULL,
       NULL,
