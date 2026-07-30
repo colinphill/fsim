@@ -37,7 +37,20 @@ module container_lowering #(
   endfunction
 
   task automatic mutate(inout byte target[$:2]);
+    byte ordered[$];
+    ordered = '{3, 1, 2, 1};
+    ordered.sort();
+    assert (ordered[0] == 1);
+    assert (ordered[3] == 3);
+    ordered.rsort();
+    assert (ordered[0] == 3);
+    ordered.reverse();
+    assert (ordered[0] == 1);
     target.push_back(4);
+    target.rsort();
+    assert (target[0] == 4);
+    target.reverse();
+    target.sort();
     #1;
     target.pop_front();
   endtask
@@ -78,12 +91,28 @@ module container_lowering #(
     assert (values.and() == 0);
     assert (values.or() == 15);
     assert (values.xor() == 15);
+    values.reverse();
+    assert (values[0] == 8);
+    values.sort();
+    assert (values[0] == 7);
+    values.rsort();
+    assert (values[0] == 8);
+    values.reverse();
     pending = '{1, 2};
     lookup = '{-1: 10, 3: 30};
     assert (pending.sum() == 3);
     assert (lookup.sum() == 40);
     fixed_down = '{8'h31, 8'h21, 8'h11};
     fixed_up = '{4'ha, 4'hb, 4'hc};
+    fixed_down.reverse();
+    assert (fixed_down[STATIC_LEFT] == 8'h11);
+    fixed_down.sort();
+    assert (fixed_down[STATIC_LEFT] == 8'h11);
+    fixed_down.rsort();
+    assert (fixed_down[STATIC_LEFT] == 8'h31);
+    fixed_up.reverse();
+    assert (fixed_up[-1] == 4'hc);
+    fixed_up.reverse();
     assert (values[1] == 8);
     assert (pending[0] == 1);
     assert (lookup[-1] == 10);
@@ -173,6 +202,14 @@ endmodule
                 ContainerReduction>(operation);
           })
       >= 12);
+  assert(
+      std::ranges::count_if(
+          process.operations,
+          [](const auto& operation) {
+            return std::holds_alternative<
+                OrderContainer>(operation);
+          })
+      >= 13);
   const auto values =
       elaborated.design->container_objects()[0].id;
   const auto pending =
@@ -556,8 +593,14 @@ module container_invalid_lowering;
   initial begin
     lookup.push_back(1);
     result = lookup.sort();
+    result = lookup.find();
     result = result.sum();
     lookup.sum();
+    result.sort();
+    lookup.sort();
+    fixed[0].sort();
+    result = fixed.sort();
+    fixed.shuffle();
     lookup[0] <= 1;
     dynamic.delete(0);
     fixed.delete();
@@ -580,6 +623,14 @@ endmodule
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVREDUCE-003"));
   assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVORDER-001"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVORDER-003"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVORDER-004"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVORDER-005"));
+  assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-013"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-018"));
@@ -601,7 +652,10 @@ endmodule
       R"(
 module bad_input(
     input logic [7:0] memory[3:0]);
-  initial memory[3] = 8'hff;
+  initial begin
+    memory[3] = 8'hff;
+    memory.sort();
+  end
 endmodule
 
 module incompatible(

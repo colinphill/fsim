@@ -674,6 +674,20 @@ methods use the common per-bit four-state truth tables. Native execution routes
 the operation through the existing generic container callback, so no ABI slot
 or address-bearing representation is added.
 
+SystemVerilog direct writable unpacked-container `reverse`, `sort`, and
+`rsort` method statements lower to `OrderContainer`. The operation retains
+only its enum and typed container register; object and port receivers reuse
+the existing explicit writeback. Static arrays expose declared left-to-right
+storage and dynamic arrays and queues expose current index order, so reversal
+and stable sorting mutate that sequence without remapping indices or changing
+capacity. The exact-width comparator scans most-significant bit first. Its
+ordinary rank is `0 < 1 < X < Z`; the signed sign-bit rank is
+`1 < 0 < X < Z`, which preserves two's-complement numeric order for known
+values and gives unknown sign states deterministic positions. The interpreter
+and native generic container callback invoke the same kernel, and schema 31
+serializes the operator plus this semantic policy without extending the
+append-only C ABI.
+
 `$onehot` and `$onehot0` lower to dedicated common reduction operators. They
 count exact `1` elements of the packed operand, ignore `X` and `Z` elements,
 and return a two-state bit indicating exactly one or at most one set element.

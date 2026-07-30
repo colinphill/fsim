@@ -83,6 +83,12 @@ module containers;
     assert (pending.and() == 0);
     assert (pending.or() == 8'hbb);
     assert (pending.xor() == 8'h11);
+    values.reverse();
+    values.sort();
+    values.rsort();
+    pending.reverse();
+    pending.sort();
+    bounded.rsort();
   end
 endmodule
 
@@ -242,6 +248,19 @@ endmodule
           == 4,
       "static, dynamic, queue, and associative assignment patterns "
       "remain aggregate HIR");
+  require(
+      std::ranges::count_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.kind
+                    == StatementKind::ContainerMethod
+                && (statement.value.text == ".reverse"
+                    || statement.value.text == ".sort"
+                    || statement.value.text == ".rsort");
+          })
+          == 6,
+      "container ordering methods remain explicit no-argument "
+      "method-statement HIR");
   const auto keyed_pattern =
       std::ranges::find_if(
           query_statements,
@@ -368,6 +387,7 @@ module container_invalid;
     queue.push_back();
     queue.delete(1, 2);
     queue.sum(1);
+    queue.sort(1);
   end
 endmodule
 )",
@@ -392,6 +412,18 @@ endmodule
               unsupported_reduction,
               "FSIM-SV-UNSUPPORTED-039"),
       "container reduction with-clauses diagnose explicitly");
+
+  const auto unsupported_ordering = parse_text(
+      "container-ordering-with.sv",
+      "module m; int values[]; "
+      "initial values.sort() with (item); endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !unsupported_ordering.ok()
+          && has_code(
+              unsupported_ordering,
+              "FSIM-SV-UNSUPPORTED-041"),
+      "container ordering with-clauses diagnose explicitly");
   require(
       has_code(invalid, "FSIM-SV-UNSUPPORTED-037")
           && has_code(invalid, "FSIM-SV-UNSUPPORTED-038"),
@@ -410,15 +442,18 @@ endmodule
   const auto verilog = parse_text(
       "container-verilog.v",
       "module m; integer values[]; integer value; "
-      "initial begin value = '{1}; value = values.sum(); end "
+      "initial begin value = '{1}; value = values.sum(); "
+      "values.sort(); end "
       "endmodule",
       Language::Verilog2005);
   require(
       !verilog.ok()
           && has_code(verilog, "FSIM-SV-SEM-077")
           && has_code(verilog, "FSIM-SV-SEM-084")
-          && has_code(verilog, "FSIM-SV-SEM-085"),
-      "containers, patterns, and reductions require SystemVerilog-2017");
+          && has_code(verilog, "FSIM-SV-SEM-085")
+          && has_code(verilog, "FSIM-SV-SEM-086"),
+      "containers, patterns, reductions, and ordering require "
+      "SystemVerilog-2017");
 
   const auto malformed_pattern = parse_text(
       "container-pattern-invalid.sv",

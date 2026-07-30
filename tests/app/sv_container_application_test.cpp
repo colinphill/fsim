@@ -199,6 +199,59 @@ void inspect_suspended(
       && resumed.time == 3);
 }
 
+void inspect_ordering_suspended(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  std::optional<fsim::runtime::simir::ProcessId> process_id;
+  std::optional<std::size_t> local_index;
+  for (const auto& process : simulation.design().processes()) {
+    for (std::size_t index = 0;
+         index < process.debug_container_locals.size(); ++index) {
+      if (process.debug_container_locals[index].name
+          == "mutate.ordered") {
+        process_id = process.id;
+        local_index = index;
+      }
+    }
+  }
+  assert(process_id && local_index);
+  std::size_t suspensions{};
+  simulation.set_execution_point_hook(
+      [&](fsim::runtime::Scheduler& scheduler,
+          const fsim::runtime::simir::ExecutionPoint& point) {
+        if (point.process == *process_id
+            && point.kind
+                == fsim::runtime::simir::ExecutionPointKind::
+                    process_suspend
+            && ++suspensions == 2) {
+          scheduler.request_stop();
+        }
+      });
+  const auto stopped = simulation.run();
+  assert(
+      stopped.status == fsim::runtime::RunStatus::stopped
+      && stopped.time == 1);
+  const auto local = simulation.read_process_container_local(
+      *process_id, *local_index);
+  assert(
+      local.elements.size() == 5
+      && local.elements[0].low_word().aval == 0xfe
+      && local.elements[1].low_word().aval == 0xff
+      && local.elements[2].low_word().aval == 2
+      && local.elements[3].low_word().aval == 3
+      && local.elements[4].low_word().aval == 3);
+  simulation.clear_stop();
+  const auto resumed = simulation.run();
+  assert(
+      resumed.status == fsim::runtime::RunStatus::completed
+      && resumed.time == 3);
+}
+
 void inspect_static_suspended(
     const fsim::project::Config& config,
     const fsim::app::SimulationEngine engine) {
@@ -391,6 +444,14 @@ module static_port_leaf #(
     assert ($unpacked_dimensions(source) == 1);
     result = '{8'h10, 8'h20, 8'h30, 8'h40};
     assert (result.sum() == 8'ha0);
+    result.reverse();
+    assert (result[LEFT] == 8'h40);
+    result.reverse();
+    result.sort();
+    assert (result[LEFT] == 8'h10);
+    result.rsort();
+    assert (result[LEFT] == 8'h40);
+    result.reverse();
     assert (result[LEFT] == 8'h10);
     assert (result[RIGHT] == 8'h40);
     assert (source[LEFT] == 8'h31);
@@ -452,6 +513,9 @@ module dynamic_port_leaf #(
     bounded = '{};
     assert ($size(bounded) == 0);
     bounded = '{1'b0, 1'b1};
+    bounded.reverse();
+    assert (bounded[0] == 1);
+    bounded.sort();
     scores = '{};
     assert ($size(scores) == 0);
     assert (scores.sum() == 0);
@@ -466,6 +530,13 @@ module dynamic_port_leaf #(
     assert (scores.next(cursor) == 1);
     assert (cursor == 2);
     suspend_mutate(work, result);
+    result.reverse();
+    assert (result[0] == 8'h22);
+    result.sort();
+    work.rsort();
+    assert (work[0] == 42);
+    work.reverse();
+    work.sort();
     observed_bits = $bits(work);
     observed_sum = work.sum();
     assert (observed_bits == 64);
@@ -550,7 +621,17 @@ module container_top;
     return copy.size();
   endfunction
   task automatic mutate(inout byte target[$:2]);
+    byte ordered[$];
+    ordered = '{8'h03, 8'hff, 8'h03, 8'h02, 8'hfe};
+    ordered.sort();
+    assert (ordered[0] == -2);
+    assert (ordered[1] == -1);
+    assert (ordered[4] == 3);
     target.push_back(4);
+    target.rsort();
+    assert (target[0] == 4);
+    target.reverse();
+    target.sort();
     #1;
     target.pop_front();
   endtask
@@ -577,6 +658,18 @@ module container_top;
     assert (binary.and() == 8'h01);
     assert (binary.or() == 8'h0b);
     assert ($isunknown(binary.xor()));
+    binary.reverse();
+    assert (binary[-1] == 8'h03);
+    binary.reverse();
+    binary.sort();
+    assert (binary[-1] == 8'h01);
+    assert (binary[0] == 8'h03);
+    assert ($isunknown(binary[1]));
+    binary.rsort();
+    assert ($isunknown(binary[-1]));
+    assert (binary[0] == 8'h03);
+    assert (binary[1] == 8'h01);
+    binary = '{8'h01, 8'b10z1, 8'h03};
     $readmemh("image.hex", memory);
     $readmemb("image.bin", binary, -1, 1);
     assert (memory[0] == 8'ha5);
@@ -606,6 +699,13 @@ module container_top;
     assert (values.and() == 0);
     assert (values.or() == -1);
     assert (values.xor() == -1);
+    values.sort();
+    assert (values[0] == -8);
+    values.rsort();
+    assert (values[0] == 7);
+    values.reverse();
+    assert (values[0] == -8);
+    values.reverse();
     lookup = '{};
     assert (lookup.size() == 0);
     lookup = '{3: 30, -1: 10};
@@ -772,6 +872,10 @@ endmodule
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);
     inspect_suspended(
+        config, fsim::app::SimulationEngine::compiled);
+    inspect_ordering_suspended(
+        config, fsim::app::SimulationEngine::interpreter);
+    inspect_ordering_suspended(
         config, fsim::app::SimulationEngine::compiled);
     inspect_static_suspended(
         config, fsim::app::SimulationEngine::interpreter);

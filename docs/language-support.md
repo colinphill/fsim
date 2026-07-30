@@ -116,6 +116,18 @@ temporary typed container before one whole-value copy, so empty patterns clear
 every non-static kind and the destination is not partially replaced.
 Mixed keyed/positional forms, `default` members, indirect targets, nested
 patterns, and nonintegral elements remain unsupported.
+Direct writable static arrays, dynamic arrays, queues, and bounded queues also
+accept no-argument `reverse()`, `sort()`, and `rsort()` method statements.
+Static values use declared left-to-right order and dynamic/queue values use
+current index order. Sorting is stable for exact duplicates. Unsigned values
+compare most-significant bit first with `0 < 1 < X < Z`; signed values use
+`1 < 0 < X < Z` at the sign bit and the unsigned rank elsewhere, giving
+ordinary two's-complement order for known values and a deterministic total
+order for four-state values. Ordering supports writable module objects,
+output/inout port aliases, and automatic task values across suspension.
+Arguments, `with` clauses, associative arrays, indirect or read-only
+receivers, expression-result use, and nondeterministic `shuffle()` remain
+unsupported.
 `$readmemb` and `$readmemh` load fixed arrays through the manifest-root file
 service with optional start/finish indices, line/block comments, hexadecimal
 `@` addresses, a 1 MiB input bound, and exact X/Z digit preservation.

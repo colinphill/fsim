@@ -587,6 +587,12 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       const auto word = result.low_word();
       *result_aval = word.aval;
       *result_bval = word.bval;
+    } else if (const auto* ordering =
+                   std::get_if<runtime::simir::OrderContainer>(
+                       &operation)) {
+      runtime::simir::order_container_value(
+          registers.at(ordering->target),
+          ordering->operation);
     } else if (const auto* read =
                    std::get_if<runtime::simir::ContainerRead>(
                        &operation)) {

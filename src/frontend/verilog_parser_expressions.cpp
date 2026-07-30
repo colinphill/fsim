@@ -504,6 +504,12 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             || member.text == "and"
             || member.text == "or"
             || member.text == "xor";
+        const bool ordering_method =
+            member.text == "reverse"
+            || member.text == "sort"
+            || member.text == "rsort";
+        const bool unsupported_shuffle =
+            member.text == "shuffle";
         const auto expected_arguments =
             member.text == "push_front"
                     || member.text == "push_back"
@@ -517,6 +523,8 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                     || member.text == "pop_front"
                     || member.text == "pop_back"
                     || reduction_method
+                    || ordering_method
+                    || unsupported_shuffle
                 ? std::optional<std::size_t>{0}
             : member.text == "delete"
                 ? (argument_count <= 1
@@ -545,6 +553,20 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               current(),
               "FSIM-SV-UNSUPPORTED-039",
               "container reduction with-clauses are not supported");
+        }
+        if ((ordering_method || unsupported_shuffle)
+            && language_ != Language::SystemVerilog2017) {
+          error(
+              member,
+              "FSIM-SV-SEM-086",
+              "container ordering methods require SystemVerilog 2017");
+        }
+        if ((ordering_method || unsupported_shuffle)
+            && current().text == "with") {
+          error(
+              current(),
+              "FSIM-SV-UNSUPPORTED-041",
+              "container ordering with-clauses are not supported");
         }
         expression = Expression{
             ExpressionKind::Call,

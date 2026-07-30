@@ -4239,6 +4239,49 @@ in 41.55 seconds, and Release passed all 59 tests in 14.05 seconds on
 2026-07-30. Batch 77 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Seventy-eighth feature batch — bounded SystemVerilog unpacked-container ordering
+
+SystemVerilog-2017 direct one-dimensional integral static arrays, dynamic
+arrays, unbounded queues, and bounded queues now accept no-argument
+`reverse`, `sort`, and `rsort` method statements. The parser retains the
+method call explicitly, and elaboration restricts mutation to a direct
+writable receiver while preserving exact element type, container size, queue
+bound, register type, and object identity. Associative arrays remain excluded.
+
+Static-array storage is already in declared left-to-right order; dynamic
+arrays and queues are already in current index order. `reverse` therefore
+permutes only the element sequence. `sort` and `rsort` use a stable
+most-significant-bit-first comparator. Unsigned and non-sign bits rank
+`0 < 1 < X < Z`; a signed sign bit ranks `1 < 0 < X < Z`. Known signed
+values consequently retain two's-complement numeric order, unknown sign states
+have deterministic positions, and exact duplicates retain source order.
+
+The new `OrderContainer` SimIR operation carries only an ordering enum and
+target container register. Validation rejects invalid tags and associative
+targets. The reference interpreter and LLVM backend share the runtime kernel
+through the existing generic container callback, and module-object or port
+receivers use the existing explicit writeback. No public native ABI slot,
+allocator identity, address, or host container representation was added.
+Native-object schema 31 serializes the selected operation and comparator
+policy while preserving canonical type, object, callable, source, and
+specialization identity.
+
+Positive evidence covers reversal, ascending and descending stable order,
+known signed bytes, duplicates, all four logic states, static arrays, dynamic
+arrays, queues, bounded queues, module objects, output/inout port aliases,
+nested/generated hierarchy, automatic task formals and locals after
+suspension, debugger stop/resume, interpreter, LLVM O0/O2, and cold/warm cache
+reuse. Stable frontend or elaboration diagnostics cover arguments, `with`
+clauses, associative/noncontainer/indirect/read-only receivers,
+expression-result use, `shuffle`, and use outside SystemVerilog-2017.
+
+The diagnostic catalog covers 1,173 production codes and the source gate
+covers 285 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 114.15 seconds, and Release passed all 59 tests in 41.30 seconds on
+2026-07-30. Batch 78 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

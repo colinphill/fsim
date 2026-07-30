@@ -729,6 +729,7 @@ therefore excluded.
 | `FSIM-SV-SEM-083` | error | `$readmemb` or `$readmemh` is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-084` | error | An assignment pattern is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-085` | error | An unpacked-container reduction method is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-086` | error | An unpacked-container ordering method is used outside SystemVerilog-2017. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -762,6 +763,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
 | `FSIM-SV-UNSUPPORTED-039` | error | An unpacked-container reduction uses the unsupported `with` clause. |
 | `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
+| `FSIM-SV-UNSUPPORTED-041` | error | An unpacked-container ordering method uses the unsupported `with` clause. |
 
 ## Elaboration and SimIR lowering
 
@@ -1075,6 +1077,11 @@ therefore excluded.
 | `FSIM-ELAB-SVREDUCE-001` | error | A container reduction is outside SystemVerilog-2017 or lacks a direct supported unpacked-container receiver. |
 | `FSIM-ELAB-SVREDUCE-002` | error | A container reduction method has one or more arguments. |
 | `FSIM-ELAB-SVREDUCE-003` | error | A result-producing container reduction is used as a standalone statement. |
+| `FSIM-ELAB-SVORDER-001` | error | Container ordering lacks a direct writable supported SystemVerilog unpacked-container receiver. |
+| `FSIM-ELAB-SVORDER-002` | error | A container ordering method has one or more arguments. |
+| `FSIM-ELAB-SVORDER-003` | error | A container ordering method is applied to an associative array. |
+| `FSIM-ELAB-SVORDER-004` | error | A void container ordering method is used as an expression result. |
+| `FSIM-ELAB-SVORDER-005` | error | Nondeterministic `shuffle()` is outside the bounded container-ordering subset. |
 | `FSIM-ELAB-SVMEMORY-001` | error | `$readmemb` or `$readmemh` is lowered outside SystemVerilog-2017. |
 | `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
 | `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |

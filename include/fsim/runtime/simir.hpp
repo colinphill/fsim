@@ -214,6 +214,24 @@ struct ContainerReduction {
     const ContainerValue& value,
     ContainerReductionOperator operation);
 
+enum class ContainerOrderingOperator : std::uint8_t {
+  reverse,
+  ascending,
+  descending,
+};
+
+struct OrderContainer {
+  ContainerOrderingOperator operation{
+      ContainerOrderingOperator::reverse};
+  ContainerRegisterId target{};
+};
+
+/// Reorder container elements using the deterministic SystemVerilog subset
+/// policy. The container type, size, bounds, and keys are unchanged.
+void order_container_value(
+    ContainerValue& value,
+    ContainerOrderingOperator operation);
+
 struct ContainerRead {
   RegisterId destination{};
   ContainerRegisterId source{};
@@ -984,7 +1002,7 @@ using Operation =
                  ResizeContainer, CopyContainerRegister,
                  ReadContainerObject, WriteContainerObject,
                  ContainerSize, ContainerReduction,
-                 ContainerRead, ContainerWrite,
+                 OrderContainer, ContainerRead, ContainerWrite,
                  DeleteContainer, ContainerExists, TraverseContainer,
                  LoadMemory, PushContainer, PopContainer, FileOpen,
                  FileClose, FileWriteLiteral, FileWriteFormatted,

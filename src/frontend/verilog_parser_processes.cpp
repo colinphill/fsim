@@ -1284,16 +1284,61 @@ std::optional<Statement> VerilogParser::parse_statement() {
     return statement;
   }
 
-  if (at(TokenKind::Identifier)
-      && at(TokenKind::Dot, 1)
-      && at(TokenKind::Identifier, 2)
-      && at(TokenKind::LeftParen, 3)
-      && contains_word(
-          {"delete", "push_front", "push_back",
-           "pop_front", "pop_back", "exists",
-           "first", "last", "next", "prev",
-           "sum", "product", "and", "or", "xor"},
-          current(2).text)) {
+  bool container_method_statement = false;
+  if (at(TokenKind::Identifier)) {
+    std::size_t square_depth = 0;
+    for (std::size_t lookahead = 1;
+         lookahead < 4096;
+         ++lookahead) {
+      const auto kind = current(lookahead).kind;
+      if (kind == TokenKind::EndOfFile
+          || (kind == TokenKind::Semicolon
+              && square_depth == 0)
+          || ((kind == TokenKind::Assign
+               || kind == TokenKind::LessEqual
+               || kind == TokenKind::PlusAssign
+               || kind == TokenKind::MinusAssign
+               || kind == TokenKind::StarAssign
+               || kind == TokenKind::SlashAssign
+               || kind == TokenKind::PercentAssign
+               || kind == TokenKind::AmpersandAssign
+               || kind == TokenKind::PipeAssign
+               || kind == TokenKind::CaretAssign
+               || kind == TokenKind::ShiftLeftAssign
+               || kind == TokenKind::ShiftRightAssign
+               || kind == TokenKind::ArithmeticShiftLeftAssign
+               || kind == TokenKind::ArithmeticShiftRightAssign)
+              && square_depth == 0)
+          || (kind == TokenKind::LeftParen
+              && square_depth == 0)) {
+        break;
+      }
+      if (kind == TokenKind::LeftBracket) {
+        ++square_depth;
+      } else if (
+          kind == TokenKind::RightBracket
+          && square_depth != 0) {
+        --square_depth;
+      } else if (
+          square_depth == 0
+          && kind == TokenKind::Dot
+          && current(lookahead + 1U).kind
+              == TokenKind::Identifier
+          && current(lookahead + 2U).kind
+              == TokenKind::LeftParen
+          && contains_word(
+              {"delete", "push_front", "push_back",
+               "pop_front", "pop_back", "exists",
+               "first", "last", "next", "prev",
+               "sum", "product", "and", "or", "xor",
+               "reverse", "sort", "rsort", "shuffle"},
+              current(lookahead + 1U).text)) {
+        container_method_statement = true;
+        break;
+      }
+    }
+  }
+  if (container_method_statement) {
     const auto start = current();
     Statement statement;
     statement.kind = StatementKind::ContainerMethod;

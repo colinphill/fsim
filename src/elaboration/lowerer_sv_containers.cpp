@@ -581,6 +581,45 @@ Lowerer::lower_container_pattern(
 void Lowerer::lower_container_method(
     const Statement& statement) {
   const auto& call = statement.value;
+  const bool ordering_method =
+      call.kind == ExpressionKind::Call
+      && (call.text == ".reverse"
+          || call.text == ".sort"
+          || call.text == ".rsort");
+  const bool unsupported_shuffle =
+      call.kind == ExpressionKind::Call
+      && call.text == ".shuffle";
+  if (ordering_method || unsupported_shuffle) {
+    if (language_
+            != frontend::Language::SystemVerilog2017
+        || call.operands.empty()
+        || call.operands.front().kind
+            != ExpressionKind::Identifier
+        || !is_container_expression(
+            call.operands.front())) {
+      report(
+          "FSIM-ELAB-SVORDER-001",
+          "container ordering requires a direct writable "
+          "SystemVerilog unpacked-container receiver",
+          call.span);
+      return;
+    }
+    if (call.operands.size() != 1) {
+      report(
+          "FSIM-ELAB-SVORDER-002",
+          "container ordering methods take no arguments",
+          call.span);
+      return;
+    }
+    if (unsupported_shuffle) {
+      report(
+          "FSIM-ELAB-SVORDER-005",
+          "shuffle() is outside the deterministic "
+          "container-ordering subset",
+          call.span);
+      return;
+    }
+  }
   if (call.kind == ExpressionKind::Call
       && (call.text == ".sum"
           || call.text == ".product"
@@ -618,7 +657,9 @@ void Lowerer::lower_container_method(
       || call.text == ".push_front"
       || call.text == ".push_back"
       || call.text == ".pop_front"
-      || call.text == ".pop_back";
+      || call.text == ".pop_back"
+      || ordering_method
+      || unsupported_shuffle;
   if (mutates_receiver
       && read_only_container_objects_.contains(
           receiver.text)) {
@@ -707,6 +748,25 @@ void Lowerer::lower_container_method(
         PopContainer{
             discarded, *target,
             call.text == ".pop_front"});
+  } else if (ordering_method) {
+    if (runtime_type->associative) {
+      report(
+          "FSIM-ELAB-SVORDER-003",
+          "container ordering does not support associative arrays",
+          call.span);
+      return;
+    }
+    auto operation =
+        ContainerOrderingOperator::reverse;
+    if (call.text == ".sort") {
+      operation =
+          ContainerOrderingOperator::ascending;
+    } else if (call.text == ".rsort") {
+      operation =
+          ContainerOrderingOperator::descending;
+    }
+    process_.operations.emplace_back(
+        OrderContainer{operation, *target});
   } else {
     report(
         "FSIM-ELAB-SVCONTAINER-008",

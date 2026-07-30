@@ -104,6 +104,57 @@ void test_simir_containers() {
                  .to_msb_string()
               == "000000X1",
       "arithmetic and bitwise reductions propagate four-state values");
+  ContainerType signed_order_type = queue_type;
+  signed_order_type.signed_elements = true;
+  signed_order_type.maximum_elements.reset();
+  ContainerValue signed_order{
+      signed_order_type,
+      {value(8, 0x7f), value(8, 0xff), value(8, 0x80),
+       value(8, 0), value(8, 0xff)},
+      {}};
+  order_container_value(
+      signed_order, ContainerOrderingOperator::ascending);
+  require(
+      signed_order.elements
+          == std::vector<PackedLogic4>{
+              value(8, 0x80), value(8, 0xff), value(8, 0xff),
+              value(8, 0), value(8, 0x7f)},
+      "ascending ordering uses exact signed element semantics");
+  order_container_value(
+      signed_order, ContainerOrderingOperator::descending);
+  require(
+      signed_order.elements
+          == std::vector<PackedLogic4>{
+              value(8, 0x7f), value(8, 0), value(8, 0xff),
+              value(8, 0xff), value(8, 0x80)},
+      "descending ordering is stable and reverses the comparison");
+  order_container_value(
+      signed_order, ContainerOrderingOperator::reverse);
+  require(
+      signed_order.elements.front() == value(8, 0x80)
+          && signed_order.elements.back() == value(8, 0x7f),
+      "reverse permutes storage without changing container metadata");
+  auto four_state_order_type = queue_type;
+  four_state_order_type.maximum_elements.reset();
+  ContainerValue four_state_order{
+      four_state_order_type,
+      {
+          PackedLogic4::from_msb_string("0000000Z"),
+          value(8, 1),
+          PackedLogic4::from_msb_string("0000000X"),
+          value(8, 0),
+      },
+      {}};
+  order_container_value(
+      four_state_order, ContainerOrderingOperator::ascending);
+  require(
+      four_state_order.elements[0] == value(8, 0)
+          && four_state_order.elements[1] == value(8, 1)
+          && four_state_order.elements[2].to_msb_string()
+              == "0000000X"
+          && four_state_order.elements[3].to_msb_string()
+              == "0000000Z",
+      "four-state ordering uses the documented 0/1/X/Z total order");
   Interpreter interpreter;
   const auto array_object = interpreter.add_container_object(
       {"array", ContainerValue{array_type, {}, {}}});

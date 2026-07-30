@@ -605,28 +605,34 @@ validate_process(const Process &process,
             },
             [&](const ContainerReduction& operation) {
               result.uses_containers = true;
-              validate_container_register(
-                  operation.source, index, "source");
-              switch (operation.operation) {
-              case ContainerReductionOperator::sum:
-              case ContainerReductionOperator::product:
-              case ContainerReductionOperator::bit_and:
-              case ContainerReductionOperator::bit_or:
-              case ContainerReductionOperator::bit_xor:
-                break;
-              default:
-                reject(
-                    process, index,
-                    "ContainerReduction has an invalid operator");
+              validate_container_register(operation.source, index, "source");
+              if (static_cast<std::uint8_t>(operation.operation) >
+                  static_cast<std::uint8_t>(
+                      ContainerReductionOperator::bit_xor)) {
+                reject(process, index, "ContainerReduction has an invalid operator");
               }
               record_definition(operation.destination, index);
               if (operation.source
                   < process.container_register_types.size()) {
                 constrain_width(
                     operation.destination,
-                    process.container_register_types[
-                        operation.source].element_width,
-                    index);
+                    process.container_register_types[operation.source]
+                        .element_width, index);
+              }
+            },
+            [&](const OrderContainer& operation) {
+              result.uses_containers = true;
+              validate_container_register(operation.target, index, "target");
+              if (static_cast<std::uint8_t>(operation.operation) >
+                  static_cast<std::uint8_t>(
+                      ContainerOrderingOperator::descending)) {
+                reject(process, index, "OrderContainer has an invalid operator");
+              }
+              if (operation.target < process.container_register_types.size()
+                  && process.container_register_types[operation.target]
+                         .associative) {
+                reject(process, index,
+                       "OrderContainer does not support associative arrays");
               }
             },
             [&](const ContainerRead& operation) {

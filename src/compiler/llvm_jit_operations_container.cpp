@@ -123,6 +123,12 @@ void ContainerOperationLowerer::lower(
       "container.reduce");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::OrderContainer&) {
+  invoke(
+      std::nullopt, std::nullopt, std::nullopt,
+      "container.order");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerRead& value) {
   invoke(value.index, std::nullopt, value.destination, "container.read");
 }

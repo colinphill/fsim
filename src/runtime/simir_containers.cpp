@@ -331,6 +331,69 @@ PackedLogic4 reduce_container_value(
   return result;
 }
 
+void order_container_value(
+    ContainerValue& value,
+    const ContainerOrderingOperator operation) {
+  validate_container_value(value);
+  if (value.type.associative) {
+    throw std::invalid_argument{
+        "container ordering does not support associative arrays"};
+  }
+  if (operation == ContainerOrderingOperator::reverse) {
+    std::reverse(value.elements.begin(), value.elements.end());
+    return;
+  }
+  if (operation != ContainerOrderingOperator::ascending
+      && operation != ContainerOrderingOperator::descending) {
+    throw std::invalid_argument{
+        "invalid SimIR container ordering operator"};
+  }
+  const auto less =
+      [&](const PackedLogic4& left,
+          const PackedLogic4& right) {
+        for (std::size_t index = value.type.element_width;
+             index-- != 0;) {
+          const bool sign =
+              value.type.signed_elements
+              && index == value.type.element_width - 1U;
+          const auto rank =
+              [sign](const Logic4 bit) -> std::uint8_t {
+                if (!sign) {
+                  return static_cast<std::uint8_t>(bit);
+                }
+                switch (bit) {
+                case Logic4::one:
+                  return 0;
+                case Logic4::zero:
+                  return 1;
+                case Logic4::x:
+                  return 2;
+                case Logic4::z:
+                  return 3;
+                }
+                return 3;
+              };
+          const auto left_rank = rank(left.get(index));
+          const auto right_rank = rank(right.get(index));
+          if (left_rank != right_rank) {
+            return left_rank < right_rank;
+          }
+        }
+        return false;
+      };
+  if (operation == ContainerOrderingOperator::ascending) {
+    std::stable_sort(
+        value.elements.begin(), value.elements.end(), less);
+  } else {
+    std::stable_sort(
+        value.elements.begin(), value.elements.end(),
+        [&](const PackedLogic4& left,
+            const PackedLogic4& right) {
+          return less(right, left);
+        });
+  }
+}
+
 void load_memory_text(
     ContainerValue& target,
     const std::string_view text,
@@ -637,6 +700,15 @@ void Interpreter::Impl::execute_container(
       reduce_container_value(
           get_container_register(process, operation.source),
           operation.operation);
+  ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const OrderContainer& operation) {
+  order_container_value(
+      get_container_register(process, operation.target),
+      operation.operation);
   ++process.pc;
 }
 

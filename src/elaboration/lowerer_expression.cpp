@@ -54,6 +54,26 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 || expression.text == ".and"
                 || expression.text == ".or"
                 || expression.text == ".xor");
+        const bool container_ordering =
+            expression.kind == ExpressionKind::Call
+            && (expression.text == ".reverse"
+                || expression.text == ".sort"
+                || expression.text == ".rsort");
+        if (container_ordering
+            || (expression.kind == ExpressionKind::Call
+                && expression.text == ".shuffle")) {
+            report(
+                expression.text == ".shuffle"
+                    ? "FSIM-ELAB-SVORDER-005"
+                    : "FSIM-ELAB-SVORDER-004",
+                expression.text == ".shuffle"
+                    ? "shuffle() is outside the deterministic "
+                      "container-ordering subset"
+                    : "container ordering methods do not produce an "
+                      "expression result",
+                expression.span);
+            return std::nullopt;
+        }
         if (container_reduction
             && (language_
                     != frontend::Language::SystemVerilog2017
