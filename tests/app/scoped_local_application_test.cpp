@@ -13,6 +13,11 @@
 #include <utility>
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <crtdbg.h>
+#include <cstdlib>
+#endif
+
 namespace {
 
 struct TemporaryDirectory {
@@ -205,6 +210,13 @@ void test_scoped_locals(
 }  // namespace
 
 int main() {
+#if defined(_MSC_VER)
+  _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+  _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+  _set_abort_behavior(
+      _WRITE_ABORT_MSG,
+      _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
   const auto nonce =
       std::chrono::steady_clock::now().time_since_epoch().count();
   TemporaryDirectory directory{

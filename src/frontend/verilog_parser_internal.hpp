@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <numeric>
@@ -719,6 +720,7 @@ class VerilogParser final : private detail::ParserBase {
   std::size_t current_loop_depth_{};
   std::unordered_set<std::string> declared_genvars_;
   std::vector<Token> external_genvar_uses_;
+  bool trace_scoped_locals_{};
   std::vector<ImplicitNetReference> implicit_net_references_;
   std::vector<SystemVerilogImport>
       compilation_unit_imports_;

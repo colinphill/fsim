@@ -792,6 +792,10 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
   update_unit_time(unit);
   const auto name = expect_identifier("module name");
   unit.name = name.text;
+  trace_scoped_locals_ = unit.name == "scoped_local_app";
+  if (trace_scoped_locals_) {
+    std::cerr << "scoped_locals parser: module entered\n";
+  }
 
   if (match(TokenKind::Hash)) {
     parse_parameter_port_list(unit, previous());
@@ -806,6 +810,10 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
          "FSIM-SV-PARSE-003");
 
   while (!at_end() && !keyword("endmodule")) {
+    if (trace_scoped_locals_) {
+      std::cerr << "scoped_locals parser: module item at token "
+                << position() << " '" << current().text << "'\n";
+    }
     if (time_declaration_start()) {
       const auto declaration = advance();
       parse_time_declaration(&unit, declaration);
@@ -902,7 +910,13 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
       unit.processes.push_back(parse_always());
     } else if (keyword("initial")) {
       module_has_non_time_item_ = true;
+      if (trace_scoped_locals_) {
+        std::cerr << "scoped_locals parser: parsing initial procedure\n";
+      }
       unit.processes.push_back(parse_initial());
+      if (trace_scoped_locals_) {
+        std::cerr << "scoped_locals parser: initial procedure stored\n";
+      }
     } else if (match_keyword("generate")) {
       module_has_non_time_item_ = true;
       parse_generate_region(unit, previous());
@@ -937,6 +951,9 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
       skip_to_semicolon();
     }
   }
+  if (trace_scoped_locals_) {
+    std::cerr << "scoped_locals parser: module items parsed\n";
+  }
   expect_keyword("endmodule", false, "FSIM-SV-PARSE-004");
   if (match(TokenKind::Colon)) {
     expect_identifier("module name after endmodule");
@@ -952,6 +969,9 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
   }
   resolve_implicit_nets(unit);
   unit.span = span_from(start, previous());
+  if (trace_scoped_locals_) {
+    std::cerr << "scoped_locals parser: module complete\n";
+  }
   return unit;
 }
 

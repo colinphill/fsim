@@ -1055,6 +1055,10 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 
 void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
+  if (trace_scoped_locals_) {
+    std::cerr << "scoped_locals parser: local declaration begins at token "
+              << position() << " '" << current().text << "'\n";
+  }
   Type type = default_verilog_type();
   if (keyword("string")) {
     type = parse_parameter_type();
@@ -1074,20 +1078,39 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     parse_optional_signedness(type);
     parse_optional_range(type);
   }
+  if (trace_scoped_locals_) {
+    std::cerr << "scoped_locals parser: local declaration type parsed\n";
+  }
 
   for (;;) {
     const auto name = expect_identifier("local variable name");
+    if (trace_scoped_locals_) {
+      std::cerr << "scoped_locals parser: local '" << name.text
+                << "' name parsed\n";
+    }
     auto declaration_type = type;
     (void)parse_optional_container_dimension(declaration_type);
+    if (trace_scoped_locals_) {
+      std::cerr << "scoped_locals parser: local '" << name.text
+                << "' dimensions parsed\n";
+    }
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
+    }
+    if (trace_scoped_locals_) {
+      std::cerr << "scoped_locals parser: local '" << name.text
+                << "' initializer parsed\n";
     }
     block.declarations.push_back(VariableDeclaration{
         name.text,
         std::move(declaration_type),
         std::move(initializer),
         span_from(name, previous())});
+    if (trace_scoped_locals_) {
+      std::cerr << "scoped_locals parser: local '" << name.text
+                << "' declaration stored\n";
+    }
     current_procedural_names_.insert(name.text);
     if (!match(TokenKind::Comma)) {
       break;
@@ -1097,6 +1120,9 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
       TokenKind::Semicolon,
       "';' after local variable declaration",
       "FSIM-SV-PARSE-045");
+  if (trace_scoped_locals_) {
+    std::cerr << "scoped_locals parser: local declaration complete\n";
+  }
 }
 
 void VerilogParser::update_or_add_port(DesignUnit& unit,
