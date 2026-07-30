@@ -210,8 +210,19 @@ std::string compilation_unit_digest(
 }
 
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
+  const bool trace_scoped_locals =
+      !group.inputs.empty()
+      && group.inputs.front().path.filename() == "scoped_local.sv";
+  const auto trace =
+      [&](const std::string_view phase) {
+        if (trace_scoped_locals) {
+          std::cerr << "scoped_locals parse_group_snapshot: "
+                    << phase << '\n';
+        }
+      };
   if (group.language == frontend::Language::Verilog2005
       || group.language == frontend::Language::SystemVerilog2017) {
+    trace("preprocessing compilation unit");
     frontend::PreprocessorOptions options;
     options.include_directories = group.include_directories;
     options.defines = group.defines;
@@ -223,10 +234,13 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
     auto preprocessed =
         frontend::preprocess_verilog_compilation_unit(
             paths, group.language, options);
+    trace("compilation unit preprocessed");
     ParsedSnapshot snapshot;
+    trace("building compilation unit digest");
     const auto unit_digest =
         compilation_unit_digest(
             preprocessed.roots, preprocessed.inputs);
+    trace("compilation unit digest built");
     snapshot.sources.reserve(preprocessed.roots.size());
     for (std::size_t root_index = 0;
          root_index < preprocessed.roots.size(); ++root_index) {
@@ -248,9 +262,12 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       source.compilation_unit_digest = unit_digest;
       snapshot.sources.push_back(std::move(source));
     }
+    trace("source snapshots built");
+    trace("parsing preprocessed tokens");
     snapshot.result = frontend::parse_verilog(
         std::move(preprocessed.lexed),
         group.language == frontend::Language::SystemVerilog2017);
+    trace("preprocessed tokens parsed");
     for (auto& unit : snapshot.result.design.units) {
       const auto unit_source =
           std::filesystem::path{physical_source(unit.span)};
@@ -278,6 +295,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       }
       snapshot.unit_source_orders.push_back(source_order);
     }
+    trace("complete");
     return snapshot;
   }
 
