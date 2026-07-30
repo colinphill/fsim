@@ -87,6 +87,13 @@ void test_scoped_locals(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
     const fsim::project::Optimization optimization) {
+  const auto optimization_name =
+      optimization == fsim::project::Optimization::o0 ? "O0" : "O2";
+  const auto checkpoint =
+      [optimization_name](const std::string_view phase) {
+        std::cerr << "scoped_locals " << optimization_name << ": "
+                  << phase << '\n';
+      };
   fsim::project::Config config;
   config.base_directory = directory;
   config.project.name = "scoped-local-application-test";
@@ -108,8 +115,10 @@ void test_scoped_locals(
   config.source_sets.push_back(std::move(sources));
 
   fsim::diagnostic::Engine diagnostics;
+  checkpoint("building reference project");
   auto reference_project =
       fsim::app::build_project(config, diagnostics);
+  checkpoint("building compiled project");
   auto compiled_project =
       fsim::app::build_project(config, diagnostics);
   if (!reference_project || !compiled_project) {
@@ -137,9 +146,11 @@ void test_scoped_locals(
       debug_locals[6].name
       == "root_scope.alternate.branch");
 
+  checkpoint("running interpreter");
   const auto reference = execute(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter);
+  checkpoint("running compiled engine");
   const auto compiled = execute(
       std::move(*compiled_project),
       fsim::app::SimulationEngine::compiled);
@@ -173,9 +184,11 @@ void test_scoped_locals(
           "00000111",
           "00000101"}));
 
+  checkpoint("building warm project");
   auto warm_project =
       fsim::app::build_project(config, diagnostics);
   assert(warm_project);
+  checkpoint("running warm compiled engine");
   const auto warm = execute(
       std::move(*warm_project),
       fsim::app::SimulationEngine::compiled);
@@ -186,6 +199,7 @@ void test_scoped_locals(
 #else
   assert(warm.cache.hits == 0);
 #endif
+  checkpoint("complete");
 }
 
 }  // namespace

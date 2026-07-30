@@ -465,7 +465,9 @@ set_tests_properties(
   )
   set_tests_properties(
     fsim.application.scoped_locals
-    PROPERTIES LABELS "fast;scoped-locals"
+    PROPERTIES
+      LABELS "fast;scoped-locals"
+      TIMEOUT 60
   )
 
   add_executable(
