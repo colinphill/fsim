@@ -726,8 +726,8 @@ end architecture;
               "unsupported actual diagnostic source span");
     }
   }
-  require(complex_actuals == 2,
-          "indexed and open actuals need targeted diagnostics");
+  require(complex_actuals == 1,
+          "indexed actuals need a targeted diagnostic");
   require(
       architecture->instances[0].parameter_overrides.size() == 1
           && architecture->instances[0].parameter_overrides[0].name
@@ -739,9 +739,9 @@ end architecture;
   require(architecture->instances[1].connections.size() == 2 &&
               architecture->instances[1].connections[0].value.kind ==
                   ExpressionKind::Invalid &&
-              architecture->instances[1].connections[1].value.kind ==
-                  ExpressionKind::Invalid,
-          "unsupported actuals must not appear as valid expressions");
+              architecture->instances[1].connections[1].kind ==
+                  PortActualKind::Open,
+          "unsupported indexed actual and explicit open state retained");
 }
 
 void test_vhdl_generics() {

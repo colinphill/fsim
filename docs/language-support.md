@@ -168,7 +168,9 @@ optional end name, value/type/function/procedure/package generic profiles and
 defaults, and scalar/vector, enumeration, named-subtype, non-nested record, or
 one-dimensional scalar-element array port types, modes, and default metadata.
 Component-style instances first select the nearest lexically visible
-declarations, then directly visible package declarations.
+declarations, then directly visible package declarations. Component input
+defaults and explicit `open` port actuals remain distinct HIR states until
+that selection is complete.
 Equally visible overloads are filtered by association shape, modes, types, and
 specialization-dependent widths plus nominal composite identity, subtype
 constraints, index direction, and specialized non-value generic profiles
@@ -185,18 +187,27 @@ bounded interface type, pure scalar function, time-free procedure, and generic
 package families. Omitted component generics materialize the component
 declaration's default independently of the entity default. Dependent ports are
 specialized before overload and target-profile matching, and configuration
-maps compose through renamed non-value formals. Version-4 component
-profile/binding identity retains declaration region/scope/order, owner and
-package sources, resolved nominal/subtype provenance, canonical selected
-actual identities, profile, and target, so a callable/package/type or visible-
-profile edit invalidates component consumers without invalidating unrelated
-direct-entity children. Whole-signal composite ports execute through the
-existing same-language nominal boundary model.
+maps compose through renamed non-value formals. Omitted or explicitly open
+inputs materialize a statically foldable component default; omitted or open
+output-family formals receive an owned disconnected child port and create no
+parent alias or boundary driver. Supported defaults cover the existing scalar,
+packed-vector, enumeration, named-subtype, non-nested-record, and one-
+dimensional scalar-element-array types, including positional/named/`others`
+aggregate forms and declaration-visible package or prior-generic constants.
+Version-5 component profile/binding identity retains declaration region/scope/
+order, owner and package sources, resolved nominal/subtype provenance,
+canonical selected actual identities, normalized default/open states, mapped
+target formals, configuration identity, profile, and target, so a callable/
+package/type/default or visible-profile edit invalidates component consumers
+without invalidating unrelated direct-entity children. Whole-signal composite
+ports execute through the existing same-language nominal boundary model.
 New generic families, nested package/template forms, nested or otherwise
-unsupported composite interfaces, composite expression/aggregate actuals,
-executable omitted port defaults, mixed-language default binding, incremental
-configurations, complete library analysis-order semantics, and general overload
-resolution remain unsupported.
+unsupported composite interfaces, general expression/aggregate port actuals,
+dynamic or mixed-language defaults, entity-port defaults, incremental
+configurations, complete library analysis-order semantics, and general
+overload resolution remain unsupported. Required unassociated direct-entity
+inputs are rejected; component defaults never implicitly become entity
+defaults.
 Operator-symbol designators, unconstrained/composite parameters or results,
 generated or nested generic subprogram templates/instances, general overload
 sets, suspending generic procedures, interface-package formals nested inside a

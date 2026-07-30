@@ -416,10 +416,20 @@ struct PackageInstantiation {
   SourceSpan span;
 };
 
+enum class PortActualKind {
+  Expression,
+  Default,
+  Open,
+};
+
 struct PortConnection {
   // Empty for a positional connection.
   std::optional<std::string> port;
   Expression value;
+  // VHDL `open` is retained independently from an invalid or unsupported
+  // expression. Omitted formals remain absent until elaboration normalizes
+  // them against the selected component profile.
+  PortActualKind kind{PortActualKind::Expression};
   SourceSpan span;
 };
 
@@ -475,9 +485,9 @@ struct VhdlConfigurationDeclaration {
   SourceSpan span;
 };
 
-/// One port formal retained by an architecture-local VHDL component
-/// declaration. Defaults are syntax/compatibility metadata in the bounded
-/// component slice; executable expression/open port actuals remain separate.
+/// One port formal retained by a VHDL component declaration. A default is
+/// resolved in the declaration's visibility and is materialized only when an
+/// input formal is omitted or explicitly associated with `open`.
 struct VhdlComponentPort {
   std::string name;
   Type type;

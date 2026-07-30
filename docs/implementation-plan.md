@@ -3628,6 +3628,75 @@ LLVM 22.1.8 warnings-as-errors Debug regression passed all 54 configured tests
 in 341.97 seconds, and Release passed all 55 configured tests in 135.92 seconds
 on 2026-07-30. No CI state was inspected.
 
+### Sixty-seventh feature batch — VHDL-2008 component port defaults and `open`
+
+The completed ten-feature architecture-gate slice is:
+
+1. Retain component input defaults, ordinary expressions, and explicit
+   `open` port actuals as distinct HIR states.
+2. Parse omitted and `open` associations across existing component instance
+   and configuration-map regions without treating `open` as an unsupported
+   expression.
+3. Resolve component defaults after generic/type specialization in the
+   declaration's direct package visibility and previously declared generic
+   context.
+4. Normalize omitted and explicit-`open` actuals by selected component-formal
+   position after overload filtering.
+5. Materialize defaults only for inputs and model omitted/open output-family
+   ports as owned disconnected child objects without parent aliases or
+   boundary drivers.
+6. Keep component defaults independent from entity defaults and reject
+   required unassociated direct-entity inputs.
+7. Compose architecture specifications and recursive configuration port maps
+   after default/open normalization while preserving direct-entity isolation.
+8. Define version-5 component identity over canonical defaults, normalized
+   default/open state, target mappings, dependencies, configuration identity,
+   selected generic/type identities, and target.
+9. Diagnose illegal default modes, required open inputs, missing actuals,
+   dynamic/incompatible defaults, invalid maps, ambiguous profiles, and
+   implicit cross-language default binding.
+10. Add frontend, negative, elaboration, declaration-visibility,
+    configuration, typed-runtime, debugger, interpreter/LLVM O0/O2,
+    cold/warm, and edited-default selective-cache evidence.
+
+The executable subset remains same-language VHDL. Supported statically
+foldable defaults cover scalar integer/Boolean/bit/logic, packed vectors,
+enumerations, named subtypes, non-nested packed records, and one-dimensional
+scalar-element arrays. Positional, named, range, and final-`others` aggregate
+forms are materialized into the existing packed runtime representation.
+Defaults may depend on earlier component value generics and directly visible
+package constants. A dynamic signal reference is rejected when the default is
+selected, but unused default metadata does not invalidate an otherwise legal
+explicit whole-signal association.
+
+Omitted and explicit-open input associations select the component declaration
+default after component overload selection. Omitted and open `out`, `inout`,
+or `buffer` formals create no parent alias; the child receives an ordinary
+owned port object, so writes are deterministically discarded outside the
+child. Required inputs on direct entity instances remain errors because this
+batch does not implement entity-port defaults.
+
+Version-5 identity records the canonical declaration default independently
+from each normalized actual state and mapped entity formal. The component
+application differential executes the selected default through interpreter
+and LLVM O0/O2, observes debugger execution points, requires cold/warm cache
+behavior, edits only the default-profile source, and verifies that the owning
+top/defaulted child keys change while unrelated component and direct-entity
+children remain stable.
+
+General expression or aggregate port actuals, dynamic defaults, entity-port
+defaults, mixed-language default binding, incremental configurations,
+complete library analysis-order semantics, and general overload resolution
+remain outside this bounded slice.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, configuration, and component application gates passed. The
+catalog covers 1,074 production codes and the source gate covers 265 authored
+files with an empty allowlist and a maximum of 1,999 lines. The exact LLVM
+22.1.8 warnings-as-errors Debug regression passed all 55 configured tests in
+70.73 seconds, and Release passed all 55 configured tests in 32.00 seconds on
+2026-07-30. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

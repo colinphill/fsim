@@ -110,7 +110,7 @@ end architecture;
             });
         assert(identity != selected.parameter_identity_values.end());
         assert(identity->second.starts_with(
-            "vhdl-component-binding-v4;name=component_leaf"));
+            "vhdl-component-binding-v5;name=component_leaf"));
     }
     assert(std::ranges::any_of(
         specialization(
@@ -499,7 +499,7 @@ end architecture;
         composite_identity
             != composite_child.parameter_identity_values.end()
         && composite_identity->second.starts_with(
-            "vhdl-component-binding-v4")
+            "vhdl-component-binding-v5")
         && composite_identity->second.find(
                ";nominal=composite_component_types.vhd:")
             != std::string::npos
@@ -680,7 +680,7 @@ end architecture;
         nonvalue_identity
             != nonvalue_child.parameter_identity_values.end()
         && nonvalue_identity->second.starts_with(
-            "vhdl-component-binding-v4")
+            "vhdl-component-binding-v5")
         && nonvalue_identity->second.find(
                "actual=component_t:vhdl-type-v1")
             != std::string::npos
@@ -896,9 +896,7 @@ begin
 end architecture;
 )",
         "vhdl:work.composite_default_top(rtl)");
-    assert(!composite_default.ok());
-    assert(has_diagnostic(
-        composite_default, "FSIM-ELAB-VHCOMP-013"));
+    assert(composite_default.ok());
 
     const auto missing_component_type = elaborate_text(
         "missing_component_type.vhd",
@@ -1322,6 +1320,335 @@ end architecture;
     assert(has_diagnostic(
         invalid_configuration_map,
         "FSIM-ELAB-VHCOMP-010"));
+
+    const auto defaulted_ports = elaborate_text(
+        "component_port_defaults.vhd",
+        R"(
+entity defaulted_port_leaf is
+  port (
+    entity_input : in integer;
+    entity_output : out integer);
+end entity;
+architecture rtl of defaulted_port_leaf is
+begin
+  entity_output <= entity_input;
+end architecture;
+entity defaulted_port_top is
+end entity;
+architecture rtl of defaulted_port_top is
+  component defaulted_port_leaf is
+    port (
+      component_input : in integer := 7;
+      component_output : out integer);
+  end component;
+begin
+  omitted_child: defaulted_port_leaf port map ();
+  open_child: defaulted_port_leaf
+    port map (
+      component_input => open,
+      component_output => open);
+end architecture;
+)",
+        "vhdl:work.defaulted_port_top(rtl)");
+    if (!defaulted_ports.ok()) {
+        for (const auto& diagnostic :
+             defaulted_ports.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(defaulted_ports.ok());
+    for (const auto child : {
+             "defaulted_port_top.omitted_child",
+             "defaulted_port_top.open_child"}) {
+        const auto& selected =
+            specialization(defaulted_ports, child);
+        const auto identity = std::ranges::find_if(
+            selected.parameter_identity_values,
+            [](const auto& value) {
+              return value.first == "__component";
+            });
+        assert(
+            identity
+                != selected.parameter_identity_values.end()
+            && identity->second.starts_with(
+                "vhdl-component-binding-v5")
+            && identity->second.find("state=1")
+                != std::string::npos
+            && identity->second.find("state=2")
+                != std::string::npos);
+    }
+    auto defaulted_interpreter =
+        defaulted_ports.design->create_interpreter();
+    for (const auto input : {
+             "defaulted_port_top.omitted_child.entity_input",
+             "defaulted_port_top.open_child.entity_input"}) {
+        const auto signal =
+            defaulted_ports.design->find_signal(input);
+        assert(signal);
+        assert(
+            defaulted_interpreter->signal_value(*signal)
+                .to_msb_string()
+            == "00000000000000000000000000000111");
+    }
+
+    const auto composite_defaults = elaborate_text(
+        "component_composite_defaults.vhd",
+        R"(
+package component_default_types is
+  type mode_t is (idle, active);
+  type packet_t is record
+    payload : std_logic_vector(3 downto 0);
+    valid : bit;
+  end record;
+  type lane_t is array (natural range <>) of std_logic;
+  subtype nibble_t is lane_t(3 downto 0);
+end package;
+use work.component_default_types.all;
+entity composite_default_leaf is
+  port (
+    entity_mode : in mode_t;
+    entity_packet : in packet_t;
+    entity_lane : in nibble_t);
+end entity;
+architecture rtl of composite_default_leaf is
+begin
+end architecture;
+entity composite_default_top is
+end entity;
+use work.component_default_types.all;
+architecture rtl of composite_default_top is
+  component composite_default_leaf is
+    port (
+      component_mode : in mode_t := active;
+      component_packet : in packet_t :=
+        (payload => "1010", valid => '1');
+      component_lane : in nibble_t :=
+        (3 => '1', others => '0'));
+  end component;
+begin
+  child: composite_default_leaf port map ();
+end architecture;
+)",
+        "vhdl:work.composite_default_top(rtl)");
+    if (!composite_defaults.ok()) {
+        for (const auto& diagnostic :
+             composite_defaults.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(composite_defaults.ok());
+    auto composite_interpreter =
+        composite_defaults.design->create_interpreter();
+    const auto require_initial =
+        [&](const std::string_view name,
+            const std::string_view expected) {
+          const auto signal =
+              composite_defaults.design->find_signal(name);
+          assert(signal);
+          assert(
+              composite_interpreter->signal_value(*signal)
+                  .to_msb_string()
+              == expected);
+        };
+    require_initial(
+        "composite_default_top.child.entity_mode", "1");
+    require_initial(
+        "composite_default_top.child.entity_packet", "10101");
+    require_initial(
+        "composite_default_top.child.entity_lane", "1000");
+
+    const auto visible_default = elaborate_text(
+        "component_visible_default.vhd",
+        R"(
+package visible_default_profiles is
+  constant bias : integer := 1;
+  component visible_default_leaf is
+    generic (component_seed : integer := 2);
+    port (
+      component_input : in integer :=
+        component_seed + bias);
+  end component;
+end package;
+entity visible_default_leaf is
+  generic (entity_seed : integer := 2);
+  port (entity_input : in integer);
+end entity;
+architecture rtl of visible_default_leaf is
+begin
+end architecture;
+use work.visible_default_profiles.all;
+entity visible_default_top is
+end entity;
+architecture rtl of visible_default_top is
+begin
+  child: visible_default_leaf
+    generic map (component_seed => 4)
+    port map ();
+end architecture;
+)",
+        "vhdl:work.visible_default_top(rtl)");
+    if (!visible_default.ok()) {
+        for (const auto& diagnostic :
+             visible_default.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(visible_default.ok());
+    auto visible_interpreter =
+        visible_default.design->create_interpreter();
+    const auto visible_input =
+        visible_default.design->find_signal(
+            "visible_default_top.child.entity_input");
+    assert(visible_input);
+    assert(
+        visible_interpreter->signal_value(*visible_input)
+            .to_msb_string()
+        == "00000000000000000000000000000101");
+
+    const auto dynamic_default = elaborate_text(
+        "component_dynamic_default.vhd",
+        R"(
+entity dynamic_default_leaf is
+  port (entity_input : in integer);
+end entity;
+architecture rtl of dynamic_default_leaf is
+begin
+end architecture;
+entity dynamic_default_top is
+end entity;
+architecture rtl of dynamic_default_top is
+  signal runtime_value : integer;
+  component dynamic_default_leaf is
+    port (component_input : in integer := runtime_value);
+  end component;
+begin
+  child: dynamic_default_leaf port map ();
+end architecture;
+)",
+        "vhdl:work.dynamic_default_top(rtl)");
+    assert(!dynamic_default.ok());
+    assert(has_diagnostic(
+        dynamic_default, "FSIM-ELAB-VHCOMP-013"));
+
+    const auto illegal_open = elaborate_text(
+        "component_required_open.vhd",
+        R"(
+entity required_open_leaf is
+  port (entity_input : in integer);
+end entity;
+architecture rtl of required_open_leaf is
+begin
+end architecture;
+entity required_open_top is
+end entity;
+architecture rtl of required_open_top is
+  component required_open_leaf is
+    port (component_input : in integer);
+  end component;
+begin
+  child: required_open_leaf
+    port map (component_input => open);
+end architecture;
+)",
+        "vhdl:work.required_open_top(rtl)");
+    assert(!illegal_open.ok());
+    assert(has_diagnostic(
+        illegal_open, "FSIM-ELAB-VHCOMP-009"));
+
+    const auto direct_missing_input = elaborate_text(
+        "direct_required_input.vhd",
+        R"(
+entity direct_required_leaf is
+  port (
+    input_value : in integer;
+    output_value : out integer);
+end entity;
+architecture rtl of direct_required_leaf is
+begin
+  output_value <= input_value;
+end architecture;
+entity direct_required_top is
+end entity;
+architecture rtl of direct_required_top is
+begin
+  child: entity work.direct_required_leaf(rtl)
+    port map (output_value => open);
+end architecture;
+)",
+        "vhdl:work.direct_required_top(rtl)");
+    assert(!direct_missing_input.ok());
+    assert(has_diagnostic(
+        direct_missing_input, "FSIM-ELAB-BIND-027"));
+
+    const auto configured_default = elaborate_text(
+        "configured_component_default.vhd",
+        R"(
+entity configured_default_leaf is
+  port (
+    entity_input : in integer;
+    entity_output : out integer);
+end entity;
+architecture rtl of configured_default_leaf is
+begin
+  entity_output <= entity_input;
+end architecture;
+entity configured_default_top is
+end entity;
+architecture rtl of configured_default_top is
+  component configured_default_leaf is
+    port (
+      component_input : in integer := 12;
+      component_output : out integer);
+  end component;
+  for child : configured_default_leaf
+    use entity work.configured_default_leaf(rtl)
+      port map (
+        entity_input => component_input,
+        entity_output => component_output);
+begin
+  child: configured_default_leaf
+    port map (component_output => open);
+end architecture;
+)",
+        "vhdl:work.configured_default_top(rtl)");
+    if (!configured_default.ok()) {
+        for (const auto& diagnostic :
+             configured_default.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(configured_default.ok());
+    auto configured_interpreter =
+        configured_default.design->create_interpreter();
+    const auto configured_input =
+        configured_default.design->find_signal(
+            "configured_default_top.child.entity_input");
+    assert(configured_input);
+    assert(
+        configured_interpreter->signal_value(*configured_input)
+            .to_msb_string()
+        == "00000000000000000000000000001100");
+    const auto& configured_specialization =
+        specialization(
+            configured_default,
+            "configured_default_top.child");
+    assert(std::ranges::any_of(
+        configured_specialization.parameter_identity_values,
+        [](const auto& value) {
+          return value.first == "__component"
+              && value.second.find("configuration=")
+                  != std::string::npos
+              && value.second.find(
+                     "mapped-port=entity_input:state=1")
+                  != std::string::npos
+              && value.second.find(
+                     "mapped-port=entity_output:state=2")
+                  != std::string::npos;
+        }));
 
     auto foreign = fsim::frontend::parse_text(
         "foreign_default.sv",

@@ -256,6 +256,12 @@ void VhdlParser::parse_vhdl_component_ports(
     std::optional<Expression> default_value;
     if (match(TokenKind::ColonEqual)) {
       default_value = parse_expression();
+      if (direction != PortDirection::Input) {
+        error(
+            names.front(),
+            "FSIM-VHDL-SEM-072",
+            "a component port default is only legal on an input port");
+      }
     }
     for (const auto& name : names) {
       const auto canonical = vhdl_name(name.text);

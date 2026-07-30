@@ -54,6 +54,8 @@ begin
   child: vector_copy
     generic map (4, enabled => <>)
     port map (source_value, result_value => result_value);
+  default_and_open: vector_copy
+    port map (result_value => open);
 end architecture;
 )",
       Language::Vhdl2008);
@@ -83,7 +85,7 @@ end architecture;
               == PortDirection::Output,
       "component generic, port, mode, default, order, and end metadata");
   require(
-      architecture.instances.size() == 1
+      architecture.instances.size() == 2
           && architecture.instances.front().vhdl_component_instance
           && architecture.instances.front().parameter_overrides.size() == 2
           && !architecture.instances.front()
@@ -93,6 +95,32 @@ end architecture;
           && architecture.instances.front().connections.size() == 2
           && !architecture.instances.front().connections.front().port,
       "positional and named component associations retained");
+  require(
+      architecture.instances[1].connections.size() == 1
+          && architecture.instances[1].connections.front().port
+              == std::optional<std::string>{"result_value"}
+          && architecture.instances[1].connections.front().kind
+              == PortActualKind::Open,
+      "omitted input and explicit open output remain distinct in HIR");
+
+  const auto invalid_default = parse_text(
+      "component_invalid_default.vhd",
+      R"(
+entity invalid_default_top is
+end entity;
+architecture rtl of invalid_default_top is
+  component invalid_default_leaf is
+    port (value : out integer := 1);
+  end component;
+begin
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_default.ok()
+          && has_code(
+              invalid_default, "FSIM-VHDL-SEM-072"),
+      "non-input component defaults need a targeted diagnostic");
 
   const auto visibility = parse_text(
       "component_visibility.vhd",

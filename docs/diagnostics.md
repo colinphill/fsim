@@ -370,6 +370,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-068` | error | One declarative region repeats an exact component profile. |
 | `FSIM-VHDL-SEM-069` | error | A component declaration's end name does not match its opening name. |
 | `FSIM-VHDL-SEM-071` | error | A component generic or port formal is declared more than once or conflicts with another component formal. |
+| `FSIM-VHDL-SEM-072` | error | A component port default is declared on a non-input formal. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -946,11 +947,11 @@ therefore excluded.
 | `FSIM-ELAB-VHCOMP-006` | error | A component generic profile is incompatible with its bound entity generic profile. |
 | `FSIM-ELAB-VHCOMP-007` | error | A component port profile, mode, type, or width is incompatible with its bound entity port profile. |
 | `FSIM-ELAB-VHCOMP-008` | error | A component generic association is unknown, duplicated, out of order, excessive, or omits a required formal. |
-| `FSIM-ELAB-VHCOMP-009` | error | A component port association is unknown, duplicated, out of order, excessive, or omits a required formal. |
+| `FSIM-ELAB-VHCOMP-009` | error | A component port association is unknown, duplicated, out of order, excessive, omits a required formal, or opens a required input without a default. |
 | `FSIM-ELAB-VHCOMP-010` | error | A configuration binding map names an unknown component or entity formal. |
 | `FSIM-ELAB-VHCOMP-011` | error | Default component binding would cross languages and requires an explicit manifest binding. |
 | `FSIM-ELAB-VHCOMP-012` | error | No equally visible component overload matches the instance associations, modes, types, or dependent widths. |
-| `FSIM-ELAB-VHCOMP-013` | error | A bounded composite component port supplies a default that cannot be materialized as an omitted port actual. |
+| `FSIM-ELAB-VHCOMP-013` | error | A selected component input default is dynamic, malformed, or incompatible with the bounded scalar/vector/enumeration/record/array port type. |
 | `FSIM-ELAB-VHCOMP-014` | error | A component generic association selects `<>`, but the selected component formal has no usable default. |
 | `FSIM-ELAB-VHCOMP-015` | error | A selected component non-value generic actual cannot be forwarded into the bound entity profile. |
 | `FSIM-ELAB-SVTASK-001` | error | A bounded task call names no visible task. |
@@ -1076,7 +1077,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-024` | error | Multiple boundary drivers lack the required explicit resolver. |
 | `FSIM-ELAB-BIND-025` | error | A named port is unknown or there are too many positional connections. |
 | `FSIM-ELAB-BIND-026` | error | An instance port is connected more than once. |
-| `FSIM-ELAB-BIND-027` | error | A boundary actual is not a whole signal. |
+| `FSIM-ELAB-BIND-027` | error | A boundary actual is not a whole signal, an input is illegally open, or a required VHDL direct-entity input is unassociated. |
 | `FSIM-ELAB-BIND-028` | error | A boundary actual names an unknown parent signal. |
 | `FSIM-ELAB-BIND-030` | error | A cross-language `inout` lacks an explicit resolver. |
 | `FSIM-ELAB-BIND-032` | error | More than one preconstructed SystemC description names the same instance path. |

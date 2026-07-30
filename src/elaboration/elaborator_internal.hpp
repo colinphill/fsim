@@ -214,6 +214,11 @@ std::optional<LoweredLiteral> literal_value(
     const std::size_t expected_width,
     const frontend::Language language);
 
+std::optional<PackedLogic4> static_vhdl_value(
+    const Expression& expression,
+    const frontend::Type& type,
+    std::string& error);
+
 struct ConstantTypeInfo {
     frontend::ValueDomain domain{frontend::ValueDomain::Unknown};
     bool vhdl_enumeration{};
@@ -1327,7 +1332,8 @@ private:
         const std::string& path,
         const SignalMap& parent_signals,
         const Binding* binding,
-        const bool cross_language);
+        const bool cross_language,
+        const bool require_input_connections = false);
 
     SignalMap connect_instance(
         const frontend::Instance& instance,

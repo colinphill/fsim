@@ -551,176 +551,338 @@ evaluate_vhdl_enumeration_attribute(
     return FoldedEnumerationAttribute{
         adjusted, true, false};
 }
-
-
-
-std::optional<LoweredLiteral> literal_value(
+std::optional<PackedLogic4> static_vhdl_value(
     const Expression& expression,
-    const std::size_t expected_width,
-    const frontend::Language language) {
-    auto text = expression.text;
-    if (expression.kind == ExpressionKind::BooleanLiteral
-        && language == frontend::Language::Vhdl2008
-        && (text == "true" || text == "false")) {
-        return LoweredLiteral{
-            PackedLogic4(
-                1,
-                text == "true" ? Logic4::one : Logic4::zero),
-            frontend::ValueDomain::Boolean};
+    const frontend::Type& type,
+    std::string& error) {
+    const auto width_value = type.width().value_or(1);
+    if (width_value == 0
+        || width_value
+            > std::numeric_limits<std::size_t>::max()) {
+        error = "the contextual type has no representable non-null width";
+        return std::nullopt;
     }
-    if (expression.kind == ExpressionKind::LogicLiteral && text.size() == 3
-        && text.front() == '\'' && text.back() == '\'') {
-        if (language == frontend::Language::Vhdl2008) {
-            const auto parsed = runtime::parse_logic9(text[1]);
-            if (!parsed) {
-                return std::nullopt;
-            }
-            const auto domain =
-                *parsed == runtime::Logic9::zero
-                        || *parsed == runtime::Logic9::one
-                    ? frontend::ValueDomain::Bit2
-                    : frontend::ValueDomain::Logic9;
-            return LoweredLiteral{
-                domain == frontend::ValueDomain::Logic9
-                    ? PackedLogic4::from_logic9_msb_string(
-                          std::string_view{text}.substr(1, 1))
-                    : PackedLogic4(
-                          1, runtime::to_logic4(*parsed)),
-                domain};
-        }
-        const auto parsed = runtime::parse_logic4(text[1]);
-        if (!parsed) {
-            return std::nullopt;
-        }
-        const auto domain =
-            *parsed == Logic4::zero || *parsed == Logic4::one
-                ? frontend::ValueDomain::Bit2
-                : frontend::ValueDomain::Logic4;
-        return LoweredLiteral{PackedLogic4(1, *parsed), domain};
-    }
-    if (expression.kind == ExpressionKind::StringLiteral && text.size() >= 2
-        && text.front() == '"' && text.back() == '"') {
-        text = text.substr(1, text.size() - 2);
-        try {
-            if (language == frontend::Language::Vhdl2008) {
-                const auto nine_state =
-                    runtime::PackedLogic9::from_msb_string(text);
-                auto domain = frontend::ValueDomain::Bit2;
-                for (std::size_t bit = 0; bit < nine_state.width(); ++bit) {
-                    const auto value = nine_state.get(bit);
-                    if (value != runtime::Logic9::zero
-                        && value != runtime::Logic9::one) {
-                        domain = frontend::ValueDomain::Logic9;
-                        break;
-                    }
-                }
-                return LoweredLiteral{
-                    domain == frontend::ValueDomain::Logic9
-                        ? PackedLogic4::from_logic9_msb_string(text)
-                        : runtime::collapse_to_logic4(nine_state),
-                    domain};
-            }
-            auto value = PackedLogic4::from_msb_string(text);
-            auto domain = frontend::ValueDomain::Bit2;
-            for (std::size_t bit = 0; bit < value.width(); ++bit) {
-                if (value.get(bit) != Logic4::zero
-                    && value.get(bit) != Logic4::one) {
-                    domain = frontend::ValueDomain::Logic4;
-                    break;
-                }
-            }
-            return LoweredLiteral{std::move(value), domain};
-        } catch (const std::invalid_argument&) {
-            return std::nullopt;
-        }
-    }
+    const auto width = static_cast<std::size_t>(width_value);
+    const auto normalize =
+        [&](PackedLogic4 value)
+            -> std::optional<PackedLogic4> {
+          if (value.width() != width) {
+              error = "the default value width differs from its port type";
+              return std::nullopt;
+          }
+          if (type.domain == frontend::ValueDomain::Logic9
+              && !value.is_logic9()) {
+              value = value.promoted_to_logic9();
+          }
+          if (is_two_state_domain(type.domain)) {
+              for (std::size_t bit = 0; bit < value.width(); ++bit) {
+                  const auto digit = value.get(bit);
+                  if (digit == Logic4::x || digit == Logic4::z) {
+                      error = "a two-state port default contains an "
+                              "unknown or high-impedance digit";
+                      return std::nullopt;
+                  }
+              }
+          }
+          return value;
+        };
 
-    const auto quote = text.find('\'');
-    if (quote != std::string::npos) {
-        const auto width_text = std::string_view{text}.substr(0, quote);
-        std::size_t width = expected_width;
-        if (!width_text.empty()) {
-            const auto parsed_width = unsigned_decimal(width_text);
-            if (!parsed_width || *parsed_width == 0
-                || *parsed_width > std::numeric_limits<std::size_t>::max()) {
-                return std::nullopt;
-            }
-            width = static_cast<std::size_t>(*parsed_width);
+    if (expression.kind != ExpressionKind::Aggregate) {
+        if (const auto ordinal =
+                vhdl_enumeration_ordinal(expression, type)) {
+            return normalize(unsigned_value(
+                static_cast<std::uint64_t>(*ordinal), width));
         }
-        auto digits = std::string_view{text}.substr(quote + 1);
-        if (!digits.empty() && (digits.front() == 's' || digits.front() == 'S')) {
-            digits.remove_prefix(1);
+        if (auto literal = literal_value(
+                expression,
+                width,
+                frontend::Language::Vhdl2008)) {
+            return normalize(std::move(literal->value));
         }
-        if (digits.empty()) {
-            return std::nullopt;
+        std::string evaluation_error;
+        if (const auto value =
+                evaluate_constant_expression(
+                    expression, {}, evaluation_error)) {
+            return normalize(
+                type.domain == frontend::ValueDomain::Integer
+                    ? integer_value(*value)
+                    : unsigned_value(
+                          static_cast<std::uint64_t>(*value),
+                          width));
         }
-        const auto base = static_cast<char>(std::tolower(static_cast<unsigned char>(digits.front())));
-        digits.remove_prefix(1);
-        if (base == 'b') {
-            std::string expanded;
-            for (const char c : digits) {
-                if (c != '_') {
-                    expanded.push_back(
-                        language != frontend::Language::Vhdl2008
-                                && c == '?'
-                            ? 'z'
-                            : c);
-                }
-            }
-            if (expanded.size() < width) {
-                expanded.insert(expanded.begin(), width - expanded.size(), '0');
-            } else if (expanded.size() > width) {
-                expanded.erase(0, expanded.size() - width);
-            }
-            try {
-                auto value = PackedLogic4::from_msb_string(expanded);
-                auto domain = frontend::ValueDomain::Bit2;
-                for (std::size_t bit = 0; bit < value.width(); ++bit) {
-                    if (value.get(bit) != Logic4::zero
-                        && value.get(bit) != Logic4::one) {
-                        domain = frontend::ValueDomain::Logic4;
-                        break;
-                    }
-                }
-                return LoweredLiteral{std::move(value), domain};
-            } catch (const std::invalid_argument&) {
-                return std::nullopt;
-            }
-        }
-        if (base == 'd') {
-            const auto value = unsigned_decimal(digits);
-            return value
-                ? std::optional{LoweredLiteral{
-                      unsigned_value(*value, width),
-                      frontend::ValueDomain::Bit2}}
-                : std::nullopt;
-        }
-        if (base == 'h') {
-            std::uint64_t value{};
-            std::string cleaned;
-            for (const char c : digits) {
-                if (c != '_') {
-                    cleaned.push_back(c);
-                }
-            }
-            const auto parsed =
-                std::from_chars(cleaned.data(), cleaned.data() + cleaned.size(), value, 16);
-            if (parsed.ec != std::errc{} || parsed.ptr != cleaned.data() + cleaned.size()) {
-                return std::nullopt;
-            }
-            return LoweredLiteral{
-                unsigned_value(value, width),
-                frontend::ValueDomain::Bit2};
-        }
+        error = evaluation_error.empty()
+            ? "the expression is not a supported static VHDL value"
+            : evaluation_error;
         return std::nullopt;
     }
 
-    const auto value = unsigned_decimal(text);
-    return value
-        ? std::optional{LoweredLiteral{
-              unsigned_value(*value, expected_width),
-              frontend::ValueDomain::Bit2}}
-        : std::nullopt;
+    if (expression.aggregate_choices.size()
+            != expression.operands.size()
+        || expression.aggregate_choice_expressions.size()
+            != expression.operands.size()) {
+        error = "aggregate association metadata is inconsistent";
+        return std::nullopt;
+    }
+
+    auto result = default_packed_value(type, width);
+    const auto insert =
+        [&](const PackedLogic4& value,
+            const std::size_t offset) {
+          for (std::size_t bit = 0; bit < value.width(); ++bit) {
+              if (result.is_logic9()) {
+                  result.set_logic9(
+                      offset + bit,
+                      value.is_logic9()
+                          ? value.get_logic9(bit)
+                          : runtime::to_logic9(value.get(bit)));
+              } else {
+                  result.set(offset + bit, value.get(bit));
+              }
+          }
+        };
+
+    if (!type.packed_members.empty()) {
+        std::vector<bool> assigned(type.packed_members.size());
+        std::optional<std::size_t> others;
+        std::size_t positional = 0;
+        const auto assign =
+            [&](const std::size_t member_index,
+                const Expression& value) -> bool {
+              if (member_index >= type.packed_members.size()
+                  || assigned[member_index]) {
+                  error = member_index
+                              >= type.packed_members.size()
+                      ? "record aggregate has too many positional "
+                        "associations"
+                      : "record aggregate assigns one element more "
+                        "than once";
+                  return false;
+              }
+              const auto& member =
+                  type.packed_members[member_index];
+              frontend::Type member_type;
+              member_type.domain = member.domain;
+              member_type.spelling = member.spelling;
+              member_type.packed_range = member.packed_range;
+              member_type.packed_range_expression =
+                  member.packed_range_expression;
+              member_type.is_signed = member.is_signed;
+              auto member_value =
+                  static_vhdl_value(
+                      value, member_type, error);
+              if (!member_value) {
+                  return false;
+              }
+              insert(
+                  *member_value,
+                  static_cast<std::size_t>(
+                      member.lsb_offset));
+              assigned[member_index] = true;
+              return true;
+            };
+        for (std::size_t index = 0;
+             index < expression.operands.size(); ++index) {
+            const auto& choice =
+                expression.aggregate_choices[index];
+            if (choice.empty()) {
+                if (!assign(
+                        positional++,
+                        expression.operands[index])) {
+                    return std::nullopt;
+                }
+                continue;
+            }
+            if (choice == "others") {
+                if (others) {
+                    error = "record aggregate has more than one others "
+                            "association";
+                    return std::nullopt;
+                }
+                others = index;
+                continue;
+            }
+            const auto member = std::ranges::find_if(
+                type.packed_members,
+                [&](const auto& candidate) {
+                  return candidate.name == choice;
+                });
+            if (member == type.packed_members.end()) {
+                error = "record aggregate names an unknown element '"
+                    + choice + "'";
+                return std::nullopt;
+            }
+            if (!assign(
+                    static_cast<std::size_t>(
+                        std::distance(
+                            type.packed_members.begin(), member)),
+                    expression.operands[index])) {
+                return std::nullopt;
+            }
+        }
+        if (others) {
+            for (std::size_t member = 0;
+                 member < assigned.size(); ++member) {
+                if (!assigned[member]
+                    && !assign(
+                        member,
+                        expression.operands[*others])) {
+                    return std::nullopt;
+                }
+            }
+        }
+        if (std::ranges::find(assigned, false)
+            != assigned.end()) {
+            error = "record aggregate omits a required element";
+            return std::nullopt;
+        }
+        return normalize(std::move(result));
+    }
+
+    if (type.vhdl_array && type.packed_range) {
+        frontend::Type element_type;
+        element_type.domain =
+            type.vhdl_array->element_domain;
+        element_type.spelling =
+            type.vhdl_array->element_spelling;
+        element_type.named_type =
+            type.vhdl_array->element_named_type;
+        std::vector<bool> assigned(width);
+        std::optional<std::size_t> others;
+        std::size_t positional = 0;
+        const auto assign_offset =
+            [&](const std::size_t offset,
+                const Expression& value) -> bool {
+              if (offset >= width || assigned[offset]) {
+                  error = offset >= width
+                      ? "array aggregate index is outside its constraint"
+                      : "array aggregate assigns one index more than once";
+                  return false;
+              }
+              auto element =
+                  static_vhdl_value(
+                      value, element_type, error);
+              if (!element || element->width() != 1) {
+                  if (error.empty()) {
+                      error = "array aggregate element is not scalar";
+                  }
+                  return false;
+              }
+              insert(*element, offset);
+              assigned[offset] = true;
+              return true;
+            };
+        const auto assign_index =
+            [&](const std::int64_t source_index,
+                const Expression& value) -> bool {
+              const auto& range = *type.packed_range;
+              const auto low = std::min(range.left, range.right);
+              const auto high = std::max(range.left, range.right);
+              if (source_index < low || source_index > high) {
+                  error = "array aggregate index is outside its constraint";
+                  return false;
+              }
+              return assign_offset(
+                  static_cast<std::size_t>(
+                      index_distance(
+                          source_index, range.right)),
+                  value);
+            };
+        for (std::size_t association = 0;
+             association < expression.operands.size();
+             ++association) {
+            const auto& choices =
+                expression.aggregate_choice_expressions[
+                    association];
+            if (choices.empty()) {
+                if (!assign_offset(
+                        positional++,
+                        expression.operands[association])) {
+                    return std::nullopt;
+                }
+                continue;
+            }
+            for (const auto& choice : choices) {
+                if (choice.kind == ExpressionKind::Identifier
+                    && choice.text == "others") {
+                    if (others) {
+                        error = "array aggregate has more than one others "
+                                "association";
+                        return std::nullopt;
+                    }
+                    others = association;
+                    continue;
+                }
+                if (choice.kind == ExpressionKind::Binary
+                    && (choice.text == "to"
+                        || choice.text == "downto")
+                    && choice.operands.size() == 2) {
+                    std::string choice_error;
+                    const auto left =
+                        evaluate_constant_expression(
+                            choice.operands[0], {}, choice_error);
+                    const auto right =
+                        evaluate_constant_expression(
+                            choice.operands[1], {}, choice_error);
+                    if (!left || !right) {
+                        error = "array aggregate range is not static";
+                        return std::nullopt;
+                    }
+                    const auto step =
+                        choice.text == "downto" ? -1 : 1;
+                    for (auto current = *left;; current += step) {
+                        if (!assign_index(
+                                current,
+                                expression.operands[association])) {
+                            return std::nullopt;
+                        }
+                        if (current == *right) {
+                            break;
+                        }
+                        if ((step > 0 && current > *right)
+                            || (step < 0 && current < *right)) {
+                            error = "array aggregate range direction "
+                                    "does not reach its right bound";
+                            return std::nullopt;
+                        }
+                    }
+                    continue;
+                }
+                std::string choice_error;
+                const auto selected =
+                    evaluate_constant_expression(
+                        choice, {}, choice_error);
+                if (!selected
+                    || !assign_index(
+                        *selected,
+                        expression.operands[association])) {
+                    if (!selected) {
+                        error = "array aggregate choice is not static";
+                    }
+                    return std::nullopt;
+                }
+            }
+        }
+        if (others) {
+            for (std::size_t offset = 0;
+                 offset < assigned.size(); ++offset) {
+                if (!assigned[offset]
+                    && !assign_offset(
+                        offset,
+                        expression.operands[*others])) {
+                    return std::nullopt;
+                }
+            }
+        }
+        if (std::ranges::find(assigned, false)
+            != assigned.end()) {
+            error = "array aggregate omits a required index";
+            return std::nullopt;
+        }
+        return normalize(std::move(result));
+    }
+
+    error = "aggregate defaults require a supported record or array type";
+    return std::nullopt;
 }
 
 

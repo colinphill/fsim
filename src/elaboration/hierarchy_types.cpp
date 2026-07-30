@@ -1569,7 +1569,8 @@ using namespace elaboration_detail;
         const std::string& path,
         const SignalMap& parent_signals,
         const Binding* binding,
-        const bool cross_language) {
+        const bool cross_language,
+        const bool require_input_connections) {
         SignalMap aliases;
         std::vector<bool> connected(ports.size());
         std::size_t positional = 0;
@@ -1612,6 +1613,60 @@ using namespace elaboration_detail;
                 continue;
             }
             connected[port_index] = true;
+            const auto& port = ports[port_index];
+            if (connection.kind
+                    == frontend::PortActualKind::Open) {
+                if (port.direction
+                    == frontend::PortDirection::Input) {
+                    report(
+                        "FSIM-ELAB-BIND-027",
+                        "input port '" + path + "." + port.name
+                            + "' cannot be open without a component "
+                              "default",
+                        connection.span);
+                }
+                continue;
+            }
+            if (connection.kind
+                    == frontend::PortActualKind::Default) {
+                if (port.direction
+                    != frontend::PortDirection::Input) {
+                    report(
+                        "FSIM-ELAB-VHCOMP-013",
+                        "only an input component port can materialize "
+                        "a default on '" + path + "." + port.name + "'",
+                        connection.span);
+                    continue;
+                }
+                const auto signal =
+                    add_owned_signal(port, path, aliases);
+                if (!signal) {
+                    continue;
+                }
+                const auto width =
+                    static_cast<std::size_t>(
+                        port.type.width().value_or(1));
+                std::string default_error;
+                auto lowered = static_vhdl_value(
+                    connection.value,
+                    port.type,
+                    default_error);
+                if (!lowered
+                    || lowered->width() != width) {
+                    report(
+                        "FSIM-ELAB-VHCOMP-013",
+                        "component input default for '" + path + "."
+                            + port.name
+                            + "' is not a statically foldable value "
+                              "compatible with the selected port type: "
+                            + default_error,
+                        connection.value.span);
+                    continue;
+                }
+                design_.signals_.at(*signal).initial_value =
+                    std::move(*lowered);
+                continue;
+            }
             if (connection.value.kind != frontend::ExpressionKind::Identifier) {
                 report(
                     "FSIM-ELAB-BIND-027",
@@ -1628,7 +1683,6 @@ using namespace elaboration_detail;
                     connection.value.span);
                 continue;
             }
-            const auto& port = ports[port_index];
             const auto& actual_info = design_.signal_info_.at(actual->second);
             validate_boundary_type(
                 port,
@@ -1681,6 +1735,21 @@ using namespace elaboration_detail;
                 (void)add_owned_signal(pulled, path, aliases);
             }
         }
+        if (require_input_connections) {
+            for (std::size_t port_index = 0;
+                 port_index < ports.size(); ++port_index) {
+                if (!connected[port_index]
+                    && ports[port_index].direction
+                        == frontend::PortDirection::Input) {
+                    report(
+                        "FSIM-ELAB-BIND-027",
+                        "required VHDL input port '" + path + "."
+                            + ports[port_index].name
+                            + "' is not associated",
+                        ports[port_index].span);
+                }
+            }
+        }
         return aliases;
     }
 
@@ -1706,7 +1775,9 @@ using namespace elaboration_detail;
             path,
             parent_signals,
             binding,
-            cross_language);
+            cross_language,
+            target.language
+                == frontend::Language::Vhdl2008);
     }
 
     frontend::SignalDeclaration HierarchyBuilder::external_port_declaration(

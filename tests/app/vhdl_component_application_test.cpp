@@ -31,6 +31,7 @@ struct Capture {
   std::array<std::string, 3> values;
   std::array<std::string, 2> packets;
   std::string nonvalue;
+  std::string defaulted;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   fsim::app::NativeCacheStatistics cache;
@@ -44,6 +45,7 @@ fsim::project::Config make_config(
     const std::filesystem::path& directory,
     const std::filesystem::path& leaf,
     const std::filesystem::path& profiles,
+    const std::filesystem::path& default_profiles,
     const std::filesystem::path& hierarchy,
     const fsim::project::Optimization optimization) {
   fsim::project::Config config;
@@ -64,7 +66,8 @@ fsim::project::Config make_config(
   sources.standard = "2008";
   sources.library = "work";
   sources.compilation_unit = "file";
-  sources.files = {leaf, profiles, hierarchy};
+  sources.files = {
+      leaf, profiles, default_profiles, hierarchy};
   config.source_sets.push_back(std::move(sources));
   return config;
 }
@@ -106,7 +109,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 5);
+  assert(project->design.specializations().size() == 6);
   for (const auto path : {
            "component_runtime_top.positional_child",
            "component_runtime_top.default_child"}) {
@@ -123,7 +126,7 @@ Capture run_once(
         [](const auto& item) {
           return item.first == "__component"
               && item.second.starts_with(
-                  "vhdl-component-binding-v4")
+                  "vhdl-component-binding-v5")
               && item.second.find(
                      "region=2;scope=;owner=work."
                      "component_runtime_profiles")
@@ -155,7 +158,7 @@ Capture run_once(
       == "vhdl:work.component_runtime_nonvalue(rtl)");
   for (const auto& dependency :
        {config.source_sets.front().files[1].string(),
-        config.source_sets.front().files[2].string()}) {
+        config.source_sets.front().files[3].string()}) {
     assert(std::ranges::find(
                nonvalue.source_dependencies,
                dependency)
@@ -166,7 +169,7 @@ Capture run_once(
       [](const auto& item) {
         return item.first == "__component"
             && item.second.starts_with(
-                "vhdl-component-binding-v4")
+                "vhdl-component-binding-v5")
             && item.second.find(
                    "actual=component_t:vhdl-type-v1")
                 != std::string::npos
@@ -178,6 +181,26 @@ Capture run_once(
                 != std::string::npos
             && item.second.find(
                    "actual=component_helpers:vhdl-package-v1")
+                != std::string::npos;
+      }));
+  const auto& defaulted = specialization(
+      *project, "component_runtime_top.defaulted_child");
+  assert(
+      defaulted.unit
+      == "vhdl:work.component_runtime_defaulted(rtl)");
+  assert(std::ranges::find(
+             defaulted.source_dependencies,
+             config.source_sets.front().files[2].string())
+         != defaulted.source_dependencies.end());
+  assert(std::ranges::any_of(
+      defaulted.parameter_identity_values,
+      [](const auto& item) {
+        return item.first == "__component"
+            && item.second.starts_with(
+                "vhdl-component-binding-v5")
+            && item.second.find("state=1")
+                != std::string::npos
+            && item.second.find("state=2")
                 != std::string::npos;
       }));
 
@@ -226,7 +249,12 @@ Capture run_once(
       "component_runtime_top.nonvalue_input");
   const auto nonvalue_output = simulation.find_signal(
       "component_runtime_top.nonvalue_output");
-  assert(nonvalue_input && nonvalue_output);
+  const auto defaulted_output = simulation.find_signal(
+      "component_runtime_top.defaulted_child."
+      "entity_default_output");
+  assert(
+      nonvalue_input && nonvalue_output
+      && defaulted_output);
   simulation.deposit_signal(
       *nonvalue_input,
       fsim::runtime::PackedLogic4::from_msb_string(bits(7)));
@@ -267,12 +295,15 @@ Capture run_once(
   }
   capture.nonvalue =
       simulation.read_signal(*nonvalue_output).to_msb_string();
+  capture.defaulted =
+      simulation.read_signal(*defaulted_output).to_msb_string();
   return capture;
 }
 
 void verify(
     const Capture& capture,
-    const std::uint32_t expected_nonvalue = 27) {
+    const std::uint32_t expected_nonvalue = 27,
+    const std::uint32_t expected_default = 7) {
   assert(
       capture.result.status
       == fsim::runtime::RunStatus::completed);
@@ -284,6 +315,7 @@ void verify(
           == std::array<std::string, 2>{
               "10101", "01010"}));
   assert(capture.nonvalue == bits(expected_nonvalue));
+  assert(capture.defaulted == bits(expected_default));
   assert(std::ranges::count_if(
              capture.points,
              [](const auto& point) {
@@ -316,6 +348,8 @@ int main() {
       directory.path / "component_runtime_top.vhd";
   const auto profiles =
       directory.path / "component_runtime_profiles.vhd";
+  const auto default_profiles =
+      directory.path / "component_default_profiles.vhd";
 
   {
     std::ofstream output(leaf, std::ios::binary);
@@ -343,6 +377,16 @@ end entity;
 architecture rtl of component_runtime_stable is
 begin
   output_value <= input_value;
+end architecture;
+
+entity component_runtime_defaulted is
+  port (
+    entity_default_input : in integer;
+    entity_default_output : out integer);
+end entity;
+architecture rtl of component_runtime_defaulted is
+begin
+  entity_default_output <= entity_default_input;
 end architecture;
 
 entity component_runtime_nonvalue is
@@ -424,6 +468,25 @@ end package;
     assert(output.good());
   };
 
+  const auto write_default_profiles =
+      [&](const std::uint32_t default_value) {
+        std::ofstream output(
+            default_profiles,
+            std::ios::binary | std::ios::trunc);
+        output << R"(
+package component_default_profiles is
+  component component_runtime_defaulted is
+    port (
+      component_default_input : in integer := )"
+               << default_value
+               << R"(;
+      component_default_output : out integer);
+  end component;
+end package;
+)";
+        assert(output.good());
+      };
+
   const auto write_hierarchy = [&](const bool revised_function) {
     const auto increment = revised_function ? 3 : 2;
     std::ofstream output(
@@ -432,6 +495,7 @@ end package;
 entity component_runtime_top is
 end entity;
 use work.component_runtime_profiles.all;
+use work.component_default_profiles.all;
 architecture rtl of component_runtime_top is
   function increment(value : integer) return integer is
   begin
@@ -484,6 +548,10 @@ begin
     port map (
       component_input => nonvalue_input,
       component_output => nonvalue_output);
+  defaulted_child: component_runtime_defaulted
+    port map (
+      component_default_input => open,
+      component_default_output => open);
 end architecture;
 )";
     assert(output.good());
@@ -493,12 +561,14 @@ end architecture;
        {fsim::project::Optimization::o0,
         fsim::project::Optimization::o2}) {
     write_profiles(false);
+    write_default_profiles(7);
     write_hierarchy(false);
     const auto config =
         make_config(
             directory.path,
             leaf,
             profiles,
+            default_profiles,
             hierarchy,
             optimization);
     const auto reference = run_once(
@@ -514,6 +584,8 @@ end architecture;
     assert(cold.values == warm.values);
     assert(reference.nonvalue == cold.nonvalue);
     assert(cold.nonvalue == warm.nonvalue);
+    assert(reference.defaulted == cold.defaulted);
+    assert(cold.defaulted == warm.defaulted);
     assert(reference.keys == cold.keys);
     assert(cold.keys == warm.keys);
 #if defined(FSIM_HAS_LLVM)
@@ -522,6 +594,35 @@ end architecture;
     assert(warm.cache.hits > 0);
     assert(warm.cache.misses == 0);
 
+    write_default_profiles(11);
+    const auto default_reference = run_once(
+        config, fsim::app::SimulationEngine::interpreter);
+    const auto default_changed = run_once(
+        config, fsim::app::SimulationEngine::compiled);
+    verify(default_reference, 27, 11);
+    verify(default_changed, 27, 11);
+    assert(default_reference.defaulted
+           == default_changed.defaulted);
+    for (const auto path : {
+             "component_runtime_top",
+             "component_runtime_top.defaulted_child"}) {
+      assert(
+          key_for(cold, path)
+          != key_for(default_changed, path));
+    }
+    for (const auto path : {
+             "component_runtime_top.positional_child",
+             "component_runtime_top.default_child",
+             "component_runtime_top.direct_child",
+             "component_runtime_top.nonvalue_child"}) {
+      assert(
+          key_for(cold, path)
+          == key_for(default_changed, path));
+    }
+    assert(default_changed.cache.misses > 0);
+    assert(default_changed.cache.hits > 0);
+
+    write_default_profiles(7);
     write_hierarchy(true);
     const auto function_reference = run_once(
         config, fsim::app::SimulationEngine::interpreter);
@@ -541,7 +642,8 @@ end architecture;
     for (const auto path : {
              "component_runtime_top.positional_child",
              "component_runtime_top.default_child",
-             "component_runtime_top.direct_child"}) {
+             "component_runtime_top.direct_child",
+             "component_runtime_top.defaulted_child"}) {
       assert(
           key_for(cold, path)
           == key_for(function_changed, path));
@@ -568,6 +670,13 @@ end architecture;
     assert(
         key_for(function_changed, "component_runtime_top.direct_child")
         == key_for(changed, "component_runtime_top.direct_child"));
+    assert(
+        key_for(
+            function_changed,
+            "component_runtime_top.defaulted_child")
+        == key_for(
+            changed,
+            "component_runtime_top.defaulted_child"));
 #endif
   }
 }

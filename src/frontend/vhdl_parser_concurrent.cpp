@@ -577,8 +577,14 @@ PortConnection VhdlParser::parse_vhdl_port_connection() {
     advance();
   }
 
+  if (match_keyword("open", true)) {
+    connection.kind = PortActualKind::Open;
+    connection.span = cover(start.span, previous().span);
+    return connection;
+  }
+
   bool simple_identifier = false;
-  if (at(TokenKind::Identifier) && !keyword("open", 0, true)) {
+  if (at(TokenKind::Identifier)) {
     const auto actual = advance();
     connection.value =
         Expression{ExpressionKind::Identifier, vhdl_name(actual.text), {},

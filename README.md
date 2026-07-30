@@ -109,8 +109,11 @@ The current tree contains:
   specialization, lexical/package visibility, nominal/profile-aware overload
   selection, formal-aware named/positional associations, latest-analyzed
   same-library architecture default binding, configuration-map precedence,
-  whole-signal composite execution, and version-4 selected-actual/source
-  selective-cache identity;
+  whole-signal composite execution, statically foldable component input
+  defaults, explicit or omitted open output-family ports, declaration-visible
+  scalar/vector/enumeration/record/array aggregate defaults, required direct-
+  entity input enforcement, and version-5 normalized-default/open/mapping
+  identity with interpreter/LLVM O0/O2 cold/warm/edit-cache equivalence;
 - bounded SystemVerilog packages with immutable integral
   parameters/localparams, packed integral typedef aliases, and packed enum
   types/enumerators plus non-nested packed struct and equal-width packed union

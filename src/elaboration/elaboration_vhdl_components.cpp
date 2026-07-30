@@ -205,14 +205,20 @@ bool component_generic_has_default(
     }
     return false;
 }
-
+bool component_port_may_be_omitted(
+    const frontend::VhdlComponentPort& port) {
+    return (port.direction == frontend::PortDirection::Input
+            && port.default_value.has_value())
+        || port.direction == frontend::PortDirection::Output
+        || port.direction == frontend::PortDirection::Inout
+        || port.direction == frontend::PortDirection::Buffer;
+}
 std::string type_provenance_profile(
     const frontend::Type& type) {
     return type.vhdl_type_declaration.empty()
         ? std::string{"<builtin>"}
         : type.vhdl_type_declaration;
 }
-
 std::unordered_map<std::string, std::string>
 generic_placeholders(
     const std::span<
@@ -521,7 +527,7 @@ bool component_actual_profile_matches(
               return actual.port;
             },
             [](const auto& formal) {
-              return formal.default_value.has_value();
+              return component_port_may_be_omitted(formal);
             })) {
         return false;
     }
@@ -542,6 +548,8 @@ bool component_actual_profile_matches(
             formal = &declaration.ports[positional++];
         }
         if (formal == nullptr
+            || connection.kind
+                != frontend::PortActualKind::Expression
             || connection.value.kind
                 != frontend::ExpressionKind::Identifier) {
             continue;
@@ -621,10 +629,12 @@ std::string component_identity(
     const DesignUnit& target,
     const std::span<
         const std::pair<std::string, std::string>>
-        actual_identities) {
+        actual_identities,
+    const std::span<const frontend::PortConnection>
+        normalized_ports) {
     const auto names = generic_placeholders(declaration.generics);
     std::ostringstream output;
-    output << "vhdl-component-binding-v4;name="
+    output << "vhdl-component-binding-v5;name="
            << declaration.name
            << ";region="
            << static_cast<int>(declaration.region)
@@ -665,6 +675,18 @@ std::string component_identity(
             output << expression_profile(*port.default_value, names);
         } else {
             output << "<required>";
+        }
+    }
+    for (const auto& actual : normalized_ports) {
+        output << ";mapped-port="
+               << (actual.port
+                       ? *actual.port
+                       : std::string{"<positional>"})
+               << ":state="
+               << static_cast<int>(actual.kind);
+        if (actual.kind != frontend::PortActualKind::Open) {
+            output << ":actual="
+                   << expression_profile(actual.value, names);
         }
     }
     return output.str();
@@ -741,6 +763,26 @@ bool normalize_associations(
             actual.name = formals[index].name;
         } else {
             actual.port = formals[index].name;
+            if (actual.kind
+                    == frontend::PortActualKind::Open
+                && formals[index].direction
+                    == frontend::PortDirection::Input) {
+                if (formals[index].default_value) {
+                    actual.kind =
+                        frontend::PortActualKind::Default;
+                    actual.value =
+                        *formals[index].default_value;
+                } else {
+                    diagnostics.push_back({
+                        std::string{code},
+                        "input component " + std::string{object}
+                            + " formal '" + formals[index].name
+                            + "' is associated with open but has no "
+                              "default on '" + path + "'",
+                        actual.span});
+                    valid = false;
+                }
+            }
         }
         normalized.push_back(std::move(actual));
     }
@@ -752,7 +794,8 @@ bool normalize_associations(
             return component_generic_has_default(
                 formals[index]);
           } else {
-            return formals[index].default_value.has_value();
+            return component_port_may_be_omitted(
+                formals[index]);
           }
         }();
         if (!bound[index] && !has_default) {
@@ -763,6 +806,25 @@ bool normalize_associations(
                     + "' is not associated on '" + path + "'",
                 formals[index].span});
             valid = false;
+        } else if constexpr (
+            std::is_same_v<Formal,
+                           frontend::VhdlComponentPort>) {
+            if (!bound[index]) {
+                frontend::PortConnection actual;
+                actual.port = formals[index].name;
+                actual.span = formals[index].span;
+                if (formals[index].direction
+                        == frontend::PortDirection::Input) {
+                    actual.kind =
+                        frontend::PortActualKind::Default;
+                    actual.value =
+                        *formals[index].default_value;
+                } else {
+                    actual.kind =
+                        frontend::PortActualKind::Open;
+                }
+                normalized.push_back(std::move(actual));
+            }
         }
     }
     return valid;
@@ -1105,12 +1167,60 @@ HierarchyBuilder::bind_vhdl_component_instance(
               return std::nullopt;
           }
           auto resolved = declaration;
+          auto default_environment = parent_environment;
+          default_environment.insert(
+              specialized.environment.begin(),
+              specialized.environment.end());
+          ConstantDomainEnvironment default_domains = parent_domains;
+          for (const auto& generic : declaration.generics) {
+              if (specialized.environment.contains(generic.name)) {
+                  default_domains.insert_or_assign(
+                      generic.name, ConstantTypeInfo{generic.type.domain});
+              }
+          }
           for (std::size_t index = 0;
                index < resolved.ports.size()
                    && index < specialized.unit.ports.size();
                ++index) {
               resolved.ports[index].type =
                   specialized.unit.ports[index].type;
+              if (resolved.ports[index].default_value) {
+                  auto& value =
+                      *resolved.ports[index].default_value;
+                  substitute_parameters(
+                      value,
+                      default_environment,
+                      default_domains,
+                      frontend::Language::Vhdl2008);
+                  if (const auto ordinal =
+                          vhdl_enumeration_ordinal(
+                              value,
+                              resolved.ports[index].type)) {
+                      value = constant_expression(
+                          *ordinal,
+                          value.span,
+                          resolved.ports[index].type.domain,
+                          frontend::Language::Vhdl2008,
+                          true,
+                          resolved.ports[index].type.nominal_type);
+                  } else if (
+                      value.kind
+                          != frontend::ExpressionKind::LogicLiteral
+                      && value.kind
+                          != frontend::ExpressionKind::StringLiteral
+                      && value.kind
+                          != frontend::ExpressionKind::BooleanLiteral) {
+                      std::string error;
+                      if (const auto folded = evaluate_constant_expression(
+                              value, default_environment, error)) {
+                          value = constant_expression(
+                              *folded,
+                              value.span,
+                              resolved.ports[index].type.domain,
+                              frontend::Language::Vhdl2008);
+                      }
+                  }
+              }
           }
           return ComponentSpecialization{
               std::move(resolved),
@@ -1238,23 +1348,6 @@ HierarchyBuilder::bind_vhdl_component_instance(
         return result;
     }
     const auto& component = *matching.front();
-    if (std::ranges::any_of(
-            component.ports,
-            [](const auto& port) {
-              return port.default_value.has_value()
-                  && (!port.type.packed_members.empty()
-                      || !port.type.enumeration_literals.empty()
-                      || port.type.vhdl_array.has_value());
-            })) {
-        report(
-            "FSIM-ELAB-VHCOMP-013",
-            "component '" + component.name
-                + "' uses an unsupported composite port default",
-            component.span);
-        result.valid = false;
-        return result;
-    }
-
     frontend::Instance normalized = instance;
     normalized.parameter_overrides.clear();
     normalized.connections.clear();
@@ -1272,13 +1365,14 @@ HierarchyBuilder::bind_vhdl_component_instance(
               return actual.name;
             },
             diagnostics_);
-    result.valid &=
-        normalize_associations<
+    if (!result.valid) {
+        std::vector<frontend::PortConnection> rejected_connections;
+        (void)normalize_associations<
             frontend::VhdlComponentPort,
             frontend::PortConnection>(
             component.ports,
             instance.connections,
-            normalized.connections,
+            rejected_connections,
             path,
             "port",
             "FSIM-ELAB-VHCOMP-009",
@@ -1286,7 +1380,6 @@ HierarchyBuilder::bind_vhdl_component_instance(
               return actual.port;
             },
             diagnostics_);
-    if (!result.valid) {
         return result;
     }
 
@@ -1301,6 +1394,23 @@ HierarchyBuilder::bind_vhdl_component_instance(
     }
     const auto& specialized_component =
         component_specialization->specialized;
+    result.valid &=
+        normalize_associations<
+            frontend::VhdlComponentPort,
+            frontend::PortConnection>(
+            component_specialization->declaration.ports,
+            instance.connections,
+            normalized.connections,
+            path,
+            "port",
+            "FSIM-ELAB-VHCOMP-009",
+            [](const auto& actual) {
+              return actual.port;
+            },
+            diagnostics_);
+    if (!result.valid) {
+        return result;
+    }
 
     result = configure_vhdl_component_instance(
         unit, normalized, path);
@@ -1877,7 +1987,8 @@ HierarchyBuilder::bind_vhdl_component_instance(
         component_identity(
             component,
             *result.target,
-            specialized_component.identity_values);
+            specialized_component.identity_values,
+            result.instance.connections);
     if (!result.configuration_identity.empty()) {
         result.component_identity +=
             ";configuration=" + result.configuration_identity;

@@ -9,16 +9,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-66 cadence checkpoint; the
-  preceding feature-batch-65 checkpoint is `c9e16b7`.
-- The source-size refactor is complete: all 264 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-67 cadence checkpoint; the
+  preceding feature-batch-66 checkpoint is `8822c79`.
+- The source-size refactor is complete: all 265 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
-  empty and the maximum is 1,987 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 54
-  configured tests in 341.97 seconds, and Release passed all 55 configured
-  tests in 135.92 seconds on 2026-07-30.
-- The diagnostic catalog covers all 1,073 production codes.
-- No CI state was inspected during feature batch 66 or this handoff.
+  empty and the maximum is 1,999 lines.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 55
+  configured tests in 70.73 seconds, and Release passed all 55 configured
+  tests in 32.00 seconds on 2026-07-30.
+- The diagnostic catalog covers all 1,074 production codes.
+- No CI state was inspected during feature batch 67 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -30,7 +30,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, automatic integral functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics and deterministic default binding now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, automatic integral functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -102,8 +102,10 @@ not rebuilt:
   package-use re-export; overload selection by association/mode/nominal type/
   constraint/direction/dependent generic profile; named/positional formal
   normalization; latest-analyzed compatible same-library default binding;
-  configuration-map precedence; version-4 selected-actual/source/type/target
-  identity; and interpreter/LLVM O0/O2/debugger/cache equivalence;
+  configuration-map precedence; statically foldable scalar/vector/enumeration/
+  record/array component input defaults; disconnected explicit or omitted
+  open output-family ports; version-5 selected-actual/default/open/source/type/
+  map/target identity; and interpreter/LLVM O0/O2/debugger/cache equivalence;
 - packed Bit2, Logic4, and exact Logic9 values, wide-value runtime kernels,
   process-owned drivers, standard resolution, delayed/projected transactions,
   NBA/update writes, dynamic packed indexing, and committed-change visibility;
@@ -166,8 +168,9 @@ document merely because the parser accepts a related form.
 
 - Complete configuration semantics beyond the bounded declaration/specification
   slice; full libraries, packages/bodies, and contexts; generics; component
-  port defaults/open actuals; incremental configurations and complete library
-  analysis order; direct instantiation; blocks and generates.
+  expression/aggregate actuals and entity-port defaults; incremental
+  configurations and complete library analysis order; direct instantiation;
+  blocks and generates.
 - Finish name/overload resolution, constant evaluation, legality, resolution
   functions, complete synthesizable statements, and full promised composite
   type/aggregate/attribute behavior.
@@ -218,39 +221,42 @@ opaque native session/object model already used by Tcl.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 67: bounded VHDL-2008 component port defaults and
-`open` actuals**:
+Resume with **feature batch 68: bounded SystemVerilog runtime mutable
+strings**:
 
-1. Retain supported component input-port default expressions and explicit
-   `open` port-map actuals as distinct HIR states.
-2. Parse omitted port associations and `open` actuals across the existing
-   component declarative and instance regions without blanket rejection.
-3. Resolve each component port default in its declaration visibility and
-   previously declared generic/type context.
-4. Normalize omitted and explicit-`open` actuals by formal position after
-   component overload selection.
-5. Enforce bounded mode legality: defaults may feed unconnected inputs, while
-   output-family `open` actuals discard writes without creating aliases.
-6. Materialize component input defaults independently of entity port defaults
-   and reject required unconnected entity inputs.
-7. Compose architecture specifications and recursive configuration port maps
-   after default/`open` normalization while preserving direct-entity
-   isolation.
-8. Include canonical port-default expressions, normalized open state,
-   dependencies, and mappings in version-5 component identity.
-9. Diagnose illegal defaults/opens, missing required actuals, incompatible
-   profiles, invalid maps, ambiguous overloads, and implicit cross-language
-   binding.
-10. Add frontend, negative, elaboration, visibility/overload/configuration,
-    runtime, debugger, interpreter/LLVM O0/O2, cold/warm, and edited-default
+1. Retain `string` module variables, automatic locals, function results, and
+   task/function formals as a distinct mutable runtime type rather than an
+   immutable parameter spelling.
+2. Parse bounded declarations, initialization, blocking assignment, literals,
+   concatenation, equality/inequality, indexing, and the `len()` method with
+   targeted recovery outside the slice.
+3. Define deterministic byte-string storage, empty initialization, value-copy
+   assignment, bounds behavior, and a per-object 4,096-byte v1 limit.
+4. Add stable DesignIR/SimIR string object and register identities without
+   exposing allocator or C++ object layout through the native runtime ABI.
+5. Lower module variables and automatic activation-frame locals through
+   nested nonrecursive functions and suspending tasks, preserving values
+   across wait/resume and deferred copy-out.
+6. Extend interpreter operations and append-only JIT runtime helpers for
+   construct, copy, concatenate, compare, index, length, and destruction.
+7. Preserve debugger source points, live string locals/formals, escaped value
+   rendering, deposit/force legality, and safe-point inspection across
+   suspended frames.
+8. Include literal bytes, callable provenance, object layout/version, and
+   transitive helper semantics in native-cache identity without embedding
+   addresses.
+9. Diagnose unsupported dynamic allocation, oversize values, invalid indices,
+   recursive callable use, incompatible formals, nonblocking string writes,
+   and mixed-language string boundaries.
+10. Add frontend, negative, elaboration, interpreter, LLVM O0/O2, task/function
+    suspension, debugger, output/callback, cold/warm, and edited-literal
     selective-cache evidence, then run the scheduled gate.
 
-Keep this batch to supported same-language scalar, packed-vector, enumeration,
-named-subtype, non-nested-record, and one-dimensional scalar-element-array
-whole-object ports with statically foldable defaults. General expression or
-aggregate actuals, dynamic defaults, mixed-language default binding,
-incremental configurations, and general overload resolution remain separate
-release-gate work.
+Keep this batch to byte-oriented same-language SystemVerilog strings in module
+procedural code and the existing bounded automatic function/task families.
+Unicode code-point semantics, classes, DPI, files, queues/dynamic arrays,
+associative containers, regex-style methods, mixed-language boundaries, and
+general heap allocation remain separate release-gate work.
 
 ## Working cadence
 
@@ -289,9 +295,9 @@ git log -5 --oneline --decorate
 ```
 
 History must contain Batch 66 commit `8822c79` (`feat: add VHDL non-value
-component generics`). Treat a newer pushed commit on the same branch as the
-authoritative continuation and read this file from that checkout before doing
-work.
+component generics`) followed by the Batch 67 component-default/open handoff.
+Treat a newer pushed commit on the same branch as the authoritative
+continuation and read this file from that checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -313,7 +319,7 @@ cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
 Because a new host is a new toolchain/environment boundary, establish its
-baseline once before changing behavior:
+   baseline once before changing behavior:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure
@@ -322,7 +328,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 67 below and return to focused tests until its tenth feature.
+   resume Batch 68 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -340,12 +346,12 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains
    `feat: add VHDL non-value component generics`.
-3. Begin batch 67 at item 1 above. Do not rerun batch 66's full regression
+3. Begin batch 68 at item 1 above. Do not rerun batch 67's full regression
    unless a later change can
-   affect component/configuration binding, hierarchy, cache identity, or
-   runtime behavior.
-4. Keep batch-67 work within bounded same-language component port defaults and
-   `open` actuals. Record intentional scope changes in this handoff before
+   affect string storage/runtime helpers, callable activation frames,
+   debugger values, cache identity, or runtime behavior.
+4. Keep batch-68 work within bounded same-language SystemVerilog mutable
+   strings. Record intentional scope changes in this handoff before
    implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -354,20 +360,22 @@ For a clean-context restart:
 The existing exact-LLVM build trees on the recorded development host are:
 
 ```sh
-cmake --build build/llvm22-ninja-debug --parallel 8
-cmake --build build/llvm22-ninja-release --parallel 8
+cmake --build build/gcc-debug --parallel 8
+cmake --build build/gcc-release --parallel 8
 ```
 
-Use a narrow test expression while batch 67 is in progress, for example:
+Use a narrow test expression while batch 68 is in progress, for example:
 
 ```sh
-ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
-  -R 'fsim\.(frontend|elaboration|llvm|application|source-line-budget)'
+ctest --test-dir build/gcc-debug --output-on-failure \
+  -R 'fsim\.(frontend|elaboration|llvm|application\.(sv_functions|sv_tasks|sv_suspending_tasks)|source-line-budget)'
 ```
 
-Both exact-LLVM build trees were rebuilt for feature batch 66. The configured
-test counts differ because the Release tree includes the fetched-Tcl
-relocation test; both recorded inventories are clean.
+The current host used warnings-as-errors Unix Makefiles trees at
+`build/gcc-debug` and `build/gcc-release` because Ninja was unavailable; both
+link the exact LLVM 22.1.8 backend. The portable Ninja commands above remain
+the preferred bootstrap when Ninja is installed. Both recorded 55-test
+inventories are clean after feature batch 67.
 
 Before declaring any row complete, consult:
 
