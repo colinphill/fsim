@@ -234,6 +234,11 @@ struct Type {
   // so two equally sized enumeration types never become assignment
   // compatible by accident.
   std::string nominal_type;
+  // Identity of the VHDL type or subtype declaration selected by this view.
+  // Unlike nominal_type, this changes when a non-nominal subtype declaration
+  // is selected and is used for source/cache provenance rather than type
+  // compatibility.
+  std::string vhdl_type_declaration;
   // Declaration-order spelling of a VHDL enumeration's literals. Identifier
   // literals are canonicalized case-insensitively; character literals retain
   // their quoted spelling. The ordinal is the vector index.

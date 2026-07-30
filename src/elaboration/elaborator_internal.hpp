@@ -411,6 +411,15 @@ void visit_generate_body_types(
     for (auto& signal : body.signals) {
         visitor(signal.type);
     }
+    for (auto& component :
+         body.vhdl_component_declarations) {
+        for (auto& generic : component.generics) {
+            visitor(generic.type);
+        }
+        for (auto& port : component.ports) {
+            visitor(port.type);
+        }
+    }
     for (auto& process : body.processes) {
         for (auto& variable : process.variables) {
             visitor(variable.type);
@@ -455,6 +464,15 @@ void visit_declared_types(
     }
     for (auto& signal : unit.signals) {
         visitor(signal.type);
+    }
+    for (auto& component :
+         unit.vhdl_component_declarations) {
+        for (auto& generic : component.generics) {
+            visitor(generic.type);
+        }
+        for (auto& port : component.ports) {
+            visitor(port.type);
+        }
     }
     visit_statement_types(
         unit.concurrent_statements, visitor);
@@ -1241,6 +1259,9 @@ private:
         const DesignUnit& selected,
         const DesignUnit* entity_override = nullptr);
 
+    const DesignUnit& resolved_vhdl_entity_interface(
+        const DesignUnit& entity);
+
     SpecializedUnit specialize_selected_unit(
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
@@ -1371,6 +1392,8 @@ private:
     const DesignUnit* active_vhdl_configuration_{};
     std::unordered_map<std::string, const DesignUnit*>
         vhdl_configurations_by_path_;
+    std::unordered_map<const DesignUnit*, DesignUnit>
+        resolved_vhdl_entity_interfaces_;
     std::unordered_map<
         std::string, const SystemCInstanceDescription*>
         systemc_instances_;

@@ -29,6 +29,7 @@ struct TemporaryDirectory {
 struct Capture {
   fsim::runtime::RunResult result;
   std::array<std::string, 3> values;
+  std::array<std::string, 2> packets;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   fsim::app::NativeCacheStatistics cache;
@@ -121,10 +122,13 @@ Capture run_once(
         [](const auto& item) {
           return item.first == "__component"
               && item.second.starts_with(
-                  "vhdl-component-binding-v2")
+                  "vhdl-component-binding-v3")
               && item.second.find(
                      "region=2;scope=;owner=work."
                      "component_runtime_profiles")
+                  != std::string::npos
+              && item.second.find(
+                     "component_runtime_profiles.vhd:")
                   != std::string::npos;
         }));
   }
@@ -174,7 +178,17 @@ Capture run_once(
       "component_runtime_top.default_output",
       "component_runtime_top.direct_output"};
   constexpr std::array<std::uint32_t, 3> values{10, 20, 30};
+  constexpr std::array<std::string_view, 2> packet_inputs{
+      "component_runtime_top.positional_packet_input",
+      "component_runtime_top.default_packet_input"};
+  constexpr std::array<std::string_view, 2> packet_outputs{
+      "component_runtime_top.positional_packet_output",
+      "component_runtime_top.default_packet_output"};
+  constexpr std::array<std::string_view, 2> packet_values{
+      "10101", "01010"};
   std::array<fsim::runtime::simir::SignalId, 3> output_ids{};
+  std::array<fsim::runtime::simir::SignalId, 2>
+      packet_output_ids{};
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const auto input = simulation.find_signal(inputs[index]);
     const auto output = simulation.find_signal(outputs[index]);
@@ -185,11 +199,30 @@ Capture run_once(
             bits(values[index])));
     output_ids[index] = *output;
   }
+  for (std::size_t index = 0;
+       index < packet_inputs.size(); ++index) {
+    const auto input =
+        simulation.find_signal(packet_inputs[index]);
+    const auto output =
+        simulation.find_signal(packet_outputs[index]);
+    assert(input && output);
+    simulation.deposit_signal(
+        *input,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            packet_values[index]));
+    packet_output_ids[index] = *output;
+  }
 
   capture.result = simulation.run();
   for (std::size_t index = 0; index < output_ids.size(); ++index) {
     capture.values[index] =
         simulation.read_signal(output_ids[index]).to_msb_string();
+  }
+  for (std::size_t index = 0;
+       index < packet_output_ids.size(); ++index) {
+    capture.packets[index] =
+        simulation.read_signal(
+            packet_output_ids[index]).to_msb_string();
   }
   return capture;
 }
@@ -202,6 +235,9 @@ void verify(const Capture& capture) {
   assert((capture.values
           == std::array<std::string, 3>{
               bits(15), bits(23), bits(30)}));
+  assert((capture.packets
+          == std::array<std::string, 2>{
+              "10101", "01010"}));
   assert(std::ranges::count_if(
              capture.points,
              [](const auto& point) {
@@ -238,15 +274,19 @@ int main() {
   {
     std::ofstream output(leaf, std::ios::binary);
     output << R"(
+use work.component_runtime_profiles.all;
 entity component_runtime_leaf is
   generic (entity_amount : integer := 9);
   port (
     entity_input : in integer;
-    entity_output : out integer);
+    entity_output : out integer;
+    entity_packet_input : in packet_t;
+    entity_packet_output : out packet_t);
 end entity;
 architecture rtl of component_runtime_leaf is
 begin
   entity_output <= entity_input + entity_amount;
+  entity_packet_output <= entity_packet_input;
 end architecture;
 
 entity component_runtime_stable is
@@ -269,10 +309,18 @@ end architecture;
         revised_profile ? "revised_input" : "component_input";
     const auto output_name =
         revised_profile ? "revised_output" : "component_output";
+    const auto member_name =
+        revised_profile ? "revised_payload" : "payload";
     std::ofstream output(
         profiles, std::ios::binary | std::ios::trunc);
     output << R"(
 package component_runtime_profiles is
+  type packet_t is record
+    )"
+           << member_name
+           << R"( : std_logic_vector(3 downto 0);
+    valid : bit;
+  end record;
   component component_runtime_leaf is
     generic ()"
            << amount_name
@@ -281,7 +329,9 @@ package component_runtime_profiles is
            << input_name
            << R"( : in integer; )"
            << output_name
-           << R"( : out integer);
+           << R"( : out integer;
+      component_packet_input : in packet_t;
+      component_packet_output : out packet_t);
   end component;
 end package;
 )";
@@ -291,9 +341,9 @@ end package;
   {
     std::ofstream output(hierarchy, std::ios::binary);
     output << R"(
-use work.component_runtime_profiles.all;
 entity component_runtime_top is
 end entity;
+use work.component_runtime_profiles.all;
 architecture rtl of component_runtime_top is
   signal positional_input : integer;
   signal positional_output : integer;
@@ -301,12 +351,24 @@ architecture rtl of component_runtime_top is
   signal default_output : integer;
   signal direct_input : integer;
   signal direct_output : integer;
+  signal positional_packet_input : packet_t;
+  signal positional_packet_output : packet_t;
+  signal default_packet_input : packet_t;
+  signal default_packet_output : packet_t;
 begin
   positional_child: component_runtime_leaf
     generic map (5)
-    port map (positional_input, positional_output);
+    port map (
+      positional_input,
+      positional_output,
+      positional_packet_input,
+      positional_packet_output);
   default_child: component_runtime_leaf
-    port map (default_input, default_output);
+    port map (
+      default_input,
+      default_output,
+      default_packet_input,
+      default_packet_output);
   direct_child: entity work.component_runtime_stable(rtl)
     port map (
       input_value => direct_input,

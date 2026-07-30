@@ -110,7 +110,7 @@ end architecture;
             });
         assert(identity != selected.parameter_identity_values.end());
         assert(identity->second.starts_with(
-            "vhdl-component-binding-v2;name=component_leaf"));
+            "vhdl-component-binding-v3;name=component_leaf"));
     }
     assert(std::ranges::any_of(
         specialization(
@@ -315,6 +315,198 @@ end architecture;
                "visible_component_profiles")
             != std::string::npos);
 
+    auto composite_types = fsim::frontend::parse_text(
+        "composite_component_types.vhd",
+        R"(
+package composite_component_types is
+  type mode_t is (idle, active, done);
+  subtype active_mode_t is mode_t range active to done;
+  type packet_t is record
+    payload : std_logic_vector(3 downto 0);
+    valid : bit;
+  end record;
+  type lane_t is array (natural range <>) of std_logic;
+  subtype nibble_t is lane_t(3 downto 0);
+  subtype ascending_nibble_t is lane_t(0 to 3);
+  subtype small_t is integer range 0 to 15;
+end package;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    auto composite_profiles = fsim::frontend::parse_text(
+        "composite_component_profiles.vhd",
+        R"(
+use work.composite_component_types.all;
+package composite_component_profiles is
+  component record_leaf is
+    port (value : in packet_t);
+  end component;
+  component enum_leaf is
+    port (value : in active_mode_t);
+  end component;
+  component array_leaf is
+    port (value : in nibble_t);
+  end component;
+  component array_leaf is
+    port (value : in ascending_nibble_t);
+  end component;
+  component scalar_leaf is
+    port (value : in small_t);
+  end component;
+  component selected_leaf is
+    port (
+      value : in work.composite_component_types.packet_t);
+  end component;
+  component overload_leaf is
+    port (value : in packet_t);
+  end component;
+  component overload_leaf is
+    port (value : in nibble_t);
+  end component;
+end package;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    auto composite_hierarchy = fsim::frontend::parse_text(
+        "composite_component_hierarchy.vhd",
+        R"(
+use work.composite_component_types.all;
+entity record_leaf is
+  port (target_value : in packet_t);
+end entity;
+architecture rtl of record_leaf is
+begin
+end architecture;
+architecture configured of record_leaf is
+begin
+end architecture;
+
+use work.composite_component_types.all;
+entity enum_leaf is
+  port (value : in active_mode_t);
+end entity;
+architecture rtl of enum_leaf is
+begin
+end architecture;
+
+use work.composite_component_types.all;
+entity array_leaf is
+  port (value : in nibble_t);
+end entity;
+architecture rtl of array_leaf is
+begin
+end architecture;
+
+use work.composite_component_types.all;
+entity scalar_leaf is
+  port (value : in small_t);
+end entity;
+architecture rtl of scalar_leaf is
+begin
+end architecture;
+
+entity selected_leaf is
+  port (
+    value : in work.composite_component_types.packet_t);
+end entity;
+architecture rtl of selected_leaf is
+begin
+end architecture;
+
+use work.composite_component_types.all;
+entity overload_leaf is
+  port (value : in packet_t);
+end entity;
+architecture rtl of overload_leaf is
+begin
+end architecture;
+
+entity composite_component_top is
+end entity;
+use work.composite_component_types.all;
+use work.composite_component_profiles.all;
+architecture rtl of composite_component_top is
+  signal packet_value : packet_t;
+  signal mode_value : active_mode_t;
+  signal lane_value : nibble_t;
+  signal scalar_value : small_t;
+  for configured_child : record_leaf
+    use entity work.record_leaf(configured)
+    port map (target_value => value);
+begin
+  configured_child: record_leaf port map (packet_value);
+  enum_child: enum_leaf port map (mode_value);
+  array_child: array_leaf port map (lane_value);
+  scalar_child: scalar_leaf port map (scalar_value);
+  selected_child: selected_leaf port map (packet_value);
+  overload_child: overload_leaf port map (packet_value);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(
+        composite_types.ok()
+        && composite_profiles.ok()
+        && composite_hierarchy.ok());
+    append_design(
+        composite_types.design,
+        std::move(composite_profiles.design));
+    append_design(
+        composite_types.design,
+        std::move(composite_hierarchy.design));
+    const auto composite_result =
+        fsim::elaboration::elaborate(
+            composite_types.design,
+            "vhdl:work.composite_component_top(rtl)");
+    if (!composite_result.ok()) {
+        for (const auto& diagnostic :
+             composite_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(composite_result.ok());
+    assert(
+        specialization(
+            composite_result,
+            "composite_component_top.configured_child").unit
+        == "vhdl:work.record_leaf(configured)");
+    for (const auto path : {
+             "composite_component_top.enum_child",
+             "composite_component_top.array_child",
+             "composite_component_top.scalar_child",
+             "composite_component_top.selected_child",
+             "composite_component_top.overload_child"}) {
+        assert(
+            specialization(composite_result, path).unit.ends_with(
+                "(rtl)"));
+    }
+    const auto& composite_child =
+        specialization(
+            composite_result,
+            "composite_component_top.configured_child");
+    for (const auto dependency : {
+             "composite_component_types.vhd",
+             "composite_component_profiles.vhd"}) {
+        assert(std::ranges::find(
+                   composite_child.source_dependencies,
+                   dependency)
+               != composite_child.source_dependencies.end());
+    }
+    const auto composite_identity = std::ranges::find_if(
+        composite_child.parameter_identity_values,
+        [](const auto& value) {
+          return value.first == "__component";
+        });
+    assert(
+        composite_identity
+            != composite_child.parameter_identity_values.end()
+        && composite_identity->second.starts_with(
+            "vhdl-component-binding-v3")
+        && composite_identity->second.find(
+               ";nominal=composite_component_types.vhd:")
+            != std::string::npos
+        && composite_identity->second.find(
+               ":type-source=composite_component_types.vhd:")
+            != std::string::npos);
+
     const auto hidden_sibling = elaborate_text(
         "hidden_sibling_component.vhd",
         R"(
@@ -408,6 +600,135 @@ end architecture;
     assert(!ambiguous_packages.ok());
     assert(has_diagnostic(
         ambiguous_packages, "FSIM-ELAB-VHCOMP-002"));
+
+    const auto nominal_profile_mismatch = elaborate_text(
+        "composite_component_nominal_mismatch.vhd",
+        R"(
+package first_record_types is
+  type packet_t is record
+    value : std_logic_vector(3 downto 0);
+  end record;
+end package;
+package second_record_types is
+  type packet_t is record
+    value : std_logic_vector(3 downto 0);
+  end record;
+end package;
+use work.second_record_types.all;
+entity nominal_profile_leaf is
+  port (target : in packet_t);
+end entity;
+architecture rtl of nominal_profile_leaf is
+begin
+end architecture;
+entity nominal_profile_top is
+end entity;
+use work.first_record_types.all;
+architecture rtl of nominal_profile_top is
+  signal value : packet_t;
+  component nominal_profile_leaf is
+    port (source : in packet_t);
+  end component;
+begin
+  child: nominal_profile_leaf port map (value);
+end architecture;
+)",
+        "vhdl:work.nominal_profile_top(rtl)");
+    assert(!nominal_profile_mismatch.ok());
+    assert(has_diagnostic(
+        nominal_profile_mismatch, "FSIM-ELAB-VHCOMP-007"));
+
+    const auto nominal_actual_mismatch = elaborate_text(
+        "composite_component_actual_mismatch.vhd",
+        R"(
+package component_record_types is
+  type first_packet_t is record
+    value : std_logic_vector(3 downto 0);
+  end record;
+  type second_packet_t is record
+    value : std_logic_vector(3 downto 0);
+  end record;
+end package;
+use work.component_record_types.all;
+entity nominal_actual_leaf is
+  port (target : in first_packet_t);
+end entity;
+architecture rtl of nominal_actual_leaf is
+begin
+end architecture;
+entity nominal_actual_top is
+end entity;
+use work.component_record_types.all;
+architecture rtl of nominal_actual_top is
+  signal value : second_packet_t;
+  component nominal_actual_leaf is
+    port (source : in first_packet_t);
+  end component;
+begin
+  child: nominal_actual_leaf port map (value);
+end architecture;
+)",
+        "vhdl:work.nominal_actual_top(rtl)");
+    assert(!nominal_actual_mismatch.ok());
+    assert(has_diagnostic(
+        nominal_actual_mismatch, "FSIM-ELAB-BIND-057"));
+
+    const auto composite_default = elaborate_text(
+        "composite_component_default.vhd",
+        R"(
+package component_default_types is
+  type packet_t is record
+    value : std_logic_vector(3 downto 0);
+  end record;
+end package;
+use work.component_default_types.all;
+entity composite_default_leaf is
+  port (target : in packet_t);
+end entity;
+architecture rtl of composite_default_leaf is
+begin
+end architecture;
+entity composite_default_top is
+end entity;
+use work.component_default_types.all;
+architecture rtl of composite_default_top is
+  signal value : packet_t;
+  component composite_default_leaf is
+    port (source : in packet_t := default_packet);
+  end component;
+begin
+  child: composite_default_leaf port map (value);
+end architecture;
+)",
+        "vhdl:work.composite_default_top(rtl)");
+    assert(!composite_default.ok());
+    assert(has_diagnostic(
+        composite_default, "FSIM-ELAB-VHCOMP-013"));
+
+    const auto missing_component_type = elaborate_text(
+        "missing_component_type.vhd",
+        R"(
+entity missing_component_type_leaf is
+  port (value : in bit);
+end entity;
+architecture rtl of missing_component_type_leaf is
+begin
+end architecture;
+entity missing_component_type_top is
+end entity;
+architecture rtl of missing_component_type_top is
+  signal value : bit;
+  component missing_component_type_leaf is
+    port (value : in missing_t);
+  end component;
+begin
+  child: missing_component_type_leaf port map (value);
+end architecture;
+)",
+        "vhdl:work.missing_component_type_top(rtl)");
+    assert(!missing_component_type.ok());
+    assert(has_diagnostic(
+        missing_component_type, "FSIM-ELAB-VHTYPE-001"));
 
     const auto missing_declaration = elaborate_text(
         "missing_component_declaration.vhd",

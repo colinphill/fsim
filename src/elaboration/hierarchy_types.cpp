@@ -96,6 +96,10 @@ using namespace elaboration_detail;
             [&](frontend::Type base,
                 const frontend::Type& derived)
                 -> std::optional<frontend::Type> {
+                if (!derived.vhdl_type_declaration.empty()) {
+                    base.vhdl_type_declaration =
+                        derived.vhdl_type_declaration;
+                }
                 const bool has_integer_constraint =
                     derived.integer_range_expression.has_value();
                 const bool has_discrete_constraint =
@@ -462,9 +466,6 @@ using namespace elaboration_detail;
         }
         resolve_generate_regions(unit.generate_regions);
     }
-
-
-
     DesignUnit HierarchyBuilder::effective_unit(
         const DesignUnit& selected,
         const DesignUnit* entity_override) {
@@ -759,6 +760,32 @@ using namespace elaboration_detail;
                          : entity->library)
                         + "." + entity->name});
         }
+        std::erase_if(
+            result.vhdl_component_declarations,
+            [](const auto& component) {
+              return component.region
+                  == frontend::VhdlComponentDeclarationRegion::
+                      Entity;
+            });
+        auto resolved_entity_components =
+            std::move(
+                effective_entity_declarations
+                    .vhdl_component_declarations);
+        for (auto& component : resolved_entity_components) {
+            component.region =
+                frontend::VhdlComponentDeclarationRegion::Entity;
+            component.owner_library =
+                entity->library.empty()
+                    ? std::string{"work"}
+                    : entity->library;
+            component.owner_name = entity->name;
+        }
+        result.vhdl_component_declarations.insert(
+            result.vhdl_component_declarations.begin(),
+            std::make_move_iterator(
+                resolved_entity_components.begin()),
+            std::make_move_iterator(
+                resolved_entity_components.end()));
         resolve_named_types(
             result, type_environment, true, false);
         for (const auto& [name, binding] : type_environment) {
@@ -1422,6 +1449,26 @@ using namespace elaboration_detail;
                 "packed aggregate boundary '" + path + "."
                     + port.name
                     + "' requires a same-language scalar/vector wrapper",
+                source);
+            return;
+        }
+        const bool port_record =
+            !port.type.packed_members.empty()
+            && !port.type.nominal_type.empty();
+        const bool actual_record =
+            !actual.packed_members.empty()
+            && !actual.nominal_type.empty();
+        if (!cross_language
+            && (port_record || actual_record)
+            && (!port_record
+                || !actual_record
+                || port.type.nominal_type
+                    != actual.nominal_type)) {
+            report(
+                "FSIM-ELAB-BIND-057",
+                "VHDL record boundary '" + path + "."
+                    + port.name
+                    + "' requires the same nominal record type",
                 source);
             return;
         }

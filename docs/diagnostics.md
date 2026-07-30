@@ -950,6 +950,7 @@ therefore excluded.
 | `FSIM-ELAB-VHCOMP-010` | error | A configuration binding map names an unknown component or entity formal. |
 | `FSIM-ELAB-VHCOMP-011` | error | Default component binding would cross languages and requires an explicit manifest binding. |
 | `FSIM-ELAB-VHCOMP-012` | error | No equally visible component overload matches the instance associations, modes, types, or dependent widths. |
+| `FSIM-ELAB-VHCOMP-013` | error | A bounded composite component port supplies a default that cannot be materialized as an omitted port actual. |
 | `FSIM-ELAB-SVTASK-001` | error | A bounded task call names no visible task. |
 | `FSIM-ELAB-SVTASK-003` | error | The visible bounded task set exceeds the representable SimIR call-stack capacity. |
 | `FSIM-ELAB-SVTASK-004` | error | More than one bounded task has the same visible name. |
@@ -1101,6 +1102,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-054` | error | Same-language VHDL enumeration subtype ranges cannot guarantee a range-safe alias in the port's data-flow direction. |
 | `FSIM-ELAB-BIND-055` | error | A VHDL array crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-056` | error | A same-language VHDL hierarchy boundary connects different nominal array types. |
+| `FSIM-ELAB-BIND-057` | error | A same-language VHDL hierarchy boundary connects different nominal record types. |
 
 ## Time, runtime, trace, and design cache
 

@@ -159,29 +159,36 @@ its child subtree. Version-2 recursive selection/reference identity, maps,
 selected targets, and transitive physical sources participate in specialization
 and native-cache provenance. Incremental configurations, dynamic or multi-index
 generate specifications, general block-specification ranges, positional
-binding-indication maps, complete default-binding rules, package-visible
-component interfaces, and mixed-language configuration references remain
-unsupported. This update supersedes the compact table's blanket statement that
-configurations are unavailable.
+binding-indication maps, complete default-binding rules, non-value component
+generics, and mixed-language configuration references remain unsupported. This
+update supersedes the compact table's blanket statement that configurations are
+unavailable.
 Bounded VHDL-2008 component declarations retain their architecture, entity,
 package, block, or selected-generate owner, lexical scope, declaration order,
-optional end name, value-generic defaults, and scalar/vector port types, modes,
-and default metadata. Component-style instances first select the nearest
+optional end name, value-generic defaults, and scalar/vector, enumeration,
+named-subtype, non-nested record, or one-dimensional scalar-element array port
+types, modes, and default metadata. Component-style instances first select the nearest
 lexically visible declarations, then directly visible package declarations.
 Equally visible overloads are filtered by association shape, modes, types, and
-specialization-dependent widths without leaking declarations into sibling
-regions. Named and positional generic/port associations are normalized against
-the selected declaration and mapped by formal position into a compatible
+specialization-dependent widths plus nominal composite identity, subtype
+constraints, and index direction without leaking declarations into sibling
+regions. Direct and selected package type marks resolve in the declaration's
+own visibility context; a package `use` does not re-export imported types.
+Named and positional generic/port associations are normalized against the
+selected declaration and mapped by formal position into a compatible
 same-library entity; absent an explicit configuration, the latest analyzed
 compatible architecture is selected. Architecture specifications and recursive
 configuration rules retain precedence and apply to that selected profile.
 Omitted component generics materialize the component declaration's default
-independently of the entity default. A version-2 component profile/binding
+independently of the entity default. Version-3 component profile/binding
 identity retains declaration region/scope/order, owner and package sources,
-profile, and target, so a visible-profile edit invalidates component consumers
-without invalidating unrelated direct-entity children.
-Non-value component generics, composite component interfaces, executable
-omitted port defaults, mixed-language default binding, incremental
+resolved nominal/subtype provenance, profile, and target, so a composite type
+or visible-profile edit invalidates component consumers without invalidating
+unrelated direct-entity children. Whole-signal composite ports execute through
+the existing same-language nominal boundary model.
+Non-value component generics, nested or otherwise unsupported composite
+interfaces, composite expression/aggregate actuals, executable omitted port
+defaults, mixed-language default binding, incremental
 configurations, complete library analysis-order semantics, and general
 overload resolution remain unsupported.
 Operator-symbol designators, unconstrained/composite parameters or results,

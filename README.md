@@ -103,10 +103,12 @@ The current tree contains:
   equivalence;
 - bounded VHDL-2008 component declarations in architecture, entity, package,
   block, and selected-generate regions with retained value-generic and
-  scalar/vector port profiles; lexical/package visibility, profile overload
-  selection, formal-aware named/positional associations, latest-analyzed
-  same-library architecture default binding, configuration-map precedence,
-  and versioned scope/source selective-cache identity;
+  scalar/vector, enumeration, named-subtype, non-nested record, and
+  one-dimensional scalar-element array port profiles; lexical/package type
+  visibility, nominal/constraint-aware overload selection, formal-aware
+  named/positional associations, latest-analyzed same-library architecture
+  default binding, configuration-map precedence, whole-signal composite
+  execution, and versioned scope/type-source selective-cache identity;
 - bounded SystemVerilog packages with immutable integral
   parameters/localparams, packed integral typedef aliases, and packed enum
   types/enumerators plus non-nested packed struct and equal-width packed union

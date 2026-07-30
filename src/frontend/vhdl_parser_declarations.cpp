@@ -38,6 +38,7 @@ void VhdlParser::parse_type_declaration(
         start.span.source_name + ":"
         + std::to_string(start.span.begin.offset) + ":"
         + canonical_name;
+    type.vhdl_type_declaration = type.nominal_type;
     VhdlArrayInfo array;
 
     expect(
@@ -197,6 +198,7 @@ void VhdlParser::parse_type_declaration(
         start.span.source_name + ":"
         + std::to_string(start.span.begin.offset) + ":"
         + canonical_name;
+    type.vhdl_type_declaration = type.nominal_type;
     std::vector<EnumLiteralDeclaration> literals;
     std::unordered_set<std::string> literal_names;
     while (!at_end()
@@ -312,6 +314,11 @@ void VhdlParser::parse_type_declaration(
   type.spelling = canonical_name;
   type.domain = ValueDomain::Bit2;
   type.packed_aggregate = PackedAggregateKind::Struct;
+  type.nominal_type =
+      start.span.source_name + ":"
+      + std::to_string(start.span.begin.offset) + ":"
+      + canonical_name;
+  type.vhdl_type_declaration = type.nominal_type;
   std::unordered_set<std::string> member_names;
   while (!at_end()
          && !(keyword("end", 0, true)
@@ -472,6 +479,10 @@ void VhdlParser::parse_subtype_declaration(
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-134");
   auto type = parse_vhdl_type(true, true);
+  type.vhdl_type_declaration =
+      start.span.source_name + ":"
+      + std::to_string(start.span.begin.offset) + ":"
+      + canonical_name;
   expect(
       TokenKind::Semicolon,
       "';' after subtype declaration",

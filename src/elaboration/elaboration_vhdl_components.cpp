@@ -37,6 +37,7 @@ std::string type_profile(
     output << static_cast<int>(type.domain)
            << ";spelling=" << type.spelling
            << ";named=" << type.named_type
+           << ";nominal=" << type.nominal_type
            << ";signed=" << type.is_signed;
     if (type.packed_range) {
         output << ";packed=" << type.packed_range->left << ':'
@@ -66,7 +67,104 @@ std::string type_profile(
                << ':'
                << type.integer_range_expression->descending;
     }
+    if (type.integer_base_range) {
+        output << ";integer-base="
+               << type.integer_base_range->left << ':'
+               << type.integer_base_range->right << ':'
+               << type.integer_base_range->descending;
+    } else if (type.integer_base_range_expression) {
+        output << ";integer-base-expr="
+               << expression_profile(
+                      type.integer_base_range_expression->left, names)
+               << ':'
+               << expression_profile(
+                      type.integer_base_range_expression->right, names)
+               << ':'
+               << type.integer_base_range_expression->descending;
+    }
+    for (const auto& literal : type.enumeration_literals) {
+        output << ";literal=" << literal;
+    }
+    if (type.enumeration_range) {
+        output << ";enum=" << type.enumeration_range->left << ':'
+               << type.enumeration_range->right << ':'
+               << type.enumeration_range->descending;
+    } else if (type.enumeration_range_expression) {
+        output << ";enum-expr="
+               << expression_profile(
+                      type.enumeration_range_expression->left, names)
+               << ':'
+               << expression_profile(
+                      type.enumeration_range_expression->right, names)
+               << ':'
+               << type.enumeration_range_expression->descending;
+    }
+    if (type.enumeration_base_range) {
+        output << ";enum-base="
+               << type.enumeration_base_range->left << ':'
+               << type.enumeration_base_range->right << ':'
+               << type.enumeration_base_range->descending;
+    } else if (type.enumeration_base_range_expression) {
+        output << ";enum-base-expr="
+               << expression_profile(
+                      type.enumeration_base_range_expression->left,
+                      names)
+               << ':'
+               << expression_profile(
+                      type.enumeration_base_range_expression->right,
+                      names)
+               << ':'
+               << type.enumeration_base_range_expression->descending;
+    }
+    output << ";aggregate="
+           << static_cast<int>(type.packed_aggregate);
+    for (const auto& member : type.packed_members) {
+        output << ";member=" << member.name << ':'
+               << static_cast<int>(member.domain) << ':'
+               << member.spelling << ':' << member.is_signed
+               << ':' << member.lsb_offset;
+        if (member.packed_range) {
+            output << ':' << member.packed_range->left << ':'
+                   << member.packed_range->right << ':'
+                   << member.packed_range->descending;
+        } else if (member.packed_range_expression) {
+            output << ":expr:"
+                   << expression_profile(
+                          member.packed_range_expression->left, names)
+                   << ':'
+                   << expression_profile(
+                          member.packed_range_expression->right, names)
+                   << ':'
+                   << member.packed_range_expression
+                          ->descending.value_or(true);
+        }
+    }
+    if (type.vhdl_array) {
+        output << ";array=" << type.vhdl_array->index_subtype
+               << ':' << type.vhdl_array->element_spelling
+               << ':' << type.vhdl_array->element_named_type
+               << ':'
+               << static_cast<int>(
+                      type.vhdl_array->element_domain)
+               << ':' << type.vhdl_array->unconstrained;
+        if (type.vhdl_array->index_base_range) {
+            output << ':'
+                   << type.vhdl_array->index_base_range->left
+                   << ':'
+                   << type.vhdl_array->index_base_range->right
+                   << ':'
+                   << type.vhdl_array
+                          ->index_base_range->descending;
+        }
+    }
     return output.str();
+}
+
+std::string type_provenance_profile(
+    const frontend::Type& type) {
+    return type.vhdl_type_declaration.empty()
+        ? std::string{"<builtin>"}
+        : type.vhdl_type_declaration;
 }
 
 std::unordered_map<std::string, std::string>
@@ -164,19 +262,87 @@ bool association_shape_matches(
 
 bool known_type_matches(
     const frontend::Type& formal,
-    const frontend::Type& actual) {
+    const frontend::Type& actual,
+    const frontend::PortDirection direction) {
     if (formal.domain != actual.domain
         || formal.is_signed != actual.is_signed) {
         return false;
     }
     if (!formal.named_type.empty()
-        && !actual.named_type.empty()
-        && formal.named_type != actual.named_type) {
+        || !actual.named_type.empty()) {
+        return formal.named_type == actual.named_type
+            && formal.spelling == actual.spelling;
+    }
+    const bool formal_nominal =
+        !formal.packed_members.empty()
+        || !formal.enumeration_literals.empty()
+        || formal.vhdl_array.has_value();
+    const bool actual_nominal =
+        !actual.packed_members.empty()
+        || !actual.enumeration_literals.empty()
+        || actual.vhdl_array.has_value();
+    if (formal_nominal != actual_nominal
+        || (formal_nominal
+            && formal.nominal_type != actual.nominal_type)) {
         return false;
     }
-    if (formal.packed_range && actual.packed_range) {
-        return formal.packed_range->width()
-            == actual.packed_range->width();
+    if (formal.width() && actual.width()
+        && formal.width() != actual.width()) {
+        return false;
+    }
+    if (formal.packed_range
+        && actual.packed_range
+        && (formal.packed_range->left != actual.packed_range->left
+            || formal.packed_range->right
+                != actual.packed_range->right
+            || formal.packed_range->descending
+                != actual.packed_range->descending)) {
+        return false;
+    }
+    const auto directional_bounds_match =
+        [&](const auto formal_bounds,
+            const auto actual_bounds) {
+          const auto formal_low =
+              std::min(formal_bounds.first, formal_bounds.second);
+          const auto formal_high =
+              std::max(formal_bounds.first, formal_bounds.second);
+          const auto actual_low =
+              std::min(actual_bounds.first, actual_bounds.second);
+          const auto actual_high =
+              std::max(actual_bounds.first, actual_bounds.second);
+          if (direction == frontend::PortDirection::Input) {
+              return formal_low <= actual_low
+                  && formal_high >= actual_high;
+          }
+          if (direction == frontend::PortDirection::Output) {
+              return actual_low <= formal_low
+                  && actual_high >= formal_high;
+          }
+          return formal_low == actual_low
+              && formal_high == actual_high;
+        };
+    if (formal.integer_range && actual.integer_range
+        && !directional_bounds_match(
+            std::pair{
+                formal.integer_range->left,
+                formal.integer_range->right},
+            std::pair{
+                actual.integer_range->left,
+                actual.integer_range->right})) {
+        return false;
+    }
+    if (formal.enumeration_range
+        && actual.enumeration_range
+        && (!directional_bounds_match(
+                std::pair{
+                    formal.enumeration_range->left,
+                    formal.enumeration_range->right},
+                std::pair{
+                    actual.enumeration_range->left,
+                    actual.enumeration_range->right})
+            || formal.enumeration_range->descending
+                != actual.enumeration_range->descending)) {
+        return false;
     }
     return true;
 }
@@ -244,7 +410,9 @@ bool component_actual_profile_matches(
         }
         if (actual_type != nullptr
             && !known_type_matches(
-                formal->type, *actual_type)) {
+                formal->type,
+                *actual_type,
+                formal->direction)) {
             return false;
         }
     }
@@ -299,7 +467,7 @@ std::string component_identity(
     const DesignUnit& target) {
     const auto names = generic_placeholders(declaration.generics);
     std::ostringstream output;
-    output << "vhdl-component-binding-v2;name="
+    output << "vhdl-component-binding-v3;name="
            << declaration.name
            << ";region="
            << static_cast<int>(declaration.region)
@@ -312,6 +480,8 @@ std::string component_identity(
         output << ";generic=" << generic.name
                << ':' << static_cast<int>(generic.kind)
                << ':' << type_profile(generic.type, names)
+               << ":type-source="
+               << type_provenance_profile(generic.type)
                << ":default=";
         if (generic.default_value.valid()) {
             output << expression_profile(
@@ -324,6 +494,8 @@ std::string component_identity(
         output << ";port=" << port.name
                << ':' << static_cast<int>(port.direction)
                << ':' << type_profile(port.type, names)
+               << ":type-source="
+               << type_provenance_profile(port.type)
                << ":default=";
         if (port.default_value) {
             output << expression_profile(*port.default_value, names);
@@ -524,6 +696,83 @@ std::vector<std::size_t> port_mapping(
 
 }  // namespace
 
+const DesignUnit&
+HierarchyBuilder::resolved_vhdl_entity_interface(
+    const DesignUnit& entity) {
+    if (const auto cached =
+            resolved_vhdl_entity_interfaces_.find(&entity);
+        cached != resolved_vhdl_entity_interfaces_.end()) {
+        return cached->second;
+    }
+
+    auto visibility = entity;
+    visibility.type_aliases.clear();
+    visibility.vhdl_component_declarations.clear();
+    visibility.signals.clear();
+    visibility.processes.clear();
+    visibility.instances.clear();
+    visibility.generate_regions.clear();
+    visibility.concurrent_statements.clear();
+    visibility.functions.clear();
+    visibility.tasks.clear();
+    visibility.procedures.clear();
+    visibility.generic_function_templates.clear();
+    visibility.generic_procedure_templates.clear();
+    visibility.generic_function_instances.clear();
+    visibility.generic_procedure_instances.clear();
+
+    std::vector<frontend::VhdlContextItem> expanded_context;
+    std::vector<const DesignUnit*> context_stack;
+    const auto owner_library =
+        entity.library.empty()
+            ? std::string{"work"}
+            : entity.library;
+    expand_vhdl_context_references(
+        visibility,
+        entity.vhdl_context,
+        expanded_context,
+        context_stack,
+        owner_library);
+    std::vector<const DesignUnit*> import_stack;
+    NamedTypeEnvironment type_environment;
+    import_vhdl_package_constants(
+        visibility,
+        expanded_context,
+        import_stack,
+        type_environment);
+    import_qualified_vhdl_package_constants(
+        visibility, import_stack);
+    import_qualified_vhdl_package_types(
+        visibility, type_environment, import_stack);
+    for (const auto& parameter : entity.parameters) {
+        if (parameter.kind != frontend::ParameterKind::Type) {
+            continue;
+        }
+        type_environment.insert_or_assign(
+            parameter.name,
+            NamedTypeBinding{
+                {},
+                owner_library + "." + entity.name,
+                true});
+    }
+
+    DesignUnit resolved;
+    resolved.kind = entity.kind;
+    resolved.language = entity.language;
+    resolved.library = entity.library;
+    resolved.name = entity.name;
+    resolved.primary_name = entity.primary_name;
+    resolved.parameters = entity.parameters;
+    resolved.ports = entity.ports;
+    resolved.span = entity.span;
+    resolved.source_dependencies =
+        std::move(visibility.source_dependencies);
+    resolve_named_types(resolved, type_environment, true);
+    return resolved_vhdl_entity_interfaces_
+        .emplace(&entity, std::move(resolved))
+        .first->second;
+}
+
 HierarchyBuilder::ConfiguredVhdlInstance
 HierarchyBuilder::bind_vhdl_component_instance(
     const DesignUnit& unit,
@@ -582,18 +831,21 @@ HierarchyBuilder::bind_vhdl_component_instance(
         const frontend::VhdlComponentDeclaration*> matching;
     const auto parent_library = normalized_library(unit);
     const DesignUnit* default_entity_profile = nullptr;
+    const DesignUnit* default_entity_declaration = nullptr;
     std::size_t default_entity_count = 0;
     for (const auto& candidate : parsed_.units) {
         if (candidate.kind == frontend::UnitKind::VhdlEntity
             && candidate.name == instance.unit_name
             && normalized_library(candidate)
                 == parent_library) {
-            default_entity_profile = &candidate;
+            default_entity_declaration = &candidate;
             ++default_entity_count;
         }
     }
-    if (default_entity_count != 1) {
-        default_entity_profile = nullptr;
+    if (default_entity_count == 1) {
+        default_entity_profile =
+            &resolved_vhdl_entity_interface(
+                *default_entity_declaration);
     }
     std::ranges::copy_if(
         visible,
@@ -632,6 +884,22 @@ HierarchyBuilder::bind_vhdl_component_instance(
         return result;
     }
     const auto& component = *matching.front();
+    if (std::ranges::any_of(
+            component.ports,
+            [](const auto& port) {
+              return port.default_value.has_value()
+                  && (!port.type.packed_members.empty()
+                      || !port.type.enumeration_literals.empty()
+                      || port.type.vhdl_array.has_value());
+            })) {
+        report(
+            "FSIM-ELAB-VHCOMP-013",
+            "component '" + component.name
+                + "' uses an unsupported composite port default",
+            component.span);
+        result.valid = false;
+        return result;
+    }
 
     frontend::Instance normalized = instance;
     normalized.parameter_overrides.clear();
@@ -787,6 +1055,7 @@ HierarchyBuilder::bind_vhdl_component_instance(
         result.valid = false;
         return result;
     }
+    entity = &resolved_vhdl_entity_interface(*entity);
 
     bool profile_valid = true;
     if (component.generics.size() != entity->parameters.size()) {
@@ -1089,6 +1358,43 @@ HierarchyBuilder::bind_vhdl_component_instance(
             == result.target->source_dependencies.end()) {
         result.target->source_dependencies.push_back(
             component_source);
+    }
+    std::unordered_set<std::string> type_declarations;
+    const auto collect_type_declaration =
+        [&](const frontend::Type& type) {
+          if (!type.vhdl_type_declaration.empty()) {
+              type_declarations.insert(
+                  type.vhdl_type_declaration);
+          }
+        };
+    for (const auto& generic : component.generics) {
+        collect_type_declaration(generic.type);
+    }
+    for (const auto& port : component.ports) {
+        collect_type_declaration(port.type);
+    }
+    const auto append_type_dependency =
+        [&](const std::string& dependency) {
+          if (!dependency.empty()
+              && dependency
+                  != frontend::physical_source(
+                         result.target->span)
+              && std::ranges::find(
+                     result.target->source_dependencies,
+                     dependency)
+                  == result.target->source_dependencies.end()) {
+              result.target->source_dependencies.push_back(
+                  dependency);
+          }
+        };
+    for (const auto& source_unit : parsed_.units) {
+        for (const auto& alias : source_unit.type_aliases) {
+            if (type_declarations.contains(
+                    alias.type.vhdl_type_declaration)) {
+                append_type_dependency(std::string{
+                    frontend::physical_source(alias.span)});
+            }
+        }
     }
     if (result.configuration_rule != nullptr) {
         const auto configuration_source = std::string{

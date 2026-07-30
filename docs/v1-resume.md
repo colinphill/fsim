@@ -9,16 +9,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-64 cadence checkpoint based
-  on `d1a3057`; batches 54–64 are included in the checkpoint commit.
+- Implementation baseline: completed feature-batch-65 cadence checkpoint; the
+  preceding batches 54–64 checkpoint is `31d6def`.
 - The source-size refactor is complete: all 263 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 1,987 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 54
-  configured tests in 318.53 seconds, and Release passed all 55 configured
-  tests in 130.33 seconds on 2026-07-30.
-- The diagnostic catalog covers all 1,069 production codes.
-- No CI state was inspected during feature batches 54–64 or this handoff.
+  configured tests in 319.51 seconds, and Release passed all 55 configured
+  tests in 132.56 seconds on 2026-07-30.
+- The diagnostic catalog covers all 1,071 production codes.
+- No CI state was inspected during feature batch 65 or this handoff.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -30,7 +30,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, automatic integral functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded component declarations with deterministic default binding now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, immutable string parameters, automatic integral functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with deterministic default binding now have interpreter/O0/O2/cache evidence; wider/complete typing, runtime strings, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, files, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -95,11 +95,14 @@ not rebuilt:
   equivalence;
 - bounded VHDL-2008 component declarations in architecture, entity, package,
   block, and selected-generate regions with retained value-generic and
-  scalar/vector port profiles, nearest lexical/package visibility, overload
-  selection by association/mode/type/dependent width, named/positional formal
-  normalization, latest-analyzed compatible same-library default binding,
-  configuration-map precedence, version-2 scope/source/target identity, and
-  interpreter/LLVM O0/O2/debugger/cache equivalence;
+  scalar/vector, enumeration, named-subtype, non-nested-record, and
+  one-dimensional scalar-element-array port profiles; nearest lexical/package
+  visibility without package-use re-export; overload selection by
+  association/mode/nominal type/constraint/direction/dependent width;
+  named/positional formal normalization; latest-analyzed compatible
+  same-library default binding; configuration-map precedence; version-3
+  scope/source/type/target identity; and interpreter/LLVM
+  O0/O2/debugger/cache equivalence;
 - packed Bit2, Logic4, and exact Logic9 values, wide-value runtime kernels,
   process-owned drivers, standard resolution, delayed/projected transactions,
   NBA/update writes, dynamic packed indexing, and committed-change visibility;
@@ -162,8 +165,8 @@ document merely because the parser accepts a related form.
 
 - Complete configuration semantics beyond the bounded declaration/specification
   slice; full libraries, packages/bodies, and contexts; generics; component
-  composite interfaces and non-value generics; incremental configurations and
-  complete library analysis order; direct instantiation; blocks and generates.
+  non-value generics; incremental configurations and complete library analysis
+  order; direct instantiation; blocks and generates.
 - Finish name/overload resolution, constant evaluation, legality, resolution
   functions, complete synthesizable statements, and full promised composite
   type/aggregate/attribute behavior.
@@ -214,43 +217,38 @@ opaque native session/object model already used by Tcl.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 65: bounded VHDL-2008 composite component
-profiles**:
+Resume with **feature batch 66: bounded VHDL-2008 non-value component
+generics**:
 
-1. Extend component-profile type ownership so package, entity, architecture,
-   block, and selected-generate declarations retain resolved nominal type and
-   subtype provenance.
-2. Accept existing bounded enumeration, record, one-dimensional user-array,
-   and named scalar/vector subtype indications in component port profiles.
-3. Resolve local, directly visible package, and selected package type marks in
-   component declarations with the same source dependency rules as entity
-   interfaces.
-4. Preserve nominal record/enumeration/array identity and scalar/vector subtype
-   constraints while normalizing component and entity formals by position.
-5. Select equally visible component overloads by nominal composite type,
-   subtype constraint/direction, port mode, and existing value-generic
-   specialization.
-6. Bind whole-signal composite actuals through component formals into compatible
-   entity ports without flattening away language-local nominal legality.
-7. Compose architecture/configuration port maps after composite component-formal
-   normalization and retain existing direct-entity isolation.
-8. Include resolved type declarations, subtype constraints, owning package
-   sources, and selected composite profile in versioned specialization/cache
-   identity.
-9. Diagnose missing/ambiguous type marks, nominal mismatches, incompatible
-   constraints/directions/modes, unsupported composite defaults, illegal maps,
-   and implicit mixed-language defaults.
-10. Add frontend, negative, elaboration, package/local type visibility,
-    overload/configuration hierarchy, interpreter/LLVM O0/O2, debugger,
-    cold/warm, and edited-type-source selective-cache evidence, then run the
-    scheduled gate.
+1. Retain component generic kinds and profiles for the existing interface
+   type, function, procedure, and package families.
+2. Parse bounded type/function/procedure/package generics in component
+   declarations across the existing declarative regions.
+3. Resolve each formal in declaration order so dependent component ports can
+   reference earlier non-value generic formals.
+4. Normalize explicit, omitted-default, and box actuals against the selected
+   component declaration before target binding.
+5. Match same-language component and entity non-value generic profiles by
+   kind, callable/package profile, defaults, and formal position.
+6. Select equally visible component overloads after specializing dependent
+   ports through their normalized non-value generic maps.
+7. Compose architecture specifications and recursive configuration maps
+   through non-value component formals while preserving direct-entity
+   isolation.
+8. Include canonical non-value formal profiles, selected actual identities,
+   dependencies, and target mappings in version-4 component identity.
+9. Diagnose missing/ambiguous/wrong-kind actuals, incompatible profiles,
+   illegal defaults/boxes/maps, recursion, and implicit cross-language
+   binding.
+10. Add frontend, negative, elaboration, visibility/overload/configuration,
+    runtime, debugger, interpreter/LLVM O0/O2, cold/warm, and edited-source
+    selective-cache evidence, then run the scheduled gate.
 
-Keep this batch to same-language whole-signal ports over the existing bounded
-enumeration, non-nested packed record, one-dimensional scalar-element
-user-array, and named scalar/vector subtype families. Composite aggregates as
-port actuals, non-value component generics, executable omitted port defaults,
-incremental configurations, mixed-language default binding, and general
-overload resolution remain separate release-gate work.
+Keep this batch to the existing bounded same-language interface type,
+function, time-free procedure, and package generic families. General
+composite expression actuals, new generic families, nested package/template
+forms, incremental configurations, mixed-language component binding, and
+general overload resolution remain separate release-gate work.
 
 ## Working cadence
 
@@ -284,12 +282,12 @@ For a clean-context restart:
    release authority, and `docs/implementation-plan.md` only when historical
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains
-   `feat: complete v1 feature batches 54 through 64`.
-3. Begin batch 65 at item 1 above. Do not rerun batch 64's full regression
+   `feat: add VHDL composite component profiles`.
+3. Begin batch 66 at item 1 above. Do not rerun batch 65's full regression
    unless a later change can
    affect component/configuration binding, hierarchy, cache identity, or
    runtime behavior.
-4. Keep batch-65 work within bounded VHDL-2008 composite component profiles.
+4. Keep batch-66 work within bounded VHDL-2008 non-value component generics.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -302,14 +300,14 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 65 is in progress, for example:
+Use a narrow test expression while batch 66 is in progress, for example:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
   -R 'fsim\.(frontend|elaboration|llvm|application|source-line-budget)'
 ```
 
-Both exact-LLVM build trees were rebuilt for feature batch 64. The configured
+Both exact-LLVM build trees were rebuilt for feature batch 65. The configured
 test counts differ because the Release tree includes the fetched-Tcl
 relocation test; both recorded inventories are clean.
 

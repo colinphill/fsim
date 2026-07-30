@@ -405,8 +405,24 @@ HierarchyBuilder::HierarchyBuilder(
                         };
                     add_alias(declaration.name);
                 }
-                for (const auto& alias :
-                     specialized.unit.type_aliases) {
+                for (const auto& declared_alias :
+                     package->type_aliases) {
+                    const auto resolved_alias =
+                        std::ranges::find_if(
+                            specialized.unit.type_aliases,
+                            [&](const auto& candidate) {
+                              return candidate.name
+                                      == declared_alias.name
+                                  && candidate.span.source_name
+                                      == declared_alias.span.source_name
+                                  && candidate.span.begin.offset
+                                      == declared_alias.span.begin.offset;
+                            });
+                    const auto& alias =
+                        resolved_alias
+                                == specialized.unit.type_aliases.end()
+                            ? declared_alias
+                            : *resolved_alias;
                     if (!import_all
                         && alias.name != parts[2]) {
                         continue;
@@ -583,8 +599,28 @@ HierarchyBuilder::HierarchyBuilder(
                             generic);
                     }
                 }
-                for (auto component :
+                for (const auto& declared_component :
                      package->vhdl_component_declarations) {
+                    const auto resolved_component =
+                        std::ranges::find_if(
+                            specialized.unit
+                                .vhdl_component_declarations,
+                            [&](const auto& candidate) {
+                              return candidate.name
+                                      == declared_component.name
+                                  && candidate.span.source_name
+                                      == declared_component
+                                             .span.source_name
+                                  && candidate.span.begin.offset
+                                      == declared_component
+                                             .span.begin.offset;
+                            });
+                    auto component =
+                        resolved_component
+                                == specialized.unit
+                                       .vhdl_component_declarations.end()
+                            ? declared_component
+                            : *resolved_component;
                     if (!import_all
                         && component.name != parts[2]) {
                         continue;
@@ -596,8 +632,22 @@ HierarchyBuilder::HierarchyBuilder(
                     component.owner_library =
                         requested_library;
                     component.owner_name = package->name;
-                    component_imports.push_back(
-                        std::move(component));
+                    if (std::ranges::none_of(
+                            component_imports,
+                            [&](const auto& existing) {
+                              return existing.owner_library
+                                          == component.owner_library
+                                  && existing.owner_name
+                                          == component.owner_name
+                                  && existing.name == component.name
+                                  && existing.span.source_name
+                                          == component.span.source_name
+                                  && existing.span.begin.offset
+                                          == component.span.begin.offset;
+                            })) {
+                        component_imports.push_back(
+                            std::move(component));
+                    }
                 }
                 if (!found_selected) {
                     report(

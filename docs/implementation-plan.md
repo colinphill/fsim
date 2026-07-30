@@ -3514,6 +3514,66 @@ LLVM 22.1.8 warnings-as-errors Debug regression passed all 54 configured tests
 in 318.53 seconds, and Release passed all 55 configured tests in 130.33 seconds
 on 2026-07-30. No CI state was inspected.
 
+### Sixty-fifth feature batch — VHDL-2008 composite component profiles
+
+The completed ten-feature architecture-gate slice is:
+
+1. Retain a resolved nominal base identity separately from the selected
+   VHDL type or subtype declaration and its physical source provenance.
+2. Accept existing bounded enumeration, named scalar/vector subtype,
+   non-nested record, and one-dimensional scalar-element user-array type
+   indications in component port profiles.
+3. Resolve local, directly visible package, and selected package type marks in
+   the owning component region without re-exporting package imports.
+4. Preserve nominal record/enumeration/array identity, layout, bounds, and
+   direction while normalizing component and entity formals by position.
+5. Select equally visible component overloads by nominal type, subtype
+   constraint/direction, mode, association shape, and value-generic
+   specialization.
+6. Bind whole-signal composite actuals into compatible same-language entity
+   ports while rejecting structurally equal but nominally distinct records.
+7. Compose architecture specifications and recursive configuration port maps
+   after composite component-formal normalization.
+8. Define version-3 component identity over the resolved nominal layout,
+   constraints, type/subtype sources, owning packages, profile, and target.
+9. Diagnose missing or ambiguous type marks, nominal mismatches, incompatible
+   constraints/modes, unsupported composite defaults, illegal maps, and
+   implicit mixed-language defaults.
+10. Add frontend, negative, elaboration, package visibility,
+    overload/configuration, runtime, debugger, interpreter/LLVM O0/O2,
+    cold/warm, and edited-type-source selective-cache evidence.
+
+The executable subset remains same-language VHDL and carries whole-signal
+values over the existing bounded enumeration, non-nested packed-record,
+one-dimensional scalar-element user-array, and named scalar/vector subtype
+families. Entity interfaces are resolved in their own declaration visibility
+context, component declarations in package imports retain specialized type
+profiles, and wildcard or selected package use no longer leaks declarations
+imported by that package.
+
+Composite conformance is nominal: records and user arrays must share the
+declared family, while scalar, vector, enumeration, and array subtype bounds
+and direction participate in overload and target matching. The runtime
+differential copies packed record values through two component children,
+compares interpreter and LLVM O0/O2 state and debugger execution points,
+requires cold/warm cache behavior, and edits only the package record layout to
+invalidate component consumers while an unrelated direct child remains
+stable.
+
+Composite aggregates as port actuals, non-value component generics,
+executable omitted composite port defaults, incremental configurations,
+mixed-language default binding, nested records, multidimensional or composite-
+element arrays, and general overload resolution remain outside this bounded
+slice.
+
+The focused warnings-as-errors frontend, elaboration, diagnostic-catalog,
+source-budget, component, record, package-record, subtype, enumeration, and
+array gates passed. The catalog now covers 1,071 production codes and the
+source gate covers 263 authored files with an empty allowlist and a maximum of
+1,987 lines. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed
+all 54 configured tests in 319.51 seconds, and Release passed all 55 configured
+tests in 132.56 seconds on 2026-07-30. No CI state was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

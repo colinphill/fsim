@@ -96,8 +96,22 @@ end architecture;
       "component_visibility.vhd",
       R"(
 package component_profiles is
+  type mode_t is (idle, active);
+  type packet_t is record
+    payload : std_logic_vector(3 downto 0);
+    valid : bit;
+  end record;
+  type lane_t is array (natural range <>) of std_logic;
+  subtype nibble_t is lane_t(3 downto 0);
   component shared_leaf is
     port (value : in integer);
+  end component;
+  component composite_leaf is
+    port (
+      mode : in mode_t;
+      packet : in packet_t;
+      lane : in nibble_t;
+      selected_packet : in component_profiles.packet_t);
   end component;
 end package;
 
@@ -140,12 +154,26 @@ end architecture;
   require(
       visibility.design.units[0]
               .vhdl_component_declarations.size()
-              == 1
+              == 2
           && visibility.design.units[0]
                  .vhdl_component_declarations.front()
                  .region
               == VhdlComponentDeclarationRegion::Package,
       "package component ownership retained");
+  const auto& composite_component =
+      visibility.design.units[0]
+          .vhdl_component_declarations[1];
+  require(
+      composite_component.ports.size() == 4
+          && composite_component.ports[0].type.named_type
+              == "mode_t"
+          && composite_component.ports[1].type.named_type
+              == "packet_t"
+          && composite_component.ports[2].type.named_type
+              == "nibble_t"
+          && composite_component.ports[3].type.named_type
+              == "component_profiles.packet_t",
+      "composite and selected component subtype indications retained");
   require(
       visibility.design.units[1]
               .vhdl_component_declarations.size()
