@@ -20,9 +20,11 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 - The diagnostic catalog covers all 1,121 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
-  two LLVM-only cache-key test helpers were unguarded. The local repair guards
-  those helpers and raises every workflow build from two to eight workers;
-  replacement checks await publishing the batch-69/70 handoff and repair.
+  LLVM-only cache-key test helpers were unguarded. The first repair guarded
+  two helpers and raised every workflow build from two to eight workers;
+  replacement run `30553184827` exposed four more helpers with the same
+  non-LLVM warning. All six are now guarded and locally verified; replacement
+  confirmation awaits publishing the follow-up repair.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1

@@ -3849,7 +3849,11 @@ them. The local repair conditionally compiles those helpers and changes every
 workflow build from two to eight parallel workers. The formerly failing
 targets and their focused tests pass locally under non-LLVM Debug, Release,
 and ASan/UBSan plus exact-LLVM Debug and Release; replacement CI confirmation
-awaits publishing the accumulated handoff.
+initially exposed four additional cache-key helpers with the same warning in
+[run 30553184827](https://github.com/colinphill/fsim/actions/runs/30553184827).
+All six helpers are now conditionally compiled and the additional targets pass
+the same five local configurations; final replacement CI confirmation awaits
+publishing the follow-up repair.
 
 ## v1 release condition
 

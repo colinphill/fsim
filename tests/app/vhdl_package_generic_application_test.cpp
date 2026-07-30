@@ -164,6 +164,7 @@ Capture run_once(
   return capture;
 }
 
+#if defined(FSIM_HAS_LLVM)
 std::string key_for(
     const Capture& capture,
     const std::string_view instance) {
@@ -175,6 +176,7 @@ std::string key_for(
   assert(found != capture.keys.end());
   return found->second;
 }
+#endif
 
 void verify(
     const Capture& capture,

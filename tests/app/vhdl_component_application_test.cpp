@@ -85,6 +85,7 @@ specialization(
   return *found;
 }
 
+#if defined(FSIM_HAS_LLVM)
 std::string key_for(
     const Capture& capture,
     const std::string_view path) {
@@ -96,6 +97,7 @@ std::string key_for(
   assert(found != capture.keys.end());
   return found->second;
 }
+#endif
 
 Capture run_once(
     const fsim::project::Config& config,
