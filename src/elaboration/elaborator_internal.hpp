@@ -929,6 +929,10 @@ private:
         const Expression& expression,
         const frontend::Type& source_type,
         const ContainerType& runtime_type);
+    bool lower_container_locator(
+        const Expression& expression,
+        ContainerRegisterId destination,
+        const ContainerType& destination_type);
     ContainerRegisterId allocate_container_register(
         const ContainerType& type);
     void lower_container_method(const Statement& statement);

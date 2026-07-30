@@ -593,6 +593,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       runtime::simir::order_container_value(
           registers.at(ordering->target),
           ordering->operation);
+    } else if (const auto* locator =
+                   std::get_if<runtime::simir::LocateContainer>(
+                       &operation)) {
+      runtime::simir::locate_container_values(
+          registers.at(locator->destination),
+          registers.at(locator->source),
+          locator->operation);
     } else if (const auto* read =
                    std::get_if<runtime::simir::ContainerRead>(
                        &operation)) {

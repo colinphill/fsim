@@ -479,7 +479,8 @@ Expression VerilogParser::parse_postfix(Expression expression) {
       if (member.kind == TokenKind::Identifier
           && (member.text == "and"
               || member.text == "or"
-              || member.text == "xor")) {
+              || member.text == "xor"
+              || member.text == "unique")) {
         advance();
       } else {
         member = expect_identifier("member name");
@@ -510,6 +511,11 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             || member.text == "rsort";
         const bool unsupported_shuffle =
             member.text == "shuffle";
+        const bool locator_method =
+            member.text == "min"
+            || member.text == "max"
+            || member.text == "unique"
+            || member.text == "unique_index";
         const auto expected_arguments =
             member.text == "push_front"
                     || member.text == "push_back"
@@ -525,6 +531,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                     || reduction_method
                     || ordering_method
                     || unsupported_shuffle
+                    || locator_method
                 ? std::optional<std::size_t>{0}
             : member.text == "delete"
                 ? (argument_count <= 1
@@ -567,6 +574,19 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               current(),
               "FSIM-SV-UNSUPPORTED-041",
               "container ordering with-clauses are not supported");
+        }
+        if (locator_method
+            && language_ != Language::SystemVerilog2017) {
+          error(
+              member,
+              "FSIM-SV-SEM-087",
+              "container locator methods require SystemVerilog 2017");
+        }
+        if (locator_method && current().text == "with") {
+          error(
+              current(),
+              "FSIM-SV-UNSUPPORTED-042",
+              "container locator with-clauses are not supported");
         }
         expression = Expression{
             ExpressionKind::Call,

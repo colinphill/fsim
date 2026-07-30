@@ -4282,6 +4282,50 @@ in 114.15 seconds, and Release passed all 59 tests in 41.30 seconds on
 2026-07-30. Batch 78 is not a ten-batch CI-inspection boundary, so no GitHub
 Actions run was inspected.
 
+### Seventy-ninth feature batch — bounded SystemVerilog unpacked-container locators
+
+SystemVerilog-2017 direct one-dimensional integral static arrays, dynamic
+arrays, unbounded queues, and bounded queues now support no-argument `min`,
+`max`, `unique`, and `unique_index` expressions in compatible whole-queue
+assignments. The parser retains all four calls explicitly, including the
+reserved-keyword spelling of `unique`, and contextual lowering distinguishes
+exact-element value queues from signed two-state 32-bit index queues.
+Associative receivers and general expression contexts remain excluded.
+
+Extrema reuse Batch 78's deterministic exact-width comparator and return an
+empty queue or one first-occurring minimum/maximum. `unique` compares complete
+four-state values and preserves the first occurrence of every distinct value.
+`unique_index` emits the corresponding signed declared static index or current
+dynamic/queue index in the same stable order. Results obey the common
+4,096-element limit and an optional bounded destination capacity. The kernel
+copies source elements before clearing the result, making an in-place queue
+assignment deterministic.
+
+The typed `LocateContainer` SimIR operation carries locator enum, destination
+container register, and source container register. Validation checks the enum,
+receiver kind, queue result kind, and exact value/index element profile. The
+reference interpreter and LLVM backend share one runtime kernel through the
+existing generic container callback, so the public native ABI remains
+unchanged. Native-object schema 32 serializes locator and result semantics.
+The LLVM runtime-error and symbol validation helpers were split into a focused
+compilation unit, reducing the main validator from its 2,000-line ceiling.
+
+Positive evidence covers empty results, signed extrema, exact duplicates,
+X/Z identity and ordering, negative declared static indices, dynamic/current
+indices, bounded and aliased queues, module objects, generated input and
+inout port aliases, automatic task formals and locals after suspension,
+debugger stop/resume, interpreter, LLVM O0/O2, and cold/warm cache reuse.
+Stable frontend or elaboration diagnostics cover arguments, predicate `with`
+clauses, associative/noncontainer/indirect receivers, incompatible and scalar
+result contexts, discarded results, and use outside SystemVerilog-2017.
+
+The diagnostic catalog covers 1,180 production codes and the source gate
+covers 286 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 130.48 seconds, and Release passed all 59 tests in 43.77 seconds on
+2026-07-30. Batch 79 is not a ten-batch CI-inspection boundary, so no GitHub
+Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

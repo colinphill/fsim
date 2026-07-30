@@ -530,7 +530,18 @@ using namespace elaboration_detail;
             }
             if (statement.target.kind
                 == ExpressionKind::Identifier) {
-                if (statement.value.kind
+                const bool locator =
+                    statement.value.kind == ExpressionKind::Call
+                    && (statement.value.text == ".min"
+                        || statement.value.text == ".max"
+                        || statement.value.text == ".unique"
+                        || statement.value.text == ".unique_index");
+                if (locator) {
+                    if (!lower_container_locator(
+                            statement.value, target, *runtime_type)) {
+                        return;
+                    }
+                } else if (statement.value.kind
                         == ExpressionKind::Aggregate
                     && statement.value.text == "sv-pattern") {
                     const auto value = lower_container_pattern(

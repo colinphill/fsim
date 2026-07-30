@@ -232,6 +232,27 @@ void order_container_value(
     ContainerValue& value,
     ContainerOrderingOperator operation);
 
+enum class ContainerLocatorOperator : std::uint8_t {
+  minimum,
+  maximum,
+  unique,
+  unique_index,
+};
+
+struct LocateContainer {
+  ContainerLocatorOperator operation{
+      ContainerLocatorOperator::minimum};
+  ContainerRegisterId destination{};
+  ContainerRegisterId source{};
+};
+
+/// Populate a queue with extrema, unique values, or first-occurrence indices
+/// using the deterministic SystemVerilog subset policy.
+void locate_container_values(
+    ContainerValue& destination,
+    const ContainerValue& source,
+    ContainerLocatorOperator operation);
+
 struct ContainerRead {
   RegisterId destination{};
   ContainerRegisterId source{};
@@ -1002,7 +1023,8 @@ using Operation =
                  ResizeContainer, CopyContainerRegister,
                  ReadContainerObject, WriteContainerObject,
                  ContainerSize, ContainerReduction,
-                 OrderContainer, ContainerRead, ContainerWrite,
+                 OrderContainer, LocateContainer,
+                 ContainerRead, ContainerWrite,
                  DeleteContainer, ContainerExists, TraverseContainer,
                  LoadMemory, PushContainer, PopContainer, FileOpen,
                  FileClose, FileWriteLiteral, FileWriteFormatted,

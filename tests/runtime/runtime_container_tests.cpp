@@ -155,6 +155,89 @@ void test_simir_containers() {
           && four_state_order.elements[3].to_msb_string()
               == "0000000Z",
       "four-state ordering uses the documented 0/1/X/Z total order");
+  ContainerValue locator_result{
+      signed_order_type, {}, {}};
+  ContainerType index_result_type;
+  index_result_type.element_width = 32;
+  index_result_type.two_state = true;
+  index_result_type.signed_elements = true;
+  index_result_type.queue = true;
+  const ContainerValue empty_locator_source{
+      signed_order_type, {}, {}};
+  for (const auto operation :
+       {ContainerLocatorOperator::minimum,
+        ContainerLocatorOperator::maximum,
+        ContainerLocatorOperator::unique,
+        ContainerLocatorOperator::unique_index}) {
+    ContainerValue empty_result{
+        operation == ContainerLocatorOperator::unique_index
+            ? index_result_type
+            : signed_order_type,
+        {}, {}};
+    locate_container_values(
+        empty_result, empty_locator_source, operation);
+    require(
+        empty_result.elements.empty(),
+        "empty container locators return an empty queue");
+  }
+  locate_container_values(
+      locator_result, signed_order,
+      ContainerLocatorOperator::minimum);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{value(8, 0x80)},
+      "minimum locator returns the signed extremum");
+  locate_container_values(
+      locator_result, signed_order,
+      ContainerLocatorOperator::maximum);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{value(8, 0x7f)},
+      "maximum locator returns the signed extremum");
+  locate_container_values(
+      locator_result, signed_order,
+      ContainerLocatorOperator::unique);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{
+              value(8, 0x80), value(8, 0xff),
+              value(8, 0), value(8, 0x7f)},
+      "unique locator preserves first-occurrence order");
+  ContainerValue index_result{index_result_type, {}, {}};
+  locate_container_values(
+      index_result, signed_order,
+      ContainerLocatorOperator::unique_index);
+  require(
+      index_result.elements
+          == std::vector<PackedLogic4>{
+              value(32, 0), value(32, 1),
+              value(32, 3), value(32, 4)},
+      "unique_index returns first current indices");
+  locate_container_values(
+      signed_order, signed_order,
+      ContainerLocatorOperator::unique);
+  require(
+      signed_order.elements == locator_result.elements,
+      "locator assignment safely supports an aliased queue receiver");
+  ContainerType fixed_locator_type = signed_order_type;
+  fixed_locator_type.queue = false;
+  fixed_locator_type.fixed = true;
+  fixed_locator_type.index_left = -2;
+  fixed_locator_type.index_right = 1;
+  ContainerValue fixed_locator{
+      fixed_locator_type,
+      {value(8, 5), value(8, 7), value(8, 5), value(8, 9)},
+      {}};
+  locate_container_values(
+      index_result, fixed_locator,
+      ContainerLocatorOperator::unique_index);
+  require(
+      index_result.elements
+          == std::vector<PackedLogic4>{
+              value(32, UINT32_C(0xfffffffe)),
+              value(32, UINT32_C(0xffffffff)),
+              value(32, 1)},
+      "static unique_index preserves signed declared indices");
   Interpreter interpreter;
   const auto array_object = interpreter.add_container_object(
       {"array", ContainerValue{array_type, {}, {}}});

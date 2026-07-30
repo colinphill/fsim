@@ -1331,7 +1331,8 @@ std::optional<Statement> VerilogParser::parse_statement() {
                "pop_front", "pop_back", "exists",
                "first", "last", "next", "prev",
                "sum", "product", "and", "or", "xor",
-               "reverse", "sort", "rsort", "shuffle"},
+               "reverse", "sort", "rsort", "shuffle",
+               "min", "max", "unique", "unique_index"},
               current(lookahead + 1U).text)) {
         container_method_statement = true;
         break;

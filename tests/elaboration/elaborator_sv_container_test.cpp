@@ -78,6 +78,8 @@ module container_lowering #(
 
   initial begin
     key_t key;
+    int located[$];
+    int locations[$];
     values = '{};
     assert ($size(values) == 0);
     assert (values.sum() == 0);
@@ -85,14 +87,27 @@ module container_lowering #(
     assert (values.and() == -1);
     assert (values.or() == 0);
     assert (values.xor() == 0);
-    values = '{7, 8};
-    assert (values.sum() == 15);
-    assert (values.product() == 56);
+    values = '{7, 8, 7};
+    assert (values.sum() == 22);
+    assert (values.product() == 392);
     assert (values.and() == 0);
     assert (values.or() == 15);
-    assert (values.xor() == 15);
+    assert (values.xor() == 8);
+    located = values.min();
+    assert (located.size() == 1);
+    assert (located[0] == 7);
+    located = values.max();
+    assert (located[0] == 8);
+    located = values.unique();
+    assert (located.size() == 2);
+    assert (located[0] == 7);
+    assert (located[1] == 8);
+    locations = values.unique_index();
+    assert (locations.size() == 2);
+    assert (locations[0] == 0);
+    assert (locations[1] == 1);
     values.reverse();
-    assert (values[0] == 8);
+    assert (values[0] == 7);
     values.sort();
     assert (values[0] == 7);
     values.rsort();
@@ -210,6 +225,14 @@ endmodule
                 OrderContainer>(operation);
           })
       >= 13);
+  assert(
+      std::ranges::count_if(
+          process.operations,
+          [](const auto& operation) {
+            return std::holds_alternative<
+                LocateContainer>(operation);
+          })
+      >= 4);
   const auto values =
       elaborated.design->container_objects()[0].id;
   const auto pending =
@@ -236,7 +259,7 @@ endmodule
   const auto& fixed_up_result =
       interpreter->container_object_value(fixed_up);
   assert(
-      values_result.elements.size() == 2
+      values_result.elements.size() == 3
       && values_result.elements[0].low_word().aval == 7
       && pending_result.elements.size() == 2
       && pending_result.elements[0].low_word().aval == 2
@@ -589,6 +612,8 @@ module container_invalid_lowering;
   byte too_large[0:4096];
   int runtime_bound;
   byte nonconstant[runtime_bound:0];
+  byte locator_result[$];
+  int locator_indices[$];
   int result;
   initial begin
     lookup.push_back(1);
@@ -601,6 +626,12 @@ module container_invalid_lowering;
     fixed[0].sort();
     result = fixed.sort();
     fixed.shuffle();
+    locator_result = lookup.min();
+    dynamic = fixed.min();
+    locator_indices = fixed.unique();
+    locator_result = fixed[0].min();
+    result = fixed.min();
+    fixed.min();
     lookup[0] <= 1;
     dynamic.delete(0);
     fixed.delete();
@@ -630,6 +661,14 @@ endmodule
       rejected, "FSIM-ELAB-SVORDER-004"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVORDER-005"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVLOCATOR-001"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVLOCATOR-003"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVLOCATOR-004"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVLOCATOR-005"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-013"));
   assert(has_diagnostic(

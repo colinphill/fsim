@@ -578,6 +578,80 @@ Lowerer::lower_container_pattern(
   return destination;
 }
 
+bool Lowerer::lower_container_locator(
+    const Expression& expression,
+    const ContainerRegisterId destination,
+    const ContainerType& destination_type) {
+  if (language_ != frontend::Language::SystemVerilog2017
+      || expression.operands.empty()
+      || expression.operands.front().kind
+          != ExpressionKind::Identifier
+      || !is_container_expression(expression.operands.front())) {
+    report(
+        "FSIM-ELAB-SVLOCATOR-001",
+        "container locators require a direct supported "
+        "SystemVerilog unpacked-container receiver",
+        expression.span);
+    return false;
+  }
+  if (expression.operands.size() != 1) {
+    report(
+        "FSIM-ELAB-SVLOCATOR-002",
+        "bounded container locator methods take no arguments",
+        expression.span);
+    return false;
+  }
+  const auto& receiver = expression.operands.front();
+  const auto source = lower_container_expression(receiver);
+  const auto* source_frontend_type = object_type(receiver.text);
+  const auto source_type =
+      source_frontend_type
+          ? container_type(*source_frontend_type, receiver.span)
+          : std::nullopt;
+  if (!source || !source_type || source_type->associative) {
+    report(
+        "FSIM-ELAB-SVLOCATOR-001",
+        "bounded container locators do not support associative "
+        "or unresolved receivers",
+        expression.span);
+    return false;
+  }
+  const bool index_result =
+      expression.text == ".unique_index";
+  const bool compatible =
+      destination_type.queue
+      && !destination_type.associative
+      && !destination_type.fixed
+      && (index_result
+              ? destination_type.element_width == 32
+                    && destination_type.two_state
+                    && destination_type.signed_elements
+              : destination_type.element_width
+                        == source_type->element_width
+                    && destination_type.two_state
+                        == source_type->two_state
+                    && destination_type.signed_elements
+                        == source_type->signed_elements);
+  if (!compatible) {
+    report(
+        "FSIM-ELAB-SVLOCATOR-003",
+        "container locator result requires a compatible queue target",
+        expression.span);
+    return false;
+  }
+  auto operation = ContainerLocatorOperator::minimum;
+  if (expression.text == ".max") {
+    operation = ContainerLocatorOperator::maximum;
+  } else if (expression.text == ".unique") {
+    operation = ContainerLocatorOperator::unique;
+  } else if (index_result) {
+    operation = ContainerLocatorOperator::unique_index;
+  }
+  process_.operations.emplace_back(
+      LocateContainer{operation, destination, *source});
+  return true;
+}
+
 void Lowerer::lower_container_method(
     const Statement& statement) {
   const auto& call = statement.value;
@@ -589,6 +663,19 @@ void Lowerer::lower_container_method(
   const bool unsupported_shuffle =
       call.kind == ExpressionKind::Call
       && call.text == ".shuffle";
+  const bool locator_method =
+      call.kind == ExpressionKind::Call
+      && (call.text == ".min"
+          || call.text == ".max"
+          || call.text == ".unique"
+          || call.text == ".unique_index");
+  if (locator_method) {
+    report(
+        "FSIM-ELAB-SVLOCATOR-005",
+        "container locator results cannot be discarded",
+        call.span);
+    return;
+  }
   if (ordering_method || unsupported_shuffle) {
     if (language_
             != frontend::Language::SystemVerilog2017

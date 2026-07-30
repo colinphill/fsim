@@ -74,6 +74,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 expression.span);
             return std::nullopt;
         }
+        const bool container_locator =
+            expression.kind == ExpressionKind::Call
+            && (expression.text == ".min"
+                || expression.text == ".max"
+                || expression.text == ".unique"
+                || expression.text == ".unique_index");
+        if (container_locator) {
+            report(
+                "FSIM-ELAB-SVLOCATOR-004",
+                "container locator results require a compatible "
+                "whole-queue assignment target",
+                expression.span);
+            return std::nullopt;
+        }
         if (container_reduction
             && (language_
                     != frontend::Language::SystemVerilog2017

@@ -688,6 +688,20 @@ and native generic container callback invoke the same kernel, and schema 31
 serializes the operator plus this semantic policy without extending the
 append-only C ABI.
 
+SystemVerilog direct nonassociative unpacked-container `min`, `max`, `unique`,
+and `unique_index` expressions lower contextually to `LocateContainer` when
+assigned to a compatible queue. Value-result queues retain the receiver's
+exact element profile; index-result queues use signed two-state 32-bit
+elements. Extrema reuse the ordering comparator and retain the first equal
+candidate. Uniqueness scans declared/current storage order, compares complete
+four-state values, and emits either the first value or its signed declared or
+current index. The kernel copies source elements before replacing the result,
+so an aliased queue expression is deterministic. Interpreter and native paths
+again use the generic container callback; schema 32 serializes the locator,
+source, destination, result type, and shared comparison policy without adding
+a public ABI slot. LLVM validation support is split from the main validator
+so both authored compilation units remain below the hard source-size limit.
+
 `$onehot` and `$onehot0` lower to dedicated common reduction operators. They
 count exact `1` elements of the packed operand, ignore `X` and `Z` elements,
 and return a two-state bit indicating exactly one or at most one set element.

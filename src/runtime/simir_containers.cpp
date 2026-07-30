@@ -185,6 +185,41 @@ void require_associative(
   return left.low_word().aval == right.low_word().aval;
 }
 
+[[nodiscard]] bool element_less(
+    const ContainerType& type,
+    const PackedLogic4& left,
+    const PackedLogic4& right) {
+  for (std::size_t index = type.element_width;
+       index-- != 0;) {
+    const bool sign =
+        type.signed_elements
+        && index == type.element_width - 1U;
+    const auto rank =
+        [sign](const Logic4 bit) -> std::uint8_t {
+          if (!sign) {
+            return static_cast<std::uint8_t>(bit);
+          }
+          switch (bit) {
+          case Logic4::one:
+            return 0;
+          case Logic4::zero:
+            return 1;
+          case Logic4::x:
+            return 2;
+          case Logic4::z:
+            return 3;
+          }
+          return 3;
+        };
+    const auto left_rank = rank(left.get(index));
+    const auto right_rank = rank(right.get(index));
+    if (left_rank != right_rank) {
+      return left_rank < right_rank;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 void validate_container_value(const ContainerValue& value) {
@@ -351,35 +386,7 @@ void order_container_value(
   const auto less =
       [&](const PackedLogic4& left,
           const PackedLogic4& right) {
-        for (std::size_t index = value.type.element_width;
-             index-- != 0;) {
-          const bool sign =
-              value.type.signed_elements
-              && index == value.type.element_width - 1U;
-          const auto rank =
-              [sign](const Logic4 bit) -> std::uint8_t {
-                if (!sign) {
-                  return static_cast<std::uint8_t>(bit);
-                }
-                switch (bit) {
-                case Logic4::one:
-                  return 0;
-                case Logic4::zero:
-                  return 1;
-                case Logic4::x:
-                  return 2;
-                case Logic4::z:
-                  return 3;
-                }
-                return 3;
-              };
-          const auto left_rank = rank(left.get(index));
-          const auto right_rank = rank(right.get(index));
-          if (left_rank != right_rank) {
-            return left_rank < right_rank;
-          }
-        }
-        return false;
+        return element_less(value.type, left, right);
       };
   if (operation == ContainerOrderingOperator::ascending) {
     std::stable_sort(
@@ -391,6 +398,93 @@ void order_container_value(
             const PackedLogic4& right) {
           return less(right, left);
         });
+  }
+}
+
+void locate_container_values(
+    ContainerValue& destination,
+    const ContainerValue& source,
+    const ContainerLocatorOperator operation) {
+  validate_container_value(source);
+  validate_container_value(destination);
+  if (source.type.associative || !destination.type.queue
+      || destination.type.associative
+      || destination.type.fixed) {
+    throw std::invalid_argument{
+        "container locators require a nonassociative source and queue result"};
+  }
+  const bool index_result =
+      operation == ContainerLocatorOperator::unique_index;
+  if (static_cast<std::uint8_t>(operation)
+      > static_cast<std::uint8_t>(
+          ContainerLocatorOperator::unique_index)) {
+    throw std::invalid_argument{
+        "invalid SimIR container locator operator"};
+  }
+  if (index_result
+          ? destination.type.element_width != 32
+                || !destination.type.two_state
+                || !destination.type.signed_elements
+          : destination.type.element_width
+                    != source.type.element_width
+                || destination.type.two_state
+                    != source.type.two_state
+                || destination.type.signed_elements
+                    != source.type.signed_elements) {
+    throw std::invalid_argument{
+        "container locator result element type mismatch"};
+  }
+  const auto elements = source.elements;
+  const auto source_type = source.type;
+  destination.elements.clear();
+  destination.keys.clear();
+  const auto limit = destination.type.maximum_elements.value_or(
+      static_cast<std::uint32_t>(maximum_container_elements));
+  const auto append =
+      [&](PackedLogic4 value) {
+        if (destination.elements.size() < limit) {
+          destination.elements.push_back(std::move(value));
+        }
+      };
+  if (operation == ContainerLocatorOperator::minimum
+      || operation == ContainerLocatorOperator::maximum) {
+    if (elements.empty()) {
+      return;
+    }
+    auto selected = elements.begin();
+    for (auto current = std::next(selected);
+         current != elements.end(); ++current) {
+      const bool replace =
+          operation == ContainerLocatorOperator::minimum
+              ? element_less(source_type, *current, *selected)
+              : element_less(source_type, *selected, *current);
+      if (replace) {
+        selected = current;
+      }
+    }
+    append(*selected);
+    return;
+  }
+  std::vector<PackedLogic4> seen;
+  for (std::size_t offset = 0; offset < elements.size(); ++offset) {
+    if (std::ranges::find(seen, elements[offset]) != seen.end()) {
+      continue;
+    }
+    seen.push_back(elements[offset]);
+    if (!index_result) {
+      append(elements[offset]);
+      continue;
+    }
+    const auto index =
+        source_type.fixed
+            ? source_type.index_left >= source_type.index_right
+                  ? source_type.index_left
+                        - static_cast<std::int32_t>(offset)
+                  : source_type.index_left
+                        + static_cast<std::int32_t>(offset)
+            : static_cast<std::int32_t>(offset);
+    append(PackedLogic4::from_aval_bval(
+        32, static_cast<std::uint32_t>(index), 0));
   }
 }
 
@@ -709,6 +803,18 @@ void Interpreter::Impl::execute_container(
   order_container_value(
       get_container_register(process, operation.target),
       operation.operation);
+  ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const LocateContainer& operation) {
+  auto& destination =
+      get_container_register(process, operation.destination);
+  const auto& source =
+      get_container_register(process, operation.source);
+  locate_container_values(
+      destination, source, operation.operation);
   ++process.pc;
 }
 

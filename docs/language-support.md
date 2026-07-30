@@ -128,6 +128,18 @@ output/inout port aliases, and automatic task values across suspension.
 Arguments, `with` clauses, associative arrays, indirect or read-only
 receivers, expression-result use, and nondeterministic `shuffle()` remain
 unsupported.
+Direct nonassociative static arrays, dynamic arrays, queues, and bounded
+queues also support no-argument `min()`, `max()`, `unique()`, and
+`unique_index()` when their result is assigned to a compatible queue.
+Value results preserve the exact element profile; index results use signed
+two-state 32-bit elements. Empty sources produce empty results, extrema return
+one first-occurring value, uniqueness preserves first occurrences by
+four-state identity, and unique indices use signed declared static indices or
+current dynamic/queue indices. Results remain bounded to 4,096 elements or the
+destination queue capacity, and aliased queue assignment evaluates the source
+before replacement. Predicate `with` clauses, associative locators, indirect
+receivers, and locator results outside a compatible whole-queue assignment
+remain unsupported.
 `$readmemb` and `$readmemh` load fixed arrays through the manifest-root file
 service with optional start/finish indices, line/block comments, hexadecimal
 `@` addresses, a 1 MiB input bound, and exact X/Z digit preservation.

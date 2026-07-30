@@ -43,6 +43,8 @@ module containers;
   bit flags[logic signed [3:0]];
   logic [7:0] image[7:4];
   bit [3:0] ascending[-2:1];
+  int located[$];
+  int located_indices[$];
 
   task automatic mutate(
       input int source[],
@@ -89,6 +91,10 @@ module containers;
     pending.reverse();
     pending.sort();
     bounded.rsort();
+    located = values.min();
+    located = values.max();
+    located = values.unique();
+    located_indices = values.unique_index();
   end
 endmodule
 
@@ -124,7 +130,7 @@ endmodule
   const auto* unit =
       parsed.design.find(UnitKind::VerilogModule, "containers");
   require(
-      unit != nullptr && unit->variables.size() == 7,
+      unit != nullptr && unit->variables.size() == 9,
       "module containers remain unpacked variable objects");
   require(
       unit->variables[0].type.systemverilog_container
@@ -261,6 +267,18 @@ endmodule
           == 6,
       "container ordering methods remain explicit no-argument "
       "method-statement HIR");
+  require(
+      std::ranges::count_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.value.kind == ExpressionKind::Call
+                && (statement.value.text == ".min"
+                    || statement.value.text == ".max"
+                    || statement.value.text == ".unique"
+                    || statement.value.text == ".unique_index");
+          })
+          == 4,
+      "container locator methods remain explicit no-argument call HIR");
   const auto keyed_pattern =
       std::ranges::find_if(
           query_statements,
@@ -388,6 +406,7 @@ module container_invalid;
     queue.delete(1, 2);
     queue.sum(1);
     queue.sort(1);
+    queue.min(1);
   end
 endmodule
 )",
@@ -424,6 +443,17 @@ endmodule
               unsupported_ordering,
               "FSIM-SV-UNSUPPORTED-041"),
       "container ordering with-clauses diagnose explicitly");
+  const auto unsupported_locator = parse_text(
+      "container-locator-with.sv",
+      "module m; int values[]; int result[$]; "
+      "initial result = values.unique() with (item); endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !unsupported_locator.ok()
+          && has_code(
+              unsupported_locator,
+              "FSIM-SV-UNSUPPORTED-042"),
+      "container locator with-clauses diagnose explicitly");
   require(
       has_code(invalid, "FSIM-SV-UNSUPPORTED-037")
           && has_code(invalid, "FSIM-SV-UNSUPPORTED-038"),
@@ -443,7 +473,7 @@ endmodule
       "container-verilog.v",
       "module m; integer values[]; integer value; "
       "initial begin value = '{1}; value = values.sum(); "
-      "values.sort(); end "
+      "values.sort(); value = values.min(); end "
       "endmodule",
       Language::Verilog2005);
   require(
@@ -451,8 +481,9 @@ endmodule
           && has_code(verilog, "FSIM-SV-SEM-077")
           && has_code(verilog, "FSIM-SV-SEM-084")
           && has_code(verilog, "FSIM-SV-SEM-085")
-          && has_code(verilog, "FSIM-SV-SEM-086"),
-      "containers, patterns, reductions, and ordering require "
+          && has_code(verilog, "FSIM-SV-SEM-086")
+          && has_code(verilog, "FSIM-SV-SEM-087"),
+      "containers, patterns, reductions, ordering, and locators require "
       "SystemVerilog-2017");
 
   const auto malformed_pattern = parse_text(
