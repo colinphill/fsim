@@ -28,8 +28,9 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   `30553851223` reached the full Windows tests and exposed host newline
   translation in SystemVerilog file streams plus Debug frontend stack
   exhaustion. Binary stream transport and an 8 MiB Windows Debug stack for
-  the accumulated frontend matrix are locally verified; replacement
-  confirmation awaits publishing this repair.
+  the accumulated frontend matrix were repaired, and workflow builds returned
+  to two workers to avoid hosted Ubuntu memory pressure. Replacement run
+  `30555745832` passed all 12 Linux and Windows jobs.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1

@@ -3866,8 +3866,12 @@ supported simulator file modes now use binary stream transport while retaining
 their logical read/write modes, and the Windows Debug frontend test receives
 the same 8 MiB stack reserve as the accumulated elaboration matrix. Focused
 frontend, runtime, and SystemVerilog file tests pass under non-LLVM Debug,
-Release, and ASan/UBSan plus exact-LLVM Debug and Release; final replacement
-CI confirmation awaits publishing this repair.
+Release, and ASan/UBSan plus exact-LLVM Debug and Release. After returning
+GitHub-hosted builds to two workers, replacement
+[run 30555745832](https://github.com/colinphill/fsim/actions/runs/30555745832)
+passed all 12 Ubuntu and Windows jobs, including GCC Debug/Release,
+ASan/UBSan, exact LLVM 22.1.8 Debug/Release, both MSVC-compatible toolchains,
+and the frontend fuzz smoke.
 
 ## v1 release condition
 
