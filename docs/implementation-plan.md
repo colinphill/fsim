@@ -3840,6 +3840,17 @@ warnings-as-errors Debug regression passed all 59 configured tests in 69.02
 seconds, and Release passed all 59 configured tests in 30.53 seconds on
 2026-07-30. No CI state was inspected.
 
+The required batch-70 GitHub boundary inspection subsequently examined
+[run 30542845249](https://github.com/colinphill/fsim/actions/runs/30542845249)
+at the then-remote batch-68 handoff. Its LLVM and Windows jobs passed, while
+non-LLVM GCC Debug, Release, and ASan/UBSan failed at build time because two
+cache-key helpers were compiled without the `FSIM_HAS_LLVM` uses that consume
+them. The local repair conditionally compiles those helpers and changes every
+workflow build from two to eight parallel workers. The formerly failing
+targets and their focused tests pass locally under non-LLVM Debug, Release,
+and ASan/UBSan plus exact-LLVM Debug and Release; replacement CI confirmation
+awaits publishing the accumulated handoff.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

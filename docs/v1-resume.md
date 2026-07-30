@@ -18,9 +18,11 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   configured tests in 69.02 seconds, and Release passed all 59 configured
   tests in 30.53 seconds on 2026-07-30.
 - The diagnostic catalog covers all 1,121 production codes.
-- The feature-batch-70 GitHub Actions boundary inspection is pending: the
-  local `gh` credential was invalid when checked on 2026-07-30, and the
-  batch-69/70 handoff commits are not yet on the remote branch.
+- The feature-batch-70 boundary inspection found remote CI run
+  `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
+  two LLVM-only cache-key test helpers were unguarded. The local repair guards
+  those helpers and raises every workflow build from two to eight workers;
+  replacement checks await publishing the batch-69/70 handoff and repair.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
