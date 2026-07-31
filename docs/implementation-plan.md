@@ -5363,6 +5363,56 @@ in 0.83 seconds, functions in 10.46 seconds, containers in 84.69 seconds, and
 the monolithic application in 13.56 seconds, on 2026-07-31. Batch 98 is not a
 ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+## Forward language-closure feature batches
+
+The following sequence is the authoritative planning baseline for closing the
+remaining v1 language rows. Each batch remains bounded by its checked-in
+positive, negative, elaboration, interpreter, LLVM O0/O2, cache/provenance,
+debug/trace, and portability evidence. A permissive parse does not complete a
+feature. If implementation evidence requires a batch to split or reorder, this
+section and the resume handoff must be amended explicitly before proceeding.
+
+| Batch | Planned feature scope |
+|---|---|
+| 99 | Complete bounded SystemVerilog `unique`, `unique0`, and `priority` case qualifiers and deterministic warning reports. |
+| 100 | Add bounded `case matches`, pattern matching, and tagged-pattern diagnostics; complete the mandatory non-documentation CI inspection. |
+| 101 | Complete SystemVerilog expression sizing and conversions, short-circuit and side-effect behavior, dynamic part-selects, and streaming concatenation. |
+| 102 | Complete procedural lvalues, chained selections, dynamic targets, timed compound assignments, expression-form increments/decrements, and procedural force/release. |
+| 103 | Complete remaining function/task lifetimes, formals, results, defaults, references, unpacked values, local declarations, and generated subprograms. |
+| 104 | Complete remaining `always` and procedural-control forms, noncanonical loops, dynamic repeat/forever behavior, and general event controls. |
+| 105 | Add `fork`/`join` variants, process completion/control, event races, and the complete NBA/delta ordering matrix. |
+| 106 | Complete parameterized and net delays, gate arrays, remaining nondeferred primitives, and continuous-assignment semantics. |
+| 107 | Add interfaces, modports, interface ports, package exports, and complete package/interface visibility. |
+| 108 | Close preprocessor/directive semantics plus genvar-dependent constants, generated declarations, and specialization legality. |
+| 109 | Complete nested structs/unions/enums, unpacked aggregate members, multidimensional arrays, assignment patterns, casts, and nominal legality. |
+| 110 | Complete general strings, files, containers, and memories; audit every SystemVerilog v1 row; run full gates and the mandatory CI inspection. |
+| 111 | Complete VHDL library analysis order, packages and bodies, contexts, and configuration binding. |
+| 112 | Complete VHDL name/overload resolution, visibility, constant evaluation, legality, and resolution functions. |
+| 113 | Complete VHDL generics, components/direct instantiation, expression/aggregate/`open` port actuals, defaults, and specialization. |
+| 114 | Complete guarded blocks, generated types/subprograms/declarations, local declarative regions, and remaining generate choices. |
+| 115 | Complete synthesizable sequential/concurrent statements, matching selections, case ranges, scopes, and dynamic selections. |
+| 116 | Complete multidimensional/composite arrays, array aggregates, null ranges, slicing, ports, and callable boundaries. |
+| 117 | Complete nested records, enumerations, qualified expressions, aggregate choice forms, attributes, and composite operations. |
+| 118 | Complete access, protected, and physical types with their legality, storage, scheduling, and debugger metadata. |
+| 119 | Complete nested waits, general assertions/reports, files/TextIO, physical time, and inertial/transport/reject transactions. |
+| 120 | Review and bundle Apache-2.0 IEEE logic/numeric/bit/fixed/floating packages; audit every VHDL v1 row; run full gates and the mandatory CI inspection. |
+| 121 | Complete mixed-language ordinal vector, Boolean, integer, signedness, width, and state-domain conversions. |
+| 122 | Complete cross-language generic/parameter transfer, driver ownership, wired resolution, delay, NBA/update-phase, and failure matrices. |
+| 123 | Complete SystemC named hierarchy, ports, exports, standard interfaces, and the custom metadata permitted by the v1 subset. |
+| 124 | Complete SystemC static/dynamic sensitivity, events and cancellation, channel updates, lifecycle, and thread interactions. |
+| 125 | Complete SystemC compiler/cache fingerprints, plug-in lifecycle/error coverage, and Windows LLVM/thread evidence. |
+| 126 | Finish explicit typed VHDL HIR, SystemVerilog HIR, and elaborated DesignIR boundaries with stable identities and complete source/debug metadata. |
+| 127 | Perform a language-wide positive/negative legality sweep and eliminate every silently accepted, discarded, or parser-only required construct. |
+| 128 | Add license-reviewed conformance cases and close interpreter/O0/O2/cache/debug/VCD differential evidence. |
+| 129 | Close Linux and Windows Debug/Release language portability and repair all remaining platform-specific failures. |
+| 130 | Perform the final language-matrix audit, full release regression, mandatory CI inspection, and reclassify every completed v1 row. |
+
+Batches 100, 110, 120, and 130 are mandatory non-documentation GitHub CI
+inspection boundaries. Local builds use at least eight workers; GitHub Actions
+builds remain at parallelism two. Documentation-only Actions runs do not
+require monitoring. The explicitly deferred rows in the feature matrix remain
+outside this sequence unless the v1 contract is deliberately amended.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

@@ -1082,6 +1082,9 @@ Resume with **feature batch 99: bounded SystemVerilog case qualifiers**:
 Keep Batch 99 to procedural case qualifiers and deterministic diagnostics.
 `case matches`, tagged patterns, assertion-style severity controls, and
 cross-language qualifier behavior remain separate release-gate work.
+The authoritative Batch 99 through 130 language-closure sequence is recorded
+under **Forward language-closure feature batches** in the implementation plan;
+preserve that order unless both documents are explicitly amended.
 
 ## Working cadence
 
