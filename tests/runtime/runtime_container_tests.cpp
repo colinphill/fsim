@@ -227,6 +227,98 @@ void test_simir_containers() {
           && four_state_order.elements[3].to_msb_string()
               == "0000000Z",
       "four-state ordering uses the documented 0/1/X/Z total order");
+  const std::vector<ContainerPredicateNode> ordering_index_key{
+      {ContainerPredicateOperator::item, 0, 0,
+       PackedLogic4{}, ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::index, 0, 0,
+       PackedLogic4{}, ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::constant, 0, 0,
+       value(32, 2), ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::less, 1, 2,
+       PackedLogic4{}, ContainerPredicateValueKind::logical},
+      {ContainerPredicateOperator::constant, 0, 0,
+       value(8, 0), ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::conditional, 3, 4,
+       PackedLogic4{}, ContainerPredicateValueKind::element, 0}};
+  ContainerValue ascending_keyed{
+      four_state_order_type,
+      {value(8, 30), value(8, 10),
+       value(8, 20), value(8, 11)},
+      {}};
+  order_container_value(
+      ascending_keyed, ContainerOrderingOperator::ascending,
+      ordering_index_key);
+  require(
+      ascending_keyed.elements
+          == std::vector<PackedLogic4>{
+              value(8, 30), value(8, 10),
+              value(8, 11), value(8, 20)},
+      "ordering keys use original current indices and preserve original "
+      "order among equal precomputed keys");
+  ContainerValue descending_keyed{
+      four_state_order_type,
+      {value(8, 30), value(8, 10),
+       value(8, 20), value(8, 11)},
+      {}};
+  order_container_value(
+      descending_keyed, ContainerOrderingOperator::descending,
+      ordering_index_key);
+  require(
+      descending_keyed.elements
+          == std::vector<PackedLogic4>{
+              value(8, 20), value(8, 11),
+              value(8, 30), value(8, 10)},
+      "descending transformed ordering remains stable for equal keys");
+  auto fixed_key_type = four_state_order_type;
+  fixed_key_type.queue = false;
+  fixed_key_type.fixed = true;
+  fixed_key_type.index_left = -1;
+  fixed_key_type.index_right = 1;
+  fixed_key_type.maximum_elements.reset();
+  ContainerValue fixed_keyed{
+      fixed_key_type,
+      {value(8, 12), value(8, 11), value(8, 10)},
+      {}};
+  auto static_ordering_key = ordering_index_key;
+  static_ordering_key[2].constant = value(32, 0);
+  order_container_value(
+      fixed_keyed, ContainerOrderingOperator::ascending,
+      static_ordering_key);
+  require(
+      fixed_keyed.elements
+          == std::vector<PackedLogic4>{
+              value(8, 12), value(8, 10), value(8, 11)},
+      "ordering keys use signed declared static-array indices");
+  ContainerValue four_state_keyed{
+      four_state_order_type,
+      {
+          PackedLogic4::from_msb_string("0000000Z"),
+          value(8, 1),
+          PackedLogic4::from_msb_string("0000000X"),
+          value(8, 0),
+      },
+      {}};
+  const std::vector<ContainerPredicateNode> item_key{
+      {ContainerPredicateOperator::item, 0, 0,
+       PackedLogic4{}, ContainerPredicateValueKind::element}};
+  order_container_value(
+      four_state_keyed, ContainerOrderingOperator::ascending,
+      item_key);
+  require(
+      four_state_keyed.elements[0] == value(8, 0)
+          && four_state_keyed.elements[1] == value(8, 1)
+          && four_state_keyed.elements[2].to_msb_string()
+              == "0000000X"
+          && four_state_keyed.elements[3].to_msb_string()
+              == "0000000Z",
+      "transformed keys preserve exact four-state total ordering");
+  try {
+    order_container_value(
+        four_state_keyed, ContainerOrderingOperator::reverse,
+        item_key);
+    require(false, "reverse must reject ordering-key metadata");
+  } catch (const std::invalid_argument&) {
+  }
   ContainerValue locator_result{
       signed_order_type, {}, {}};
   ContainerType index_result_type;

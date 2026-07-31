@@ -585,20 +585,27 @@ Lowerer::lower_container_expression_graph(
     const std::string_view iterator_name,
     const frontend::Type& source_type,
     const ContainerType& runtime_type,
-    const bool transformation) {
+    const bool transformation,
+    const bool ordering_key) {
   using PredicateKind = ContainerPredicateValueKind;
   std::vector<ContainerPredicateNode> nodes;
   std::size_t conditional_count{};
   const auto unsupported_code =
-      transformation
+      ordering_key
+          ? "FSIM-ELAB-SVORDER-006"
+      : transformation
           ? "FSIM-ELAB-SVREDUCE-004"
           : "FSIM-ELAB-SVFIND-004";
   const auto reference_code =
-      transformation
+      ordering_key
+          ? "FSIM-ELAB-SVORDER-007"
+      : transformation
           ? "FSIM-ELAB-SVREDUCE-005"
           : "FSIM-ELAB-SVFIND-008";
   const auto expression_name =
-      transformation
+      ordering_key
+          ? std::string_view{"container ordering key expression"}
+      : transformation
           ? std::string_view{"reduction transformation"}
           : std::string_view{"container locator predicate"};
   const auto append =
@@ -836,8 +843,11 @@ Lowerer::lower_container_expression_graph(
           if (++conditional_count > 1U) {
             report(
                 unsupported_code,
-                "container reduction transformations permit one "
-                "conditional element selection",
+                ordering_key
+                    ? "container ordering key expressions permit one "
+                      "conditional key selection"
+                    : "container reduction transformations permit one "
+                      "conditional element selection",
                 candidate.span);
             return std::nullopt;
           }
@@ -953,9 +963,14 @@ Lowerer::lower_container_expression_graph(
   if (transformation
       && nodes[*root].value_kind != PredicateKind::element) {
     report(
-        "FSIM-ELAB-SVREDUCE-006",
-        "container reduction transformation root must have the "
-        "receiver element type",
+        ordering_key
+            ? "FSIM-ELAB-SVORDER-008"
+            : "FSIM-ELAB-SVREDUCE-006",
+        ordering_key
+            ? "container ordering key root must have the receiver "
+              "element type"
+            : "container reduction transformation root must have the "
+              "receiver element type",
         expression.span);
     return std::nullopt;
   }
@@ -1171,11 +1186,31 @@ void Lowerer::lower_container_method(
           call.span);
       return;
     }
-    if (call.operands.size() != 1) {
+    const bool ordering_key_method =
+        call.text == ".sort"
+        || call.text == ".rsort";
+    const bool valid_arity =
+        ordering_key_method
+            ? call.operands.size() >= 1
+                  && call.operands.size() <= 3
+            : call.operands.size() == 1;
+    if (!valid_arity) {
       report(
           "FSIM-ELAB-SVORDER-002",
-          "container ordering methods take no arguments",
+          ordering_key_method
+              ? "sort and rsort take no value arguments and retain "
+                "at most one iterator plus one with-clause key"
+              : "reverse and shuffle take no arguments",
           call.span);
+      return;
+    }
+    if (call.operands.size() == 3
+        && call.operands[1].kind
+            != ExpressionKind::Identifier) {
+      report(
+          "FSIM-ELAB-SVORDER-008",
+          "a named container ordering iterator must be one identifier",
+          call.operands[1].span);
       return;
     }
     if (unsupported_shuffle) {
@@ -1323,6 +1358,46 @@ void Lowerer::lower_container_method(
           call.span);
       return;
     }
+    const bool explicit_iterator =
+        call.operands.size() == 3;
+    const bool has_key =
+        call.operands.size() >= 2;
+    const std::string_view iterator_name =
+        explicit_iterator
+            ? std::string_view{call.operands[1].text}
+            : std::string_view{"item"};
+    const auto iterator_key = std::string{iterator_name};
+    const bool iterator_collision =
+        explicit_iterator
+        && (object_type(iterator_name) != nullptr
+            || locals_.contains(iterator_key)
+            || string_locals_.contains(iterator_key)
+            || container_locals_.contains(iterator_key)
+            || signals_.contains(iterator_key)
+            || string_objects_.contains(iterator_key)
+            || container_objects_.contains(iterator_key));
+    if (iterator_collision) {
+      report(
+          "FSIM-ELAB-SVORDER-008",
+          "named container ordering iterator '"
+              + std::string{iterator_name}
+              + "' collides with a visible object",
+          call.operands[1].span);
+      return;
+    }
+    std::vector<ContainerPredicateNode> key;
+    if (has_key) {
+      const auto& key_expression =
+          call.operands[explicit_iterator ? 2U : 1U];
+      const auto lowered =
+          lower_container_expression_graph(
+              key_expression, iterator_name,
+              *type, *runtime_type, true, true);
+      if (!lowered) {
+        return;
+      }
+      key = std::move(*lowered);
+    }
     auto operation =
         ContainerOrderingOperator::reverse;
     if (call.text == ".sort") {
@@ -1333,7 +1408,8 @@ void Lowerer::lower_container_method(
           ContainerOrderingOperator::descending;
     }
     process_.operations.emplace_back(
-        OrderContainer{operation, *target});
+        OrderContainer{
+            operation, *target, std::move(key)});
   } else {
     report(
         "FSIM-ELAB-SVCONTAINER-008",

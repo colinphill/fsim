@@ -559,13 +559,18 @@ PackedLogic4 reduce_container_value(
 
 void order_container_value(
     ContainerValue& value,
-    const ContainerOrderingOperator operation) {
+    const ContainerOrderingOperator operation,
+    const std::span<const ContainerPredicateNode> key) {
   validate_container_value(value);
   if (value.type.associative) {
     throw std::invalid_argument{
         "container ordering does not support associative arrays"};
   }
   if (operation == ContainerOrderingOperator::reverse) {
+    if (!key.empty()) {
+      throw std::invalid_argument{
+          "SimIR container reverse cannot have key metadata"};
+    }
     std::reverse(value.elements.begin(), value.elements.end());
     return;
   }
@@ -574,11 +579,60 @@ void order_container_value(
     throw std::invalid_argument{
         "invalid SimIR container ordering operator"};
   }
+  if (!key.empty()
+      && (key.size() > maximum_container_predicate_nodes
+          || key.back().value_kind
+              != ContainerPredicateValueKind::element)) {
+    throw std::invalid_argument{
+        "SimIR container ordering key is invalid"};
+  }
   const auto less =
       [&](const PackedLogic4& left,
           const PackedLogic4& right) {
         return element_less(value.type, left, right);
       };
+  if (!key.empty()) {
+    struct KeyedElement {
+      PackedLogic4 element;
+      PackedLogic4 key;
+    };
+    std::vector<KeyedElement> keyed;
+    keyed.reserve(value.elements.size());
+    const auto declared_index =
+        [&](const std::size_t offset) {
+          return value.type.fixed
+              ? value.type.index_left >= value.type.index_right
+                    ? value.type.index_left
+                          - static_cast<std::int32_t>(offset)
+                    : value.type.index_left
+                          + static_cast<std::int32_t>(offset)
+              : static_cast<std::int32_t>(offset);
+        };
+    for (std::size_t offset = 0;
+         offset < value.elements.size(); ++offset) {
+      const auto& element = value.elements[offset];
+      keyed.push_back(
+          KeyedElement{
+              element,
+              evaluate_container_predicate(
+                  value.type, element,
+                  declared_index(offset), key)});
+    }
+    const auto key_less =
+        [&](const KeyedElement& left,
+            const KeyedElement& right) {
+          return operation == ContainerOrderingOperator::ascending
+              ? less(left.key, right.key)
+              : less(right.key, left.key);
+        };
+    std::stable_sort(keyed.begin(), keyed.end(), key_less);
+    std::transform(
+        keyed.begin(), keyed.end(), value.elements.begin(),
+        [](KeyedElement& entry) {
+          return std::move(entry.element);
+        });
+    return;
+  }
   if (operation == ContainerOrderingOperator::ascending) {
     std::stable_sort(
         value.elements.begin(), value.elements.end(), less);
@@ -1044,7 +1098,7 @@ void Interpreter::Impl::execute_container(
     const OrderContainer& operation) {
   order_container_value(
       get_container_register(process, operation.target),
-      operation.operation);
+      operation.operation, operation.key);
   ++process.pc;
 }
 

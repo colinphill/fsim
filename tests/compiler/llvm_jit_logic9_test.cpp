@@ -382,6 +382,98 @@ void test_rejections() {
       },
       "invalid transformation metadata");
 
+  Process invalid_ordering_root;
+  invalid_ordering_root.name = "invalid_ordering_root";
+  invalid_ordering_root.container_register_count = 1;
+  invalid_ordering_root.container_register_types = {
+      locator_queue};
+  invalid_ordering_root.operations = {
+      OrderContainer{
+          ContainerOrderingOperator::ascending, 0,
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::constant, 0, 0,
+               PackedLogic4::from_aval_bval(8, 0, 0),
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::greater, 0, 1,
+               PackedLogic4{},
+               ContainerPredicateValueKind::logical},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_ordering_root",
+            invalid_ordering_root, no_signals);
+      },
+      "key root has the wrong type");
+
+  auto invalid_reverse_key = invalid_ordering_root;
+  invalid_reverse_key.name = "invalid_reverse_key";
+  invalid_reverse_key.operations = {
+      OrderContainer{
+          ContainerOrderingOperator::reverse, 0,
+          {{ContainerPredicateOperator::item, 0, 0,
+            PackedLogic4{},
+            ContainerPredicateValueKind::element}}},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_reverse_key",
+            invalid_reverse_key, no_signals);
+      },
+      "key metadata requires sort or rsort");
+
+  auto invalid_ordering_conditional =
+      invalid_ordering_root;
+  invalid_ordering_conditional.name =
+      "invalid_ordering_conditional";
+  invalid_ordering_conditional.operations = {
+      OrderContainer{
+          ContainerOrderingOperator::ascending, 0,
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::conditional, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element, 99},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_ordering_conditional",
+            invalid_ordering_conditional, no_signals);
+      },
+      "conditional operands are invalid");
+
+  auto oversized_ordering = invalid_ordering_root;
+  oversized_ordering.name = "oversized_ordering";
+  std::vector<ContainerPredicateNode> oversized_ordering_graph(
+      maximum_container_predicate_nodes + 1U,
+      ContainerPredicateNode{
+          ContainerPredicateOperator::item,
+          0,
+          0,
+          PackedLogic4{},
+          ContainerPredicateValueKind::element});
+  oversized_ordering.operations = {
+      OrderContainer{
+          ContainerOrderingOperator::ascending, 0,
+          std::move(oversized_ordering_graph)},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "oversized_ordering",
+            oversized_ordering, no_signals);
+      },
+      "invalid key metadata");
+
   const auto projected_process =
       [](const ProjectedDelayMode mode,
          const std::uint64_t delay,

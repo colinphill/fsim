@@ -117,17 +117,23 @@ every non-static kind and the destination is not partially replaced.
 Mixed keyed/positional forms, `default` members, indirect targets, nested
 patterns, and nonintegral elements remain unsupported.
 Direct writable static arrays, dynamic arrays, queues, and bounded queues also
-accept no-argument `reverse()`, `sort()`, and `rsort()` method statements.
+accept no-argument `reverse()` plus `sort()` and `rsort()` method statements
+with an optional parenthesized `with` key.
 Static values use declared left-to-right order and dynamic/queue values use
 current index order. Sorting is stable for exact duplicates. Unsigned values
 compare most-significant bit first with `0 < 1 < X < Z`; signed values use
 `1 < 0 < X < Z` at the sign bit and the unsigned rank elsewhere, giving
 ordinary two's-complement order for known values and a deterministic total
-order for four-state values. Ordering supports writable module objects,
-output/inout port aliases, and automatic task values across suspension.
-Arguments, `with` clauses, associative arrays, indirect or read-only
-receivers, expression-result use, and nondeterministic `shuffle()` remain
-unsupported.
+order for four-state values. A key binds implicit `item` or one named
+iterator, exposes the original signed declared/current `.index`, and admits
+the same bounded pure element/index comparisons, logical composition, local
+constants, and one element-typed conditional selection as transformed
+reductions. Every key is computed once before stable ascending/descending
+sorting, so equal keys retain original order. Ordering supports writable
+module objects, output/inout port aliases, and automatic task values across
+suspension. Arbitrary value arguments, keys on `reverse`, associative arrays,
+indirect or read-only receivers, arithmetic/calls/side effects in keys,
+expression-result use, and nondeterministic `shuffle()` remain unsupported.
 Direct nonassociative static arrays, dynamic arrays, queues, and bounded
 queues also support no-argument `min()`, `max()`, `unique()`, and
 `unique_index()` when their result is assigned to a compatible queue.

@@ -115,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v35";
+    "fsim-llvm-native-object-v36";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -225,7 +225,7 @@ void add_dynamic_index_key(
   }
   builder.add(
       "container-semantics",
-      "bounded-static-associative-v11-reduction-transformations");
+      "bounded-static-associative-v12-ordering-keys");
   add_key_u64(
       builder,
       "container-entry-limit",
@@ -472,6 +472,36 @@ void add_dynamic_index_key(
                   builder, "ordering",
                   static_cast<std::uint64_t>(value.operation));
               add_key_u64(builder, "target", value.target);
+              add_key_u64(
+                  builder, "ordering-key-count",
+                  value.key.size());
+              for (const auto& node : value.key) {
+                add_key_u64(
+                    builder, "ordering-key-operation",
+                    static_cast<std::uint64_t>(node.operation));
+                add_key_u64(
+                    builder, "ordering-key-value-kind",
+                    static_cast<std::uint64_t>(node.value_kind));
+                add_key_u64(
+                    builder, "ordering-key-left", node.left);
+                add_key_u64(
+                    builder, "ordering-key-right", node.right);
+                add_key_u64(
+                    builder, "ordering-key-third", node.third);
+                add_key_u64(
+                    builder, "ordering-key-constant-width",
+                    node.constant.width());
+                const auto word =
+                    node.constant.empty()
+                        ? runtime::Logic4Word{}
+                        : node.constant.low_word();
+                add_key_u64(
+                    builder, "ordering-key-constant-aval",
+                    word.aval);
+                add_key_u64(
+                    builder, "ordering-key-constant-bval",
+                    word.bval);
+              }
             },
             [&](const runtime::simir::LocateContainer& value) {
               builder.add("operation", "LocateContainer");

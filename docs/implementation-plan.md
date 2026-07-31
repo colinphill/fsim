@@ -4500,6 +4500,64 @@ in 48.28 seconds, including scoped locals in 0.79 seconds and containers in
 17.85 seconds, on 2026-07-30. Batch 82 is not a ten-batch GitHub
 CI-inspection boundary, so no Actions run is required.
 
+### Eighty-third feature batch — bounded ordering `with` keys
+
+SystemVerilog `sort` and `rsort` now retain one optional parenthesized `with`
+key as explicit source-spanned method-statement HIR. The clause binds implicit
+`item` or one optional named iterator and its direct signed two-state 32-bit
+`.index`; parser scope suppression prevents either name from becoming an
+implicit net, while stable diagnostics cover malformed, colliding, missing,
+empty, and leaked binders. `reverse` remains no-argument, and `shuffle`
+remains outside the deterministic subset.
+
+Lowering reuses the bounded typed container-expression graph. Element, index,
+and logical profiles remain explicit, the final key node must match the
+receiver's exact integral element type, and at most one conditional key
+selection is retained. Direct iterator values, locally constant alternatives,
+signed index and element comparisons, and logical composition are supported.
+Arithmetic or calls involving the iterator, side effects, nonconstant
+operands, indirect index selection, mixed profiles, multiple conditionals,
+non-element roots, graphs beyond 64 nodes, associative receivers, and the
+broader excluded container/element families fail deterministically.
+
+The shared ordering kernel computes and stores every key before sorting. It
+uses each element's original signed declared static index or original current
+dynamic/queue index exactly once, then stable-sorts `{element, key}` records
+ascending or descending. Equal keys therefore preserve original order.
+Existing exact-width signed/unsigned four-state comparison supplies the same
+deterministic `0/1/X/Z` total order as no-key ordering. No-key `sort`/`rsort`
+and no-argument `reverse` preserve Batch 78 mutation, bounds, object/port
+coherence, callable state, and suspension behavior.
+
+Both the reference interpreter and native executor call the common kernel.
+The LLVM validator checks key presence versus ordering mode plus every typed
+leaf, constant, edge, comparison, logical result, conditional branch, root,
+and graph bound before execution. The public append-only native ABI is
+unchanged. Native-object schema 36 records key absence/presence, ordering
+mode, every typed operator and edge including the third conditional edge, and
+exact constant payloads while intentionally excluding iterator spelling.
+Cold/warm tests distinguish constants, element/index profiles, conditional
+edges, key presence, and ascending/descending mode.
+
+Positive evidence covers implicit and named keys, no-key compatibility,
+original-index evaluation, stable duplicates, signed declared and current
+indices, four-state X/Z keys, static and dynamic arrays, queues and bounded
+queues, objects, direct ports, hierarchy, automatic task values across
+suspension, interpreter, LLVM O0/O2, validation, and cache identity. Negative
+evidence covers malformed/empty clauses, invalid binders and leakage,
+collision, unsupported expressions and calls, nonconstant operands, mixed
+profiles, nested conditionals, wrong roots/edges, reverse-key metadata,
+associative and read-only receivers, and oversized graphs.
+
+The diagnostic catalog now covers 1,204 production codes and the source gate
+still covers 286 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 175.86 seconds, including scoped locals in 0.90 seconds and the
+expanded container differential in 107.20 seconds. Release passed all 59
+tests in 52.64 seconds, including scoped locals in 0.81 seconds and containers
+in 22.11 seconds, on 2026-07-30. Batch 83 is not a ten-batch GitHub
+CI-inspection boundary, so no Actions run is required.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

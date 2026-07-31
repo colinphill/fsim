@@ -9,18 +9,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-82 bounded SystemVerilog
-  reduction `with` transformations on top of the feature-batch-81 named
-  locator iterator/direct predicate-index handoff.
+- Implementation baseline: completed feature-batch-83 bounded SystemVerilog
+  ordering `with` keys on top of the feature-batch-82 reduction
+  transformation handoff.
 - The source-size refactor is complete: all 286 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 161.02 seconds, and Release passed all 59 configured
-  tests in 48.28 seconds on 2026-07-30. Debug/Release scoped locals completed
-  in 0.88/0.79 seconds and the expanded container differential completed in
-  91.71/17.85 seconds.
-- The diagnostic catalog covers all 1,198 production codes.
+  configured tests in 175.86 seconds, and Release passed all 59 configured
+  tests in 52.64 seconds on 2026-07-30. Debug/Release scoped locals completed
+  in 0.90/0.81 seconds and the expanded container differential completed in
+  107.20/22.11 seconds.
+- The diagnostic catalog covers all 1,204 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -70,6 +70,14 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   kernel. Schema 35 records exact graph structure and constants without a
   public ABI change. Batch 82 is not a CI-inspection boundary, so no Actions
   run is inspected.
+- Batch 83 adds optional source-spanned `with` keys to `sort` and `rsort`.
+  Implicit `item` or one named iterator and signed-32 `.index` lower through
+  the shared bounded typed graph. Keys are computed once per original element
+  before stable ascending/descending four-state ordering, preserving equal-key
+  order, object/port/callable coherence, and suspension behavior. Validated
+  schema 36 records key presence, structure, constants, index typing, and
+  ordering mode without a public ABI change. Batch 83 is not a
+  CI-inspection boundary, so no Actions run is inspected.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -81,7 +89,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, strings, text files, dynamic arrays/queues/integral-key associative arrays, one-dimensional static memories with `$readmem*`, direct same-language static and dynamic whole-container module ports, unpacked-container bound/size/bit/dimension queries, reductions with bounded pure `with` transformations, deterministic ordering, extrema/uniqueness locators, and predicate locators with named iterators and signed declared/current indices, automatic integral/string/container functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, sliced/multidimensional and cross-language container boundaries, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, strings, text files, dynamic arrays/queues/integral-key associative arrays, one-dimensional static memories with `$readmem*`, direct same-language static and dynamic whole-container module ports, unpacked-container bound/size/bit/dimension queries, reductions with bounded pure `with` transformations, deterministic ordering with optional bounded pure `with` keys, extrema/uniqueness locators, and predicate locators with named iterators and signed declared/current indices, automatic integral/string/container functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, sliced/multidimensional and cross-language container boundaries, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -118,7 +126,8 @@ not rebuilt:
   and contextual positional/keyed assignment patterns plus exact-element-type
   `sum`/`product`/`and`/`or`/`xor` reductions with optional bounded pure
   `item`/`item.index` conditional transformations and deterministic
-  no-argument `reverse`/`sort`/`rsort` ordering plus `min`/`max`/`unique`/
+  no-argument `reverse` plus `sort`/`rsort` ordering with optional bounded
+  pure `item`/named-iterator key graphs, plus `min`/`max`/`unique`/
   `unique_index` queue-valued locators over
   objects/ports/callable values, debugger visibility, stable SimIR/native
   identities, and interpreter/LLVM O0/O2 equivalence;
@@ -354,6 +363,13 @@ with direct signed-32 `item.index`, locally constant element alternatives,
 logical/comparison composition, and one four-state conditional mask. The graph
 is evaluated once in declared/current order, preserves empty identities and
 nonmutation, and uses validated schema-35 interpreter/native/cache semantics.
+`sort` and `rsort` now accept one optional bounded pure key graph with
+implicit `item` or one named iterator and direct signed-32 `.index`. Every key
+is evaluated once against the original declared/current index before stable
+ascending/descending ordering; equal keys retain original order and exact
+signed/unsigned four-state comparison. No-key ordering, coherent mutation,
+ports, callable values, and suspension remain intact through validated
+schema-36 interpreter/native/cache semantics.
 Unicode
 code-point semantics, multidimensional or
 aggregate/string-element containers, sliced/expression port actuals,
@@ -362,37 +378,39 @@ separate release-gate work.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 83: bounded SystemVerilog ordering `with` key
-expressions**:
+Resume with **feature batch 84: bounded SystemVerilog locator `with`
+transformations**:
 
-1. Retain an optional parenthesized `with` key expression as explicit
-   source-spanned HIR on `sort` and `rsort`; keep `reverse` no-argument.
-2. Accept either implicit `item` or one optional named ordering iterator with
+1. Retain an optional parenthesized `with` transformation as explicit
+   source-spanned HIR on `min`, `max`, `unique`, and `unique_index`.
+2. Accept either implicit `item` or one optional named locator iterator with
    exact lexical scope, collision/leakage checks, and no implicit net.
 3. Reuse direct signed 32-bit `iterator.index`/`item.index` and the bounded
    typed container-expression graph without enlarging recursive frontend HIR.
-4. Require one exact integral sortable key profile and admit the iterator,
+4. Require one exact integral comparison-key profile and admit the iterator,
    locally constant alternatives, direct index comparisons/logical
    composition, and one conditional key selection.
-5. Evaluate the key once per element before stable ascending/descending
-   ordering, preserving declared/current order among equal transformed keys.
-6. Preserve Batch 78 no-`with` ordering, four-state total order, receiver
-   mutation/coherence, port aliases, and suspension behavior.
-7. Extend validated ordering metadata and the shared interpreter/native
-   ordering kernel without changing the public ABI.
-8. Version iterator-independent key structure, exact constants, index typing,
-   and `with` presence in native-object cache identity.
+5. Evaluate the transformation once per source element in declared/current
+   order; return original elements for extrema/uniqueness and original signed
+   indices for `unique_index`, preserving first occurrences for equal keys.
+6. Preserve Batch 79 no-`with` empty/extrema/identity, destination-capacity,
+   alias-safe replacement, four-state comparison, and result typing.
+7. Extend validated locator metadata and the shared interpreter/native locator
+   kernel without changing the public ABI.
+8. Version iterator-independent transformation structure, exact constants,
+   index typing, locator mode, and `with` presence in native-object cache
+   identity.
 9. Diagnose malformed/empty clauses, invalid binders, leakage, unsupported
    expressions/calls, nonconstant operands, mixed profiles, graph bounds,
-   read-only/associative receivers, and excluded families.
-10. Add frontend, elaboration, runtime, stable-duplicate/XZ/static-index/
-    current-index, object/port/hierarchy/task, interpreter, LLVM O0/O2, cache,
-    and negative evidence; run full gates and push the non-boundary batch.
+   incompatible destinations, associative receivers, and excluded families.
+10. Add frontend, elaboration, runtime, equal-key/XZ/static-index/current-index,
+    object/port/hierarchy/task, interpreter, LLVM O0/O2, cache, and negative
+    evidence; run full gates and push the non-boundary batch.
 
-Keep this batch to one pure key expression over direct writable
+Keep this batch to one pure transformation over direct nonassociative
 one-dimensional integral static arrays, dynamic arrays, queues, and bounded
-queues. Associative ordering, arbitrary arithmetic or function calls, side
-effects, `shuffle`, multidimensional or aggregate/string elements,
+queues with compatible queue results. Associative locators, arithmetic or
+function calls, side effects, multidimensional or aggregate/string elements,
 interfaces, cross-language transfer, and unrestricted metadata remain
 separate release-gate work.
 
@@ -453,8 +471,8 @@ Batch 77 bounded reduction-method handoff, and the newest Batch 78 bounded
 ordering-method handoff, followed by the newest Batch 79 bounded
 locator-method handoff, Batch 80 predicate-locator handoff, and Batch 81
 named-iterator/index-predicate handoff, followed by the Batch 82 bounded
-reduction-transformation handoff. Treat the newest pushed commit on the
-same branch
+reduction-transformation handoff and the Batch 83 bounded ordering-key
+handoff. Treat the newest pushed commit on the same branch
 as the authoritative continuation and read this file from that checkout before
 doing work.
 
@@ -487,7 +505,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 83 below and return to focused tests until its tenth feature.
+resume Batch 84 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -505,13 +523,14 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin batch 83 at item 1 above. Do not rerun batch 82's full regression
+3. Begin batch 84 at item 1 above. Do not rerun batch 83's full regression
    unless a later change can affect container query, construction, reduction,
    ordering, or locator semantics,
    object binding, runtime helpers, callable activation frames, debugger paths,
    cache identity, or execution.
-4. Keep batch-83 work within bounded pure ordering `with` key expressions
-   over supported writable one-dimensional integral containers.
+4. Keep batch-84 work within bounded pure `with` transformations on the four
+   extrema/uniqueness locators over supported one-dimensional integral
+   containers.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -524,8 +543,8 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 83 is in progress, extending the
-container tests as ordering-key coverage appears:
+Use a narrow test expression while batch 84 is in progress, extending the
+container tests as transformed-locator coverage appears:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
@@ -533,7 +552,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 82.
+recorded 59-test inventories are clean after feature batch 83.
 
 Before declaring any row complete, consult:
 

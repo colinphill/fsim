@@ -204,25 +204,26 @@ validate_container_locator_metadata(
   return std::nullopt;
 }
 
+namespace {
+
 [[nodiscard]] std::optional<std::string>
-validate_container_reduction_metadata(
-    const runtime::simir::ContainerReduction& operation,
-    const runtime::simir::ContainerType& source) {
+validate_container_element_graph(
+    const std::span<const runtime::simir::ContainerPredicateNode> nodes,
+    const runtime::simir::ContainerType& source,
+    const std::string_view owner,
+    const std::string_view graph_name) {
   using namespace runtime::simir;
-  if (operation.transformation.empty()) {
-    return std::nullopt;
-  }
   if (source.associative
-      || operation.transformation.size()
-          > maximum_container_predicate_nodes) {
-    return "ContainerReduction has invalid transformation metadata";
+      || nodes.empty()
+      || nodes.size() > maximum_container_predicate_nodes) {
+    return std::string{owner} + " has invalid "
+        + std::string{graph_name} + " metadata";
   }
   std::vector<ContainerPredicateValueKind> value_kinds;
-  value_kinds.reserve(operation.transformation.size());
+  value_kinds.reserve(nodes.size());
   std::size_t conditional_count{};
-  for (std::size_t index = 0;
-       index < operation.transformation.size(); ++index) {
-    const auto& node = operation.transformation[index];
+  for (std::size_t index = 0; index < nodes.size(); ++index) {
+    const auto& node = nodes[index];
     const auto earlier =
         [index](const std::uint32_t operand) {
           return operand < index;
@@ -232,28 +233,32 @@ validate_container_reduction_metadata(
         && node.operation
             <= ContainerPredicateOperator::greater_equal;
     if (node.operation > ContainerPredicateOperator::conditional) {
-      return "ContainerReduction transformation has an invalid operator";
+      return std::string{owner} + " " + std::string{graph_name}
+          + " has an invalid operator";
     }
     if (node.operation != ContainerPredicateOperator::conditional
         && node.third != 0) {
-      return "ContainerReduction transformation has an unused third edge";
+      return std::string{owner} + " " + std::string{graph_name}
+          + " has an unused third edge";
     }
     if (node.operation == ContainerPredicateOperator::item) {
       if (node.value_kind
           != ContainerPredicateValueKind::element) {
-        return "ContainerReduction transformation item has the "
-               "wrong type";
+        return std::string{owner} + " " + std::string{graph_name}
+            + " item has the wrong type";
       }
     } else if (
         node.operation == ContainerPredicateOperator::index) {
       if (node.value_kind
           != ContainerPredicateValueKind::index) {
-        return "ContainerReduction transformation index has the "
-               "wrong type";
+        return std::string{owner} + " " + std::string{graph_name}
+            + " index has the wrong type";
       }
     } else if (
         node.operation == ContainerPredicateOperator::constant) {
-      if (node.value_kind == ContainerPredicateValueKind::logical
+      if (node.value_kind > ContainerPredicateValueKind::logical
+          || node.value_kind
+              == ContainerPredicateValueKind::logical
           || node.constant.width()
               != (node.value_kind
                           == ContainerPredicateValueKind::index
@@ -264,8 +269,8 @@ validate_container_reduction_metadata(
                        == ContainerPredicateValueKind::index
                    || source.two_state)
               && node.constant.low_word().bval != 0)) {
-        return "ContainerReduction transformation constant has the "
-               "wrong type";
+        return std::string{owner} + " " + std::string{graph_name}
+            + " constant has the wrong type";
       }
     } else if (comparison) {
       if (!earlier(node.left) || !earlier(node.right)
@@ -275,8 +280,8 @@ validate_container_reduction_metadata(
               != value_kinds[node.right]
           || value_kinds[node.left]
               == ContainerPredicateValueKind::logical) {
-        return "ContainerReduction transformation comparison operands "
-               "are invalid";
+        return std::string{owner} + " " + std::string{graph_name}
+            + " comparison operands are invalid";
       }
     } else if (
         node.operation
@@ -284,8 +289,8 @@ validate_container_reduction_metadata(
       if (!earlier(node.left)
           || node.value_kind
               != ContainerPredicateValueKind::logical) {
-        return "ContainerReduction transformation logical operand is "
-               "invalid";
+        return std::string{owner} + " " + std::string{graph_name}
+            + " logical operand is invalid";
       }
     } else if (
         node.operation
@@ -301,23 +306,56 @@ validate_container_reduction_metadata(
               != ContainerPredicateValueKind::element
           || value_kinds[node.third]
               != ContainerPredicateValueKind::element) {
-        return "ContainerReduction conditional operands are invalid";
+        return std::string{owner}
+            + " conditional operands are invalid";
       }
     } else {
       if (!earlier(node.left) || !earlier(node.right)
           || node.value_kind
               != ContainerPredicateValueKind::logical) {
-        return "ContainerReduction transformation logical operands are "
-               "invalid";
+        return std::string{owner} + " " + std::string{graph_name}
+            + " logical operands are invalid";
       }
     }
     value_kinds.push_back(node.value_kind);
   }
   if (value_kinds.back()
       != ContainerPredicateValueKind::element) {
-    return "ContainerReduction transformation root has the wrong type";
+    return std::string{owner} + " " + std::string{graph_name}
+        + " root has the wrong type";
   }
   return std::nullopt;
+}
+
+}  // namespace
+
+[[nodiscard]] std::optional<std::string>
+validate_container_reduction_metadata(
+    const runtime::simir::ContainerReduction& operation,
+    const runtime::simir::ContainerType& source) {
+  if (operation.transformation.empty()) {
+    return std::nullopt;
+  }
+  return validate_container_element_graph(
+      operation.transformation, source,
+      "ContainerReduction", "transformation");
+}
+
+[[nodiscard]] std::optional<std::string>
+validate_container_ordering_metadata(
+    const runtime::simir::OrderContainer& operation,
+    const runtime::simir::ContainerType& target) {
+  using runtime::simir::ContainerOrderingOperator;
+  if (operation.key.empty()) {
+    return std::nullopt;
+  }
+  if (operation.operation != ContainerOrderingOperator::ascending
+      && operation.operation
+          != ContainerOrderingOperator::descending) {
+    return "OrderContainer key metadata requires sort or rsort";
+  }
+  return validate_container_element_graph(
+      operation.key, target, "OrderContainer", "key");
 }
 
 }  // namespace fsim::compiler::llvm_detail

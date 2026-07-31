@@ -466,6 +466,13 @@ module static_port_leaf #(
     assert (
         result.sum() with (
             item.index < 2 ? item : 8'h00) == 8'h70);
+    result.rsort(cell) with (
+        cell.index >= 2 ? 8'h00 : cell);
+    assert (result[LEFT] == 8'h40);
+    assert (result[LEFT - 1] == 8'h30);
+    assert (result[RIGHT + 1] == 8'h10);
+    assert (result[RIGHT] == 8'h20);
+    result = '{8'h10, 8'h20, 8'h30, 8'h40};
     result.reverse();
     assert (result[LEFT] == 8'h40);
     result.reverse();
@@ -576,6 +583,11 @@ module dynamic_port_leaf #(
     assert (byte_located.size() == 2);
     locations = work.unique_index();
     assert (locations[0] == 0);
+    work.rsort(work_item) with (
+        work_item.index == 0 ? 0 : work_item);
+    assert (work[0] == 42);
+    assert (work[1] == 41);
+    work = '{41, 42};
     result.reverse();
     assert (result[0] == 8'h22);
     result.sort();
@@ -716,6 +728,12 @@ module container_top;
     assert (target[0] == 4);
     target.reverse();
     target.sort();
+    target.rsort(target_item) with (
+        target_item.index == 0 ? 0 : target_item);
+    assert (target[0] == 4);
+    assert (target[1] == 2);
+    assert (target[2] == 1);
+    target.sort();
     #1;
     target.pop_front();
   endtask
@@ -759,6 +777,12 @@ module container_top;
     assert ($isunknown(binary[-1]));
     assert (binary[0] == 8'h03);
     assert (binary[1] == 8'h01);
+    binary = '{8'h01, 8'b10z1, 8'h03};
+    binary.sort() with (
+        item.index < 0 ? 8'h00 : item);
+    assert (binary[-1] == 8'h01);
+    assert (binary[0] == 8'h03);
+    assert ($isunknown(binary[1]));
     binary = '{8'h01, 8'b10z1, 8'h03};
     $readmemh("image.hex", memory);
     $readmemb("image.bin", binary, -1, 1);
@@ -808,6 +832,19 @@ module container_top;
     assert (
         values.sum() with (
             item.index >= 0 ? item : 0) == 0);
+    values = '{30, 10, 20, 11};
+    values.sort() with (
+        item.index < 2 ? 0 : item);
+    assert (values[0] == 30);
+    assert (values[1] == 10);
+    assert (values[2] == 11);
+    assert (values[3] == 20);
+    values.rsort(value_item) with (
+        value_item.index < 2 ? 0 : value_item);
+    assert (values[0] == 20);
+    assert (values[1] == 11);
+    assert (values[2] == 30);
+    assert (values[3] == 10);
     values = '{7, -8, 7};
     assert (values[1] == -8);
     assert (values.sum() == 6);

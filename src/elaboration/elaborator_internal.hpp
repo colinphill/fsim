@@ -939,7 +939,8 @@ private:
         std::string_view iterator_name,
         const frontend::Type& source_type,
         const ContainerType& runtime_type,
-        bool transformation);
+        bool transformation,
+        bool ordering_key = false);
     ContainerRegisterId allocate_container_register(
         const ContainerType& type);
     void lower_container_method(const Statement& statement);

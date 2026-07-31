@@ -555,6 +555,16 @@ validate_process(const Process &process,
                 reject(process, index,
                        "OrderContainer does not support associative arrays");
               }
+              if (operation.target
+                  < process.container_register_types.size()) {
+                if (const auto error =
+                        validate_container_ordering_metadata(
+                            operation,
+                            process.container_register_types[
+                                operation.target])) {
+                  reject(process, index, *error);
+                }
+              }
             },
             [&](const LocateContainer& operation) {
               result.uses_containers = true;

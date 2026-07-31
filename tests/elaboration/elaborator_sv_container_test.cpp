@@ -91,6 +91,19 @@ module container_lowering #(
     assert (
         values.product() with (
             item.index >= 0 ? item : 1) == 1);
+    values = '{30, 10, 20, 11};
+    values.sort() with (
+        item.index < 2 ? 0 : item);
+    assert (values[0] == 30);
+    assert (values[1] == 10);
+    assert (values[2] == 11);
+    assert (values[3] == 20);
+    values.rsort(entry) with (
+        entry.index < 2 ? 0 : entry);
+    assert (values[0] == 20);
+    assert (values[1] == 11);
+    assert (values[2] == 30);
+    assert (values[3] == 10);
     values = '{7, 8, 7};
     assert (values.sum() == 22);
     assert (values.product() == 392);
@@ -173,6 +186,12 @@ module container_lowering #(
             item.index > 0 ? item : 0) == 2);
     assert (lookup.sum() == 40);
     fixed_down = '{8'h31, 8'h21, 8'h11};
+    fixed_up = '{4'ha, 4'hb, 4'hc};
+    fixed_up.rsort(slot) with (
+        slot.index < 0 ? 0 : slot);
+    assert (fixed_up[-1] == 4'hc);
+    assert (fixed_up[0] == 4'hb);
+    assert (fixed_up[1] == 4'ha);
     fixed_up = '{4'ha, 4'hb, 4'hc};
     fixed_down.reverse();
     assert (fixed_down[STATIC_LEFT] == 8'h11);
@@ -323,7 +342,36 @@ endmodule
             return std::holds_alternative<
                 OrderContainer>(operation);
           })
-      >= 13);
+      >= 16);
+  assert(std::ranges::any_of(
+      process.operations,
+      [](const auto& operation) {
+        const auto* ordering =
+            std::get_if<OrderContainer>(&operation);
+        if (ordering == nullptr || ordering->key.empty()) {
+          return false;
+        }
+        const auto& graph = ordering->key;
+        return graph.back().value_kind
+                == ContainerPredicateValueKind::element
+            && std::ranges::any_of(
+                graph,
+                [](const auto& node) {
+                  return node.operation
+                          == ContainerPredicateOperator::index
+                      && node.value_kind
+                          == ContainerPredicateValueKind::index;
+                })
+            && std::ranges::any_of(
+                graph,
+                [&](const auto& node) {
+                  return node.operation
+                          == ContainerPredicateOperator::conditional
+                      && node.left < graph.size()
+                      && node.right < graph.size()
+                      && node.third < graph.size();
+                });
+      }));
   assert(
       std::ranges::count_if(
           process.operations,
@@ -407,6 +455,18 @@ endmodule
     }
   }
   assert(spelling_independent);
+  std::vector<const OrderContainer*> keyed_orderings;
+  for (const auto& operation : process.operations) {
+    if (const auto* ordering =
+            std::get_if<OrderContainer>(&operation);
+        ordering && !ordering->key.empty()) {
+      keyed_orderings.push_back(ordering);
+    }
+  }
+  assert(keyed_orderings.size() >= 3);
+  assert(same_predicate(
+      keyed_orderings[0]->key,
+      keyed_orderings[1]->key));
   const auto values =
       elaborated.design->container_objects()[0].id;
   const auto pending =
@@ -815,6 +875,19 @@ module container_invalid_lowering;
     result =
         fixed.sum() with (
             runtime_bound ? item : 0);
+    fixed.sort() with (item + 1);
+    fixed.sort() with (identity(item));
+    fixed.sort() with (item > 0);
+    fixed.sort() with (
+        item ? (item ? item : 0) : 0);
+    fixed.sort() with (
+        item.index.member == 0 ? item : 0);
+    fixed.sort() with (
+        item == item.index ? item : 0);
+    fixed.sort() with (
+        runtime_bound ? item : 0);
+    fixed.sort(collision) with (collision);
+    fixed.sort(entry) with (unknown.index == 0 ? entry : 0);
     result.sort();
     lookup.sort();
     fixed[0].sort();
@@ -875,6 +948,12 @@ endmodule
       rejected, "FSIM-ELAB-SVORDER-004"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVORDER-005"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVORDER-006"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVORDER-007"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVORDER-008"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVLOCATOR-001"));
   assert(has_diagnostic(

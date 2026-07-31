@@ -68,6 +68,10 @@ validate_container_locator_metadata(
 validate_container_reduction_metadata(
     const runtime::simir::ContainerReduction& operation,
     const runtime::simir::ContainerType& source);
+[[nodiscard]] std::optional<std::string>
+validate_container_ordering_metadata(
+    const runtime::simir::OrderContainer& operation,
+    const runtime::simir::ContainerType& target);
 
 [[nodiscard]] ValidatedProcess validate_process(
     const runtime::simir::Process& process,

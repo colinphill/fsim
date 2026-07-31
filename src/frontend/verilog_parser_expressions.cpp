@@ -518,6 +518,9 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             member.text == "reverse"
             || member.text == "sort"
             || member.text == "rsort";
+        const bool ordering_key_method =
+            member.text == "sort"
+            || member.text == "rsort";
         const bool unsupported_shuffle =
             member.text == "shuffle";
         const bool locator_method =
@@ -526,7 +529,8 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             || member.text == "unique"
             || member.text == "unique_index";
         const bool valid_iterator_argument =
-            predicate_locator_method
+            (predicate_locator_method
+             || ordering_key_method)
             && argument_count == 1
             && operands[1].kind == ExpressionKind::Identifier
             && operands[1].text.find('.') == std::string::npos;
@@ -549,7 +553,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                     || member.text == "pop_front"
                     || member.text == "pop_back"
                     || reduction_method
-                    || ordering_method
+                    || member.text == "reverse"
                     || unsupported_shuffle
                     || locator_method
                 ? std::optional<std::size_t>{0}
@@ -579,6 +583,20 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               member,
               "FSIM-SV-SEM-090",
               "predicate container locator method '" + member.text
+                  + "' accepts at most one iterator identifier");
+        }
+        if (ordering_key_method
+            && (argument_count > 1
+                || (argument_count == 1
+                    && operands[1].kind
+                        != ExpressionKind::Identifier)
+                || (argument_count == 1
+                    && operands[1].text.find('.')
+                        != std::string::npos))) {
+          error(
+              member,
+              "FSIM-SV-SEM-092",
+              "container ordering method '" + member.text
                   + "' accepts at most one iterator identifier");
         }
         if (reduction_method
@@ -622,12 +640,55 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "FSIM-SV-SEM-086",
               "container ordering methods require SystemVerilog 2017");
         }
-        if ((ordering_method || unsupported_shuffle)
+        if ((member.text == "reverse" || unsupported_shuffle)
             && current().text == "with") {
           error(
               current(),
               "FSIM-SV-UNSUPPORTED-041",
-              "container ordering with-clauses are not supported");
+              "reverse and shuffle ordering with-clauses are not "
+              "supported");
+        }
+        if (ordering_key_method) {
+          const auto iterator_scope_name =
+              valid_iterator_argument
+                  ? operands[1].text
+                  : std::string{"item"};
+          if (current().text != "with") {
+            if (argument_count != 0) {
+              error(
+                  current(),
+                  "FSIM-SV-SEM-092",
+                  "a named container ordering iterator requires a "
+                  "with-clause");
+            }
+          } else {
+            container_iterator_names_.insert(iterator_scope_name);
+            const bool iterator_scope_inserted =
+                current_procedural_names_.insert(
+                    iterator_scope_name).second;
+            advance();
+            expect(
+                TokenKind::LeftParen,
+                "'(' after container ordering with",
+                "FSIM-SV-PARSE-169");
+            if (at(TokenKind::RightParen)) {
+              error(
+                  current(),
+                  "FSIM-SV-SEM-092",
+                  "a container ordering with-clause requires a key "
+                  "expression");
+            } else {
+              operands.push_back(parse_expression());
+            }
+            if (iterator_scope_inserted) {
+              current_procedural_names_.erase(
+                  iterator_scope_name);
+            }
+            expect(
+                TokenKind::RightParen,
+                "')' after container ordering key expression",
+                "FSIM-SV-PARSE-170");
+          }
         }
         if (locator_method
             && language_ != Language::SystemVerilog2017) {

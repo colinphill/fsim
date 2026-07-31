@@ -91,6 +91,9 @@ module containers;
     values.reverse();
     values.sort();
     values.rsort();
+    values.sort() with (
+        item.index >= 0 ? item : 0);
+    pending.rsort(entry) with (entry);
     pending.reverse();
     pending.sort();
     bounded.rsort();
@@ -319,9 +322,46 @@ endmodule
                     || statement.value.text == ".sort"
                     || statement.value.text == ".rsort");
           })
-          == 6,
-      "container ordering methods remain explicit no-argument "
-      "method-statement HIR");
+          == 8,
+      "container ordering methods remain explicit method-statement HIR");
+  const auto implicit_ordering_key =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.kind
+                    == StatementKind::ContainerMethod
+                && statement.value.text == ".sort"
+                && statement.value.operands.size() == 2;
+          });
+  require(
+      implicit_ordering_key != query_statements.end()
+          && implicit_ordering_key->value.operands[1].kind
+              == ExpressionKind::Call
+          && implicit_ordering_key->value.operands[1].text == "?:"
+          && implicit_ordering_key->value.operands[1].span.source_name
+              == "containers.sv"
+          && !implicit_ordering_key->value.operands[1].span.empty(),
+      "implicit ordering with-key remains explicit source-spanned HIR");
+  const auto named_ordering_key =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.kind
+                    == StatementKind::ContainerMethod
+                && statement.value.text == ".rsort"
+                && statement.value.operands.size() == 3;
+          });
+  require(
+      named_ordering_key != query_statements.end()
+          && named_ordering_key->value.operands[1].kind
+              == ExpressionKind::Identifier
+          && named_ordering_key->value.operands[1].text == "entry"
+          && named_ordering_key->value.operands[2].kind
+              == ExpressionKind::Identifier
+          && named_ordering_key->value.operands[2].text == "entry"
+          && !named_ordering_key->value.operands[1].span.empty()
+          && !named_ordering_key->value.operands[2].span.empty(),
+      "named ordering iterator and key remain explicit source-spanned HIR");
   require(
       std::ranges::count_if(
           query_statements,
@@ -548,17 +588,48 @@ endmodule
               "FSIM-SV-SEM-090"),
       "implicit reduction iterator cannot leak outside its with-clause");
 
-  const auto unsupported_ordering = parse_text(
+  const auto ordering_with = parse_text(
       "container-ordering-with.sv",
-      "module m; int values[]; "
-      "initial values.sort() with (item); endmodule",
+      "module m; int values[]; initial begin "
+      "values.sort() with (item); "
+      "values.rsort(entry) with (entry.index < 2 ? entry : 0); "
+      "end endmodule",
       Language::SystemVerilog2017);
   require(
-      !unsupported_ordering.ok()
+      ordering_with.ok(),
+      "container ordering with-clauses parse with implicit and named "
+      "iterators");
+  const auto invalid_ordering_with = parse_text(
+      "container-ordering-invalid-with.sv",
+      "module m; int values[]; int result; initial begin "
+      "values.sort() with (); "
+      "values.rsort(entry); "
+      "values.sort(first, second) with (first); "
+      "values.sort() with item; "
+      "values.rsort() with (item; "
+      "values.reverse() with (item); "
+      "result = item; "
+      "end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_ordering_with.ok()
           && has_code(
-              unsupported_ordering,
-              "FSIM-SV-UNSUPPORTED-041"),
-      "container ordering with-clauses diagnose explicitly");
+              invalid_ordering_with,
+              "FSIM-SV-SEM-092")
+          && has_code(
+              invalid_ordering_with,
+              "FSIM-SV-PARSE-169")
+          && has_code(
+              invalid_ordering_with,
+              "FSIM-SV-PARSE-170")
+          && has_code(
+              invalid_ordering_with,
+              "FSIM-SV-UNSUPPORTED-041")
+          && has_code(
+              invalid_ordering_with,
+              "FSIM-SV-SEM-090"),
+      "container ordering with-clauses diagnose empty, malformed, invalid, "
+      "leaked, and excluded forms");
   const auto unsupported_locator = parse_text(
       "container-locator-with.sv",
       "module m; int values[]; int result[$]; "

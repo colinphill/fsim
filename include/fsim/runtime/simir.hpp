@@ -208,18 +208,6 @@ enum class ContainerOrderingOperator : std::uint8_t {
   descending,
 };
 
-struct OrderContainer {
-  ContainerOrderingOperator operation{
-      ContainerOrderingOperator::reverse};
-  ContainerRegisterId target{};
-};
-
-/// Reorder container elements using the deterministic SystemVerilog subset
-/// policy. The container type, size, bounds, and keys are unchanged.
-void order_container_value(
-    ContainerValue& value,
-    ContainerOrderingOperator operation);
-
 enum class ContainerLocatorOperator : std::uint8_t {
   minimum,
   maximum,
@@ -267,6 +255,21 @@ struct ContainerPredicateNode {
       ContainerPredicateValueKind::element};
   std::uint32_t third{};
 };
+
+struct OrderContainer {
+  ContainerOrderingOperator operation{
+      ContainerOrderingOperator::reverse};
+  ContainerRegisterId target{};
+  std::vector<ContainerPredicateNode> key;
+};
+
+/// Reorder container elements using the deterministic SystemVerilog subset
+/// policy. A nonempty key graph is evaluated once per original element.
+/// Container type, size, bounds, and associative keys are unchanged.
+void order_container_value(
+    ContainerValue& value,
+    ContainerOrderingOperator operation,
+    std::span<const ContainerPredicateNode> key = {});
 
 struct ContainerReduction {
   ContainerReductionOperator operation{
