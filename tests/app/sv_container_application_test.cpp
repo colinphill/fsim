@@ -505,9 +505,10 @@ module static_port_leaf #(
     assert (result[RIGHT] == 8'h40);
     assert (source[LEFT] == 8'h31);
     assert (source[RIGHT] == 8'h04);
-    result = source;
-    result[LEFT] = source[LEFT] + 8'h01;
-    result[RIGHT] = source[RIGHT] + 8'h02;
+    result = '{
+        RIGHT: source[RIGHT] + 8'h02,
+        default: 8'h20,
+        LEFT: source[LEFT] + 8'h01};
     shared[-1] = 4'ha;
     shared[1] = 4'hc;
   end
@@ -715,6 +716,17 @@ module container_top;
     copy.delete(3);
     return copy.size();
   endfunction
+  function automatic byte keyed_static_value(
+      input logic [7:0] source[3:0]);
+    logic [7:0] copy[3:0];
+    copy = '{
+        3: source[3],
+        default: 8'h55,
+        0: source[0]};
+    assert (copy[2] == 8'h55);
+    assert (copy[1] == 8'h55);
+    return copy[3];
+  endfunction
   task automatic mutate(inout byte target[$:2]);
     byte ordered[$];
     byte located[$];
@@ -797,7 +809,10 @@ module container_top;
       inout logic [7:0] target[3:0]);
     target[2] = 8'h11;
     #1;
-    target[3] = 8'h22;
+    target = '{
+        3: 8'h22,
+        default: 8'bxxxxzzzz,
+        0: 8'ha5};
   endtask
   initial begin
     key_t key;
@@ -807,7 +822,10 @@ module container_top;
     port_source[3] = 8'h31;
     port_source[0] = 8'h04;
     dynamic_source = '{11, 12};
-    binary = '{8'h01, 8'b10z1, 8'h03};
+    binary = '{
+        32'hffffffff: 8'h01,
+        default: 8'b10z1,
+        1: 8'h03};
     assert ($isunknown(binary[0]));
     assert ($isunknown(binary.sum()));
     assert ($isunknown(binary.product()));
@@ -841,6 +859,7 @@ module container_top;
     assert ($isunknown(memory[1]));
     assert ($isunknown(memory[2]));
     assert (memory[3] == 8'h0f);
+    assert (keyed_static_value(memory) == 8'h0f);
     assert (binary[-1] == 8'h01);
     assert ($isunknown(binary[0]));
     assert (binary[1] == 8'h03);
@@ -1020,6 +1039,8 @@ module container_top;
                 ? pending_item : 0) == pending[1]);
     mutate_memory(memory);
     assert (port_result[3] == 8'h32);
+    assert (port_result[2] == 8'h20);
+    assert (port_result[1] == 8'h20);
     assert (port_result[0] == 8'h06);
     assert (port_shared[-1] == 4'ha);
     assert (port_shared[0] == 0);
@@ -1098,7 +1119,7 @@ endmodule
         && compiled.memory.elements[0].to_msb_string()
             == "00100010"
         && compiled.memory.elements[1].to_msb_string()
-            == "00010001"
+            == "XXXXZZZZ"
         && compiled.memory.elements[2].to_msb_string()
             == "XXXXZZZZ"
         && compiled.memory.elements[3].to_msb_string()
@@ -1116,6 +1137,10 @@ endmodule
     assert(
         compiled.port_result.elements[0].low_word().aval
             == 0x32
+        && compiled.port_result.elements[1].low_word().aval
+            == 0x20
+        && compiled.port_result.elements[2].low_word().aval
+            == 0x20
         && compiled.port_result.elements[3].low_word().aval
             == 0x06
         && compiled.port_shared.elements[0].low_word().aval

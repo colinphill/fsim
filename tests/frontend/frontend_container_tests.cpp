@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::tests::frontend {
 
@@ -66,6 +67,8 @@ module containers;
     values = '{1, 2, 3};
     pending = '{8'haa, 8'hbb};
     lookup = '{-1: 16'h1234, 3: 16'h5678};
+    image = '{default: 8'h55, 6: 8'h66};
+    ascending = '{1: 4'hd, default: 4'ha, -2: 4'hc};
     values = new[3];
     pending.push_front(8'h11);
     bounded.delete();
@@ -344,9 +347,9 @@ endmodule
             return statement.value.kind
                 == ExpressionKind::Aggregate;
           })
-          == 4,
-      "static, dynamic, queue, and associative assignment patterns "
-      "remain aggregate HIR");
+          == 6,
+      "positional, associative, and static default/key assignment "
+      "patterns remain aggregate HIR");
   require(
       std::ranges::count_if(
           query_statements,
@@ -495,6 +498,41 @@ endmodule
           && keyed_pattern->value.aggregate_choice_expressions.size()
               == 2,
       "associative assignment-pattern keys remain explicit HIR");
+  const auto defaulted_pattern =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.value.kind
+                    == ExpressionKind::Aggregate
+                && statement.value.aggregate_choices
+                    == std::vector<std::string>{
+                        "default", "@key"};
+          });
+  require(
+      defaulted_pattern != query_statements.end()
+          && defaulted_pattern->value.operands.size() == 2
+          && defaulted_pattern->value
+                 .aggregate_choice_expressions.size() == 2
+          && defaulted_pattern->value
+                 .aggregate_choice_expressions[0].size() == 1
+          && defaulted_pattern->value
+                 .aggregate_choice_expressions[0][0].kind
+              == ExpressionKind::DefaultChoice
+          && defaulted_pattern->value
+                 .aggregate_choice_expressions[0][0].text
+              == "default"
+          && defaulted_pattern->value
+                 .aggregate_choice_expressions[0][0].span.source_name
+              == "containers.sv"
+          && !defaulted_pattern->value
+                  .aggregate_choice_expressions[0][0].span.empty()
+          && defaulted_pattern->value
+                 .aggregate_choice_expressions[1].size() == 1
+          && defaulted_pattern->value
+                 .aggregate_choice_expressions[1][0].kind
+              == ExpressionKind::IntegerLiteral,
+      "static default and index choices remain ordered, explicit, and "
+      "source-spanned without treating default as an identifier");
   require(
       unit->tasks.size() == 1
           && unit->tasks[0].arguments.size() == 3
@@ -839,6 +877,23 @@ endmodule
           && has_code(
               malformed_pattern, "FSIM-SV-PARSE-163"),
       "assignment-pattern opening-brace recovery is stable");
+  const auto malformed_pattern_members = parse_text(
+      "container-pattern-member-invalid.sv",
+      "module m; int values[1:0]; initial begin "
+      "values = '{default 1}; "
+      "values = '{default: }; "
+      "end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_pattern_members.ok()
+          && has_code(
+              malformed_pattern_members,
+              "FSIM-SV-PARSE-173")
+          && has_code(
+              malformed_pattern_members,
+              "FSIM-SV-PARSE-174"),
+      "assignment-pattern default punctuation and missing values "
+      "diagnose with stable recovery");
 }
 
 }  // namespace fsim::tests::frontend

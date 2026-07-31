@@ -402,10 +402,17 @@ Lowerer::lower_container_pattern(
   bool has_positional = false;
   bool has_keyed = false;
   bool has_default = false;
-  for (const auto& choice : expression.aggregate_choices) {
+  std::size_t default_count{};
+  for (std::size_t member = 0;
+       member < expression.aggregate_choices.size();
+       ++member) {
+    const auto& choice = expression.aggregate_choices[member];
+    const auto& choice_expressions =
+        expression.aggregate_choice_expressions[member];
     has_positional |= choice.empty();
     has_keyed |= choice == "@key";
     has_default |= choice == "default";
+    default_count += choice == "default" ? 1U : 0U;
     if (!choice.empty() && choice != "@key"
         && choice != "default") {
       report(
@@ -414,20 +421,54 @@ Lowerer::lower_container_pattern(
           expression.span);
       return std::nullopt;
     }
+    const bool valid_choice_metadata =
+        choice.empty()
+            ? choice_expressions.empty()
+            : choice == "@key"
+                ? choice_expressions.size() == 1
+                : choice_expressions.size() == 1
+                    && choice_expressions.front().kind
+                        == ExpressionKind::DefaultChoice;
+    if (!valid_choice_metadata) {
+      report(
+          "FSIM-ELAB-SVPATTERN-001",
+          "a container assignment-pattern association has "
+          "inconsistent choice metadata",
+          expression.span);
+      return std::nullopt;
+    }
   }
-  if (has_default || (has_positional && has_keyed)) {
+  if (has_positional && (has_keyed || has_default)) {
     report(
         "FSIM-ELAB-SVPATTERN-004",
-        has_default
-            ? "default container assignment-pattern members are "
-              "outside the bounded subset"
-            : "container assignment patterns cannot mix positional "
-              "and keyed members",
+        "container assignment patterns cannot mix positional "
+        "members with keyed or default members",
         expression.span);
     return std::nullopt;
   }
-  if (runtime_type.associative != has_keyed
-      && !expression.operands.empty()) {
+  if (has_default && !runtime_type.fixed) {
+    report(
+        "FSIM-ELAB-SVPATTERN-004",
+        "default assignment-pattern members require a direct "
+        "one-dimensional static-array target",
+        expression.span);
+    return std::nullopt;
+  }
+  if (runtime_type.fixed && (has_keyed || has_default)
+      && default_count != 1) {
+    report(
+        "FSIM-ELAB-SVPATTERN-005",
+        default_count == 0
+            ? "a keyed static-array assignment pattern requires "
+              "exactly one default member"
+            : "a static-array assignment pattern cannot contain "
+              "more than one default member",
+        expression.span);
+    return std::nullopt;
+  }
+  if (runtime_type.associative
+          ? (!has_keyed && !expression.operands.empty())
+          : (has_keyed && !runtime_type.fixed)) {
     report(
         "FSIM-ELAB-SVPATTERN-001",
         runtime_type.associative
@@ -447,9 +488,13 @@ Lowerer::lower_container_pattern(
               : static_cast<std::int64_t>(runtime_type.index_right)
                     - runtime_type.index_left)
       + 1U;
-  if ((runtime_type.fixed
+  const bool static_default_pattern =
+      runtime_type.fixed && has_default;
+  if ((runtime_type.fixed && !static_default_pattern
        && count != fixed_count)
-      || count > maximum_container_elements
+      || count
+          > maximum_container_elements
+              + (static_default_pattern ? 1U : 0U)
       || (runtime_type.maximum_elements
           && count > *runtime_type.maximum_elements)) {
     report(
@@ -464,6 +509,118 @@ Lowerer::lower_container_pattern(
   }
   const auto destination =
       allocate_container_register(runtime_type);
+  if (static_default_pattern) {
+    struct ExplicitMember {
+      std::int32_t index{};
+      RegisterId value{};
+    };
+    std::optional<RegisterId> default_value;
+    std::vector<ExplicitMember> explicit_members;
+    std::set<std::int32_t> converted_keys;
+    for (std::size_t member = 0; member < count; ++member) {
+      const auto value = lower_expression(
+          expression.operands[member],
+          runtime_type.element_width,
+          &source_type);
+      if (!value) {
+        return std::nullopt;
+      }
+      if (expression.aggregate_choices[member] == "default") {
+        default_value = *value;
+        continue;
+      }
+      const auto& key_expression =
+          expression.aggregate_choice_expressions[member].front();
+      std::string error;
+      const auto constant =
+          evaluate_systemverilog_constant_expression(
+              key_expression, {}, {}, error);
+      if (!constant || !constant->known()) {
+        report(
+            "FSIM-ELAB-SVPATTERN-006",
+            "static-array assignment-pattern keys must be locally "
+            "constant known integral values",
+            key_expression.span);
+        return std::nullopt;
+      }
+      const auto converted_bits =
+          static_cast<std::uint32_t>(constant->bits);
+      const auto converted =
+          converted_bits
+                  <= static_cast<std::uint32_t>(
+                      std::numeric_limits<std::int32_t>::max())
+              ? static_cast<std::int64_t>(converted_bits)
+              : static_cast<std::int64_t>(converted_bits)
+                    - (INT64_C(1) << 32U);
+      const auto low = std::min(
+          runtime_type.index_left, runtime_type.index_right);
+      const auto high = std::max(
+          runtime_type.index_left, runtime_type.index_right);
+      if (converted < low || converted > high) {
+        report(
+            "FSIM-ELAB-SVPATTERN-007",
+            "a converted static-array assignment-pattern key is "
+            "outside the declared index range",
+            key_expression.span);
+        return std::nullopt;
+      }
+      const auto declared_index =
+          static_cast<std::int32_t>(converted);
+      if (!converted_keys.insert(declared_index).second) {
+        report(
+            "FSIM-ELAB-SVPATTERN-007",
+            "static-array assignment-pattern keys must be unique "
+            "after signed index conversion",
+            key_expression.span);
+        return std::nullopt;
+      }
+      explicit_members.push_back(
+          ExplicitMember{declared_index, *value});
+    }
+    if (!default_value) {
+      report(
+          "FSIM-ELAB-SVPATTERN-005",
+          "a keyed static-array assignment pattern requires exactly "
+          "one default member",
+          expression.span);
+      return std::nullopt;
+    }
+    for (std::uint64_t element = 0;
+         element < fixed_count;
+         ++element) {
+      const auto step =
+          runtime_type.index_left >= runtime_type.index_right
+              ? -static_cast<std::int64_t>(element)
+              : static_cast<std::int64_t>(element);
+      const auto declared_index =
+          static_cast<std::int32_t>(
+              static_cast<std::int64_t>(
+                  runtime_type.index_left)
+              + step);
+      if (converted_keys.contains(declared_index)) {
+        continue;
+      }
+      const auto index =
+          allocate_register(32, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(LoadConstant{
+          index,
+          unsigned_value(
+              static_cast<std::uint32_t>(declared_index), 32)});
+      process_.operations.emplace_back(ContainerWrite{
+          destination, index, *default_value, true});
+    }
+    for (const auto& member : explicit_members) {
+      const auto index =
+          allocate_register(32, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(LoadConstant{
+          index,
+          unsigned_value(
+              static_cast<std::uint32_t>(member.index), 32)});
+      process_.operations.emplace_back(ContainerWrite{
+          destination, index, member.value, true});
+    }
+    return destination;
+  }
   if (!runtime_type.fixed && !runtime_type.associative
       && !runtime_type.queue) {
     const auto size =

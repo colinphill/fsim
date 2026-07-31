@@ -423,6 +423,7 @@ using namespace elaboration_detail;
         case ExpressionKind::Aggregate:
         case ExpressionKind::Concatenation:
         case ExpressionKind::Replication:
+        case ExpressionKind::DefaultChoice:
         case ExpressionKind::Invalid:
             return false;
         case ExpressionKind::Index:
@@ -687,6 +688,7 @@ using namespace elaboration_detail;
         case ExpressionKind::Aggregate:
         case ExpressionKind::Concatenation:
         case ExpressionKind::Replication:
+        case ExpressionKind::DefaultChoice:
         case ExpressionKind::Invalid:
             return false;
         }

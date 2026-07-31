@@ -1312,6 +1312,145 @@ void test_signal_kind_cache_identity(
   assert(cached_object_paths(cache_directory).size() == 2);
 }
 
+void test_static_pattern_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  const auto make_process =
+      [](const std::uint8_t explicit_value,
+         const std::int32_t explicit_index,
+         const bool explicit_first,
+         const bool default_pattern,
+         const std::int32_t left = 2,
+         const std::uint32_t element_width = 8,
+         const bool two_state = false,
+         const std::uint32_t source_line = 17) {
+        ContainerType fixed;
+        fixed.element_width = element_width;
+        fixed.two_state = two_state;
+        fixed.fixed = true;
+        fixed.index_left = left;
+        fixed.index_right = 0;
+        Process process;
+        process.id = 30;
+        process.name = "cached_static_pattern";
+        process.container_register_count = 1;
+        process.container_register_types = {fixed};
+        process.operations.push_back(
+            DebugPoint{
+                DebugPointKind::statement,
+                SourceLocation{
+                    "cached_static_pattern.sv",
+                    source_line,
+                    5}});
+        RegisterId next_register{};
+        const auto load_value =
+            [&](const std::uint8_t value) {
+              const auto result = next_register++;
+              process.operations.push_back(
+                  LoadConstant{
+                      result,
+                      PackedLogic4::from_aval_bval(
+                          element_width, value, 0)});
+              return result;
+            };
+        if (default_pattern) {
+          RegisterId default_value{};
+          RegisterId selected_value{};
+          if (explicit_first) {
+            selected_value = load_value(explicit_value);
+            default_value = load_value(0x22);
+          } else {
+            default_value = load_value(0x22);
+            selected_value = load_value(explicit_value);
+          }
+          for (auto index = left; index >= 0; --index) {
+            const auto index_register = next_register++;
+            process.operations.push_back(
+                LoadConstant{
+                    index_register,
+                    PackedLogic4::from_aval_bval(
+                        32,
+                        static_cast<std::uint32_t>(index),
+                        0)});
+            process.operations.push_back(
+                ContainerWrite{
+                    0,
+                    index_register,
+                    index == explicit_index
+                        ? selected_value
+                        : default_value,
+                    true});
+          }
+        } else {
+          std::vector<RegisterId> values;
+          for (auto index = left; index >= 0; --index) {
+            values.push_back(
+                load_value(
+                    index == explicit_index
+                        ? explicit_value
+                        : 0x22));
+          }
+          for (std::int32_t offset = 0;
+               offset <= left;
+               ++offset) {
+            const auto index = left - offset;
+            const auto index_register = next_register++;
+            process.operations.push_back(
+                LoadConstant{
+                    index_register,
+                    PackedLogic4::from_aval_bval(
+                        32,
+                        static_cast<std::uint32_t>(index),
+                        0)});
+            process.operations.push_back(
+                ContainerWrite{
+                    0,
+                    index_register,
+                    values[static_cast<std::size_t>(offset)],
+                    true});
+          }
+        }
+        process.register_count = next_register;
+        process.operations.push_back(Halt{});
+        return process;
+      };
+  constexpr std::string_view symbol =
+      "cached_static_pattern";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_cache_statistics(
+            jit, hits, misses, misses);
+      };
+  materialize(
+      make_process(0x33, 2, false, true), 0, 1);
+  materialize(
+      make_process(0x33, 2, false, true), 1, 0);
+  materialize(
+      make_process(0x44, 2, false, true), 0, 1);
+  materialize(
+      make_process(0x33, 1, false, true), 0, 1);
+  materialize(
+      make_process(0x33, 2, true, true), 0, 1);
+  materialize(
+      make_process(0x33, 2, false, false), 0, 1);
+  materialize(
+      make_process(0x33, 2, false, true, 3), 0, 1);
+  materialize(
+      make_process(0x03, 2, false, true, 2, 4, true), 0, 1);
+  materialize(
+      make_process(0x33, 2, false, true, 2, 8, false, 18),
+      0,
+      1);
+  assert(cached_object_paths(cache_directory).size() == 8);
+}
+
 void test_container_predicate_cache_identity(
     const std::filesystem::path& cache_directory) {
   const auto make_process =
@@ -1725,6 +1864,8 @@ void test_persistent_object_cache() {
   test_signed_shift_cache_identity(root / "signed-shift");
   test_integer_cache_identity(root / "integer");
   test_signal_kind_cache_identity(root / "signal-kind");
+  test_static_pattern_cache_identity(
+      root / "static-pattern");
   test_container_predicate_cache_identity(
       root / "container-predicate");
   test_container_reduction_cache_identity(

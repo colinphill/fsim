@@ -4668,6 +4668,70 @@ tests in 60.69 seconds, including scoped locals in 0.80 seconds and containers
 in 27.12 seconds, on 2026-07-30. Batch 85 is not a ten-batch GitHub
 CI-inspection boundary, so no Actions run is required.
 
+### Eighty-sixth feature batch — bounded static assignment-pattern defaults and index keys
+
+SystemVerilog assignment-pattern parsing now retains `default` associations as
+explicit source-spanned `DefaultChoice` nodes rather than ordinary
+identifiers. This adds no vector or recursively embedded expression to the
+common `Expression` footprint: the marker occupies the existing
+aggregate-choice expression storage beside ordered `@key` metadata. Stable
+parser diagnostics cover a missing colon after `default` and a missing
+association value.
+
+Direct whole assignment to a one-dimensional integral static array accepts
+either the existing exact-count positional form or exactly one default member
+plus zero or more explicit integral index members. A default-only pattern
+fills the complete array. Positional associations cannot mix with keyed or
+default associations, and keyed static patterns without a default or with
+duplicate defaults fail deterministically. Dynamic arrays and queues retain
+positional sizing, associative arrays retain their keyed semantics, and
+defaults remain excluded from those kinds.
+
+Explicit static keys use bounded SystemVerilog constant evaluation and must be
+known. Their low 32 bits convert to the signed declared-index profile before
+range and uniqueness checks, so spellings such as unsigned
+`32'hffffffff` select declared index `-1` and collide with an explicit `-1`.
+Converted keys map through the existing direction-aware fixed-container index
+kernel for both ascending and descending declarations.
+
+Member value expressions lower in source order through the destination's
+exact element width, signedness, and two-/four-state domain. Construction then
+fills every unmentioned declared index from the one default register before
+applying explicit members in their retained source order. The existing typed
+temporary remains the only construction target; one
+`CopyContainerRegister`, followed by ordinary object writeback when needed,
+atomically replaces the destination. No new SimIR operation, runtime callback,
+allocator identity, or public ABI slot was required.
+
+Positive evidence covers default-only and keyed/default patterns, default
+placement before, between, and after keys, parameter keys, signed `-1`
+conversion, ascending and descending ranges, exact bit/logic conversion,
+four-state X/Z defaults, legacy positional and associative behavior, module
+objects, writable direct static ports, nested/generated aliases, automatic
+function values, and inout tasks after suspension. A dedicated elaboration
+fixture proves three temporary writes precede one whole copy with the exact
+fixed type. The standalone application agrees across interpreter and LLVM
+O0/O2 with cold/warm cache reuse.
+
+Negative evidence covers missing punctuation and values, missing or duplicate
+defaults, nonconstant and unknown keys, converted duplicates, out-of-range
+keys, mixed positional/keyed/default associations, defaults on dynamic kinds,
+indirect and noncontainer targets, and the existing multidimensional,
+aggregate/string-element, and cross-language exclusions. Native-object schema
+38 and container semantic revision 14 distinguish the expanded behavior.
+Cache evidence separately changes member values, converted keys, source
+member order, default-versus-positional construction, destination range,
+element width/state profile, and statement source provenance.
+
+The diagnostic catalog now covers 1,216 production codes and the source gate
+still covers 286 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 212.40 seconds, including scoped locals in 0.89 seconds and the
+expanded container differential in 143.74 seconds. Release passed all 59
+tests in 61.92 seconds, including scoped locals in 0.81 seconds and containers
+in 30.66 seconds, on 2026-07-30. Batch 86 is not a ten-batch GitHub
+CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

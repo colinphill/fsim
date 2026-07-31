@@ -65,6 +65,9 @@ enum class ExpressionKind {
   Aggregate,
   Concatenation,
   Replication,
+  // Source-spanned SystemVerilog assignment-pattern `default` choice. This
+  // is association metadata, never an ordinary identifier expression.
+  DefaultChoice,
 };
 
 // `text` contains the identifier/literal/operator/callee. Operands retain
@@ -77,11 +80,13 @@ struct Expression {
   SourceSpan span;
   // VHDL aggregate choices parallel operands. Empty denotes a positional
   // association; otherwise the canonical record element name, `others`, or
-  // the internal `@array` marker is retained. Each corresponding entry in
-  // aggregate_choice_expressions retains the parsed discrete/range choices;
-  // record aggregates normally have one identifier choice, positional
-  // associations have none, and non-aggregate expressions leave both vectors
-  // empty.
+  // the internal `@array` marker is retained. SystemVerilog keyed patterns use
+  // the internal `@key` marker and defaulted patterns use `default`. Each
+  // corresponding entry in aggregate_choice_expressions retains the parsed
+  // discrete/range choices; a SystemVerilog default association retains one
+  // source-spanned DefaultChoice node, record aggregates normally have one
+  // identifier choice, positional associations have none, and non-aggregate
+  // expressions leave both vectors empty.
   std::vector<std::string> aggregate_choices{};
   std::vector<std::vector<Expression>> aggregate_choice_expressions{};
   // Set only on elaboration-internal folded VHDL enumeration constants so

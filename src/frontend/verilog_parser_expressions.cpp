@@ -299,30 +299,53 @@ Expression VerilogParser::parse_primary() {
         "sv-pattern",
         {},
         apostrophe.span};
+    const auto parse_pattern_value = [&]() {
+      if (at(TokenKind::Comma)
+          || at(TokenKind::RightBrace)
+          || at(TokenKind::EndOfFile)) {
+        error(
+            current(),
+            "FSIM-SV-PARSE-174",
+            "expected a value after an assignment-pattern association");
+        return Expression{
+            ExpressionKind::Invalid,
+            current().text,
+            {},
+            current().span};
+      }
+      return parse_expression();
+    };
     while (!at(TokenKind::RightBrace)
            && !at(TokenKind::EndOfFile)) {
-      const bool default_choice =
-          current().text == "default";
-      auto first =
-          default_choice
-              ? Expression{
-                    ExpressionKind::Identifier,
-                    advance().text,
-                    {},
-                    previous().span}
-              : parse_expression();
-      if (match(TokenKind::Colon)) {
-        pattern.aggregate_choices.push_back(
-            default_choice ? "default" : "@key");
+      if (keyword("default")) {
+        const auto default_token = advance();
+        Expression default_choice{
+            ExpressionKind::DefaultChoice,
+            default_token.text,
+            {},
+            default_token.span};
+        if (!match(TokenKind::Colon)) {
+          error(
+              current(),
+              "FSIM-SV-PARSE-173",
+              "expected ':' after an assignment-pattern default choice");
+        }
+        pattern.aggregate_choices.push_back("default");
         pattern.aggregate_choice_expressions.push_back(
-            default_choice
-                ? std::vector<Expression>{}
-                : std::vector<Expression>{std::move(first)});
-        pattern.operands.push_back(parse_expression());
+            {std::move(default_choice)});
+        pattern.operands.push_back(parse_pattern_value());
       } else {
-        pattern.aggregate_choices.emplace_back();
-        pattern.aggregate_choice_expressions.emplace_back();
-        pattern.operands.push_back(std::move(first));
+        auto first = parse_expression();
+        if (match(TokenKind::Colon)) {
+          pattern.aggregate_choices.push_back("@key");
+          pattern.aggregate_choice_expressions.push_back(
+              {std::move(first)});
+          pattern.operands.push_back(parse_pattern_value());
+        } else {
+          pattern.aggregate_choices.emplace_back();
+          pattern.aggregate_choice_expressions.emplace_back();
+          pattern.operands.push_back(std::move(first));
+        }
       }
       if (!match(TokenKind::Comma)) {
         break;

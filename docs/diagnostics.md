@@ -543,6 +543,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-170` | error | Expected `)` after a container ordering key expression. |
 | `FSIM-SV-PARSE-171` | error | Expected `(` after an extrema/uniqueness locator's transformation `with` keyword. |
 | `FSIM-SV-PARSE-172` | error | Expected `)` after an extrema/uniqueness locator transformation. |
+| `FSIM-SV-PARSE-173` | error | Expected `:` after a SystemVerilog assignment-pattern `default` choice. |
+| `FSIM-SV-PARSE-174` | error | Expected a value after a SystemVerilog assignment-pattern association. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -1088,7 +1090,10 @@ therefore excluded.
 | `FSIM-ELAB-SVPATTERN-001` | error | A container assignment pattern has inconsistent metadata or uses keyed versus positional members with the wrong container kind. |
 | `FSIM-ELAB-SVPATTERN-002` | error | A static pattern has the wrong element count or a dynamic pattern exceeds its container capacity. |
 | `FSIM-ELAB-SVPATTERN-003` | error | An associative pattern key is not locally constant and known or duplicates another converted key. |
-| `FSIM-ELAB-SVPATTERN-004` | error | A container assignment pattern mixes keyed and positional members or uses an unsupported `default` member. |
+| `FSIM-ELAB-SVPATTERN-004` | error | A container assignment pattern mixes positional members with keyed/default members or uses `default` outside the bounded static-array subset. |
+| `FSIM-ELAB-SVPATTERN-005` | error | A keyed/default static-array assignment pattern is missing its one required default member or contains duplicate defaults. |
+| `FSIM-ELAB-SVPATTERN-006` | error | A static-array assignment-pattern index key is not a locally constant known integral value. |
+| `FSIM-ELAB-SVPATTERN-007` | error | A static-array assignment-pattern index key is duplicate after signed conversion or outside the declared range. |
 | `FSIM-ELAB-SVREDUCE-001` | error | A container reduction is outside SystemVerilog-2017 or lacks a direct supported unpacked-container receiver. |
 | `FSIM-ELAB-SVREDUCE-002` | error | A container reduction method has an argument or more than one retained `with` transformation. |
 | `FSIM-ELAB-SVREDUCE-003` | error | A result-producing container reduction is used as a standalone statement. |

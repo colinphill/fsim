@@ -652,15 +652,21 @@ queries diagnose. Type-only, indirect, and multidimensional container queries
 remain pending.
 
 SystemVerilog apostrophe-brace assignment patterns are retained as aggregate
-HIR with positional or keyed association metadata, distinct from packed
-concatenation. A direct whole-container assignment allocates a temporary
-register of the exact specialized target type. Static members write declared
-indices in left-to-right order; dynamic arrays resize before indexed writes;
+HIR with positional, keyed, or source-spanned `DefaultChoice` association
+metadata, distinct from packed concatenation. A direct whole-container
+assignment allocates a temporary register of the exact specialized target
+type. Static positional members write declared indices in left-to-right
+order. A bounded keyed/default static pattern evaluates member values in
+source order, converts each key to the signed 32-bit declared-index profile,
+fills every unmentioned ascending or descending index from its one default,
+then applies explicit keys. Dynamic arrays resize before indexed writes;
 queues append through `PushContainer`; associative members convert and
 deduplicate locally constant keys before `ContainerWrite`. Only after the
 temporary is complete does `CopyContainerRegister` replace the local or
 module-object value. No new SimIR operation, native callback, allocator
-identity, or address-bearing ABI is required.
+identity, or address-bearing ABI is required. Schema 38 distinguishes the
+expanded construction semantics while canonical operations retain member
+order, values, keys, destination profile, and source provenance.
 
 SystemVerilog direct unpacked-container `sum`, `product`, `and`, `or`, and
 `xor` methods lower to a typed `ContainerReduction` operation whose scalar

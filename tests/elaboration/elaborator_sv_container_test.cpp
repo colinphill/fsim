@@ -65,7 +65,11 @@ module container_lowering #(
   function automatic byte copied_static(
       input logic [7:0] source[STATIC_LEFT:1]);
     logic [7:0] copy[STATIC_LEFT:1];
-    copy = source;
+    copy = '{
+        STATIC_LEFT: source[STATIC_LEFT],
+        default: 8'h55,
+        1: source[1]};
+    assert (copy[2] == 8'h55);
     copy[2] = 8'h99;
     return copy[3];
   endfunction
@@ -74,7 +78,10 @@ module container_lowering #(
       inout logic [7:0] target[STATIC_LEFT:1]);
     target[2] = 8'h22;
     #1;
-    target[1] = 8'h11;
+    target = '{
+        default: 8'h44,
+        STATIC_LEFT: 8'h33,
+        1: 8'h11};
   endtask
 
   initial begin
@@ -215,6 +222,26 @@ module container_lowering #(
     assert (lookup.sum() == 40);
     fixed_down = '{8'h31, 8'h21, 8'h11};
     fixed_up = '{4'ha, 4'hb, 4'hc};
+    fixed_down = '{
+        STATIC_LEFT: 8'h31,
+        default: 8'b10xz0011,
+        1: 8'h11};
+    assert (fixed_down[STATIC_LEFT] == 8'h31);
+    assert ($isunknown(fixed_down[2]));
+    assert (fixed_down[1] == 8'h11);
+    fixed_up = '{default: 4'h7};
+    assert (fixed_up[-1] == 4'h7);
+    assert (fixed_up[0] == 4'h7);
+    assert (fixed_up[1] == 4'h7);
+    fixed_up = '{
+        32'hffffffff: 4'ha,
+        default: 4'hb,
+        1: 4'hc};
+    assert (fixed_up[-1] == 4'ha);
+    assert (fixed_up[0] == 4'hb);
+    assert (fixed_up[1] == 4'hc);
+    fixed_down = '{8'h31, 8'h21, 8'h11};
+    fixed_up = '{4'ha, 4'hb, 4'hc};
     fixed_up.rsort(slot) with (
         slot.index < 0 ? 0 : slot);
     assert (fixed_up[-1] == 4'hc);
@@ -294,7 +321,7 @@ module container_lowering #(
     assert (values[0] == 7);
     assert (count(pending) == 2);
     assert (fixed_down[3] == 8'h33);
-    assert (fixed_down[2] == 8'h22);
+    assert (fixed_down[2] == 8'h44);
     assert (fixed_down[1] == 8'h11);
   end
 endmodule
@@ -565,7 +592,7 @@ endmodule
       && fixed_down_result.type.index_right == 1
       && fixed_down_result.elements.size() == 3
       && fixed_down_result.elements[0].low_word().aval == 0x33
-      && fixed_down_result.elements[1].low_word().aval == 0x22
+      && fixed_down_result.elements[1].low_word().aval == 0x44
       && fixed_down_result.elements[2].low_word().aval == 0x11
       && fixed_up_result.type.fixed
       && fixed_up_result.type.index_left == -1
@@ -573,6 +600,76 @@ endmodule
       && fixed_up_result.elements[0].low_word().aval == 0xa
       && fixed_up_result.elements[1].low_word().aval == 0
       && fixed_up_result.elements[2].low_word().aval == 0xc);
+
+  const auto atomic_pattern_parsed =
+      fsim::frontend::parse_text(
+          "static-pattern-atomic.sv",
+          R"(
+module static_pattern_atomic;
+  logic [7:0] target[2:0];
+  logic [7:0] selected;
+  initial begin
+    selected = 8'h33;
+    target = '{2: selected, default: 8'h22, 0: 8'h11};
+  end
+endmodule
+)",
+          fsim::frontend::Language::SystemVerilog2017);
+  assert(atomic_pattern_parsed.ok());
+  const auto atomic_pattern_elaborated =
+      fsim::elaboration::elaborate(
+          atomic_pattern_parsed.design,
+          "static_pattern_atomic");
+  assert(atomic_pattern_elaborated.ok());
+  const auto& atomic_process =
+      atomic_pattern_elaborated.design->processes().front();
+  const CopyContainerRegister* atomic_copy{};
+  std::size_t atomic_copy_position{};
+  std::size_t atomic_object_write_position{};
+  std::vector<std::size_t> atomic_element_writes;
+  for (std::size_t position = 0;
+       position < atomic_process.operations.size();
+       ++position) {
+    const auto& operation =
+        atomic_process.operations[position];
+    if (const auto* copy =
+            std::get_if<CopyContainerRegister>(&operation)) {
+      assert(atomic_copy == nullptr);
+      atomic_copy = copy;
+      atomic_copy_position = position;
+    } else if (
+        std::holds_alternative<ContainerWrite>(operation)) {
+      atomic_element_writes.push_back(position);
+    } else if (
+        std::holds_alternative<WriteContainerObject>(operation)) {
+      atomic_object_write_position = position;
+    }
+  }
+  assert(
+      atomic_copy != nullptr
+      && atomic_element_writes.size() == 3
+      && std::ranges::all_of(
+          atomic_element_writes,
+          [&](const auto position) {
+            const auto& write =
+                std::get<ContainerWrite>(
+                    atomic_process.operations[position]);
+            return write.target == atomic_copy->source
+                && position < atomic_copy_position;
+          })
+      && atomic_copy->destination != atomic_copy->source
+      && atomic_object_write_position > atomic_copy_position
+      && atomic_copy->source
+          < atomic_process.container_register_types.size());
+  const auto& atomic_type =
+      atomic_process
+          .container_register_types[atomic_copy->source];
+  assert(
+      atomic_type.fixed
+      && atomic_type.element_width == 8
+      && !atomic_type.two_state
+      && atomic_type.index_left == 2
+      && atomic_type.index_right == 0);
 
   const auto port_parsed = fsim::frontend::parse_text(
       "container-ports.sv",
@@ -597,8 +694,10 @@ module static_port_leaf #(
     assert (source[LEFT] == 8'h31);
     assert (source[RIGHT] == 8'h04);
     result = source;
-    result[LEFT] = source[LEFT] + 8'h01;
-    result[RIGHT] = source[RIGHT] + 8'h02;
+    result = '{
+        RIGHT: source[RIGHT] + 8'h02,
+        default: 8'h20,
+        LEFT: source[LEFT] + 8'h01};
     shared[-1] = 4'ha;
     shared[1] = 4'hc;
   end
@@ -643,6 +742,8 @@ module static_port_top;
     source[0] = 8'h04;
     #2;
     assert (result[3] == 8'h32);
+    assert (result[2] == 8'h20);
+    assert (result[1] == 8'h20);
     assert (result[0] == 8'h06);
     assert (shared[-1] == 4'ha);
     assert (shared[0] == 0);
@@ -707,6 +808,8 @@ endmodule
       port_interpreter->container_object_value(*shared_id);
   assert(
       result_value.elements[0].low_word().aval == 0x32
+      && result_value.elements[1].low_word().aval == 0x20
+      && result_value.elements[2].low_word().aval == 0x20
       && result_value.elements[3].low_word().aval == 0x06
       && shared_value.elements[0].low_word().aval == 0xa
       && shared_value.elements[1].low_word().aval == 0
@@ -1219,6 +1322,8 @@ module bad_dynamic_port_top;
   int fixed_value[1:0];
   logic [7:0] four_state_value[];
   int query_result;
+  int keyed_static[1:0];
+  logic [7:0] signed_key_static[-1:1];
   dynamic_accept expression_actual(
       .value(dynamic_value[0]));
   dynamic_accept unknown_actual(.value(missing));
@@ -1246,6 +1351,15 @@ module bad_dynamic_port_top;
     narrow_associative = '{-1: 1, 15: 2};
     dynamic_value = '{1, 2: 3};
     dynamic_value = '{default: 1};
+    keyed_static = '{0: 1, 1: 2};
+    keyed_static = '{default: 0, default: 1};
+    keyed_static = '{default: 0, query_result: 1};
+    keyed_static = '{default: 0, 32'hxxxxxxxx: 1};
+    keyed_static = '{default: 0, 2: 1};
+    signed_key_static = '{
+        default: 8'h00, -1: 8'h01,
+        32'hffffffff: 8'h02};
+    keyed_static = '{default: 0, 0: 1, 2};
     dynamic_value[0] = '{1};
     query_result = '{1};
   end
@@ -1284,6 +1398,12 @@ endmodule
       rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-003"));
   assert(has_diagnostic(
       rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-004"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-005"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-006"));
+  assert(has_diagnostic(
+      rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-007"));
 
   const auto mixed_parent = fsim::frontend::parse_text(
       "mixed-container-port.vhd",
