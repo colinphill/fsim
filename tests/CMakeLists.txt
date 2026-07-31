@@ -1004,6 +1004,22 @@ set_tests_properties(
     app/application_test_systemc.cpp
   )
   fsim_configure_test(fsim_application_tests)
+  if(
+    WIN32
+    AND (
+      MSVC
+      OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+    )
+  )
+    # The monolithic application regression retains many large project and
+    # type values in one unoptimized fixture frame. Give MSVC-compatible Debug
+    # builds the same bounded stack budget as the accumulated frontend and
+    # elaboration matrices.
+    target_link_options(
+      fsim_application_tests
+      PRIVATE "$<$<CONFIG:Debug>:/STACK:8388608>"
+    )
+  endif()
   target_compile_definitions(
     fsim_application_tests
     PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
