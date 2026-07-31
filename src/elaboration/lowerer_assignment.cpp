@@ -1528,6 +1528,7 @@ using namespace elaboration_detail;
 
     void Lowerer::lower_case(const Statement& statement) {
         BinaryOperator match_operation = BinaryOperator::case_equal;
+        bool inside_matching = false;
         switch (statement.case_match_kind) {
         case frontend::CaseMatchKind::Exact:
             break;
@@ -1537,6 +1538,10 @@ using namespace elaboration_detail;
         case frontend::CaseMatchKind::WildcardXZ:
             match_operation = BinaryOperator::casex_equal;
             break;
+        case frontend::CaseMatchKind::Inside:
+            inside_matching = true;
+            match_operation = BinaryOperator::wildcard_equal;
+            break;
         default:
             report(
                 "FSIM-ELAB-081",
@@ -1544,8 +1549,41 @@ using namespace elaboration_detail;
                 statement.span);
             return;
         }
-        const auto selector_width =
-            infer_width(statement.condition).value_or(std::size_t{1});
+        if (inside_matching
+            && language_ != frontend::Language::SystemVerilog2017) {
+            report(
+                "FSIM-ELAB-SVCASEINSIDE-001",
+                "case inside matching requires SystemVerilog",
+                statement.span);
+            return;
+        }
+        if (inside_matching
+            && (is_container_expression(statement.condition)
+                || is_string_expression(statement.condition)
+                || statement.condition.kind == ExpressionKind::Aggregate
+                || statement.condition.kind
+                    == ExpressionKind::Concatenation)) {
+            report(
+                "FSIM-ELAB-SVCASEINSIDE-002",
+                "bounded case inside requires a scalar integral selector",
+                statement.condition.span);
+            return;
+        }
+        const auto inferred_selector_width =
+            infer_width(statement.condition);
+        if (inside_matching
+            && (!inferred_selector_width
+                || *inferred_selector_width == 0)) {
+            report(
+                "FSIM-ELAB-SVCASEINSIDE-002",
+                "the case inside selector width is not statically inferable",
+                statement.condition.span);
+            return;
+        }
+        const auto selector_width = inferred_selector_width.value_or(
+            std::size_t{1});
+        const bool selector_signed =
+            is_signed_expression(statement.condition);
         const auto* selector_type =
             statement.condition.kind
                     == ExpressionKind::Identifier
@@ -1564,6 +1602,36 @@ using namespace elaboration_detail;
             return;
         }
 
+        const auto lower_inside_operand =
+            [&](const Expression& operand)
+                -> std::optional<RegisterId> {
+              if (is_container_expression(operand)
+                  || is_string_expression(operand)
+                  || operand.kind == ExpressionKind::Aggregate
+                  || operand.kind == ExpressionKind::Concatenation
+                  || (operand.kind == ExpressionKind::Call
+                      && (operand.text == "inside"
+                          || operand.text == "@inside-range"))) {
+                report(
+                    "FSIM-ELAB-SVCASEINSIDE-003",
+                    "case inside choices must be nonnested scalar integral "
+                    "values",
+                    operand.span);
+                return std::nullopt;
+              }
+              const auto width = infer_width(operand);
+              if (!width || *width != selector_width
+                  || is_signed_expression(operand) != selector_signed) {
+                report(
+                    "FSIM-ELAB-SVCASEINSIDE-004",
+                    "case inside choices and range bounds must exactly match "
+                    "the selector width and signedness",
+                    operand.span);
+                return std::nullopt;
+              }
+              return lower_expression(operand, selector_width);
+            };
+
         std::vector<InstructionIndex> exit_jumps;
         const frontend::CaseAlternative* default_alternative = nullptr;
         for (const auto& alternative : statement.case_alternatives) {
@@ -1572,44 +1640,105 @@ using namespace elaboration_detail;
                 continue;
             }
 
+            if (inside_matching && alternative.choices.empty()) {
+                report(
+                    "FSIM-ELAB-SVCASEINSIDE-005",
+                    "a case inside alternative requires at least one choice",
+                    alternative.span);
+                continue;
+            }
+
             std::vector<InstructionIndex> branches;
             for (const auto& choice : alternative.choices) {
-                const auto choice_register =
-                    lower_expression(
-                        choice,
-                        register_width(*selector),
-                        selector_type != nullptr
-                                && !selector_type
-                                        ->enumeration_literals.empty()
-                            ? selector_type
-                            : nullptr);
-                if (!choice_register) {
-                    continue;
+                std::optional<RegisterId> condition;
+                if (inside_matching
+                    && choice.kind == ExpressionKind::Call
+                    && choice.text == "@inside-range") {
+                    if (choice.operands.size() != 2) {
+                        report(
+                            "FSIM-ELAB-SVCASEINSIDE-006",
+                            "a case inside range requires exactly one low "
+                            "and high bound",
+                            choice.span);
+                        continue;
+                    }
+                    const auto low =
+                        lower_inside_operand(choice.operands[0]);
+                    const auto high =
+                        lower_inside_operand(choice.operands[1]);
+                    if (!low || !high) {
+                        continue;
+                    }
+                    const auto domain = frontend::ValueDomain::Logic4;
+                    const auto valid = allocate_register(1, domain);
+                    const auto above_low = allocate_register(1, domain);
+                    const auto below_high = allocate_register(1, domain);
+                    const auto within_lower = allocate_register(1, domain);
+                    condition = allocate_register(1, domain);
+                    process_.operations.emplace_back(Binary{
+                        selector_signed
+                            ? BinaryOperator::less_equal_signed
+                            : BinaryOperator::less_equal_unsigned,
+                        valid, *low, *high});
+                    process_.operations.emplace_back(Binary{
+                        selector_signed
+                            ? BinaryOperator::greater_equal_signed
+                            : BinaryOperator::greater_equal_unsigned,
+                        above_low, *selector, *low});
+                    process_.operations.emplace_back(Binary{
+                        selector_signed
+                            ? BinaryOperator::less_equal_signed
+                            : BinaryOperator::less_equal_unsigned,
+                        below_high, *selector, *high});
+                    process_.operations.emplace_back(LogicalBinary{
+                        LogicalBinaryOperator::logical_and,
+                        within_lower, valid, above_low});
+                    process_.operations.emplace_back(LogicalBinary{
+                        LogicalBinaryOperator::logical_and,
+                        *condition, within_lower, below_high});
+                } else {
+                    const auto choice_register = inside_matching
+                        ? lower_inside_operand(choice)
+                        : lower_expression(
+                              choice,
+                              register_width(*selector),
+                              selector_type != nullptr
+                                      && !selector_type
+                                              ->enumeration_literals.empty()
+                                  ? selector_type
+                                  : nullptr);
+                    if (!choice_register) {
+                        continue;
+                    }
+                    if (!inside_matching
+                        && register_width(*choice_register)
+                            != register_width(*selector)) {
+                        report(
+                            "FSIM-ELAB-063",
+                            "case item width "
+                                + std::to_string(
+                                    register_width(*choice_register))
+                                + " does not match selector width "
+                                + std::to_string(register_width(*selector)),
+                            choice.span);
+                        continue;
+                    }
+                    condition = allocate_register(
+                        1,
+                        inside_matching
+                            ? frontend::ValueDomain::Logic4
+                            : frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary{
+                        match_operation,
+                        *condition,
+                        *selector,
+                        *choice_register});
                 }
-                if (register_width(*choice_register)
-                    != register_width(*selector)) {
-                    report(
-                        "FSIM-ELAB-063",
-                        "case item width "
-                            + std::to_string(
-                                register_width(*choice_register))
-                            + " does not match selector width "
-                            + std::to_string(register_width(*selector)),
-                        choice.span);
-                    continue;
-                }
-                const auto condition =
-                    allocate_register(1, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(Binary{
-                    match_operation,
-                    condition,
-                    *selector,
-                    *choice_register});
                 branches.push_back(
                     static_cast<InstructionIndex>(
                         process_.operations.size()));
                 process_.operations.emplace_back(Branch{
-                    condition,
+                    *condition,
                     0,
                     0,
                     UnknownBranchPolicy::when_false});

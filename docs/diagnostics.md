@@ -550,6 +550,11 @@ therefore excluded.
 | `FSIM-SV-PARSE-177` | error | An `inside` membership list is empty. |
 | `FSIM-SV-PARSE-178` | error | Expected `:` between the low and high bounds of an `inside` range. |
 | `FSIM-SV-PARSE-179` | error | Expected `]` after an `inside` range. |
+| `FSIM-SV-PARSE-180` | error | A `case inside` statement is used outside SystemVerilog. |
+| `FSIM-SV-PARSE-181` | error | Expected `:` between the low and high bounds of a `case inside` range. |
+| `FSIM-SV-PARSE-182` | error | Expected `]` after a `case inside` range. |
+| `FSIM-SV-PARSE-183` | error | A `case inside` alternative contains no choice or a trailing empty choice. |
+| `FSIM-SV-PARSE-184` | error | `inside` matching is combined with `casez` or `casex`. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -764,7 +769,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-011` | error | Declaration initializers are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-017` | error | A `case` statement uses an unsupported `unique`, `unique0`, or `priority` qualifier. |
-| `FSIM-SV-UNSUPPORTED-018` | error | A `case inside` statement requires unsupported set-membership matching. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
 | `FSIM-SV-UNSUPPORTED-020` | error | A parameter data type is outside the supported integral subset. |
 | `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded integral-parameter, local-signal, continuous assignment, process, instance, and nested-generate subset. |
@@ -786,6 +790,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
 | `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
+| `FSIM-SV-UNSUPPORTED-042` | error | A `case matches` statement requires unsupported pattern matching. |
 
 ## Elaboration and SimIR lowering
 
@@ -1105,6 +1110,12 @@ therefore excluded.
 | `FSIM-ELAB-SVMEMBER-004` | error | An `inside` member is a nested set, unpacked container, string, aggregate, concatenation, or another unsupported nonintegral value. |
 | `FSIM-ELAB-SVMEMBER-005` | error | An `inside` value or range bound does not exactly match the left operand width and signedness. |
 | `FSIM-ELAB-SVMEMBER-006` | error | Internal `inside` range metadata does not contain exactly one low and high bound. |
+| `FSIM-ELAB-SVCASEINSIDE-001` | error | A `case inside` statement is lowered outside SystemVerilog. |
+| `FSIM-ELAB-SVCASEINSIDE-002` | error | A bounded `case inside` selector is not scalar integral or its width is not statically inferable. |
+| `FSIM-ELAB-SVCASEINSIDE-003` | error | A `case inside` choice is a nested membership expression, range marker in value position, container, string, aggregate, concatenation, or another unsupported nonintegral value. |
+| `FSIM-ELAB-SVCASEINSIDE-004` | error | A `case inside` value or range bound does not exactly match the selector width and signedness. |
+| `FSIM-ELAB-SVCASEINSIDE-005` | error | Internal `case inside` HIR contains an alternative without a choice. |
+| `FSIM-ELAB-SVCASEINSIDE-006` | error | Internal `case inside` range metadata does not contain exactly one low and high bound. |
 | `FSIM-ELAB-SVQUERY-001` | error | A bounded unpacked-container query has the wrong language or arity, an indirect expression, or no direct typed container object. |
 | `FSIM-ELAB-SVQUERY-002` | error | A bounded unpacked-container query dimension is not the locally constant dimension `1`. |
 | `FSIM-ELAB-SVQUERY-003` | error | A finite-bound query is applied to an associative array. |

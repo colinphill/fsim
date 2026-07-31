@@ -31,7 +31,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 17> values;
+  std::array<std::string, 20> values;
   fsim::runtime::simir::ContainerValue returned;
   fsim::runtime::simir::ContainerValue qualified_returned;
   fsim::runtime::simir::ContainerValue selected;
@@ -135,7 +135,7 @@ Capture run_once(
         capture.points.push_back(point);
       });
 
-  constexpr std::array<std::string_view, 17> paths{
+  constexpr std::array<std::string_view, 20> paths{
       "function_top.imported_result",
       "function_top.qualified_result",
       "function_top.array_witness",
@@ -152,7 +152,10 @@ Capture run_once(
       "function_top.membership_value",
       "function_top.membership_package",
       "function_top.membership_wildcard",
-      "function_top.membership_unknown"};
+      "function_top.membership_unknown",
+      "function_top.case_inside_value",
+      "function_top.case_inside_package",
+      "function_top.case_inside_unknown"};
   std::array<fsim::runtime::simir::SignalId, paths.size()>
       signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -170,6 +173,8 @@ Capture run_once(
       "function_top.consumer_condition", 8);
   const auto membership_trace = vcd.declare_signal(
       "function_top.membership_value", 1);
+  const auto case_inside_trace = vcd.declare_signal(
+      "function_top.case_inside_value", 4);
   vcd.begin(simulation.now());
   vcd.change(
       witness_trace, simulation.read_signal(signals[2]));
@@ -178,6 +183,7 @@ Capture run_once(
       simulation.read_signal(signals[4]));
   vcd.change(consumer_trace, simulation.read_signal(signals[9]));
   vcd.change(membership_trace, simulation.read_signal(signals[13]));
+  vcd.change(case_inside_trace, simulation.read_signal(signals[17]));
   simulation.set_signal_change_hook(
       [&](const fsim::runtime::simir::SignalId signal,
           const fsim::runtime::PackedLogic4& value,
@@ -195,6 +201,9 @@ Capture run_once(
         } else if (signal == signals[13]) {
           vcd.set_time(time);
           vcd.change(membership_trace, value);
+        } else if (signal == signals[17]) {
+          vcd.set_time(time);
+          vcd.change(case_inside_trace, value);
         }
       });
   capture.result = simulation.run();
@@ -259,7 +268,7 @@ Capture run_once(
 
 void verify(
     const Capture& capture,
-    const std::array<std::string, 17>& expected) {
+    const std::array<std::string, 20>& expected) {
   assert(capture.result.status == fsim::runtime::RunStatus::stopped);
   assert(capture.result.time == 1);
   if (capture.values != expected) {
@@ -288,16 +297,16 @@ void verify(
         return point.kind
             == fsim::runtime::simir::ExecutionPointKind::call;
       });
-  if (calls != 14) {
+  if (calls != 17) {
     std::cerr << "unexpected function call point count: "
               << calls << '\n';
   }
-  assert(calls == 14);
-  if (capture.call_operations != 37) {
+  assert(calls == 17);
+  if (capture.call_operations != 40) {
     std::cerr << "unexpected lowered Call operation count: "
               << capture.call_operations << '\n';
   }
-  assert(capture.call_operations == 37);
+  assert(capture.call_operations == 40);
   assert(std::ranges::find(
              capture.locals, "inner.temporary")
          != capture.locals.end());
@@ -364,7 +373,8 @@ void verify(
                  : "b00101101")
           != std::string::npos
       && capture.vcd.find("b01001011") != std::string::npos
-      && capture.vcd.find("membership_value") != std::string::npos);
+      && capture.vcd.find("membership_value") != std::string::npos
+      && capture.vcd.find("case_inside_value") != std::string::npos);
   const auto avals = [](const auto& value) {
     std::vector<std::uint64_t> result;
     for (const auto& element : value.elements) {
@@ -472,13 +482,17 @@ module function_top #(
     parameter int QUEUE_MAXIMUM = 3);
   import function_pkg::*;
 
+  function automatic int constant_failing(input int divisor);
+    return 1 / divisor;
+  endfunction
+
   function automatic int width_for(input int value);
     logic [31:0] width;
     width = 4;
     for (int index = 0; index < 2; index++)
       width = width + 2;
-    case (value)
-      5: return width;
+    case (value) inside
+      1, [5:5], constant_failing(0): return width;
       default: return 4;
     endcase
   endfunction
@@ -517,6 +531,9 @@ module function_top #(
   logic membership_package;
   logic membership_wildcard;
   logic membership_unknown;
+  logic [3:0] case_inside_value;
+  logic [3:0] case_inside_package;
+  logic [3:0] case_inside_unknown;
 
   function automatic logic [WIDTH-1:0] inner(
       input logic [WIDTH-1:0] value);
@@ -649,6 +666,20 @@ module function_top #(
         8'ha5 inside {8'b10xz_0101};
     membership_unknown =
         8'bx001_0001 inside {8'b0001_0001};
+    case (outer(8'd40)) inside
+      8'd1, [8'd40:8'd42], failing(8'd0):
+        case_inside_value = 4'h1;
+      default: case_inside_value = 4'hf;
+    endcase
+    case (package_step(imported_result)) inside
+      [8'd40:8'd45]: case_inside_package = 4'h2;
+      default: case_inside_package = 4'hf;
+    endcase
+    case (8'bx001_0001) inside
+      8'b0001_0001: case_inside_unknown = 4'h3;
+      8'bxxxx_xxxx: case_inside_unknown = 4'h4;
+      default: case_inside_unknown = 4'hf;
+    endcase
     #1;
     $finish;
   end
@@ -672,12 +703,12 @@ endmodule
         run_once(config, fsim::app::SimulationEngine::compiled);
     const auto warm =
         run_once(config, fsim::app::SimulationEngine::compiled);
-    const std::array<std::string, 17> expected{
+    const std::array<std::string, 20> expected{
         "00101010", "00000011", "00101100", "1",
         "01001011", "1", "00111110",
         "00000000000000000000000000011011",
         "00110100", "00100000", "1", "1", "1",
-        "1", "1", "1", "X"};
+        "1", "1", "1", "X", "0001", "0010", "0100"};
     verify(reference, expected);
     verify(cold, expected);
     verify(warm, expected);
@@ -716,7 +747,7 @@ endmodule
        "01001011", "1", "00111110",
        "00000000000000000000000000011011",
        "00110100", "00100000", "1", "1", "1",
-       "1", "1", "1", "X"});
+       "1", "1", "1", "X", "0001", "0010", "0100"});
   assert(baseline_o2_keys.size() == 1);
   assert(changed.keys.size() == 1);
   assert(changed.keys.front() != baseline_o2_keys.front());

@@ -1654,4 +1654,213 @@ endmodule
         "FSIM-ELAB-SVMEMBER-004");
 }
 
+void test_systemverilog_case_inside_lowering() {
+    const auto parsed = fsim::frontend::parse_text(
+        "case_inside.sv",
+        R"(
+module case_inside;
+  logic [7:0] selector;
+  logic signed [7:0] signed_selector;
+  bit [7:0] bit_selector;
+  logic [7:0] low_bound;
+  logic [7:0] high_bound;
+  logic [3:0] exact_range;
+  logic [3:0] wildcard_choice;
+  logic [3:0] unknown_default;
+  logic [3:0] unknown_later_match;
+  logic [3:0] reversed_range;
+  logic [3:0] signed_range;
+  logic [3:0] bit_choice;
+  logic [3:0] first_selected;
+  logic [3:0] short_circuit;
+
+  function automatic logic [7:0] observed(input logic [7:0] value);
+    return value;
+  endfunction
+  function automatic logic [7:0] failing(input logic [7:0] divisor);
+    return 8'hff / divisor;
+  endfunction
+
+  initial begin
+    selector = 8'h15;
+    signed_selector = -8'sd5;
+    bit_selector = 8'h2a;
+    low_bound = 8'h10;
+    high_bound = 8'h1f;
+    case (selector) inside
+      8'h01, [8'h10:8'h1f]: exact_range = 4'h1;
+      default: exact_range = 4'hf;
+    endcase
+    case (8'ha5) inside
+      8'b10xz_0101: wildcard_choice = 4'h2;
+      default: wildcard_choice = 4'hf;
+    endcase
+    case (8'bx001_0001) inside
+      8'b0001_0001: unknown_default = 4'h3;
+      default: unknown_default = 4'hd;
+    endcase
+    case (8'bx001_0001) inside
+      8'b0001_0001: unknown_later_match = 4'h4;
+      8'bxxxx_xxxx: unknown_later_match = 4'h5;
+      default: unknown_later_match = 4'he;
+    endcase
+    case (selector) inside
+      [8'h1f:8'h10]: reversed_range = 4'h6;
+      default: reversed_range = 4'hc;
+    endcase
+    case (signed_selector) inside
+      [-8'sd8:-8'sd2]: signed_range = 4'h7;
+      default: signed_range = 4'hb;
+    endcase
+    case (bit_selector) inside
+      8'h2a: bit_choice = 4'h8;
+      default: bit_choice = 4'ha;
+    endcase
+    case (selector) inside
+      [8'h10:8'h20]: first_selected = 4'h9;
+      8'h15: first_selected = 4'h0;
+      default: first_selected = 4'hf;
+    endcase
+    case (observed(selector)) inside
+      [observed(low_bound):observed(high_bound)], failing(8'h00):
+        short_circuit = 4'ha;
+      default: short_circuit = 4'hf;
+    endcase
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    if (!parsed.ok()) {
+      for (const auto& diagnostic : parsed.diagnostics) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    assert(parsed.ok());
+    const auto elaborated = fsim::elaboration::elaborate(
+        parsed.design, "sv:work.case_inside");
+    if (!elaborated.ok()) {
+      for (const auto& diagnostic : elaborated.diagnostics) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated.ok());
+    const auto& process = elaborated.design->processes().front();
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          const auto* binary =
+              std::get_if<fsim::runtime::simir::Binary>(&operation);
+          return binary != nullptr
+              && binary->operation
+                  == fsim::runtime::simir::BinaryOperator::wildcard_equal;
+        }));
+    const auto case_calls = std::ranges::count_if(
+        process.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          return std::holds_alternative<fsim::runtime::simir::Call>(
+              operation);
+        });
+    assert(case_calls == 4);
+    auto interpreter = elaborated.design->create_interpreter();
+    (void)interpreter->run();
+    const auto value = [&](const std::string_view name) {
+      const auto signal = elaborated.design->find_signal(name);
+      assert(signal);
+      return interpreter->signal_value(*signal).to_msb_string();
+    };
+    assert(value("exact_range") == "0001");
+    assert(value("wildcard_choice") == "0010");
+    assert(value("unknown_default") == "1101");
+    assert(value("unknown_later_match") == "0101");
+    assert(value("reversed_range") == "1100");
+    assert(value("signed_range") == "0111");
+    assert(value("bit_choice") == "1000");
+    assert(value("first_selected") == "1001");
+    assert(value("short_circuit") == "1010");
+
+    const auto reject = [](
+        const std::string_view path,
+        const std::string_view source,
+        const std::string_view code) {
+      const auto candidate = fsim::frontend::parse_text(
+          path, source,
+          fsim::frontend::Language::SystemVerilog2017);
+      assert(candidate.ok());
+      const auto rejected = fsim::elaboration::elaborate(
+          candidate.design, "sv:work.case_inside_negative");
+      assert(!rejected.ok());
+      assert(has_diagnostic(rejected, code));
+    };
+    reject(
+        "case_inside_width.sv",
+        "module case_inside_negative; logic [7:0] s; logic r; "
+        "initial case (s) inside 4'h1: r = 1; endcase endmodule",
+        "FSIM-ELAB-SVCASEINSIDE-004");
+    reject(
+        "case_inside_signedness.sv",
+        "module case_inside_negative; logic signed [7:0] s; logic r; "
+        "initial case (s) inside 8'h1: r = 1; endcase endmodule",
+        "FSIM-ELAB-SVCASEINSIDE-004");
+    reject(
+        "case_inside_choice_container.sv",
+        "module case_inside_negative; logic [7:0] s; logic [7:0] a[1:0]; "
+        "logic r; initial case (s) inside a: r = 1; endcase endmodule",
+        "FSIM-ELAB-SVCASEINSIDE-003");
+    reject(
+        "case_inside_selector_container.sv",
+        "module case_inside_negative; logic [7:0] a[1:0]; logic r; "
+        "initial case (a) inside 8'h1: r = 1; endcase endmodule",
+        "FSIM-ELAB-SVCASEINSIDE-002");
+    reject(
+        "case_inside_nested.sv",
+        "module case_inside_negative; logic [7:0] s; logic r; "
+        "initial case (s) inside s inside {s}: r = 1; endcase endmodule",
+        "FSIM-ELAB-SVCASEINSIDE-003");
+
+    const auto malformed_parsed = fsim::frontend::parse_text(
+        "case_inside_malformed_hir.sv",
+        "module case_inside_malformed_hir; logic [7:0] s; logic r; "
+        "initial case (s) inside 8'h1: r = 1; endcase endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(malformed_parsed.ok());
+    auto empty = malformed_parsed.design;
+    empty.units.front().processes.front().statements.front()
+        .case_alternatives.front().choices.clear();
+    const auto empty_result = fsim::elaboration::elaborate(
+        empty, "sv:work.case_inside_malformed_hir");
+    assert(!empty_result.ok());
+    assert(has_diagnostic(
+        empty_result, "FSIM-ELAB-SVCASEINSIDE-005"));
+
+    auto malformed = malformed_parsed.design;
+    auto& malformed_case = malformed.units.front().processes.front()
+                               .statements.front();
+    malformed_case.case_alternatives.front().choices.front() =
+        fsim::frontend::Expression{
+            fsim::frontend::ExpressionKind::Call,
+            "@inside-range",
+            {},
+            malformed_case.span};
+    const auto malformed_result = fsim::elaboration::elaborate(
+        malformed, "sv:work.case_inside_malformed_hir");
+    assert(!malformed_result.ok());
+    assert(has_diagnostic(
+        malformed_result, "FSIM-ELAB-SVCASEINSIDE-006"));
+
+    const auto verilog_parsed = fsim::frontend::parse_text(
+        "case_inside_wrong_language.v",
+        "module case_inside_wrong_language; reg s; reg r; "
+        "initial case (s) 1'b0: r = 1; endcase endmodule",
+        fsim::frontend::Language::Verilog2005);
+    assert(verilog_parsed.ok());
+    auto wrong_language = verilog_parsed.design;
+    wrong_language.units.front().processes.front().statements.front()
+        .case_match_kind = fsim::frontend::CaseMatchKind::Inside;
+    const auto wrong_language_result = fsim::elaboration::elaborate(
+        wrong_language, "sv:work.case_inside_wrong_language");
+    assert(!wrong_language_result.ok());
+    assert(has_diagnostic(
+        wrong_language_result, "FSIM-ELAB-SVCASEINSIDE-001"));
+}
+
 } // namespace fsim::tests::elaboration

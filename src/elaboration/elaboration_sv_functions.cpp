@@ -50,14 +50,23 @@ private:
                     *function, expression, environment, error);
             }
             if (expression.text == "inside") {
-                auto folded = expression;
-                for (std::size_t index = 0;
-                     index < folded.operands.size(); ++index) {
-                    auto& operand = folded.operands[index];
-                    if (index != 0
-                        && operand.kind == ExpressionKind::Call
-                        && operand.text == "@inside-range") {
-                        for (auto& bound : operand.operands) {
+                if (expression.operands.size() < 2) {
+                    return evaluate_systemverilog_constant_expression(
+                        expression, environment, fallback_, error);
+                }
+                const auto left = evaluate_expression(
+                    expression.operands.front(), environment, error);
+                if (!left) {
+                    return std::nullopt;
+                }
+                std::optional<Value> unknown;
+                std::optional<Value> no_match;
+                for (std::size_t index = 1;
+                     index < expression.operands.size(); ++index) {
+                    auto item = expression.operands[index];
+                    if (item.kind == ExpressionKind::Call
+                        && item.text == "@inside-range") {
+                        for (auto& bound : item.operands) {
                             const auto value = evaluate_expression(
                                 bound, environment, error);
                             if (!value) {
@@ -65,17 +74,37 @@ private:
                             }
                             bound = value->expression(bound.span);
                         }
-                        continue;
+                    } else {
+                        const auto value = evaluate_expression(
+                            item, environment, error);
+                        if (!value) {
+                            return std::nullopt;
+                        }
+                        item = value->expression(item.span);
                     }
-                    const auto value = evaluate_expression(
-                        operand, environment, error);
-                    if (!value) {
+                    Expression single{
+                        ExpressionKind::Call,
+                        "inside",
+                        {left->expression(expression.operands.front().span),
+                         std::move(item)},
+                        expression.span};
+                    const auto matched =
+                        evaluate_systemverilog_constant_expression(
+                            single, environment, fallback_, error);
+                    if (!matched) {
                         return std::nullopt;
                     }
-                    operand = value->expression(operand.span);
+                    const auto truth = matched->truth_value();
+                    if (truth && *truth) {
+                        return matched;
+                    }
+                    if (truth) {
+                        no_match = matched;
+                    } else {
+                        unknown = matched;
+                    }
                 }
-                return evaluate_systemverilog_constant_expression(
-                    folded, environment, fallback_, error);
+                return unknown ? unknown : no_match;
             }
         }
         auto folded = expression;
@@ -398,6 +427,28 @@ private:
                  statement.case_alternatives) {
                 if (alternative.is_default) {
                     fallback = &alternative;
+                    continue;
+                }
+                if (statement.case_match_kind
+                    == frontend::CaseMatchKind::Inside) {
+                    Expression membership{
+                        ExpressionKind::Call,
+                        "inside",
+                        {selector->expression(statement.condition.span)},
+                        alternative.span};
+                    membership.operands.insert(
+                        membership.operands.end(),
+                        alternative.choices.begin(),
+                        alternative.choices.end());
+                    const auto matched = evaluate_expression(
+                        membership, environment, error);
+                    if (!matched) {
+                        return Flow::failed;
+                    }
+                    if (matched->truth_value().value_or(false)) {
+                        selected = &alternative;
+                        break;
+                    }
                     continue;
                 }
                 for (const auto& choice : alternative.choices) {

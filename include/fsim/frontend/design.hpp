@@ -745,6 +745,7 @@ enum class CaseMatchKind {
   Exact,
   WildcardZ,
   WildcardXZ,
+  Inside,
 };
 
 enum class AssertionSeverity {

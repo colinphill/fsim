@@ -494,6 +494,7 @@ void expect_slice_cache_statistics(
     const bool reverse_conditional,
     const bool case_equality,
     const bool reverse_membership,
+    const bool reverse_case_inside,
     const std::string_view function_source,
     const std::uint32_t function_line) {
   Process process;
@@ -510,7 +511,7 @@ void expect_slice_cache_statistics(
       LoadConstant{
           2, PackedLogic4::from_aval_bval(1, 1, 1)},
       CopyContainerRegister{0, 1},
-      Call{11, 5, CallStack{0, 1, 1}},
+      Call{14, 5, CallStack{0, 1, 1}},
       CopyContainerRegister{2, 0},
       ConditionalContainerSelect{
           3, 2,
@@ -521,7 +522,17 @@ void expect_slice_cache_statistics(
           BinaryOperator::wildcard_equal, 2,
           reverse_membership ? 1U : 0U,
           reverse_membership ? 0U : 1U},
-      Branch{2, 10, 10, UnknownBranchPolicy::when_false},
+      Binary{
+          BinaryOperator::less_equal_unsigned, 2,
+          reverse_case_inside ? 1U : 0U,
+          reverse_case_inside ? 0U : 1U},
+      Branch{
+          2,
+          reverse_case_inside ? 12U : 11U,
+          reverse_case_inside ? 11U : 12U,
+          UnknownBranchPolicy::when_false},
+      Jump{13},
+      Jump{13},
       Halt{},
       DebugPoint{
           DebugPointKind::statement,
@@ -990,12 +1001,14 @@ void test_nonstatic_function_return_cache_identity(
           const bool reverse_conditional = false,
           const bool case_equality = false,
           const bool reverse_membership = false,
+          const bool reverse_case_inside = false,
           const std::string_view source =
               "nonstatic-function-return.sv",
           const std::uint32_t line = 18) {
         return make_nonstatic_return_process(
             type, clear_before_return, reverse_conditional,
-            case_equality, reverse_membership, source, line);
+            case_equality, reverse_membership, reverse_case_inside,
+            source, line);
       };
   const auto dynamic_type = [] {
     ContainerType type;
@@ -1038,15 +1051,18 @@ void test_nonstatic_function_return_cache_identity(
   materialize(make(dynamic_type(), false, false, true), 0, 1);
   materialize(make(dynamic_type(), false, false, false, true), 0, 1);
   materialize(
+      make(dynamic_type(), false, false, false, false, true),
+      0, 1);
+  materialize(
       make(
-          dynamic_type(), false, false, false, false,
+          dynamic_type(), false, false, false, false, false,
           "edited-nonstatic-function-return.sv"),
       0,
       1);
-  materialize(make(dynamic_type(), false, false, false, false,
+  materialize(make(dynamic_type(), false, false, false, false, false,
                    "nonstatic-function-return.sv", 19),
               0, 1);
-  assert(slice_cached_object_count(cache_directory) == 16);
+  assert(slice_cached_object_count(cache_directory) == 17);
 }
 
 }  // namespace fsim::tests::compiler

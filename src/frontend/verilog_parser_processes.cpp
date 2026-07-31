@@ -198,9 +198,22 @@ Statement VerilogParser::parse_case_statement(
   statement.condition = parse_expression();
   expect(TokenKind::RightParen, "')' after case expression",
          "FSIM-SV-PARSE-047");
-  if (match_keyword("inside")) {
-    error(previous(), "FSIM-SV-UNSUPPORTED-018",
-          "case inside matching is not implemented");
+  if (at(TokenKind::Identifier) && current().text == "inside") {
+    advance();
+    if (language_ != Language::SystemVerilog2017) {
+      error(previous(), "FSIM-SV-PARSE-180",
+            "case inside matching requires SystemVerilog");
+    }
+    if (match_kind != CaseMatchKind::Exact) {
+      error(previous(), "FSIM-SV-PARSE-184",
+            "case inside cannot be combined with casez or casex");
+    }
+    statement.case_match_kind = CaseMatchKind::Inside;
+  } else if (at(TokenKind::Identifier)
+             && current().text == "matches") {
+    advance();
+    error(previous(), "FSIM-SV-UNSUPPORTED-042",
+          "case matches pattern matching is not implemented");
     skip_case_statement();
     statement.span = span_from(start, previous());
     return statement;
@@ -218,9 +231,40 @@ Statement VerilogParser::parse_case_statement(
       }
       saw_default = true;
     } else {
-      alternative.choices.push_back(parse_expression());
-      while (match(TokenKind::Comma)) {
+      const auto parse_choice = [&]() {
+        if (statement.case_match_kind == CaseMatchKind::Inside
+            && match(TokenKind::LeftBracket)) {
+          const auto range_start = previous();
+          auto low = parse_expression();
+          expect(TokenKind::Colon, "':' in case inside range",
+                 "FSIM-SV-PARSE-181");
+          auto high = parse_expression();
+          expect(TokenKind::RightBracket, "']' after case inside range",
+                 "FSIM-SV-PARSE-182");
+          alternative.choices.push_back(Expression{
+              ExpressionKind::Call,
+              "@inside-range",
+              {std::move(low), std::move(high)},
+              cover(range_start.span, previous().span)});
+          return;
+        }
         alternative.choices.push_back(parse_expression());
+      };
+      if (statement.case_match_kind == CaseMatchKind::Inside
+          && at(TokenKind::Colon)) {
+        error(current(), "FSIM-SV-PARSE-183",
+              "a case inside item requires at least one choice");
+      } else {
+        parse_choice();
+      }
+      while (match(TokenKind::Comma)) {
+        if (statement.case_match_kind == CaseMatchKind::Inside
+            && at(TokenKind::Colon)) {
+          error(current(), "FSIM-SV-PARSE-183",
+                "a case inside item cannot end with an empty choice");
+          break;
+        }
+        parse_choice();
       }
     }
     expect(TokenKind::Colon, "':' after case item",

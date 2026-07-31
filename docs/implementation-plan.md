@@ -5323,6 +5323,46 @@ in 0.83 seconds, functions in 10.12 seconds, containers in 87.04 seconds, and
 the monolithic application in 13.85 seconds, on 2026-07-31. Batch 97 is not a
 ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### Ninety-eighth feature batch — bounded SystemVerilog case-inside statements
+
+SystemVerilog `case (selector) inside` now retains a distinct source-spanned
+matching mode with ordered alternatives. Each alternative keeps its
+comma-separated exact values and explicit `[low:high]` range nodes, while the
+existing final-default and duplicate-default rules remain common to all case
+modes. Parsing diagnoses non-SystemVerilog use, malformed ranges, empty or
+trailing choices, `casez`/`casex` combinations, deferred `case matches`, and
+unsupported case qualifiers without losing following process recovery.
+
+Elaboration requires one scalar integral selector and exact width/signedness
+compatibility for every value and range bound. The selector executes once.
+Exact choices use right-choice X/Z wildcard equality; ascending ranges use
+inclusive signed or unsigned comparisons and known reversed ranges are empty.
+Unknown comparisons fall through, allowing a later wildcard to match
+definitely; otherwise the final default executes. Alternatives and choices
+retain source order, the first definite match exits the statement, and later
+choice calls—including deliberately failing calls—are skipped.
+
+Constant-function execution now applies the same ordered membership semantics
+without eagerly evaluating choices after a definite match. Runtime lowering
+reuses shared scalar comparisons, logical operations, branches, and jumps, so
+no public runtime or LLVM callback ABI was added. Positive evidence covers
+mixed lists, wildcard and unknown selectors, later matches, reversed/signed/
+two-state ranges, first selection, module and package calls, exact execution
+points, constant selection, debugger metadata, VCD, interpreter, LLVM O0/O2,
+cold/warm reuse, and package-edit invalidation. Native-object schema 50 records
+the exact choice/range operations and control-flow targets; container semantic
+revision 24 remains unchanged and the cache matrix contains 17 objects.
+
+The diagnostic catalog now covers all 1,255 production codes, and the source
+gate covers 292 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests in
+420.22 seconds, including scoped locals in 1.02 seconds, functions in 12.74
+seconds, containers in 338.48 seconds, and the monolithic application in 39.71
+seconds. Release passed all 59 tests in 125.07 seconds, including scoped locals
+in 0.83 seconds, functions in 10.46 seconds, containers in 84.69 seconds, and
+the monolithic application in 13.56 seconds, on 2026-07-31. Batch 98 is not a
+ten-batch CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
