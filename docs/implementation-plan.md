@@ -4374,9 +4374,22 @@ container gate passed before the full regression.
 The diagnostic catalog covers 1,190 production codes and the source gate
 covers 286 authored files with an empty allowlist and a 2,000-line maximum.
 The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
-in 144.58 seconds, and Release passed all 59 tests in 47.41 seconds on
-2026-07-30. Batch 80 is a ten-batch CI-inspection boundary; its pushed
-GitHub Actions result is recorded in the resume handoff.
+in 143.25 seconds, and Release passed all 59 tests in 46.82 seconds on
+2026-07-30.
+
+Batch 80's required GitHub Actions inspection traced an MSVC Debug
+`fsim.application.scoped_locals` timeout to Batch 72's inline recursive AST
+growth. Memory-load operands now reuse existing statement slots, and
+static-range expressions use vector-backed zero-or-one storage, preserving
+deep value-copy semantics while reducing recursive statement and type frames.
+The scoped test then passed in 0.36 seconds on the final Windows runner. The
+accumulated monolithic application fixture receives the same 8 MiB MSVC Debug
+stack budget as the frontend and elaboration matrices and passed in 80.55
+seconds. Retained 60-second scoped and 600-second application test bounds keep
+future regressions diagnostic. Final non-documentation run `30594329846`
+passed all 12 Linux and Windows jobs; its two-worker ASan/UBSan job took 30
+minutes 58 seconds, so the 45-minute CI job budget remains necessary. Batch 80
+is closed, and Batch 81 is the next implementation batch.
 
 ## v1 release condition
 

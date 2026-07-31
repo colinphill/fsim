@@ -16,8 +16,8 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 144.58 seconds, and Release passed all 59 configured
-  tests in 47.41 seconds on 2026-07-30.
+  configured tests in 143.25 seconds, and Release passed all 59 configured
+  tests in 46.82 seconds on 2026-07-30.
 - The diagnostic catalog covers all 1,190 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
@@ -32,9 +32,26 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   the accumulated frontend matrix were repaired, and workflow builds returned
   to two workers to avoid hosted Ubuntu memory pressure. Replacement run
   `30555745832` passed all 12 Linux and Windows jobs.
-- Batch 80 is a required ten-batch GitHub Actions inspection boundary. Its
-  first pushed non-documentation run is pending this handoff commit and must
-  be inspected and repaired before Batch 80 is closed.
+- The Batch 80 boundary inspection found that Batch 72 had embedded four
+  memory-load expressions in every recursive statement and a two-expression
+  static range in every type. The resulting MSVC Debug parser frames exhausted
+  Windows' default stack while parsing nested scoped-local assignments.
+  Memory-load lowering now reuses the statement's existing value, target, and
+  task-argument slots, and static ranges use vector-backed zero-or-one storage
+  to retain deep value-copy semantics without the inline footprint.
+- Repair run `30590422725` proved `fsim.application.scoped_locals` fixed in
+  0.28 seconds, then exposed the same accumulated-frame pressure in the
+  monolithic application fixture. The scoped regression retains a 60-second
+  bound, the MSVC Debug application regression retains a 600-second bound and
+  phase checkpoints, and its accumulated fixture receives an 8 MiB Debug
+  stack. CI jobs retain a 45-minute budget because two-worker ASan and Windows
+  builds legitimately exceed 25 minutes.
+- Final non-documentation run `30594329846` passed all 12 Linux and Windows
+  jobs. Windows MSVC Debug passed scoped locals in 0.36 seconds, SV containers
+  in 196.86 seconds, the monolithic application test in 80.55 seconds, and all
+  58 configured tests; the job completed in 16 minutes 26 seconds. ASan/UBSan
+  passed in 30 minutes 58 seconds. The Batch 80 feature and repair commits are
+  `ba1f6da`, `909cedc`, `f3d6db8`, `78c816f`, and `0934482`.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -475,8 +492,8 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 80 is in progress, extending the
-container tests as predicate-locator coverage appears:
+Use a narrow test expression while batch 81 is in progress, extending the
+container tests as iterator-index predicate coverage appears:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
