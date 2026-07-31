@@ -74,6 +74,190 @@ endmodule
       interpreter->signal_value(*result).to_msb_string()
       == "00101010");
 
+  const auto closure = fsim::frontend::parse_text(
+      "callable_closure.sv",
+      R"(
+module callable_closure(
+    output logic [7:0] static_first,
+    output logic [7:0] static_second,
+    output logic [7:0] copied,
+    output logic [7:0] returned,
+    output logic [7:0] ref_result,
+    output logic [7:0] task_first,
+    output logic [7:0] task_second,
+    output logic [7:0] task_ref_result,
+    output logic [7:0] generated_function_result,
+    output logic [7:0] generated_task_result);
+  function logic [7:0] retained(
+      input logic [7:0] amount = 8'd1);
+    logic [7:0] state = 8'd0;
+    state = state + amount;
+    return state;
+  endfunction
+
+  function automatic logic [7:0] exchange(
+      output logic [7:0] copied_value,
+      input logic [7:0] value = 8'd40);
+    copied_value = value;
+    return value + 2;
+  endfunction
+
+  function automatic logic [7:0] bump(
+      ref logic [7:0] target,
+      input logic [7:0] amount = 8'd2);
+    target = target + amount;
+    return target;
+  endfunction
+
+  task retained_task;
+    output logic [7:0] value;
+    logic [7:0] state = 8'd0;
+    state = state + 1;
+    value = state;
+  endtask
+
+  task automatic bump_task(
+      ref logic [7:0] target,
+      input logic [7:0] amount = 8'd3);
+    target = target + amount;
+  endtask
+
+  if (1) begin : selected
+    function automatic logic [7:0] generated_function;
+      return 8'd43;
+    endfunction
+    task automatic generated_task(output logic [7:0] value);
+      value = 8'd44;
+    endtask
+    initial begin
+      generated_function_result = generated_function();
+      generated_task(.value(generated_task_result));
+    end
+  end
+
+  initial begin
+    logic [7:0] local_value;
+    static_first = retained();
+    static_second = retained(.amount(8'd2));
+    returned = exchange(.copied_value(copied));
+    local_value = 8'd10;
+    ref_result = bump(.target(local_value));
+    retained_task(.value(task_first));
+    retained_task(.value(task_second));
+    bump_task(.target(local_value));
+    task_ref_result = local_value;
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(closure.ok());
+  const auto closure_elaborated = fsim::elaboration::elaborate(
+      closure.design, "sv:work.callable_closure");
+  if (!closure_elaborated.ok()) {
+    for (const auto& diagnostic : closure_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(closure_elaborated.ok());
+  auto closure_interpreter =
+      closure_elaborated.design->create_interpreter();
+  assert(
+      closure_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  const auto expect_closure_signal =
+      [&](const std::string_view name,
+          const std::string_view expected) {
+        const auto signal = closure_elaborated.design->find_signal(name);
+        assert(signal);
+        assert(
+            closure_interpreter->signal_value(*signal).to_msb_string()
+            == expected);
+      };
+  expect_closure_signal("static_first", "00000001");
+  expect_closure_signal("static_second", "00000011");
+  expect_closure_signal("copied", "00101000");
+  expect_closure_signal("returned", "00101010");
+  expect_closure_signal("ref_result", "00001100");
+  expect_closure_signal("task_first", "00000001");
+  expect_closure_signal("task_second", "00000010");
+  expect_closure_signal("task_ref_result", "00001111");
+  expect_closure_signal("generated_function_result", "00101011");
+  expect_closure_signal("generated_task_result", "00101100");
+
+  const auto association_error = fsim::frontend::parse_text(
+      "function_association_error.sv",
+      R"(
+module function_association_error(output logic result);
+  function automatic logic selected(
+      input logic left = 1'b0,
+      input logic right = 1'b1);
+    return left | right;
+  endfunction
+  initial result = selected(.left(1'b0), .left(1'b1));
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(association_error.ok());
+  const auto rejected_association = fsim::elaboration::elaborate(
+      association_error.design,
+      "sv:work.function_association_error");
+  assert(
+      !rejected_association.ok()
+      && has_diagnostic(
+          rejected_association, "FSIM-ELAB-SVFUNC-010"));
+  auto malformed_association = association_error.design;
+  malformed_association.units.front().processes.front()
+      .statements.front().value.call_argument_names.pop_back();
+  const auto rejected_malformed = fsim::elaboration::elaborate(
+      malformed_association,
+      "sv:work.function_association_error");
+  assert(
+      !rejected_malformed.ok()
+      && has_diagnostic(
+          rejected_malformed, "FSIM-ELAB-SVFUNC-010"));
+
+  const auto ref_error = fsim::frontend::parse_text(
+      "function_ref_error.sv",
+      R"(
+module function_ref_error(output logic result);
+  logic value;
+  function automatic logic mutate(ref logic target);
+    target = 1'b1;
+    return target;
+  endfunction
+  initial result = mutate(value);
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(ref_error.ok());
+  const auto rejected_ref = fsim::elaboration::elaborate(
+      ref_error.design, "sv:work.function_ref_error");
+  assert(
+      !rejected_ref.ok()
+      && has_diagnostic(rejected_ref, "FSIM-ELAB-SVFUNC-012"));
+
+  const auto static_container = fsim::frontend::parse_text(
+      "static_function_container.sv",
+      R"(
+module static_function_container(output logic result);
+  function logic retained;
+    logic values[1:0];
+    retained = values[0];
+  endfunction
+  initial result = retained();
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(static_container.ok());
+  const auto rejected_static_container = fsim::elaboration::elaborate(
+      static_container.design,
+      "sv:work.static_function_container");
+  assert(
+      !rejected_static_container.ok()
+      && has_diagnostic(
+          rejected_static_container, "FSIM-ELAB-SVFUNC-013"));
+
   const auto recursive = fsim::frontend::parse_text(
       "recursive_function.sv",
       R"(

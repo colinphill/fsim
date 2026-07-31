@@ -567,6 +567,12 @@ therefore excluded.
 | `FSIM-SV-PARSE-194` | error | Expected the outer `}` after a streaming concatenation. |
 | `FSIM-SV-PARSE-195` | error | Expected `=` in a procedural force statement. |
 | `FSIM-SV-PARSE-196` | error | Expected `;` after a procedural force or release statement. |
+| `FSIM-SV-PARSE-197` | error | Expected `;` after a classic function formal declaration. |
+| `FSIM-SV-PARSE-198` | error | Expected `;` after a classic task formal declaration. |
+| `FSIM-SV-PARSE-199` | error | Expected `(` after a named function actual. |
+| `FSIM-SV-PARSE-200` | error | Expected `)` after a named function actual. |
+| `FSIM-SV-PARSE-201` | error | Expected `(` after a named task actual. |
+| `FSIM-SV-PARSE-202` | error | Expected `)` after a named task actual. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -772,6 +778,11 @@ therefore excluded.
 | `FSIM-SV-SEM-092` | error | A `sort` or `rsort` key has an empty `with` clause, a malformed or multiple iterator binder, or a named binder without a `with` clause. |
 | `FSIM-SV-SEM-093` | error | An extrema/uniqueness locator transformation has an empty `with` clause, a malformed or multiple iterator binder, or a named binder without a `with` clause. |
 | `FSIM-SV-SEM-094` | error | A reduction transformation has a malformed or multiple iterator binder, or a named binder without a `with` clause. |
+| `FSIM-SV-SEM-095` | error | A default function actual is attached to a writable or reference formal instead of an input value formal. |
+| `FSIM-SV-SEM-096` | error | A `ref` function formal is declared in a static or implicit-lifetime function. |
+| `FSIM-SV-SEM-097` | error | A default task actual is attached to a writable or reference formal instead of an input value formal. |
+| `FSIM-SV-SEM-098` | error | A `ref` task formal is declared in a static or implicit-lifetime task. |
+| `FSIM-SV-SEM-099` | error | A static or implicit-lifetime callable declares a nested block local outside its supported persistent body scope. |
 | `FSIM-SV-SEM-100` | error | A streaming concatenation is used outside SystemVerilog-2017. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
@@ -798,12 +809,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
 | `FSIM-SV-UNSUPPORTED-031` | error | A procedural `for` loop does not declare an inline `int` or `integer` index. |
 | `FSIM-SV-UNSUPPORTED-032` | error | A nonblocking assignment uses a repeated event control, which is not executable yet. |
-| `FSIM-SV-UNSUPPORTED-033` | error | A bounded function is static or omits the explicit `automatic` lifetime required by the current activation-frame implementation. |
-| `FSIM-SV-UNSUPPORTED-035` | error | A bounded function formal uses `ref`, `output`, or `inout` instead of `input`. |
-| `FSIM-SV-UNSUPPORTED-036` | error | A bounded function uses an unpacked/default argument or a classic body argument declaration. |
-| `FSIM-SV-UNSUPPORTED-037` | error | A bounded task is static or omits the explicit `automatic` lifetime required by the current activation-frame implementation. |
-| `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
-| `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
+| `FSIM-SV-UNSUPPORTED-035` | error | A bounded function output, inout, or ref formal uses a string or unpacked-container type instead of the supported packed integral type. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
 | `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
@@ -943,6 +949,10 @@ therefore excluded.
 | `FSIM-ELAB-SVFUNC-007` | error | The same bare function name is directly visible from multiple imported SystemVerilog packages. |
 | `FSIM-ELAB-SVFUNC-008` | error | A bounded SystemVerilog function result or its whole-container destination has an incompatible container kind, element profile, queue bound, or associative index profile. |
 | `FSIM-ELAB-SVFUNC-009` | error | A bounded SystemVerilog function container argument has an incompatible kind, element profile, queue bound, or associative index profile. |
+| `FSIM-ELAB-SVFUNC-010` | error | Function actual association metadata is inconsistent, positional ordering is illegal, a name is unknown or duplicated, or a required actual/default is missing. |
+| `FSIM-ELAB-SVFUNC-011` | error | Malformed HIR presents a nonintegral writable function formal to the bounded execution path. |
+| `FSIM-ELAB-SVFUNC-012` | error | A bounded `ref` function actual is not a direct caller-local variable or the function is not automatic. |
+| `FSIM-ELAB-SVFUNC-013` | error | A static or implicit-lifetime function local is not a bounded packed integral value. |
 | `FSIM-ELAB-VHFUNC-001` | error | An interface-function generic has no retained profile in HIR. |
 | `FSIM-ELAB-VHFUNC-002` | error | An interface-function association or selected actual is not same-language VHDL. |
 | `FSIM-ELAB-VHFUNC-003` | error | An interface-function actual is not a simple visible function name. |
@@ -1038,6 +1048,10 @@ therefore excluded.
 | `FSIM-ELAB-SVTASK-009` | error | The same bare task name is directly visible from multiple imported SystemVerilog packages. |
 | `FSIM-ELAB-SVTASK-010` | error | A suspending bounded task is called from `final`, `always_comb`, or `always_latch`. |
 | `FSIM-ELAB-SVTASK-011` | error | A bounded SystemVerilog task container input or inout actual has an incompatible kind, element profile, queue bound, or associative index profile. |
+| `FSIM-ELAB-SVTASK-012` | error | Task actual association metadata is inconsistent, positional ordering is illegal, a name is unknown or duplicated, or a required actual/default is missing. |
+| `FSIM-ELAB-SVTASK-013` | error | A bounded `ref` task call is not automatic and nonsuspending or its actual is not a direct caller-local variable. |
+| `FSIM-ELAB-SVTASK-014` | error | A static or implicit-lifetime task may suspend directly or transitively. |
+| `FSIM-ELAB-SVTASK-015` | error | A static or implicit-lifetime task local is not a bounded packed integral value. |
 | `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the design unit where it is used. |
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |

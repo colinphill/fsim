@@ -245,6 +245,16 @@ void VerilogParser::parse_generate_region(
           previous());
       continue;
     }
+    if (match_keyword("function")) {
+      direct_region.then_body.functions.push_back(
+          parse_function(previous()));
+      continue;
+    }
+    if (match_keyword("task")) {
+      direct_region.then_body.tasks.push_back(
+          parse_task(previous()));
+      continue;
+    }
     if (
         keyword("final")
         || (language_ == Language::Verilog2005
@@ -575,6 +585,10 @@ void VerilogParser::parse_generate_branch(
     } else if (match_keyword("localparam")) {
       parse_generated_parameter_group(
           body, local_names, true, previous());
+    } else if (match_keyword("function")) {
+      body.functions.push_back(parse_function(previous()));
+    } else if (match_keyword("task")) {
+      body.tasks.push_back(parse_task(previous()));
     } else if (match_keyword("assign")) {
       if (auto assignment =
               parse_continuous_assignment(previous())) {

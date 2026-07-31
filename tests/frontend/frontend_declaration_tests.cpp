@@ -1002,6 +1002,15 @@ endmodule
       "invalid_functions.sv",
       R"(
 module invalid_functions;
+  function static logic bad_ref(ref logic argument);
+    bad_ref = argument;
+  endfunction
+  function automatic string bad_output(output string argument);
+    bad_output = argument;
+  endfunction
+  function automatic logic bad_default(output logic argument = 1'b0);
+    bad_default = argument;
+  endfunction
   function static logic bad(output logic argument);
     #1 bad = argument;
   endfunction
@@ -1022,11 +1031,13 @@ endmodule
             });
       };
   require(
-      has_code("FSIM-SV-UNSUPPORTED-033")
+      has_code("FSIM-SV-SEM-095")
+          && has_code("FSIM-SV-SEM-096")
           && has_code("FSIM-SV-UNSUPPORTED-035")
           && has_code("FSIM-SV-SEM-062")
           && has_code("FSIM-SV-SEM-064"),
-      "function lifetime, direction, input-write, and timing diagnostics");
+      "function default, ref lifetime, type, input-write, and timing "
+      "diagnostics");
 }
 
 void test_vhdl_function_declarations() {
@@ -1268,8 +1279,7 @@ endmodule
         invalid.diagnostics,
         [&](const Diagnostic &diagnostic) { return diagnostic.code == code; });
   };
-  require(has_code("FSIM-SV-UNSUPPORTED-037") &&
-              has_code("FSIM-SV-UNSUPPORTED-038") &&
+  require(has_code("FSIM-SV-SEM-098") &&
               has_code("FSIM-SV-SEM-067") && has_code("FSIM-SV-SEM-068") &&
               has_code("FSIM-SV-SEM-070") && has_code("FSIM-SV-SEM-071"),
           "task lifetime, ref formal, body, return, and closing-name "

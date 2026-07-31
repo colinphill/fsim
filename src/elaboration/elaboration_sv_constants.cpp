@@ -1396,6 +1396,10 @@ void substitute_sv_function(
     substitute_sv_type(function.return_type, environment);
     for (auto& argument : function.arguments) {
         substitute_sv_type(argument.type, environment);
+        if (argument.default_value) {
+            substitute_systemverilog_parameters(
+                *argument.default_value, environment);
+        }
     }
     for (auto& variable : function.variables) {
         substitute_sv_variable(variable, environment);
@@ -1408,6 +1412,10 @@ void substitute_sv_task(
     const SystemVerilogConstantEnvironment& environment) {
     for (auto& argument : task.arguments) {
         substitute_sv_type(argument.type, environment);
+        if (argument.default_value) {
+            substitute_systemverilog_parameters(
+                *argument.default_value, environment);
+        }
     }
     for (auto& variable : task.variables) {
         substitute_sv_variable(variable, environment);
@@ -1498,6 +1506,12 @@ void substitute_sv_generate_body(
     }
     for (auto& signal : body.signals) {
         substitute_sv_type(signal.type, body_environment);
+    }
+    for (auto& function : body.functions) {
+        substitute_sv_function(function, body_environment);
+    }
+    for (auto& task : body.tasks) {
+        substitute_sv_task(task, body_environment);
     }
     substitute_sv_statements(
         body.concurrent_statements, body_environment);

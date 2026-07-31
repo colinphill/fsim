@@ -5580,6 +5580,56 @@ seconds, containers in 86.13 seconds, procedural assignments in 1.90 seconds,
 and the monolithic application in 14.17 seconds, on 2026-07-31. Batch 102 is
 not a ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### One-hundred-third feature batch — SystemVerilog function/task closure
+
+SystemVerilog function and task HIR now retains explicit or implicit
+automatic/static lifetime, ANSI or classic body formal declarations,
+input/output/inout/reference mode, typed default expressions, and positional
+or named actual-association metadata. Classic header names are reconciled with
+body declarations in header order, and selected generated regions may publish
+scope-qualified functions and tasks with parameter substitution and exact
+source provenance.
+
+One common association service binds every actual once in formal order,
+supplies omitted input defaults, rejects malformed or ambiguous associations,
+and performs typed ordered copy-out. Packed integral function output/inout and
+bounded direct-caller-local automatic reference formals execute around the
+ordinary value result. Automatic nonsuspending tasks admit the same bounded
+direct-local reference transfer. Existing fixed/dynamic/queue/associative
+callable values retain their prior copy isolation and suspended-task behavior
+through the normalized association layer.
+
+Automatic activations continue to restore per-call defaults. Static and
+implicit-lifetime functions plus nonsuspending tasks instead allocate bounded
+packed body-scope locals once in each process preamble, preserving their state
+across sequential calls from that process. Nested or nonintegral static
+locals, suspending static tasks, nonlocal or suspending references,
+nonintegral writable function formals, unsafe recursion, and malformed HIR are
+rejected through stable checked paths. Constant evaluation accepts the same
+bounded named/default association rules but leaves static or writable calls to
+runtime execution.
+
+The dedicated callable-closure application proves static function/task state,
+named/default associations, function output and reference transfer, task
+reference transfer, selected generated declarations, safe points, explicit
+post-run debugger-local reads, VCD witnesses, interpreter/LLVM O0/O2 parity,
+cold/warm reuse, and generated-source invalidation. Native-object schema 55
+records the static preamble, normalized association/copy graph, generated
+callables, operations, and transitive source/debug identity without changing
+the public runtime ABI.
+
+The diagnostic catalog covers all 1,303 production codes, and the source gate
+covers 301 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 60 tests
+in 441.89 seconds, including scoped locals in 0.89 seconds, functions in 13.34
+seconds, tasks in 0.74 seconds, callable closure in 1.63 seconds, containers in
+344.88 seconds, and the monolithic application in 39.71 seconds. Release
+passed all 60 tests in 141.23 seconds, including scoped locals in 0.80 seconds,
+functions in 11.22 seconds, tasks in 0.65 seconds, callable closure in 1.46
+seconds, containers in 87.28 seconds, and the monolithic application in 13.72
+seconds, on 2026-07-31. Batch 103 is not a ten-batch CI-inspection boundary,
+so no Actions run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

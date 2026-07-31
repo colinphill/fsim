@@ -157,6 +157,74 @@ void substitute_parameters(
             diagnostics,
             language);
     }
+    for (auto& function : body.functions) {
+        substitute_parameters(
+            function.return_type,
+            environment,
+            domains,
+            diagnostics,
+            language);
+        for (auto& argument : function.arguments) {
+            substitute_parameters(
+                argument.type,
+                environment,
+                domains,
+                diagnostics,
+                language);
+            if (argument.default_value) {
+                substitute_parameters(
+                    *argument.default_value,
+                    environment,
+                    domains,
+                    language);
+            }
+        }
+        for (auto& variable : function.variables) {
+            substitute_parameters(
+                variable,
+                environment,
+                domains,
+                diagnostics,
+                language);
+        }
+        substitute_parameters(
+            function.statements,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
+    for (auto& task : body.tasks) {
+        for (auto& argument : task.arguments) {
+            substitute_parameters(
+                argument.type,
+                environment,
+                domains,
+                diagnostics,
+                language);
+            if (argument.default_value) {
+                substitute_parameters(
+                    *argument.default_value,
+                    environment,
+                    domains,
+                    language);
+            }
+        }
+        for (auto& variable : task.variables) {
+            substitute_parameters(
+                variable,
+                environment,
+                domains,
+                diagnostics,
+                language);
+        }
+        substitute_parameters(
+            task.statements,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
     substitute_parameters(
         body.concurrent_statements,
         environment,
@@ -436,6 +504,42 @@ void collect_qualified_identifiers(
     for (const auto& signal : body.signals) {
         collect_qualified_identifiers(signal.type, identifiers);
     }
+    for (const auto& function : body.functions) {
+        collect_qualified_identifiers(
+            function.return_type, identifiers);
+        for (const auto& argument : function.arguments) {
+            collect_qualified_identifiers(argument.type, identifiers);
+            if (argument.default_value) {
+                collect_qualified_identifiers(
+                    *argument.default_value, identifiers);
+            }
+        }
+        for (const auto& variable : function.variables) {
+            collect_qualified_identifiers(variable.type, identifiers);
+            if (variable.initializer) {
+                collect_qualified_identifiers(
+                    *variable.initializer, identifiers);
+            }
+        }
+        collect_qualified_identifiers(function.statements, identifiers);
+    }
+    for (const auto& task : body.tasks) {
+        for (const auto& argument : task.arguments) {
+            collect_qualified_identifiers(argument.type, identifiers);
+            if (argument.default_value) {
+                collect_qualified_identifiers(
+                    *argument.default_value, identifiers);
+            }
+        }
+        for (const auto& variable : task.variables) {
+            collect_qualified_identifiers(variable.type, identifiers);
+            if (variable.initializer) {
+                collect_qualified_identifiers(
+                    *variable.initializer, identifiers);
+            }
+        }
+        collect_qualified_identifiers(task.statements, identifiers);
+    }
     for (const auto& component :
          body.vhdl_component_declarations) {
         for (const auto& generic : component.generics) {
@@ -556,6 +660,10 @@ QualifiedIdentifierMap qualified_identifiers(
         for (const auto& argument : function.arguments) {
             collect_qualified_identifiers(
                 argument.type, result);
+            if (argument.default_value) {
+                collect_qualified_identifiers(
+                    *argument.default_value, result);
+            }
         }
         for (const auto& variable : function.variables) {
             collect_qualified_identifiers(
@@ -570,8 +678,11 @@ QualifiedIdentifierMap qualified_identifiers(
     }
     for (const auto& task : unit.tasks) {
         for (const auto& argument : task.arguments) {
-            collect_qualified_identifiers(
-                argument.type, result);
+            collect_qualified_identifiers(argument.type, result);
+            if (argument.default_value) {
+                collect_qualified_identifiers(
+                    *argument.default_value, result);
+            }
         }
         for (const auto& variable : task.variables) {
             collect_qualified_identifiers(
@@ -698,7 +809,8 @@ QualifiedIdentifierMap qualified_identifiers(
 void qualify_generated_expression(
     Expression& expression,
     const GeneratedNameEnvironment& names) {
-    if (expression.kind == ExpressionKind::Identifier) {
+    if (expression.kind == ExpressionKind::Identifier
+        || expression.kind == ExpressionKind::Call) {
         if (const auto found = names.find(expression.text);
             found != names.end()) {
             expression.text = found->second;
@@ -736,6 +848,12 @@ void qualify_generated_statement(
     qualify_generated_expression(statement.condition, body_names);
     for (auto& argument : statement.task_arguments) {
         qualify_generated_expression(argument, body_names);
+    }
+    if (statement.kind == StatementKind::TaskCall) {
+        if (const auto found = body_names.find(statement.task_name);
+            found != body_names.end()) {
+            statement.task_name = found->second;
+        }
     }
     for (auto& sensitivity : statement.sensitivities) {
         if (const auto found = body_names.find(sensitivity.signal);
@@ -789,6 +907,54 @@ void qualify_generated_process(
         }
     }
     qualify_generated_statements(process.statements, process_names);
+}
+
+void qualify_generated_function(
+    frontend::FunctionDeclaration& function,
+    const GeneratedNameEnvironment& names,
+    const std::string_view scope) {
+    const auto local_name = function.name;
+    function.name = generated_scope(scope, local_name);
+    auto function_names = names;
+    for (auto& argument : function.arguments) {
+        if (argument.default_value) {
+            qualify_generated_expression(
+                *argument.default_value, function_names);
+        }
+        function_names.erase(argument.name);
+    }
+    for (auto& variable : function.variables) {
+        if (variable.initializer) {
+            qualify_generated_expression(
+                *variable.initializer, function_names);
+        }
+        function_names.erase(variable.name);
+    }
+    qualify_generated_statements(function.statements, function_names);
+}
+
+void qualify_generated_task(
+    frontend::TaskDeclaration& task,
+    const GeneratedNameEnvironment& names,
+    const std::string_view scope) {
+    const auto local_name = task.name;
+    task.name = generated_scope(scope, local_name);
+    auto task_names = names;
+    for (auto& argument : task.arguments) {
+        if (argument.default_value) {
+            qualify_generated_expression(
+                *argument.default_value, task_names);
+        }
+        task_names.erase(argument.name);
+    }
+    for (auto& variable : task.variables) {
+        if (variable.initializer) {
+            qualify_generated_expression(
+                *variable.initializer, task_names);
+        }
+        task_names.erase(variable.name);
+    }
+    qualify_generated_statements(task.statements, task_names);
 }
 
 
@@ -931,6 +1097,20 @@ void append_generated_body(
         signal.name = generated_scope(scope, local_name);
         body_names[local_name] = signal.name;
         unit.signals.push_back(std::move(signal));
+    }
+    for (const auto& function : body.functions) {
+        body_names[function.name] = generated_scope(scope, function.name);
+    }
+    for (const auto& task : body.tasks) {
+        body_names[task.name] = generated_scope(scope, task.name);
+    }
+    for (auto& function : body.functions) {
+        qualify_generated_function(function, body_names, scope);
+        unit.functions.push_back(std::move(function));
+    }
+    for (auto& task : body.tasks) {
+        qualify_generated_task(task, body_names, scope);
+        unit.tasks.push_back(std::move(task));
     }
     for (auto& statement : body.concurrent_statements) {
         qualify_generated_statement(statement, body_names);

@@ -1453,9 +1453,8 @@ endmodule
               malformed_iterator, "FSIM-SV-SEM-090"),
       "predicate locators reject malformed or multiple iterator arguments");
   require(
-      has_code(invalid, "FSIM-SV-UNSUPPORTED-037")
-          && has_code(invalid, "FSIM-SV-UNSUPPORTED-038"),
-      "static and ref container call boundaries diagnose");
+      has_code(invalid, "FSIM-SV-SEM-098"),
+      "static ref container formals diagnose the unsafe lifetime");
 
   const auto malformed_static = parse_text(
       "static-range-invalid.sv",

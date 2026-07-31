@@ -1568,7 +1568,27 @@ std::optional<Statement> VerilogParser::parse_statement() {
       if (match(TokenKind::LeftParen)) {
         if (!at(TokenKind::RightParen)) {
           do {
-            statement.task_arguments.push_back(parse_expression());
+            if (match(TokenKind::Dot)) {
+              const auto formal =
+                  expect_identifier("named task argument");
+              expect(
+                  TokenKind::LeftParen,
+                  "'(' after named task argument",
+                  "FSIM-SV-PARSE-201");
+              statement.task_argument_names.push_back(formal.text);
+              if (at(TokenKind::RightParen)) {
+                statement.task_arguments.emplace_back();
+              } else {
+                statement.task_arguments.push_back(parse_expression());
+              }
+              expect(
+                  TokenKind::RightParen,
+                  "')' after named task argument",
+                  "FSIM-SV-PARSE-202");
+            } else {
+              statement.task_argument_names.emplace_back();
+              statement.task_arguments.push_back(parse_expression());
+            }
           } while (match(TokenKind::Comma));
         }
         expect(TokenKind::RightParen, "')' after task call arguments",

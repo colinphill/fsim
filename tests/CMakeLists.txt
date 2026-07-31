@@ -9,6 +9,7 @@ add_executable(
   frontend/frontend_vhdl_type_tests.cpp
   frontend/frontend_vhdl_statement_tests.cpp
   frontend/frontend_declaration_tests.cpp
+  frontend/frontend_callable_tests.cpp
   frontend/frontend_vhdl_subprogram_tests.cpp
   frontend/frontend_vhdl_generic_subprogram_tests.cpp
   frontend/frontend_vhdl_component_tests.cpp
@@ -533,6 +534,25 @@ set_tests_properties(
     fsim.application.sv_tasks
     PROPERTIES
       LABELS "fast;tasks;systemverilog;cache"
+  )
+
+  add_executable(
+    fsim_sv_callable_closure_application_tests
+    app/sv_callable_closure_application_test.cpp
+  )
+  fsim_configure_test(fsim_sv_callable_closure_application_tests)
+  target_link_libraries(
+    fsim_sv_callable_closure_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_callable_closure
+    COMMAND fsim_sv_callable_closure_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_callable_closure
+    PROPERTIES
+      LABELS "fast;functions;tasks;systemverilog;cache;debugger;vcd"
   )
 
   add_executable(

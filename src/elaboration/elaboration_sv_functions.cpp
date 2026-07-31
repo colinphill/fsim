@@ -159,12 +159,72 @@ private:
         const Expression& call,
         const SystemVerilogConstantEnvironment& caller,
         std::string& error) {
-        if (call.operands.size() != function.arguments.size()) {
-            error =
-                "constant function '" + function.name + "' expects "
-                + std::to_string(function.arguments.size())
-                + " arguments";
+        if (!function.automatic) {
+            error = "static or implicit-lifetime function '"
+                + function.name + "' is not a constant function";
             return std::nullopt;
+        }
+        std::vector<const Expression*> actuals(
+            function.arguments.size());
+        const bool have_names = !call.call_argument_names.empty();
+        if (have_names
+            && call.call_argument_names.size()
+                != call.operands.size()) {
+            error = "constant function association metadata is inconsistent";
+            return std::nullopt;
+        }
+        bool named_seen = false;
+        std::size_t positional = 0;
+        for (std::size_t index = 0;
+             index < call.operands.size(); ++index) {
+            const auto& name = have_names
+                ? call.call_argument_names[index]
+                : std::string{};
+            std::size_t formal_index = 0;
+            if (name.empty()) {
+                if (named_seen || positional >= actuals.size()) {
+                    error = "invalid positional constant function argument";
+                    return std::nullopt;
+                }
+                formal_index = positional++;
+            } else {
+                named_seen = true;
+                const auto found = std::ranges::find(
+                    function.arguments,
+                    name,
+                    &frontend::FunctionArgument::name);
+                if (found == function.arguments.end()) {
+                    error = "unknown named constant function argument '"
+                        + name + "'";
+                    return std::nullopt;
+                }
+                formal_index = static_cast<std::size_t>(
+                    std::distance(function.arguments.begin(), found));
+            }
+            if (actuals[formal_index] != nullptr) {
+                error = "duplicate constant function argument association";
+                return std::nullopt;
+            }
+            if (call.operands[index].valid()) {
+                actuals[formal_index] = &call.operands[index];
+            }
+        }
+        for (std::size_t index = 0;
+             index < function.arguments.size(); ++index) {
+            const auto& formal = function.arguments[index];
+            if (formal.direction != frontend::PortDirection::Input
+                || formal.reference) {
+                error = "constant functions require input value arguments";
+                return std::nullopt;
+            }
+            if (actuals[index] == nullptr && formal.default_value) {
+                actuals[index] = &*formal.default_value;
+            }
+            if (actuals[index] == nullptr) {
+                error = "constant function argument '" + formal.name
+                    + "' has no actual or default value";
+                return std::nullopt;
+            }
         }
         if (std::ranges::find(call_stack_, &function)
             != call_stack_.end()) {
@@ -183,7 +243,7 @@ private:
         for (std::size_t index = 0;
              index < function.arguments.size(); ++index) {
             auto value = converted(
-                call.operands[index],
+                *actuals[index],
                 function.arguments[index].type,
                 caller,
                 error);
@@ -799,6 +859,60 @@ void fold_generate_body(
     for (auto& signal : body.signals) {
         fold_type(
             signal.type, functions, environment, fallback);
+    }
+    for (auto& function : body.functions) {
+        fold_type(
+            function.return_type, functions, environment, fallback);
+        for (auto& argument : function.arguments) {
+            fold_type(
+                argument.type, functions, environment, fallback);
+            if (argument.default_value) {
+                fold_expression(
+                    *argument.default_value,
+                    functions,
+                    environment,
+                    fallback);
+            }
+        }
+        for (auto& variable : function.variables) {
+            fold_type(
+                variable.type, functions, environment, fallback);
+            if (variable.initializer) {
+                fold_expression(
+                    *variable.initializer,
+                    functions,
+                    environment,
+                    fallback);
+            }
+        }
+        fold_statements(
+            function.statements, functions, environment, fallback);
+    }
+    for (auto& task : body.tasks) {
+        for (auto& argument : task.arguments) {
+            fold_type(
+                argument.type, functions, environment, fallback);
+            if (argument.default_value) {
+                fold_expression(
+                    *argument.default_value,
+                    functions,
+                    environment,
+                    fallback);
+            }
+        }
+        for (auto& variable : task.variables) {
+            fold_type(
+                variable.type, functions, environment, fallback);
+            if (variable.initializer) {
+                fold_expression(
+                    *variable.initializer,
+                    functions,
+                    environment,
+                    fallback);
+            }
+        }
+        fold_statements(
+            task.statements, functions, environment, fallback);
     }
     fold_statements(
         body.concurrent_statements,

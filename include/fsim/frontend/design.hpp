@@ -98,6 +98,9 @@ struct Expression {
   // parser. The original token spelling remains in text for diagnostics and
   // cache/source provenance.
   std::optional<std::string> decoded_string;
+  // SystemVerilog user-function actual names parallel operands. Empty entries
+  // are positional; nonempty entries retain `.formal(expression)` syntax.
+  std::vector<std::string> call_argument_names;
 
   Expression() = default;
 
@@ -382,6 +385,21 @@ struct FunctionArgument {
   Type type;
   PortDirection direction{PortDirection::Input};
   SourceSpan span;
+  bool reference{};
+  std::optional<Expression> default_value;
+
+  FunctionArgument() = default;
+  FunctionArgument(
+      std::string argument_name,
+      Type argument_type,
+      PortDirection argument_direction,
+      SourceSpan argument_span,
+      bool argument_reference = false,
+      std::optional<Expression> argument_default = std::nullopt)
+      : name(std::move(argument_name)), type(std::move(argument_type)),
+        direction(argument_direction), span(std::move(argument_span)),
+        reference(argument_reference),
+        default_value(std::move(argument_default)) {}
 };
 
 enum class InterfaceObjectClass {
@@ -823,6 +841,8 @@ struct Statement {
   // because task formals have direction and copy-out semantics.
   std::string task_name;
   std::vector<Expression> task_arguments;
+  // Empty entries are positional; nonempty entries retain named task actuals.
+  std::vector<std::string> task_argument_names;
   // A VHDL sequential procedure call remains distinct from a SystemVerilog
   // task call and retains each positional or named association span.
   std::string procedure_name;
@@ -951,9 +971,10 @@ struct Process {
 
 /// Typed source-level HDL function.
 ///
-/// v1 functions are automatic, integral, and time-free. Frontends retain the
-/// declaration separately from processes so elaboration can use the same body
-/// for constant evaluation and executable SimIR subroutines.
+/// Supported SystemVerilog functions retain explicit or implicit lifetime,
+/// typed formal association metadata, and a time-free body. Frontends retain
+/// the declaration separately from processes so elaboration can use eligible
+/// bodies for constant evaluation and executable SimIR subroutines.
 struct FunctionDeclaration {
   std::string name;
   Type return_type;
@@ -961,6 +982,7 @@ struct FunctionDeclaration {
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
   bool automatic{};
+  bool lifetime_explicit{};
   Language language{Language::SystemVerilog2017};
   bool pure{};
   bool defined{true};
@@ -974,20 +996,36 @@ struct TaskArgument {
   Type type;
   PortDirection direction{PortDirection::Input};
   SourceSpan span;
+  bool reference{};
+  std::optional<Expression> default_value;
+
+  TaskArgument() = default;
+  TaskArgument(
+      std::string argument_name,
+      Type argument_type,
+      PortDirection argument_direction,
+      SourceSpan argument_span,
+      bool argument_reference = false,
+      std::optional<Expression> argument_default = std::nullopt)
+      : name(std::move(argument_name)), type(std::move(argument_type)),
+        direction(argument_direction), span(std::move(argument_span)),
+        reference(argument_reference),
+        default_value(std::move(argument_default)) {}
 };
 
 /// Typed source-level SystemVerilog task.
 ///
 /// Tasks are retained independently from functions because they have no
 /// result object and their output/inout formals require copy-out semantics.
-/// The current bounded subset admits only explicit automatic, integral, and
-/// nonrecursive task bodies with the supported scheduler controls.
+/// The current bounded subset admits automatic tasks with supported scheduler
+/// controls and nonsuspending static or implicit-lifetime task bodies.
 struct TaskDeclaration {
   std::string name;
   std::vector<TaskArgument> arguments;
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
   bool automatic{};
+  bool lifetime_explicit{};
   SourceSpan span;
 };
 
@@ -1055,6 +1093,8 @@ struct GenerateBody {
   // are not externally overridable specialization parameters.
   std::vector<ParameterDeclaration> constants;
   std::vector<SignalDeclaration> signals;
+  std::vector<FunctionDeclaration> functions;
+  std::vector<TaskDeclaration> tasks;
   std::vector<VhdlComponentDeclaration> vhdl_component_declarations;
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;

@@ -42,6 +42,13 @@ void Lowerer::initialize_task_support() {
         }
         TaskFrame frame;
         frame.source = &task;
+        if (!task.automatic) {
+            frame.static_variables =
+                allocate_static_callable_variables(
+                    task.variables,
+                    "FSIM-ELAB-SVTASK-015",
+                    "task");
+        }
         task_frames_.push_back(std::move(frame));
     }
     task_dependencies_.resize(task_frames_.size());
@@ -90,6 +97,18 @@ void Lowerer::initialize_task_support() {
             }
         }
     } while (changed);
+    for (std::size_t index = 0;
+         index < task_frames_.size(); ++index) {
+        if (!task_frames_[index].source->automatic
+            && task_suspending_[index]) {
+            report(
+                "FSIM-ELAB-SVTASK-014",
+                "static or implicit-lifetime task '"
+                    + task_frames_[index].source->name
+                    + "' cannot suspend in the bounded v1 subset",
+                task_frames_[index].source->span);
+        }
+    }
     if (task_frames_.empty()) {
         return;
     }
@@ -144,7 +163,14 @@ void Lowerer::lower_task_call(const Statement& statement) {
             statement.span);
         return;
     }
-    if (statement.task_arguments.size() != task.arguments.size()) {
+    const bool has_defaults = std::ranges::any_of(
+        task.arguments,
+        [](const frontend::TaskArgument& argument) {
+          return argument.default_value.has_value();
+        });
+    if (statement.task_argument_names.empty()
+        && !has_defaults
+        && statement.task_arguments.size() != task.arguments.size()) {
         report(
             "FSIM-ELAB-SVTASK-005",
             "task '" + task.name + "' expects "
@@ -153,6 +179,31 @@ void Lowerer::lower_task_call(const Statement& statement) {
                 + std::to_string(statement.task_arguments.size()),
             statement.span);
         return;
+    }
+    const auto actuals = bind_task_actuals(statement, task);
+    if (!actuals) {
+        return;
+    }
+    for (std::size_t index = 0;
+         index < task.arguments.size(); ++index) {
+        if (!task.arguments[index].reference) {
+            continue;
+        }
+        const auto& actual = *(*actuals)[index];
+        const bool direct_local =
+            actual.kind == ExpressionKind::Identifier
+            && (locals_.contains(actual.text)
+                || string_locals_.contains(actual.text)
+                || container_locals_.contains(actual.text));
+        if (!task.automatic || task_suspending_[task_index]
+            || !direct_local) {
+            report(
+                "FSIM-ELAB-SVTASK-013",
+                "ref task arguments require an automatic nonsuspending "
+                "task and a direct caller-local variable actual",
+                actual.span);
+            return;
+        }
     }
 
     if (!frame.allocated) {
@@ -247,10 +298,10 @@ void Lowerer::lower_task_call(const Statement& statement) {
             const auto actual =
                 formal_type->fixed
                     ? lower_static_container_assignment_value(
-                          statement.task_arguments[index],
+                          *(*actuals)[index],
                           *formal_type)
                     : lower_container_expression(
-                          statement.task_arguments[index]);
+                          *(*actuals)[index]);
             if (!actual) {
                 return;
             }
@@ -260,7 +311,7 @@ void Lowerer::lower_task_call(const Statement& statement) {
                     "FSIM-ELAB-SVTASK-011",
                     "task container input/inout arguments require an "
                     "exactly compatible kind and profile",
-                    statement.task_arguments[index].span);
+                    (*actuals)[index]->span);
                 return;
             }
             process_.operations.emplace_back(
@@ -278,7 +329,7 @@ void Lowerer::lower_task_call(const Statement& statement) {
             }
             const auto actual =
                 lower_string_expression(
-                    statement.task_arguments[index]);
+                    *(*actuals)[index]);
             if (!actual) {
                 return;
             }
@@ -296,7 +347,7 @@ void Lowerer::lower_task_call(const Statement& statement) {
             continue;
         }
         auto actual = lower_expression(
-            statement.task_arguments[index], width, &formal.type);
+            *(*actuals)[index], width, &formal.type);
         if (!actual) {
             return;
         }
@@ -305,7 +356,7 @@ void Lowerer::lower_task_call(const Statement& statement) {
                 *actual,
                 width,
                 is_signed_expression(
-                    statement.task_arguments[index]));
+                    *(*actuals)[index]));
         }
         process_.operations.emplace_back(
             CopyRegister{frame.arguments[index], *actual});
@@ -337,68 +388,16 @@ void Lowerer::lower_task_call(const Statement& statement) {
         if (formal.direction == frontend::PortDirection::Input) {
             continue;
         }
-        const auto temporary =
+        lower_callable_copy_out(
+            *(*actuals)[index],
+            formal.type,
+            frame.arguments[index],
+            frame.string_arguments[index],
+            frame.container_arguments[index],
+            frame.argument_is_string[index],
+            frame.argument_is_container[index],
             "@task_copyout_" + std::to_string(task_index)
-            + "_" + std::to_string(index);
-        if (frame.argument_is_container[index]) {
-            container_locals_.insert_or_assign(
-                temporary, frame.container_arguments[index]);
-            local_types_.insert_or_assign(
-                temporary, &formal.type);
-            Statement copy_out;
-            copy_out.kind = StatementKind::Assignment;
-            copy_out.assignment_kind = AssignmentKind::Blocking;
-            copy_out.target = statement.task_arguments[index];
-            copy_out.value = Expression{
-                ExpressionKind::Identifier,
-                temporary,
-                {},
-                statement.span};
-            copy_out.span = statement.span;
-            lower_assignment(copy_out);
-            continue;
-        }
-        if (frame.argument_is_string[index]) {
-            string_locals_.insert_or_assign(
-                temporary, frame.string_arguments[index]);
-            local_types_.insert_or_assign(
-                temporary, &formal.type);
-            Statement copy_out;
-            copy_out.kind = StatementKind::Assignment;
-            copy_out.assignment_kind = AssignmentKind::Blocking;
-            copy_out.target = statement.task_arguments[index];
-            copy_out.value = Expression{
-                ExpressionKind::Identifier,
-                temporary,
-                {},
-                statement.span};
-            copy_out.span = statement.span;
-            lower_assignment(copy_out);
-            continue;
-        }
-        locals_.insert_or_assign(
-            temporary, frame.arguments[index]);
-        local_signed_.insert_or_assign(
-            temporary, formal.type.is_signed);
-        local_ranges_.insert_or_assign(
-            temporary, formal.type.packed_range);
-        local_integer_ranges_.insert_or_assign(
-            temporary, formal.type.integer_range);
-        local_members_.insert_or_assign(
-            temporary, formal.type.packed_members);
-        local_types_.insert_or_assign(temporary, &formal.type);
-
-        Statement copy_out;
-        copy_out.kind = StatementKind::Assignment;
-        copy_out.assignment_kind = AssignmentKind::Blocking;
-        copy_out.target = statement.task_arguments[index];
-        copy_out.value = Expression{
-            ExpressionKind::Identifier,
-            temporary,
-            {},
-            statement.span};
-        copy_out.span = statement.span;
-        lower_assignment(copy_out);
+                + "_" + std::to_string(index));
     }
 }
 
@@ -547,7 +546,12 @@ void Lowerer::lower_task_body(const std::size_t task_index) {
             process_.debug_locals.back().integer_upper = upper;
         }
     }
-    initialize_variables(frame.source->variables);
+    if (frame.source->automatic) {
+        initialize_variables(frame.source->variables);
+    } else {
+        bind_static_callable_variables(
+            frame.source->variables, frame.static_variables);
+    }
     lower_statements(frame.source->statements);
     const auto epilogue = static_cast<InstructionIndex>(
         process_.operations.size());

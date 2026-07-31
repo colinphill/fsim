@@ -125,7 +125,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v54";
+    "fsim-llvm-native-object-v55";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;

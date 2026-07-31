@@ -468,9 +468,30 @@ Expression VerilogParser::parse_primary() {
         cover(name.span, previous().span)};
     if (match(TokenKind::LeftParen)) {
       std::vector<Expression> arguments;
+      std::vector<std::string> argument_names;
       if (!at(TokenKind::RightParen)) {
         do {
-          arguments.push_back(parse_expression());
+          if (match(TokenKind::Dot)) {
+            const auto formal =
+                expect_identifier("named function argument");
+            expect(
+                TokenKind::LeftParen,
+                "'(' after named function argument",
+                "FSIM-SV-PARSE-199");
+            argument_names.push_back(formal.text);
+            if (at(TokenKind::RightParen)) {
+              arguments.emplace_back();
+            } else {
+              arguments.push_back(parse_expression());
+            }
+            expect(
+                TokenKind::RightParen,
+                "')' after named function argument",
+                "FSIM-SV-PARSE-200");
+          } else {
+            argument_names.emplace_back();
+            arguments.push_back(parse_expression());
+          }
         } while (match(TokenKind::Comma));
       }
       expect(TokenKind::RightParen, "')' after arguments",
@@ -478,6 +499,7 @@ Expression VerilogParser::parse_primary() {
       expression = Expression{ExpressionKind::Call, canonical,
                               std::move(arguments),
                               cover(name.span, previous().span)};
+      expression.call_argument_names = std::move(argument_names);
       const auto require_file_call =
           [&](const std::size_t arity,
               const std::string_view description) {

@@ -85,6 +85,93 @@ endmodule
       interpreter->signal_value(*accumulator).to_msb_string()
       == "00101011");
 
+  const auto association_error = fsim::frontend::parse_text(
+      "task_association_error.sv",
+      R"(
+module task_association_error(output logic result);
+  task automatic selected(
+      input logic left = 1'b0,
+      output logic right);
+    right = left;
+  endtask
+  initial selected(.missing(1'b1), .right(result));
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(association_error.ok());
+  const auto rejected_association = fsim::elaboration::elaborate(
+      association_error.design,
+      "sv:work.task_association_error");
+  assert(
+      !rejected_association.ok()
+      && has_diagnostic(
+          rejected_association, "FSIM-ELAB-SVTASK-012"));
+
+  const auto ref_error = fsim::frontend::parse_text(
+      "task_ref_error.sv",
+      R"(
+module task_ref_error(output logic result);
+  logic value;
+  task automatic mutate(ref logic target);
+    target = 1'b1;
+  endtask
+  initial begin
+    mutate(value);
+    result = value;
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(ref_error.ok());
+  const auto rejected_ref = fsim::elaboration::elaborate(
+      ref_error.design, "sv:work.task_ref_error");
+  assert(
+      !rejected_ref.ok()
+      && has_diagnostic(rejected_ref, "FSIM-ELAB-SVTASK-013"));
+
+  const auto static_suspension = fsim::frontend::parse_text(
+      "static_task_suspension.sv",
+      R"(
+module static_task_suspension;
+  task retained;
+    #1;
+  endtask
+  initial retained();
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(static_suspension.ok());
+  const auto rejected_static_suspension =
+      fsim::elaboration::elaborate(
+          static_suspension.design,
+          "sv:work.static_task_suspension");
+  assert(
+      !rejected_static_suspension.ok()
+      && has_diagnostic(
+          rejected_static_suspension, "FSIM-ELAB-SVTASK-014"));
+
+  const auto static_container = fsim::frontend::parse_text(
+      "static_task_container.sv",
+      R"(
+module static_task_container;
+  task retained;
+    logic values[1:0];
+    values[0] = 1'b1;
+  endtask
+  initial retained();
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(static_container.ok());
+  const auto rejected_static_container =
+      fsim::elaboration::elaborate(
+          static_container.design,
+          "sv:work.static_task_container");
+  assert(
+      !rejected_static_container.ok()
+      && has_diagnostic(
+          rejected_static_container, "FSIM-ELAB-SVTASK-015"));
+
   const auto qualified = fsim::frontend::parse_text(
       "qualified_task.sv",
       R"(

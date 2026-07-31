@@ -10,18 +10,11 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
   FunctionDeclaration function;
   if (match_keyword("automatic")) {
     function.automatic = true;
+    function.lifetime_explicit = true;
   } else if (match_keyword("static")) {
-    error(
-        previous(),
-        "FSIM-SV-UNSUPPORTED-033",
-        "static function activation records are not implemented; declare "
-        "the function automatic");
+    function.lifetime_explicit = true;
   } else {
-    error(
-        start,
-        "FSIM-SV-UNSUPPORTED-033",
-        "the current function subset requires an explicit automatic "
-        "lifetime");
+    function.lifetime_explicit = false;
   }
 
   function.return_type = parse_parameter_type();
@@ -40,24 +33,41 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
   in_function_ = true;
   current_procedural_names_.insert(function.name);
 
+  std::vector<std::string> classic_header_arguments;
   if (match(TokenKind::LeftParen)) {
+    const bool classic_header =
+        at(TokenKind::Identifier)
+        && (at(TokenKind::Comma, 1)
+            || at(TokenKind::RightParen, 1));
+    if (classic_header) {
+      std::unordered_set<std::string> names;
+      do {
+        const auto argument_name =
+            expect_identifier("classic function argument name");
+        if (!names.insert(argument_name.text).second
+            || argument_name.text == function.name) {
+          error(
+              argument_name,
+              "FSIM-SV-SEM-058",
+              "duplicate or conflicting function argument '"
+                  + argument_name.text + "'");
+        }
+        classic_header_arguments.push_back(argument_name.text);
+      } while (match(TokenKind::Comma));
+    } else {
     Type inherited_type;
     bool have_inherited_type = false;
     while (!at_end() && !at(TokenKind::RightParen)) {
       PortDirection direction = PortDirection::Input;
       bool explicit_direction = false;
+      bool reference = false;
       if (is_direction_keyword()) {
         direction = parse_direction();
         explicit_direction = true;
       } else if (match_keyword("ref")) {
         explicit_direction = true;
         direction = PortDirection::Inout;
-      }
-      if (direction != PortDirection::Input) {
-        error(
-            previous(),
-            "FSIM-SV-UNSUPPORTED-035",
-            "function arguments currently support input direction only");
+        reference = true;
       }
 
       const bool explicit_type =
@@ -96,16 +106,14 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
           std::move(type),
           direction,
           argument_name.span});
+      function.arguments.back().reference = reference;
       if (match(TokenKind::Assign)) {
-        error(
-            previous(),
-            "FSIM-SV-UNSUPPORTED-036",
-            "default function arguments are not implemented");
-        (void)parse_expression();
+        function.arguments.back().default_value = parse_expression();
       }
       if (!match(TokenKind::Comma)) {
         break;
       }
+    }
     }
     expect(
         TokenKind::RightParen,
@@ -122,13 +130,53 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
   while (!at_end() && !keyword("endfunction")) {
     const auto before = position();
     if (is_direction_keyword() || keyword("ref")) {
-      const auto unsupported = advance();
-      error(
-          unsupported,
-          "FSIM-SV-UNSUPPORTED-036",
-          "classic function argument declarations are not implemented; "
-          "use an ANSI argument list or a no-argument function");
-      skip_to_semicolon();
+      const auto declaration_start = advance();
+      const bool reference = declaration_start.text == "ref";
+      const auto direction = reference
+          ? PortDirection::Inout
+          : declaration_start.text == "output"
+              ? PortDirection::Output
+          : declaration_start.text == "inout"
+              ? PortDirection::Inout
+              : PortDirection::Input;
+      Type type;
+      if (at(TokenKind::Identifier)
+          && (at(TokenKind::Comma, 1)
+              || at(TokenKind::Semicolon, 1)
+              || at(TokenKind::Assign, 1))) {
+        type = Type{ValueDomain::Integer, "implicit", std::nullopt, true};
+      } else {
+        type = parse_parameter_type();
+      }
+      do {
+        const auto argument_name =
+            expect_identifier("classic function argument name");
+        if (!current_function_arguments_.insert(
+                argument_name.text).second
+            || argument_name.text == function.name) {
+          error(
+              argument_name,
+              "FSIM-SV-SEM-058",
+              "duplicate or conflicting function argument '"
+                  + argument_name.text + "'");
+        }
+        current_procedural_names_.insert(argument_name.text);
+        auto argument_type = type;
+        (void)parse_optional_container_dimension(argument_type);
+        function.arguments.push_back(FunctionArgument{
+            argument_name.text,
+            std::move(argument_type),
+            direction,
+            argument_name.span});
+        function.arguments.back().reference = reference;
+        if (match(TokenKind::Assign)) {
+          function.arguments.back().default_value = parse_expression();
+        }
+      } while (match(TokenKind::Comma));
+      expect(
+          TokenKind::Semicolon,
+          "';' after classic function argument declaration",
+          "FSIM-SV-PARSE-197");
     } else if (is_declaration_start()) {
       parse_procedural_declaration(body);
     } else if (auto statement = parse_statement()) {
@@ -154,6 +202,33 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
 
   function.variables = std::move(body.declarations);
   function.statements = std::move(body.statements);
+  if (!classic_header_arguments.empty()) {
+    std::vector<FunctionArgument> ordered;
+    ordered.reserve(classic_header_arguments.size());
+    for (const auto& argument_name : classic_header_arguments) {
+      const auto found = std::ranges::find(
+          function.arguments,
+          argument_name,
+          &FunctionArgument::name);
+      if (found == function.arguments.end()) {
+        error(
+            start,
+            "FSIM-SV-SEM-058",
+            "classic function argument '" + argument_name
+                + "' has no body declaration");
+      } else {
+        ordered.push_back(std::move(*found));
+      }
+    }
+    if (ordered.size() != function.arguments.size()) {
+      error(
+          start,
+          "FSIM-SV-SEM-058",
+          "classic function body declares an argument absent from its "
+          "header list");
+    }
+    function.arguments = std::move(ordered);
+  }
   function.span = span_from(start, previous());
   validate_function_body(function, start);
 
@@ -171,12 +246,40 @@ void VerilogParser::validate_function_body(
   locals.insert(function.name);
   for (const auto& argument : function.arguments) {
     locals.insert(argument.name);
+    if (argument.default_value
+        && (argument.direction != PortDirection::Input
+            || argument.reference)) {
+      error(
+          start,
+          "FSIM-SV-SEM-095",
+          "default function arguments require input value formals");
+    }
+    if (argument.reference && !function.automatic) {
+      error(
+          start,
+          "FSIM-SV-SEM-096",
+          "ref function arguments require automatic lifetime");
+    }
+    if (argument.direction != PortDirection::Input
+        && (argument.type.domain == ValueDomain::String
+            || argument.type.systemverilog_container)) {
+      error(
+          start,
+          "FSIM-SV-UNSUPPORTED-035",
+          "function output, inout, and ref formals currently require a "
+          "packed integral type");
+    }
   }
 
+  bool unsupported_static_block_local = false;
   const auto collect_declarations =
       [&](const auto& self,
           const std::vector<Statement>& statements) -> void {
         for (const auto& statement : statements) {
+          unsupported_static_block_local =
+              unsupported_static_block_local
+              || (!function.automatic
+                  && !statement.declarations.empty());
           for (const auto& declaration : statement.declarations) {
             locals.insert(declaration.name);
           }
@@ -199,6 +302,13 @@ void VerilogParser::validate_function_body(
   }
   collect_declarations(
       collect_declarations, function.statements);
+  if (unsupported_static_block_local) {
+    error(
+        start,
+        "FSIM-SV-SEM-099",
+        "static or implicit-lifetime functions require declarations in "
+        "the function body scope");
+  }
 
   bool assigns_result = false;
   const auto inspect =
@@ -226,7 +336,10 @@ void VerilogParser::validate_function_body(
                 std::ranges::any_of(
                     function.arguments,
                     [&](const FunctionArgument& argument) {
-                      return argument.name == root->text;
+                      return argument.name == root->text
+                          && argument.direction
+                              == PortDirection::Input
+                          && !argument.reference;
                     })) {
               error(
                   start,
@@ -285,13 +398,11 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
   TaskDeclaration task;
   if (match_keyword("automatic")) {
     task.automatic = true;
+    task.lifetime_explicit = true;
   } else if (match_keyword("static")) {
-    error(previous(), "FSIM-SV-UNSUPPORTED-037",
-          "static task activation records are not implemented; declare "
-          "the task automatic");
+    task.lifetime_explicit = true;
   } else {
-    error(start, "FSIM-SV-UNSUPPORTED-037",
-          "the current task subset requires an explicit automatic lifetime");
+    task.lifetime_explicit = false;
   }
 
   const auto name = expect_identifier("task name");
@@ -302,13 +413,33 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
   current_procedural_names_.clear();
   in_task_ = true;
 
+  std::vector<std::string> classic_header_arguments;
   if (match(TokenKind::LeftParen)) {
+    const bool classic_header =
+        at(TokenKind::Identifier)
+        && (at(TokenKind::Comma, 1)
+            || at(TokenKind::RightParen, 1));
+    if (classic_header) {
+      std::unordered_set<std::string> names;
+      do {
+        const auto argument_name =
+            expect_identifier("classic task argument name");
+        if (!names.insert(argument_name.text).second) {
+          error(
+              argument_name,
+              "FSIM-SV-SEM-067",
+              "duplicate task argument '" + argument_name.text + "'");
+        }
+        classic_header_arguments.push_back(argument_name.text);
+      } while (match(TokenKind::Comma));
+    } else {
     Type inherited_type;
     PortDirection inherited_direction{PortDirection::Input};
     bool have_inherited_formal = false;
     while (!at_end() && !at(TokenKind::RightParen)) {
       auto direction = inherited_direction;
       bool explicit_direction = false;
+      bool reference = false;
       if (is_direction_keyword()) {
         direction = parse_direction();
         inherited_direction = direction;
@@ -317,9 +448,7 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
         direction = PortDirection::Inout;
         inherited_direction = direction;
         explicit_direction = true;
-        error(previous(), "FSIM-SV-UNSUPPORTED-038",
-              "ref task arguments are not implemented; use input, output, "
-              "or inout");
+        reference = true;
       } else if (!have_inherited_formal) {
         inherited_direction = PortDirection::Input;
         direction = PortDirection::Input;
@@ -347,14 +476,14 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
       (void)parse_optional_container_dimension(type);
       task.arguments.push_back(TaskArgument{argument_name.text, std::move(type),
                                             direction, argument_name.span});
+      task.arguments.back().reference = reference;
       if (match(TokenKind::Assign)) {
-        error(previous(), "FSIM-SV-UNSUPPORTED-040",
-              "default task arguments are not implemented");
-        (void)parse_expression();
+        task.arguments.back().default_value = parse_expression();
       }
       if (!match(TokenKind::Comma)) {
         break;
       }
+    }
     }
     expect(TokenKind::RightParen, "')' after task arguments",
            "FSIM-SV-PARSE-143");
@@ -366,11 +495,50 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
   while (!at_end() && !keyword("endtask")) {
     const auto before = position();
     if (is_direction_keyword() || keyword("ref")) {
-      const auto unsupported = advance();
-      error(unsupported, "FSIM-SV-UNSUPPORTED-040",
-            "classic task argument declarations are not implemented; use "
-            "an ANSI argument list or a no-argument task");
-      skip_to_semicolon();
+      const auto declaration_start = advance();
+      const bool reference = declaration_start.text == "ref";
+      const auto direction = reference
+          ? PortDirection::Inout
+          : declaration_start.text == "output"
+              ? PortDirection::Output
+          : declaration_start.text == "inout"
+              ? PortDirection::Inout
+              : PortDirection::Input;
+      Type type;
+      if (at(TokenKind::Identifier)
+          && (at(TokenKind::Comma, 1)
+              || at(TokenKind::Semicolon, 1)
+              || at(TokenKind::Assign, 1))) {
+        type = Type{ValueDomain::Integer, "implicit", std::nullopt, true};
+      } else {
+        type = parse_parameter_type();
+      }
+      do {
+        const auto argument_name =
+            expect_identifier("classic task argument name");
+        if (!current_procedural_names_.insert(
+                argument_name.text).second) {
+          error(
+              argument_name,
+              "FSIM-SV-SEM-067",
+              "duplicate task argument '" + argument_name.text + "'");
+        }
+        auto argument_type = type;
+        (void)parse_optional_container_dimension(argument_type);
+        task.arguments.push_back(TaskArgument{
+            argument_name.text,
+            std::move(argument_type),
+            direction,
+            argument_name.span});
+        task.arguments.back().reference = reference;
+        if (match(TokenKind::Assign)) {
+          task.arguments.back().default_value = parse_expression();
+        }
+      } while (match(TokenKind::Comma));
+      expect(
+          TokenKind::Semicolon,
+          "';' after classic task argument declaration",
+          "FSIM-SV-PARSE-198");
     } else if (is_declaration_start()) {
       parse_procedural_declaration(body);
     } else if (auto statement = parse_statement()) {
@@ -391,6 +559,33 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
 
   task.variables = std::move(body.declarations);
   task.statements = std::move(body.statements);
+  if (!classic_header_arguments.empty()) {
+    std::vector<TaskArgument> ordered;
+    ordered.reserve(classic_header_arguments.size());
+    for (const auto& argument_name : classic_header_arguments) {
+      const auto found = std::ranges::find(
+          task.arguments,
+          argument_name,
+          &TaskArgument::name);
+      if (found == task.arguments.end()) {
+        error(
+            start,
+            "FSIM-SV-SEM-067",
+            "classic task argument '" + argument_name
+                + "' has no body declaration");
+      } else {
+        ordered.push_back(std::move(*found));
+      }
+    }
+    if (ordered.size() != task.arguments.size()) {
+      error(
+          start,
+          "FSIM-SV-SEM-067",
+          "classic task body declares an argument absent from its header "
+          "list");
+    }
+    task.arguments = std::move(ordered);
+  }
   task.span = span_from(start, previous());
   validate_task_body(task, start);
 
@@ -405,6 +600,20 @@ void VerilogParser::validate_task_body(
   std::unordered_set<std::string> names;
   for (const auto& argument : task.arguments) {
     names.insert(argument.name);
+    if (argument.default_value
+        && (argument.direction != PortDirection::Input
+            || argument.reference)) {
+      error(
+          start,
+          "FSIM-SV-SEM-097",
+          "default task arguments require input value formals");
+    }
+    if (argument.reference && !task.automatic) {
+      error(
+          start,
+          "FSIM-SV-SEM-098",
+          "ref task arguments require automatic lifetime");
+    }
   }
   for (const auto& variable : task.variables) {
     if (!names.insert(variable.name).second) {
@@ -412,6 +621,28 @@ void VerilogParser::validate_task_body(
             "duplicate or conflicting task local '" + variable.name + "'");
     }
   }
+
+  const auto reject_nested_static_declarations =
+      [&](const auto& self,
+          const std::vector<Statement>& statements) -> void {
+        for (const auto& statement : statements) {
+          if (!task.automatic && !statement.declarations.empty()) {
+            error(
+                start,
+                "FSIM-SV-SEM-099",
+                "static or implicit-lifetime tasks require declarations "
+                "in the task body scope");
+          }
+          self(self, statement.statements);
+          self(self, statement.else_statements);
+          for (const auto& alternative :
+               statement.case_alternatives) {
+            self(self, alternative.statements);
+          }
+        }
+      };
+  reject_nested_static_declarations(
+      reject_nested_static_declarations, task.statements);
 
   const auto inspect =
       [&](const auto& self,

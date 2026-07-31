@@ -49,6 +49,13 @@ void Lowerer::initialize_function_support() {
         }
         FunctionFrame frame;
         frame.source = &function;
+        if (!function.automatic) {
+            frame.static_variables =
+                allocate_static_callable_variables(
+                    function.variables,
+                    "FSIM-ELAB-SVFUNC-013",
+                    "function");
+        }
         function_frames_.push_back(std::move(frame));
     }
     function_dependencies_.resize(function_frames_.size());
@@ -93,7 +100,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         || function.return_type.systemverilog_container) {
         return ExpressionAttempt{};
     }
-    if (expression.operands.size() != function.arguments.size()) {
+    const bool has_defaults = std::ranges::any_of(
+        function.arguments,
+        [](const frontend::FunctionArgument& argument) {
+          return argument.default_value.has_value();
+        });
+    if (expression.call_argument_names.empty()
+        && !has_defaults
+        && expression.operands.size() != function.arguments.size()) {
         report(
             "FSIM-ELAB-SVFUNC-003",
             "function '" + function.name + "' expects "
@@ -101,6 +115,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
                 + " arguments but received "
                 + std::to_string(expression.operands.size()),
             expression.span);
+        return std::nullopt;
+    }
+    const auto actuals = bind_function_actuals(expression, function);
+    if (!actuals
+        || !validate_function_reference_actuals(function, *actuals)) {
         return std::nullopt;
     }
 
@@ -172,6 +191,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     for (std::size_t index = 0;
          index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
+        if (formal.direction == frontend::PortDirection::Output) {
+            if (frame.argument_is_container[index]
+                || frame.argument_is_string[index]) {
+                report(
+                    "FSIM-ELAB-SVFUNC-011",
+                    "function output/inout/ref formals require a bounded "
+                    "packed integral type",
+                    formal.span);
+                return std::nullopt;
+            }
+            const auto width = static_cast<std::size_t>(
+                *formal.type.width());
+            process_.operations.emplace_back(LoadConstant{
+                frame.arguments[index],
+                default_packed_value(formal.type, width)});
+            continue;
+        }
         if (frame.argument_is_container[index]) {
             const auto formal_type =
                 container_type(formal.type, formal.span);
@@ -181,10 +217,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             const auto actual =
                 formal_type->fixed
                     ? lower_static_container_assignment_value(
-                          expression.operands[index],
+                          *(*actuals)[index],
                           *formal_type)
                     : lower_container_expression(
-                          expression.operands[index]);
+                          *(*actuals)[index]);
             if (!actual) {
                 return std::nullopt;
             }
@@ -194,7 +230,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
                     "FSIM-ELAB-SVFUNC-009",
                     "function container arguments require an exactly "
                     "compatible kind and profile",
-                    expression.operands[index].span);
+                    (*actuals)[index]->span);
                 return std::nullopt;
             }
             process_.operations.emplace_back(
@@ -205,7 +241,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         if (frame.argument_is_string[index]) {
             const auto actual =
                 lower_string_expression(
-                    expression.operands[index]);
+                    *(*actuals)[index]);
             if (!actual) {
                 return std::nullopt;
             }
@@ -217,7 +253,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         const auto width = static_cast<std::size_t>(
             *formal.type.width());
         auto actual = lower_expression(
-            expression.operands[index], width, &formal.type);
+            *(*actuals)[index], width, &formal.type);
         if (!actual) {
             return std::nullopt;
         }
@@ -225,7 +261,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             *actual = resize_register(
                 *actual,
                 width,
-                is_signed_expression(expression.operands[index]));
+                is_signed_expression(*(*actuals)[index]));
         }
         process_.operations.emplace_back(
             CopyRegister{frame.arguments[index], *actual});
@@ -254,6 +290,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     if (active_function_) {
         function_dependencies_[*active_function_].insert(
             function_index);
+    }
+    for (std::size_t index = 0;
+         index < function.arguments.size(); ++index) {
+        const auto& formal = function.arguments[index];
+        if (formal.direction == frontend::PortDirection::Input) {
+            continue;
+        }
+        lower_callable_copy_out(
+            *(*actuals)[index],
+            formal.type,
+            frame.arguments[index],
+            frame.string_arguments[index],
+            frame.container_arguments[index],
+            frame.argument_is_string[index],
+            frame.argument_is_container[index],
+            "@function_copyout_" + std::to_string(function_index)
+                + "_" + std::to_string(index));
     }
 
     const auto destination = allocate_register(
@@ -286,7 +339,14 @@ Lowerer::lower_user_container_function_expression(
     if (!function.return_type.systemverilog_container) {
         return std::nullopt;
     }
-    if (expression.operands.size() != function.arguments.size()) {
+    const bool has_defaults = std::ranges::any_of(
+        function.arguments,
+        [](const frontend::FunctionArgument& argument) {
+          return argument.default_value.has_value();
+        });
+    if (expression.call_argument_names.empty()
+        && !has_defaults
+        && expression.operands.size() != function.arguments.size()) {
         report(
             "FSIM-ELAB-SVFUNC-003",
             "function '" + function.name + "' expects "
@@ -294,6 +354,11 @@ Lowerer::lower_user_container_function_expression(
                 + " arguments but received "
                 + std::to_string(expression.operands.size()),
             expression.span);
+        return std::nullopt;
+    }
+    const auto actuals = bind_function_actuals(expression, function);
+    if (!actuals
+        || !validate_function_reference_actuals(function, *actuals)) {
         return std::nullopt;
     }
 
@@ -361,6 +426,23 @@ Lowerer::lower_user_container_function_expression(
     for (std::size_t index = 0;
          index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
+        if (formal.direction == frontend::PortDirection::Output) {
+            if (frame.argument_is_container[index]
+                || frame.argument_is_string[index]) {
+                report(
+                    "FSIM-ELAB-SVFUNC-011",
+                    "function output/inout/ref formals require a bounded "
+                    "packed integral type",
+                    formal.span);
+                return std::nullopt;
+            }
+            const auto width = static_cast<std::size_t>(
+                *formal.type.width());
+            process_.operations.emplace_back(LoadConstant{
+                frame.arguments[index],
+                default_packed_value(formal.type, width)});
+            continue;
+        }
         if (frame.argument_is_container[index]) {
             const auto formal_type =
                 container_type(formal.type, formal.span);
@@ -370,10 +452,10 @@ Lowerer::lower_user_container_function_expression(
             const auto actual =
                 formal_type->fixed
                     ? lower_static_container_assignment_value(
-                          expression.operands[index],
+                          *(*actuals)[index],
                           *formal_type)
                     : lower_container_expression(
-                          expression.operands[index]);
+                          *(*actuals)[index]);
             if (!actual) {
                 return std::nullopt;
             }
@@ -383,7 +465,7 @@ Lowerer::lower_user_container_function_expression(
                     "FSIM-ELAB-SVFUNC-009",
                     "function container arguments require an exactly "
                     "compatible kind and profile",
-                    expression.operands[index].span);
+                    (*actuals)[index]->span);
                 return std::nullopt;
             }
             process_.operations.emplace_back(
@@ -393,7 +475,7 @@ Lowerer::lower_user_container_function_expression(
         }
         if (frame.argument_is_string[index]) {
             const auto actual =
-                lower_string_expression(expression.operands[index]);
+                lower_string_expression(*(*actuals)[index]);
             if (!actual) {
                 return std::nullopt;
             }
@@ -405,7 +487,7 @@ Lowerer::lower_user_container_function_expression(
         const auto width = static_cast<std::size_t>(
             *formal.type.width());
         auto actual = lower_expression(
-            expression.operands[index], width, &formal.type);
+            *(*actuals)[index], width, &formal.type);
         if (!actual) {
             return std::nullopt;
         }
@@ -413,7 +495,7 @@ Lowerer::lower_user_container_function_expression(
             *actual = resize_register(
                 *actual,
                 width,
-                is_signed_expression(expression.operands[index]));
+                is_signed_expression(*(*actuals)[index]));
         }
         process_.operations.emplace_back(
             CopyRegister{frame.arguments[index], *actual});
@@ -442,6 +524,23 @@ Lowerer::lower_user_container_function_expression(
     if (active_function_) {
         function_dependencies_[*active_function_].insert(
             function_index);
+    }
+    for (std::size_t index = 0;
+         index < function.arguments.size(); ++index) {
+        const auto& formal = function.arguments[index];
+        if (formal.direction == frontend::PortDirection::Input) {
+            continue;
+        }
+        lower_callable_copy_out(
+            *(*actuals)[index],
+            formal.type,
+            frame.arguments[index],
+            frame.string_arguments[index],
+            frame.container_arguments[index],
+            frame.argument_is_string[index],
+            frame.argument_is_container[index],
+            "@function_copyout_" + std::to_string(function_index)
+                + "_" + std::to_string(index));
     }
 
     const auto destination =
@@ -676,7 +775,12 @@ void Lowerer::lower_function_body(const std::size_t function_index) {
                 frame.arguments[index]);
         }
     }
-    initialize_variables(frame.source->variables);
+    if (frame.source->automatic) {
+        initialize_variables(frame.source->variables);
+    } else {
+        bind_static_callable_variables(
+            frame.source->variables, frame.static_variables);
+    }
     lower_statements(frame.source->statements);
     const auto epilogue = static_cast<InstructionIndex>(
         process_.operations.size());

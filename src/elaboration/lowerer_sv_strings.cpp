@@ -121,14 +121,17 @@ Lowerer::lower_string_expression(
     auto& frame = function_frames_[function_index];
     const auto& function = *frame.source;
     if (function.return_type.domain
-            != frontend::ValueDomain::String
-        || expression.operands.size()
-            != function.arguments.size()) {
+            != frontend::ValueDomain::String) {
       report(
           "FSIM-ELAB-SVSTRING-011",
           "string function call has an incompatible result or argument "
           "count",
           expression.span);
+      return std::nullopt;
+    }
+    const auto actuals = bind_function_actuals(expression, function);
+    if (!actuals
+        || !validate_function_reference_actuals(function, *actuals)) {
       return std::nullopt;
     }
     if (!frame.allocated) {
@@ -186,10 +189,27 @@ Lowerer::lower_string_expression(
     for (std::size_t index = 0;
          index < function.arguments.size(); ++index) {
       const auto& formal = function.arguments[index];
+      if (formal.direction == frontend::PortDirection::Output) {
+        if (frame.argument_is_container[index]
+            || frame.argument_is_string[index]) {
+          report(
+              "FSIM-ELAB-SVFUNC-011",
+              "function output/inout/ref formals require a bounded packed "
+              "integral type",
+              formal.span);
+          return std::nullopt;
+        }
+        const auto width = static_cast<std::size_t>(
+            *formal.type.width());
+        process_.operations.emplace_back(LoadConstant{
+            frame.arguments[index],
+            default_packed_value(formal.type, width)});
+        continue;
+      }
       if (frame.argument_is_container[index]) {
         const auto actual =
             lower_container_expression(
-                expression.operands[index]);
+                *(*actuals)[index]);
         if (!actual) {
           return std::nullopt;
         }
@@ -200,7 +220,7 @@ Lowerer::lower_string_expression(
       }
       if (frame.argument_is_string[index]) {
         const auto actual =
-            lower_string_expression(expression.operands[index]);
+            lower_string_expression(*(*actuals)[index]);
         if (!actual) {
           return std::nullopt;
         }
@@ -212,7 +232,7 @@ Lowerer::lower_string_expression(
       const auto width =
           static_cast<std::size_t>(*formal.type.width());
       auto actual = lower_expression(
-          expression.operands[index], width, &formal.type);
+          *(*actuals)[index], width, &formal.type);
       if (!actual) {
         return std::nullopt;
       }
@@ -220,7 +240,7 @@ Lowerer::lower_string_expression(
         *actual = resize_register(
             *actual,
             width,
-            is_signed_expression(expression.operands[index]));
+            is_signed_expression(*(*actuals)[index]));
       }
       process_.operations.emplace_back(
           CopyRegister{frame.arguments[index], *actual});
@@ -247,6 +267,23 @@ Lowerer::lower_string_expression(
     if (active_function_) {
       function_dependencies_[*active_function_].insert(
           function_index);
+    }
+    for (std::size_t index = 0;
+         index < function.arguments.size(); ++index) {
+      const auto& formal = function.arguments[index];
+      if (formal.direction == frontend::PortDirection::Input) {
+        continue;
+      }
+      lower_callable_copy_out(
+          *(*actuals)[index],
+          formal.type,
+          frame.arguments[index],
+          frame.string_arguments[index],
+          frame.container_arguments[index],
+          frame.argument_is_string[index],
+          frame.argument_is_container[index],
+          "@function_copyout_" + std::to_string(function_index)
+              + "_" + std::to_string(index));
     }
     const auto destination = allocate_string_register();
     process_.operations.emplace_back(

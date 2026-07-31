@@ -416,6 +416,25 @@ void visit_generate_body_types(
     for (auto& signal : body.signals) {
         visitor(signal.type);
     }
+    for (auto& function : body.functions) {
+        visitor(function.return_type);
+        for (auto& argument : function.arguments) {
+            visitor(argument.type);
+        }
+        for (auto& variable : function.variables) {
+            visitor(variable.type);
+        }
+        visit_statement_types(function.statements, visitor);
+    }
+    for (auto& task : body.tasks) {
+        for (auto& argument : task.arguments) {
+            visitor(argument.type);
+        }
+        for (auto& variable : task.variables) {
+            visitor(variable.type);
+        }
+        visit_statement_types(task.statements, visitor);
+    }
     for (auto& component :
          body.vhdl_component_declarations) {
         for (auto& generic : component.generics) {
@@ -1056,6 +1075,15 @@ private:
 
     void initialize_function_support();
 
+    std::optional<std::vector<const Expression*>>
+    bind_function_actuals(
+        const Expression& expression,
+        const frontend::FunctionDeclaration& function);
+
+    bool validate_function_reference_actuals(
+        const frontend::FunctionDeclaration& function,
+        const std::vector<const Expression*>& actuals);
+
     void lower_pending_functions();
 
     void lower_function_body(std::size_t function_index);
@@ -1065,6 +1093,29 @@ private:
     void diagnose_function_cycles();
 
     void initialize_task_support();
+
+    std::optional<std::vector<const Expression*>> bind_task_actuals(
+        const Statement& statement,
+        const frontend::TaskDeclaration& task);
+
+    void lower_callable_copy_out(
+        const Expression& target,
+        const frontend::Type& type,
+        RegisterId value,
+        StringRegisterId string_value,
+        ContainerRegisterId container_value,
+        bool is_string,
+        bool is_container,
+        std::string temporary);
+
+    std::vector<RegisterId> allocate_static_callable_variables(
+        const std::vector<frontend::VariableDeclaration>& variables,
+        std::string_view diagnostic_code,
+        std::string_view callable_kind);
+
+    void bind_static_callable_variables(
+        const std::vector<frontend::VariableDeclaration>& variables,
+        const std::vector<RegisterId>& registers);
 
     void lower_task_call(const Statement& statement);
 
@@ -1176,6 +1227,7 @@ private:
         std::vector<ContainerRegisterId> container_arguments;
         std::vector<bool> argument_is_string;
         std::vector<bool> argument_is_container;
+        std::vector<RegisterId> static_variables;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};
@@ -1201,6 +1253,7 @@ private:
             container_output_defaults;
         std::vector<bool> argument_is_string;
         std::vector<bool> argument_is_container;
+        std::vector<RegisterId> static_variables;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};
