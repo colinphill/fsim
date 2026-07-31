@@ -754,6 +754,8 @@ module dynamic_port_mid #(
   endgenerate
 endmodule
 
+)";
+    output << R"(
 module container_top;
   typedef logic signed [31:0] key_t;
   typedef logic signed [3:0] dynamic_key_t;
@@ -963,6 +965,8 @@ module container_top;
     outgoing[0] = incoming[8];
     working[4] = 8'hc4;
   endtask
+)";
+    output << R"(
   initial begin
     key_t key;
     int located[$];
