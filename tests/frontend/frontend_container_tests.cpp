@@ -657,6 +657,108 @@ endmodule
       "non-ANSI static and dynamic container declarations refine port "
       "placeholders without becoming module variables");
 
+  const auto slice_consumers = parse_text(
+      "container-slice-consumers.sv",
+      R"(
+module container_slice_consumers;
+  logic [7:0] image[7:4];
+  int result;
+  int indices[$];
+  initial begin
+    result = $left(image[6:5]);
+    result =
+        image[6:5].sum(entry) with (
+            entry.index == 5 ? entry : 8'h00);
+    indices =
+        image[6:5].find_index(entry) with (
+            entry.index == 5);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      slice_consumers.ok(),
+      "direct static-array slice consumers parse");
+  const auto* slice_unit =
+      slice_consumers.design.find(
+          UnitKind::VerilogModule,
+          "container_slice_consumers");
+  require(
+      slice_unit != nullptr
+          && slice_unit->processes.size() == 1
+          && slice_unit->processes[0].statements.size() == 3,
+      "static-array slice consumer statements remain explicit HIR");
+  const auto& slice_statements =
+      slice_unit->processes[0].statements;
+  const auto has_direct_slice_receiver =
+      [](const Expression& call) {
+        return call.kind == ExpressionKind::Call
+            && !call.operands.empty()
+            && call.operands[0].kind
+                == ExpressionKind::Slice
+            && call.operands[0].text == ":"
+            && call.operands[0].operands.size() == 3
+            && call.operands[0].operands[0].kind
+                == ExpressionKind::Identifier
+            && call.operands[0].operands[0].text == "image"
+            && call.operands[0].operands[1].text == "6"
+            && call.operands[0].operands[2].text == "5"
+            && call.operands[0].span.source_name
+                == "container-slice-consumers.sv"
+            && !call.operands[0].span.empty();
+      };
+  require(
+      slice_statements[0].value.text == "$left"
+          && slice_statements[0].value.operands.size() == 1
+          && has_direct_slice_receiver(
+              slice_statements[0].value),
+      "a system query retains its direct source-spanned slice receiver");
+  require(
+      slice_statements[1].value.text == ".sum"
+          && slice_statements[1].value.operands.size() == 3
+          && has_direct_slice_receiver(
+              slice_statements[1].value)
+          && slice_statements[1].value.operands[1].kind
+              == ExpressionKind::Identifier
+          && slice_statements[1].value.operands[1].text
+              == "entry"
+          && slice_statements[1].value.operands[2].kind
+              == ExpressionKind::Call
+          && slice_statements[1].value.operands[2].text
+              == "?:",
+      "a transformed reduction retains its slice, iterator, and graph HIR");
+  require(
+      slice_statements[2].value.text == ".find_index"
+          && slice_statements[2].value.operands.size() == 3
+          && has_direct_slice_receiver(
+              slice_statements[2].value)
+          && slice_statements[2].value.operands[1].kind
+              == ExpressionKind::Identifier
+          && slice_statements[2].value.operands[1].text
+              == "entry"
+          && slice_statements[2].value.operands[2].kind
+              == ExpressionKind::Binary,
+      "a predicate locator retains its slice, iterator, and predicate HIR");
+
+  const auto unsupported_slice_consumers = parse_text(
+      "unsupported-slice-consumers.sv",
+      "module unsupported_slice_consumers; "
+      "int result; initial begin "
+      "result = \"abcd\"[2:1].sum(); "
+      "result = '{1, 2}[1:0].sum(); "
+      "end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !unsupported_slice_consumers.ok()
+          && has_code(
+              unsupported_slice_consumers,
+              "FSIM-SV-PARSE-022")
+          && has_code(
+              unsupported_slice_consumers,
+              "FSIM-SV-UNSUPPORTED-009"),
+      "string and aggregate slice consumers diagnose before "
+      "elaboration with stable recovery");
+
   const auto invalid = parse_text(
       "container-invalid.sv",
       R"(

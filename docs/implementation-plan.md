@@ -4795,6 +4795,70 @@ container differential in 150.97 seconds. Release passed all 59 tests in
 32.84 seconds, on 2026-07-30. Batch 87 is not a ten-batch GitHub
 CI-inspection boundary, so no Actions run was inspected.
 
+### Eighty-eighth feature batch — bounded read-only static-array slice consumers
+
+Direct direction-preserving one-dimensional integral static-array slices now
+serve as contextual read-only container receivers outside assignment. The
+frontend retains the same compact source-spanned colon `Slice` HIR used by
+Batch 87, including the direct identifier and explicit bounds. System query,
+reduction, and locator calls preserve the slice as their first operand without
+adding recursive fields to the common expression footprint.
+
+`$left`, `$right`, `$low`, `$high`, and `$increment` use the selected declared
+range and direction. `$size`, `$bits`, `$dimensions`, and
+`$unpacked_dimensions` use the selected element count and exact element
+profile, and `.size()` measures a materialized selected snapshot. The five
+reductions execute over selected left-to-right ordinal order with the existing
+exact-width signed/two-/four-state and empty-identity semantics. Their
+implicit or named transformation graphs bind the slice element type and expose
+the selected signed declared index through `.index`.
+
+`min`, `max`, `unique`, and `unique_index` return compatible queues containing
+the original selected elements or signed selected indices. All six `find*`
+methods evaluate the existing bounded pure predicate graph over the selected
+snapshot, treat X/Z logical results as false, and return values or selected
+declared indices according to first/last/all semantics. The shared
+`ContainerReduction` and `LocateContainer` interpreter/native kernels required
+no new operation, runtime callback, validator rule, or public ABI slot.
+
+Lowering recognizes only a direct static-container colon-slice candidate.
+Bound validation and snapshot materialization reuse the Batch 87 helper, while
+query-only constants derive from the selected `ContainerType` without
+allocating a module object. The general container-expression classifier
+remains identifier-only, so element indexing, mutation, associative traversal,
+and other unrelated methods do not accidentally become valid on slices.
+
+Positive evidence covers all nine system/method queries, all five reductions,
+named transformation indices, all four extrema/uniqueness locators, all six
+predicate locators, exact X/Z reduction behavior, input and writable static
+ports, module objects, nested/generated hierarchy, automatic functions, and
+tasks after suspension. Frontend tests prove direct source-spanned slice
+receivers, binders, and graphs remain explicit HIR. Interpreter, LLVM O0, and
+LLVM O2 agree through the expanded application differential.
+
+Negative evidence covers runtime/unknown, reversed/out-of-range and indexed
+slice bounds, dynamic/queue/associative receivers, indirect nested slices,
+string and aggregate consumer syntax, mutating ordering, sliced port actuals,
+multidimensional declarations, and cross-language container boundaries.
+Existing `FSIM-ELAB-SVSLICE-*`, query, reduction, locator, find, ordering, and
+port diagnostics remain stable; no new production diagnostic code was needed.
+
+Native-object schema 40 and container semantic revision 16 carry selected
+range/profile, materialization operations, query or method operation,
+transformation/predicate graphs, and source provenance. A separate cache test
+keeps the existing cache compilation unit below the hard source limit and
+independently varies receiver range, element width, operation, transformation
+presence/constants, locator mode, predicate constants, and source line.
+
+The diagnostic catalog still covers 1,222 production codes and the source gate
+covers 288 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 251.36 seconds, including scoped locals in 0.89 seconds and the expanded
+container differential in 181.18 seconds. Release passed all 59 tests in
+69.11 seconds, including scoped locals in 0.80 seconds and containers in
+38.51 seconds, on 2026-07-30. Batch 88 is not a ten-batch GitHub
+CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

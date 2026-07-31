@@ -744,6 +744,9 @@ module static_slices;
     down = '{
         8'h55, 8'h44, 8'b10xz0011,
         8'h22, 8'h11, 8'h00};
+    located =
+        down[4:2].find() with (item == 8'h33);
+    assert (located.size() == 0);
     down[4:2] = down[3:1];
     assert ($isunknown(down[4]));
     assert ($isunknown(down[4:2].sum()));
@@ -1499,6 +1502,9 @@ module static_slice_invalid(
   logic [7:0] queued[$];
   logic [7:0] associative[int];
   int runtime_bound;
+  int result;
+  logic [7:0] located[$];
+  int locations[$];
   initial begin
     down[runtime_bound:0] = down;
     down[32'hxxxxxxxx:0] = down;
@@ -1516,6 +1522,18 @@ module static_slice_invalid(
     down[1:0] = '{8'h01, 8'h02};
     down[3:2][0] = 8'h00;
     input_fixed[2:1] = pair;
+    result = $size(down[runtime_bound:0]);
+    result = $size(down[3:1], 2);
+    result = down[0:2].sum();
+    located = down[4:3].min();
+    locations =
+        down[1 +: 2].find_index() with (item);
+    result = dynamic[1:0].sum();
+    located = queued[1:0].min();
+    locations =
+        associative[1:0].find_index() with (item);
+    result = down[3:1][2:1].sum();
+    down[3:1].sort();
   end
 endmodule
 )",
@@ -1541,6 +1559,18 @@ endmodule
       rejected_slices, "FSIM-ELAB-031"));
   assert(has_diagnostic(
       rejected_slices, "FSIM-ELAB-SVPORT-009"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVQUERY-001"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVQUERY-002"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVREDUCE-001"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVLOCATOR-001"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVFIND-001"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVORDER-001"));
 
   const auto leaked_iterator = fsim::frontend::parse_text(
       "container-iterator-leak.sv",

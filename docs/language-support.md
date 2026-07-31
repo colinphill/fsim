@@ -135,10 +135,18 @@ replacement, so overlapping self-assignment and object/port writeback are
 atomic and preserve X/Z state. Module objects, writable same-language static
 ports through nested/generated hierarchy, automatic function values, and
 inout task values across suspension execute in interpreter and LLVM O0/O2.
+The same direct slices are read-only receivers for `$left`, `$right`, `$low`,
+`$high`, `$increment`, `$size`, `$bits`, `$dimensions`,
+`$unpacked_dimensions`, and `.size()`. They also support all five reductions
+with implicit or named transformations, all four extrema/uniqueness locators,
+and all six predicate locators. Methods consume a selected typed snapshot;
+iterator `.index` values and index-valued results use the selected signed
+declared indices. Module objects, input and writable static ports, hierarchy,
+automatic functions, and suspended tasks agree in interpreter and LLVM O0/O2.
 Variable or unknown bounds, direction reversal, indexed `+:`/`-:` unpacked
-selections, slice queries or method receivers, sliced port actuals,
-multidimensional and nonstatic-container slices, element conversion, and
-cross-language slices remain unsupported.
+selections, indirect or mutating slice receivers, sliced callable/port
+actuals, multidimensional and nonstatic-container slices, element conversion,
+and cross-language slices remain unsupported.
 Direct writable static arrays, dynamic arrays, queues, and bounded queues also
 accept no-argument `reverse()` plus `sort()` and `rsort()` method statements
 with an optional parenthesized `with` key.
