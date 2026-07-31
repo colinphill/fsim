@@ -49,6 +49,34 @@ private:
                 return evaluate_call(
                     *function, expression, environment, error);
             }
+            if (expression.text == "inside") {
+                auto folded = expression;
+                for (std::size_t index = 0;
+                     index < folded.operands.size(); ++index) {
+                    auto& operand = folded.operands[index];
+                    if (index != 0
+                        && operand.kind == ExpressionKind::Call
+                        && operand.text == "@inside-range") {
+                        for (auto& bound : operand.operands) {
+                            const auto value = evaluate_expression(
+                                bound, environment, error);
+                            if (!value) {
+                                return std::nullopt;
+                            }
+                            bound = value->expression(bound.span);
+                        }
+                        continue;
+                    }
+                    const auto value = evaluate_expression(
+                        operand, environment, error);
+                    if (!value) {
+                        return std::nullopt;
+                    }
+                    operand = value->expression(operand.span);
+                }
+                return evaluate_systemverilog_constant_expression(
+                    folded, environment, fallback_, error);
+            }
         }
         auto folded = expression;
         for (auto& operand : folded.operands) {

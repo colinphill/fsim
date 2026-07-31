@@ -9,19 +9,19 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-96 bounded whole-container
-  equality on top of the feature-batch-95 container-valued function-result
-  consumer and conditional handoff.
-- The source-size refactor is complete: all 291 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-97 bounded SystemVerilog
+  membership expressions on top of the feature-batch-96 bounded
+  whole-container-equality handoff.
+- The source-size refactor is complete: all 292 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 423.91 seconds, and Release passed all 59 configured
-  tests in 129.03 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 0.93/0.82 seconds, the expanded function differential in 11.00/9.92
-  seconds, containers in 343.67/88.69 seconds, and the monolithic application
-  in 40.03/13.64 seconds.
-- The diagnostic catalog covers all 1,233 production codes.
+  configured tests in 428.53 seconds, and Release passed all 59 configured
+  tests in 127.57 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.91/0.83 seconds, the expanded function differential in 11.93/10.12
+  seconds, containers in 348.00/87.04 seconds, and the monolithic application
+  in 39.94/13.85 seconds.
+- The diagnostic catalog covers all 1,244 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -986,36 +986,61 @@ Release passed all 59 tests in 129.03 seconds (scoped locals 0.82, functions
 the source gate covers 291 files. Batch 96 is not a CI-inspection boundary, so
 no Actions run was inspected.
 
+## Completed feature batch 97
+
+Bounded SystemVerilog scalar integral `inside` expressions now retain one
+source-spanned left operand and a nonempty ordered list of exact values and
+explicit `[low:high]` range nodes. Elaboration requires exact width and
+signedness compatibility, evaluates the left operand once, and tests members
+in source order. Value members apply right-operand X/Z wildcard equality;
+ascending closed ranges are inclusive and known reversed ranges are empty.
+An unknown comparison remains X unless a later member definitely matches, and
+a definite match branches past every remaining member.
+
+The typed constant evaluator, interpreter, and LLVM O0/O2 agree for exact,
+mixed, wildcard, unknown, signed, two-state, reversed-range, and later-match
+cases. Module/package/imported/qualified calls may supply the left value,
+members, and range bounds, with one evaluation for each reached call. Evidence
+also covers skipped failing members, operation counts, debugger metadata, VCD,
+cold/warm reuse, and package-edit invalidation. Empty or malformed lists,
+nonintegral or incompatible operands, containers, nested membership, and
+`case inside` retain targeted diagnostics.
+
+Native-object schema 49 records the ordered membership graph and transitive
+provenance while container semantic revision 24 and the public ABI remain
+unchanged. The complete exact-LLVM Debug regression passed all 59 tests in
+428.53 seconds (scoped locals 0.91, functions 11.93, containers 348.00,
+application 39.94). Release passed all 59 tests in 127.57 seconds (scoped
+locals 0.83, functions 10.12, containers 87.04, application 13.85). The
+catalog covers 1,244 codes and the source gate covers 292 files. Batch 97 is
+not a CI-inspection boundary, so no Actions run was inspected.
+
 ## Next ten-feature batch
 
-Resume with **feature batch 97: bounded SystemVerilog membership
-expressions**:
+Resume with **feature batch 98: bounded SystemVerilog `case inside`
+statements**:
 
-1. Retain `inside` as source-spanned HIR with one ordered left operand and a
-   nonempty ordered membership list.
-2. Support scalar integral constant and runtime left operands with exact
-   self-determined width, signedness, and state.
-3. Support exact scalar value members evaluated in lexical order.
-4. Support closed integral `[low:high]` range members with direction-neutral
-   inclusive bounds.
-5. Support mixed value/range membership lists and deterministic short-circuit
-   observation without re-evaluating the left operand.
-6. Apply SystemVerilog X/Z wildcard membership matching and exact known-result
-   Boolean semantics at the compared width.
-7. Admit bounded module/package/imported/qualified function calls in the left
-   operand, values, and range bounds with one-evaluation snapshots.
-8. Cover constant folding, interpreter, LLVM O0/O2, debugger/VCD, cold/warm
+1. Retain `case inside` as source-spanned case HIR with ordered alternatives.
+2. Support scalar integral selectors and exact scalar value choices with exact
+   width and signedness.
+3. Support inclusive ascending `[low:high]` range choices and empty reversed
+   ranges.
+4. Support mixed comma-separated value/range choices in one alternative.
+5. Apply right-choice X/Z wildcard matching and selector-unknown propagation.
+6. Preserve source order, first definite match, and final `default` behavior.
+7. Admit signed/two-state selectors and bounded function calls evaluated once.
+8. Cover constant selection, interpreter, LLVM O0/O2, debugger/VCD, cold/warm
    reuse, and package-edit invalidation.
-9. Diagnose empty/malformed lists, incompatible widths/types, reversed or
-   unknown ranges, unpacked/container members, nested sets, and `case inside`.
-10. Raise native-object schema 48 to 49, serialize membership values/ranges and
-    evaluation order, complete focused and full Debug/Release evidence, then
-    push the non-boundary batch.
+9. Diagnose empty/malformed alternatives, duplicate defaults, incompatible
+   choices, nested membership, and unsupported case qualifiers.
+10. Raise native-object schema 49 to 50, serialize the exact choice/range and
+    control-flow graph, complete full Debug/Release evidence, then push the
+    non-boundary batch.
 
-Keep Batch 97 to bounded scalar integral membership expressions. General open
-ranges, type membership, unpacked values, class handles, distribution syntax,
-`case inside`, element conversion, and cross-language values remain separate
-release-gate work.
+Keep Batch 98 to scalar integral `case inside`. `case matches`, tagged
+patterns, variable-array/open/type/class sets, `unique`/`unique0`/`priority`
+qualifiers, general element conversion, and cross-language values remain
+separate release-gate work.
 
 ## Working cadence
 
@@ -1086,8 +1111,9 @@ static-array-slice-module-port handoff, followed by the Batch 92 bounded
 indexed-static-array-slice handoff and the Batch 93 bounded fixed-array-function
 return handoff, followed by the Batch 94 bounded nonstatic-container-function
 return handoff and Batch 95 bounded function-result-consumer/conditional
-handoff, then the Batch 96 bounded whole-container-equality handoff. Treat the
-newest pushed commit on the same branch as the
+handoff, then the Batch 96 bounded whole-container-equality handoff and Batch
+97 bounded SystemVerilog membership-expression handoff. Treat the newest
+pushed commit on the same branch as the
 authoritative continuation and read this file from that checkout before doing
 work.
 
@@ -1120,7 +1146,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 97 below and return to focused tests until its tenth feature.
+resume Batch 98 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1138,11 +1164,11 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin Batch 97 at item 1 above. Do not rerun Batch 96's full regression
-   until the membership-expression implementation and evidence are complete
+3. Begin Batch 98 at item 1 above. Do not rerun Batch 97's full regression
+   until the `case inside` implementation and evidence are complete
    unless an intervening repair needs it.
-4. Keep Batch 97 within scalar integral SystemVerilog membership expressions
-   over the bounded value/range list described above.
+4. Keep Batch 98 within scalar integral SystemVerilog `case inside` statements
+   over the bounded value/range choices described above.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -1155,9 +1181,9 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 97 is in progress, extending the
-frontend, expression elaboration, native cache, and function/expression
-application tests as membership expressions appear:
+Use a narrow test expression while Batch 98 is in progress, extending the
+frontend, statement elaboration, native cache, and function/expression
+application tests as `case inside` statements appear:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
@@ -1165,7 +1191,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 96.
+recorded 59-test inventories are clean after feature batch 97.
 
 Before declaring any row complete, consult:
 

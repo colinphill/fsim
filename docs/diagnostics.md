@@ -545,6 +545,11 @@ therefore excluded.
 | `FSIM-SV-PARSE-172` | error | Expected `)` after an extrema/uniqueness locator transformation. |
 | `FSIM-SV-PARSE-173` | error | Expected `:` after a SystemVerilog assignment-pattern `default` choice. |
 | `FSIM-SV-PARSE-174` | error | Expected a value after a SystemVerilog assignment-pattern association. |
+| `FSIM-SV-PARSE-175` | error | The `inside` membership operator is used outside SystemVerilog. |
+| `FSIM-SV-PARSE-176` | error | Expected the braced list after an `inside` membership operator. |
+| `FSIM-SV-PARSE-177` | error | An `inside` membership list is empty. |
+| `FSIM-SV-PARSE-178` | error | Expected `:` between the low and high bounds of an `inside` range. |
+| `FSIM-SV-PARSE-179` | error | Expected `]` after an `inside` range. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -1094,6 +1099,12 @@ therefore excluded.
 | `FSIM-ELAB-SVEQUAL-001` | error | A container operand is used with an unsupported comparison operator or outside SystemVerilog. |
 | `FSIM-ELAB-SVEQUAL-002` | error | Whole-container equality does not have two typed container operands. |
 | `FSIM-ELAB-SVEQUAL-003` | error | Whole-container equality operands do not have an exactly compatible kind and profile. |
+| `FSIM-ELAB-SVMEMBER-001` | error | An `inside` membership expression is lowered outside SystemVerilog. |
+| `FSIM-ELAB-SVMEMBER-002` | error | An `inside` expression does not contain a left operand and at least one member. |
+| `FSIM-ELAB-SVMEMBER-003` | error | The left operand of bounded `inside` membership is not a scalar integral value with statically inferable width. |
+| `FSIM-ELAB-SVMEMBER-004` | error | An `inside` member is a nested set, unpacked container, string, aggregate, concatenation, or another unsupported nonintegral value. |
+| `FSIM-ELAB-SVMEMBER-005` | error | An `inside` value or range bound does not exactly match the left operand width and signedness. |
+| `FSIM-ELAB-SVMEMBER-006` | error | Internal `inside` range metadata does not contain exactly one low and high bound. |
 | `FSIM-ELAB-SVQUERY-001` | error | A bounded unpacked-container query has the wrong language or arity, an indirect expression, or no direct typed container object. |
 | `FSIM-ELAB-SVQUERY-002` | error | A bounded unpacked-container query dimension is not the locally constant dimension `1`. |
 | `FSIM-ELAB-SVQUERY-003` | error | A finite-bound query is applied to an associative array. |

@@ -65,6 +65,7 @@ void test_loop_control_statements();
 void test_systemverilog_do_while_statements();
 void test_systemverilog_conditional_expression();
 void test_systemverilog_comparison_expressions();
+void test_systemverilog_membership_expressions();
 void test_systemverilog_arithmetic_expressions();
 void test_gate_primitives();
 void test_systemverilog_select_and_concatenation_expressions();

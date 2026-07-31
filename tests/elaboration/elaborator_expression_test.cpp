@@ -1491,5 +1491,167 @@ endmodule
          "11111111", "00000010", "0", "1"});
 }
 
-} // namespace fsim::tests::elaboration
+void test_systemverilog_membership_lowering() {
+    const auto parsed = fsim::frontend::parse_text(
+        "membership_expression.sv",
+        R"(
+module membership_expression;
+  logic [7:0] selector;
+  logic signed [7:0] signed_selector;
+  bit [7:0] bit_selector;
+  logic [7:0] low_bound;
+  logic [7:0] high_bound;
+  logic exact_match;
+  logic range_match;
+  logic mixed_match;
+  logic wildcard_match;
+  logic unknown_miss;
+  logic unknown_then_match;
+  logic reversed_range;
+  logic signed_range;
+  logic bit_match;
+  logic unknown_range;
+  logic short_circuit;
 
+  function automatic logic [7:0] observed(input logic [7:0] value);
+    return value;
+  endfunction
+  function automatic logic [7:0] failing(input logic [7:0] divisor);
+    return 8'hff / divisor;
+  endfunction
+
+  initial begin
+    selector = 8'h15;
+    signed_selector = -8'sd5;
+    bit_selector = 8'h2a;
+    low_bound = 8'h10;
+    high_bound = 8'h1f;
+    exact_match = selector inside {8'h14, 8'h15, 8'h16};
+    range_match = selector inside {[8'h10:8'h1f]};
+    mixed_match = selector inside {8'h01, [8'h10:8'h1f], 8'hff};
+    wildcard_match = 8'ha5 inside {8'b10xz_0101};
+    unknown_miss = 8'bx001_0001 inside {8'b0001_0001};
+    unknown_then_match =
+        8'bx001_0001 inside {8'b0001_0001, 8'bxxxx_xxxx};
+    reversed_range = selector inside {[8'h1f:8'h10]};
+    signed_range = signed_selector inside {[-8'sd8:-8'sd2]};
+    bit_match = bit_selector inside {8'h2a};
+    unknown_range = selector inside {[8'bx000_0000:8'h1f]};
+    short_circuit =
+        observed(selector) inside {
+          [observed(low_bound):observed(high_bound)], failing(8'h00)};
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    if (!parsed.ok()) {
+      for (const auto& diagnostic : parsed.diagnostics) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    assert(parsed.ok());
+    const auto elaborated = fsim::elaboration::elaborate(
+        parsed.design, "sv:work.membership_expression");
+    assert(elaborated.ok());
+    const auto& process = elaborated.design->processes().front();
+    assert(std::ranges::count_if(
+        process.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          const auto* binary =
+              std::get_if<fsim::runtime::simir::Binary>(&operation);
+          return binary != nullptr
+              && binary->operation
+                  == fsim::runtime::simir::BinaryOperator::wildcard_equal;
+        }) >= 8);
+    assert(std::ranges::any_of(
+        process.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          return std::holds_alternative<
+              fsim::runtime::simir::Branch>(operation);
+        }));
+    const auto membership_calls = std::ranges::count_if(
+        process.operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          return std::holds_alternative<
+              fsim::runtime::simir::Call>(operation);
+        });
+    if (membership_calls != 4) {
+      std::cerr << "membership call count: " << membership_calls << '\n';
+    }
+    assert(membership_calls == 4);
+    auto interpreter = elaborated.design->create_interpreter();
+    (void)interpreter->run();
+    const auto value = [&](const std::string_view name) {
+      const auto signal = elaborated.design->find_signal(name);
+      assert(signal);
+      return interpreter->signal_value(*signal).to_msb_string();
+    };
+    assert(value("exact_match") == "1");
+    assert(value("range_match") == "1");
+    assert(value("mixed_match") == "1");
+    assert(value("wildcard_match") == "1");
+    assert(value("unknown_miss") == "X");
+    assert(value("unknown_then_match") == "1");
+    assert(value("reversed_range") == "0");
+    assert(value("signed_range") == "1");
+    assert(value("bit_match") == "1");
+    assert(value("unknown_range") == "X");
+    assert(value("short_circuit") == "1");
+
+    const auto reject = [](
+        const std::string_view path,
+        const std::string_view source,
+        const std::string_view code) {
+      const auto candidate = fsim::frontend::parse_text(
+          path, source,
+          fsim::frontend::Language::SystemVerilog2017);
+      assert(candidate.ok());
+      const auto rejected = fsim::elaboration::elaborate(
+          candidate.design, "sv:work.membership_negative");
+      assert(!rejected.ok());
+      assert(has_diagnostic(rejected, code));
+    };
+    reject(
+        "membership_width.sv",
+        R"(
+module membership_negative;
+  logic [7:0] value;
+  logic result;
+  initial result = value inside {4'h1};
+endmodule
+)",
+        "FSIM-ELAB-SVMEMBER-005");
+    reject(
+        "membership_signedness.sv",
+        R"(
+module membership_negative;
+  logic signed [7:0] value;
+  logic result;
+  initial result = value inside {8'h01};
+endmodule
+)",
+        "FSIM-ELAB-SVMEMBER-005");
+    reject(
+        "membership_container.sv",
+        R"(
+module membership_negative;
+  logic [7:0] value;
+  logic [7:0] values[1:0];
+  logic result;
+  initial result = value inside {values};
+endmodule
+)",
+        "FSIM-ELAB-SVMEMBER-004");
+    reject(
+        "membership_nested.sv",
+        R"(
+module membership_negative;
+  logic [7:0] value;
+  logic result;
+  initial result = value inside {value inside {value}};
+endmodule
+)",
+        "FSIM-ELAB-SVMEMBER-004");
+}
+
+} // namespace fsim::tests::elaboration

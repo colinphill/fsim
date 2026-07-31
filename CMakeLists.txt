@@ -364,6 +364,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_control.cpp
       src/elaboration/lowerer_expression.cpp
       src/elaboration/lowerer_expression_binary.cpp
+      src/elaboration/lowerer_expression_membership.cpp
       src/elaboration/lowerer_expression_system.cpp
       src/elaboration/lowerer_expression_unary.cpp
       src/elaboration/lowerer_functions.cpp

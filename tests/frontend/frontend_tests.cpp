@@ -93,6 +93,7 @@ int main() {
     test_systemverilog_do_while_statements();
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
+    test_systemverilog_membership_expressions();
     test_systemverilog_arithmetic_expressions();
     test_gate_primitives();
     test_systemverilog_select_and_concatenation_expressions();

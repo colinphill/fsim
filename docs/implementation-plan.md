@@ -5283,6 +5283,46 @@ in 0.82 seconds, functions in 9.92 seconds, containers in 88.69 seconds, and
 the monolithic application in 13.64 seconds, on 2026-07-31. Batch 96 is not a
 ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### Ninety-seventh feature batch — bounded SystemVerilog membership expressions
+
+SystemVerilog scalar integral `inside` expressions now retain one
+source-spanned left operand and a nonempty ordered braced list in HIR. Exact
+value members remain ordinary expressions, while `[low:high]` members use an
+explicit two-bound range node. Parsing diagnoses use outside SystemVerilog,
+empty lists, missing braces, missing range colons, and missing range brackets
+without admitting `case inside` or general set syntax.
+
+Elaboration requires every operand to be scalar integral with exactly matching
+width and signedness. It evaluates the left operand once, then tests value and
+range members in source order. Value members use right-operand X/Z wildcard
+equality. Ascending closed ranges are inclusive; known reversed ranges are
+empty. Unknown comparisons propagate X unless a later member definitely
+matches, and a definite match branches past every remaining member. The
+universal result is one four-state bit, including for two-state operands.
+Module, package, imported, and qualified calls may supply the left value,
+members, or bounds, and every reached call executes once.
+
+Typed constant folding implements the same value, range, wildcard, reversed,
+and unknown semantics. Runtime lowering reuses shared scalar comparison,
+logical, and branch operations, so no public runtime or LLVM callback ABI was
+added. Positive evidence covers parameter folding, mixed lists, signed and
+two-state values, unknown and later-match cases, skipped failing members,
+dynamic call bounds, call-operation counts, debugger metadata, VCD,
+interpreter, LLVM O0/O2, cold/warm reuse, and package-edit invalidation.
+Native-object schema 49 records the ordered membership graph and transitive
+provenance; container semantic revision 24 remains unchanged. The cache matrix
+contains 16 distinct objects.
+
+The diagnostic catalog now covers all 1,244 production codes, and the source
+gate covers 292 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests in
+428.53 seconds, including scoped locals in 0.91 seconds, functions in 11.93
+seconds, containers in 348.00 seconds, and the monolithic application in 39.94
+seconds. Release passed all 59 tests in 127.57 seconds, including scoped locals
+in 0.83 seconds, functions in 10.12 seconds, containers in 87.04 seconds, and
+the monolithic application in 13.85 seconds, on 2026-07-31. Batch 97 is not a
+ten-batch CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

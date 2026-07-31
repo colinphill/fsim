@@ -390,6 +390,43 @@ enum class Truth { False, True, Unknown };
     return lhs_value < rhs_value ? -1 : lhs_value > rhs_value ? 1 : 0;
 }
 
+[[nodiscard]] Truth wildcard_equal(
+    const Value& left,
+    const Value& right) noexcept {
+    const auto width = std::max(left.width, right.width);
+    const bool common_signed = left.is_signed && right.is_signed;
+    const auto lhs = common_operand(left, width, common_signed);
+    const auto rhs = common_operand(right, width, common_signed);
+    const auto compared = rhs.mask() & ~rhs.unknown_bits;
+    if ((lhs.unknown_bits & compared) != 0) {
+        return Truth::Unknown;
+    }
+    return ((lhs.bits ^ rhs.bits) & compared) == 0
+        ? Truth::True : Truth::False;
+}
+
+[[nodiscard]] Truth logical_and(
+    const Truth lhs,
+    const Truth rhs) noexcept {
+    if (lhs == Truth::False || rhs == Truth::False) {
+        return Truth::False;
+    }
+    return lhs == Truth::True && rhs == Truth::True
+        ? Truth::True : Truth::Unknown;
+}
+
+[[nodiscard]] Truth relational(
+    const Value& lhs,
+    const Value& rhs,
+    const bool less_equal) noexcept {
+    if (!lhs.known() || !rhs.known()) {
+        return Truth::Unknown;
+    }
+    const auto comparison = compare_known(lhs, rhs);
+    return (less_equal ? comparison <= 0 : comparison >= 0)
+        ? Truth::True : Truth::False;
+}
+
 [[nodiscard]] std::optional<Value> evaluate_impl(
     const Expression& expression,
     const SystemVerilogConstantEnvironment& environment,
@@ -772,6 +809,78 @@ enum class Truth { False, True, Unknown };
             result->source = expression.span;
         }
         return result;
+    }
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "inside") {
+        if (expression.operands.size() < 2U) {
+            error = "inside requires a left operand and a nonempty list";
+            return std::nullopt;
+        }
+        const auto left = evaluate_impl(
+            expression.operands.front(),
+            environment,
+            fallback_environment,
+            error);
+        if (!left) {
+            return std::nullopt;
+        }
+        Truth accumulated = Truth::False;
+        for (std::size_t index = 1;
+             index < expression.operands.size(); ++index) {
+            const auto& item = expression.operands[index];
+            Truth matched = Truth::False;
+            if (item.kind == ExpressionKind::Call
+                && item.text == "@inside-range") {
+                if (item.operands.size() != 2U) {
+                    error = "inside range requires a low and high bound";
+                    return std::nullopt;
+                }
+                const auto low = evaluate_impl(
+                    item.operands[0], environment,
+                    fallback_environment, error);
+                const auto high = evaluate_impl(
+                    item.operands[1], environment,
+                    fallback_environment, error);
+                if (!low || !high) {
+                    return std::nullopt;
+                }
+                if (low->width != left->width
+                    || high->width != left->width
+                    || low->is_signed != left->is_signed
+                    || high->is_signed != left->is_signed) {
+                    error =
+                        "inside range bounds must exactly match the left "
+                        "operand width and signedness";
+                    return std::nullopt;
+                }
+                matched = logical_and(
+                    relational(*low, *high, true),
+                    logical_and(
+                        relational(*left, *low, false),
+                        relational(*left, *high, true)));
+            } else {
+                const auto value = evaluate_impl(
+                    item, environment, fallback_environment, error);
+                if (!value) {
+                    return std::nullopt;
+                }
+                if (value->width != left->width
+                    || value->is_signed != left->is_signed) {
+                    error =
+                        "inside members must exactly match the left operand "
+                        "width and signedness";
+                    return std::nullopt;
+                }
+                matched = wildcard_equal(*left, *value);
+            }
+            if (matched == Truth::True) {
+                return logical_result(Truth::True, expression.span);
+            }
+            if (matched == Truth::Unknown) {
+                accumulated = Truth::Unknown;
+            }
+        }
+        return logical_result(accumulated, expression.span);
     }
     if (expression.kind == ExpressionKind::Call
         && expression.text == "$isunknown") {

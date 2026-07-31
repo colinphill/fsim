@@ -41,6 +41,18 @@ from sharing native objects. Widths above 64 bits, complete LRM typing, and
 genvar-dependent typed constants inside iterative generate bodies remain
 unsupported.
 
+SystemVerilog membership-expression status update: bounded scalar integral
+`lhs inside {value, [low:high], ...}` expressions preserve one source-spanned
+left operand and an ordered nonempty value/range list. Every operand must have
+the same width and signedness. The left operand is evaluated once; exact values
+and inclusive ascending closed ranges are tested in source order, reversed
+known ranges are empty, and a definite match skips all remaining members. X/Z
+bits in a value member act as wildcards. An unmasked unknown left bit or an
+unknown range comparison propagates X unless a later member definitely
+matches. Constant folding and interpreter/LLVM O0/O2 execution use the same
+bounded semantics. Variable-array sets, open ranges, type/class membership,
+distribution syntax, nested membership, and `case inside` remain unsupported.
+
 SystemVerilog type-parameter status update: module and package parameter
 regions accept bounded `parameter type` and `localparam type` declarations.
 Defaults and named/positional actuals may resolve supported integral builtins,
@@ -188,7 +200,7 @@ propagates an unknown four-state result; two-state element profiles produce a
 two-state result. Case equality compares X/Z planes exactly and always returns
 a known bit. Each function-result or conditional operand is evaluated once in
 lexical order. Associative conditional values and mutating methods on temporary
-results remain unsupported. Schema 48 and container semantic revision 24 cover
+results remain unsupported. Schema 49 and container semantic revision 24 cover
 result kinds, ranges/bounds, element/index profiles, consumer, conditional, and
 comparison operations, specialization, and transitive source provenance;
 normalized equivalent values share native cache identity without a public ABI

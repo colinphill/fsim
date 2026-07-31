@@ -923,6 +923,91 @@ endmodule
       "wildcard equality requires SystemVerilog");
 }
 
+void test_systemverilog_membership_expressions() {
+  const auto result = parse_text(
+      "membership.sv",
+      R"(
+module membership;
+  logic [7:0] selector;
+  logic result;
+  always_comb begin
+    result = selector inside {8'h01, [8'h10:8'h1f], 8'b10xz_0101};
+    result = selector + 8'h01 inside {[8'h20:8'h2f]} && result;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(result.ok(), "SystemVerilog inside expressions must parse");
+  const auto& statements =
+      result.design.units.front().processes.front().statements;
+  const auto& membership = statements.front().value;
+  require(
+      statements.size() == 2
+          && membership.kind == ExpressionKind::Call
+          && membership.text == "inside"
+          && membership.operands.size() == 4
+          && membership.operands[0].text == "selector"
+          && membership.operands[1].text == "8'h01"
+          && membership.operands[2].kind == ExpressionKind::Call
+          && membership.operands[2].text == "@inside-range"
+          && membership.operands[2].operands.size() == 2
+          && membership.operands[2].operands[0].text == "8'h10"
+          && membership.operands[2].operands[1].text == "8'h1f"
+          && membership.operands[3].text == "8'b10xz_0101"
+          && !membership.span.empty(),
+      "inside HIR retains ordered values, explicit ranges, and source span");
+  const auto& combined = statements[1].value;
+  require(
+      combined.kind == ExpressionKind::Binary
+          && combined.text == "&&"
+          && combined.operands[0].kind == ExpressionKind::Call
+          && combined.operands[0].text == "inside"
+          && combined.operands[0].operands[0].kind
+              == ExpressionKind::Binary
+          && combined.operands[0].operands[0].text == "+",
+      "inside precedence retains arithmetic lhs before logical conjunction");
+
+  const auto empty = parse_text(
+      "empty_membership.sv",
+      "module empty_membership; logic a; initial a = a inside {}; endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !empty.ok()
+          && std::ranges::any_of(
+              empty.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-177";
+              }),
+      "empty inside membership list has a targeted parse diagnostic");
+
+  const auto malformed_range = parse_text(
+      "malformed_membership_range.sv",
+      "module malformed_membership_range; logic [7:0] a; logic r; "
+      "initial r = a inside {[8'h01:8'h02}; endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_range.ok()
+          && std::ranges::any_of(
+              malformed_range.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-179";
+              }),
+      "malformed inside range has a targeted parse diagnostic");
+
+  const auto verilog = parse_text(
+      "membership.v",
+      "module membership; reg a; initial a = a inside {a}; endmodule",
+      Language::Verilog2005);
+  require(
+      !verilog.ok()
+          && std::ranges::any_of(
+              verilog.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-175";
+              }),
+      "inside membership requires SystemVerilog");
+}
+
 void test_systemverilog_arithmetic_expressions() {
   const auto result = parse_text(
       "arithmetic.sv",

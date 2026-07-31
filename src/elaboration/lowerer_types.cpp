@@ -18,6 +18,10 @@ using namespace elaboration_detail;
             return std::nullopt;
         }
         if (expression.kind == ExpressionKind::Call
+            && expression.text == "inside") {
+            return std::size_t{1};
+        }
+        if (expression.kind == ExpressionKind::Call
             && expression.operands.size() == 1
             && (expression.text == ".sum"
                 || expression.text == ".product"

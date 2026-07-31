@@ -233,6 +233,69 @@ std::optional<VerilogParser::BinaryOperation> VerilogParser::binary_operation() 
 Expression VerilogParser::parse_expression(int minimum_precedence) {
   Expression left = parse_unary();
   for (;;) {
+    constexpr int membership_precedence = 6;
+    if (at(TokenKind::Identifier)
+        && current().text == "inside"
+        && membership_precedence >= minimum_precedence) {
+      const auto inside = advance();
+      if (language_ != Language::SystemVerilog2017) {
+        error(
+            inside,
+            "FSIM-SV-PARSE-175",
+            "the inside membership operator requires SystemVerilog");
+      }
+      expect(
+          TokenKind::LeftBrace,
+          "'{' after inside",
+          "FSIM-SV-PARSE-176");
+      std::vector<Expression> operands;
+      operands.push_back(std::move(left));
+      if (at(TokenKind::RightBrace)) {
+        error(
+            current(),
+            "FSIM-SV-PARSE-177",
+            "an inside membership list must not be empty");
+      } else {
+        for (;;) {
+          if (match(TokenKind::LeftBracket)) {
+            const auto range_start = previous();
+            auto low = parse_expression();
+            expect(
+                TokenKind::Colon,
+                "':' in inside range",
+                "FSIM-SV-PARSE-178");
+            auto high = parse_expression();
+            expect(
+                TokenKind::RightBracket,
+                "']' after inside range",
+                "FSIM-SV-PARSE-179");
+            operands.push_back(Expression{
+                ExpressionKind::Call,
+                "@inside-range",
+                {std::move(low), std::move(high)},
+                cover(range_start.span, previous().span)});
+          } else {
+            operands.push_back(parse_expression());
+          }
+          if (!match(TokenKind::Comma)) {
+            break;
+          }
+        }
+      }
+      expect(
+          TokenKind::RightBrace,
+          "'}' after inside membership list",
+          "FSIM-SV-PARSE-176");
+      const auto combined = cover(
+          operands.empty() ? inside.span : operands.front().span,
+          previous().span);
+      left = Expression{
+          ExpressionKind::Call,
+          "inside",
+          std::move(operands),
+          combined};
+      continue;
+    }
     const auto operation = binary_operation();
     if (!operation || operation->precedence < minimum_precedence) {
       break;

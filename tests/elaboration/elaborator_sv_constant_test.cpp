@@ -74,6 +74,11 @@ module typed_constant_top #(
       1'b0 ? 4'hf : 8'h81,
   parameter logic [3:0] UNKNOWN_VALUE = 4'b10x1,
   parameter logic UNKNOWN_FLAG = $isunknown(UNKNOWN_VALUE),
+  parameter logic MEMBER_EXACT = 8'h15 inside {8'h14, 8'h15},
+  parameter logic MEMBER_RANGE = 8'h15 inside {[8'h10:8'h1f]},
+  parameter logic MEMBER_WILDCARD = 8'ha5 inside {8'b10xz_0101},
+  parameter logic MEMBER_UNKNOWN = 8'bx001_0001 inside {8'b0001_0001},
+  parameter logic MEMBER_REVERSED = 8'h15 inside {[8'h1f:8'h10]},
   parameter IMPLICIT_EIGHT = 8'hff,
   parameter IMPLICIT_SIXTEEN = 16'h00ff
 ) ();
@@ -146,6 +151,11 @@ endmodule
     assert(parameter_value(*top, "CONDITIONAL_VALUE") == "129");
     assert(parameter_value(*top, "UNKNOWN_VALUE") == "4'b10x1");
     assert(parameter_value(*top, "UNKNOWN_FLAG") == "1");
+    assert(parameter_value(*top, "MEMBER_EXACT") == "1");
+    assert(parameter_value(*top, "MEMBER_RANGE") == "1");
+    assert(parameter_value(*top, "MEMBER_WILDCARD") == "1");
+    assert(parameter_value(*top, "MEMBER_UNKNOWN") == "1'bx");
+    assert(parameter_value(*top, "MEMBER_REVERSED") == "0");
     assert(parameter_value(*top, "IMPLICIT_EIGHT") == "255");
     assert(parameter_value(*top, "IMPLICIT_SIXTEEN") == "255");
     assert(

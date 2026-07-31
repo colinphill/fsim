@@ -23,7 +23,11 @@ std::optional<RegisterId> Lowerer::lower_expression(
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
-    auto attempt = lower_primary_expression(
+    auto attempt = lower_membership_expression(expression);
+    if (attempt.handled) {
+        return attempt.value;
+    }
+    attempt = lower_primary_expression(
         expression, expected_width, expected_type);
     if (attempt.handled) {
         return attempt.value;

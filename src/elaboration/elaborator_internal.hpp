@@ -913,6 +913,8 @@ private:
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type = nullptr);
+    ExpressionAttempt lower_membership_expression(
+        const Expression& expression);
 
     std::optional<StringRegisterId> lower_string_expression(
         const Expression& expression);
