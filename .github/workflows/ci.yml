@@ -91,9 +91,9 @@ jobs:
     name: Ubuntu / GCC / ASan+UBSan
     runs-on: ubuntu-latest
     # Two-worker sanitizer builds avoid hosted-runner memory pressure, while
-    # the accumulated container differential now needs more than 45 minutes
-    # for configure, build, and the full test inventory.
-    timeout-minutes: 55
+    # the accumulated container differential can exceed 30 minutes under
+    # ASan/UBSan before the remaining full test inventory runs.
+    timeout-minutes: 70
     steps:
       - name: Check out sources
         uses: actions/checkout@v7
