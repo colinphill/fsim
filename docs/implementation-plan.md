@@ -5045,6 +5045,67 @@ including scoped locals in 0.86 seconds, containers in 85.11 seconds, and the
 monolithic application in 13.55 seconds, on 2026-07-31. Batch 91 is not a
 ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### Ninety-second feature batch — indexed static-array slices
+
+Direct locally constant `base +: width` and `base -: width` selections of
+one-dimensional integral static arrays now use the same selected-container
+architecture as colon slices. The frontend retains indexed `Slice` HIR with
+its source span and operator, so unpacked selections remain distinguishable
+from packed indexed part-selects until contextual elaboration.
+
+Elaboration requires a known signed-32 base and width and rejects a
+nonpositive width. The numeric interval is computed with checked arithmetic,
+validated against the receiver, and then oriented to the static array's
+declared direction. Consequently equivalent plus and minus spellings produce
+the same normalized selected `ContainerType`, including exact element count,
+element width, signedness, and two-/four-state domain. Both operators are
+valid for ascending and descending receivers when their computed interval is
+in range.
+
+The normalized type flows through whole-to-slice, slice-to-whole, and
+slice-to-slice assignments. Existing source snapshots, selected staging, and
+one whole-parent replacement preserve atomic overlap behavior and every X/Z
+bit. System queries, `.size()`, reductions and transformations,
+extrema/uniqueness, predicate locators, `reverse`, `sort`, and `rsort` consume
+the same selected snapshot and expose normalized signed declared indices to
+`.index`.
+
+Fixed automatic function inputs and task input/output/inout formals accept
+the indexed spellings through ordinal value adaptation. Suspended task
+copy-out still commits only after normal or early return. Named and positional
+same-language module connections likewise normalize indexed actuals before
+constructing the Batch 91 recursive `ContainerSliceAlias`; read-only input,
+atomic output/inout merge, nested/generated forwarding, and interval-aware
+driver ownership therefore remain unchanged.
+
+Stable negative matrices reject runtime or unknown bases and widths,
+zero/negative widths, arithmetic overflow, out-of-range selections,
+nonstatic or indirect receivers, read-only writes, shape/profile mismatch,
+overlapping drivers, multidimensional containers, recursive boundaries, and
+cross-language slices. Indexed slice return values, general expression
+receivers/actuals, runtime-variable indexed selections, and element
+conversion remain deferred.
+
+Frontend, elaboration, debugger, scalar VCD, interpreter, LLVM O0/O2, and
+cold/warm application evidence covers ascending and descending receivers,
+both indexed operators, objects, ports, nested/generated hierarchy, automatic
+callables, suspension, ordering, queries, and overlapping assignments. Native
+object schema 44 and container semantic revision 20 serialize normalized
+range, profile, operation graph, specialization, and source identity. The
+cache matrix proves equivalent `+:` and `-:` intervals reuse one object while
+range, direction, profile, operation, and provenance changes miss; the public
+native ABI is unchanged.
+
+The diagnostic catalog still covers all 1,222 production codes, and the
+source gate covers 291 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 439.73 seconds, including scoped locals in 1.02 seconds, the
+expanded indexed-container differential in 363.49 seconds, and the monolithic
+application in 43.07 seconds. Release passed all 59 tests in 128.24 seconds,
+including scoped locals in 0.85 seconds, containers in 92.19 seconds, and the
+monolithic application in 14.87 seconds, on 2026-07-31. Batch 92 is not a
+ten-batch CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
