@@ -4620,6 +4620,54 @@ tests in 57.57 seconds, including scoped locals in 0.80 seconds and containers
 in 26.89 seconds, on 2026-07-30. Batch 84 is not a ten-batch GitHub
 CI-inspection boundary, so no Actions run is required.
 
+### Eighty-fifth feature batch — named reduction transformation iterators
+
+SystemVerilog `sum`, `product`, `and`, `or`, and `xor` transformations now
+accept one optional iterator identifier in the method argument list. The
+parser retains that binder as an explicit source-spanned HIR operand between
+the receiver and transformation, removes it from implicit-net discovery, and
+exposes it only while parsing the associated `with` expression. A binder
+without `with`, a non-Identifier or multiple binders, collision, and leakage
+fail through stable diagnostics. Implicit `item` remains fully compatible.
+
+Lowering binds the named value to the receiver's exact integral element
+profile and direct `.index` to the existing signed two-state 32-bit leaf.
+Static arrays continue to project signed declared indices, while dynamic
+arrays and queues expose current zero-based positions. Named and implicit
+spellings use the same bounded typed graph lowerer and produce identical
+source-ordered operator, edge, constant, and value-kind metadata. The existing
+pure expression limits, one-conditional rule, exact element root, 64-node
+bound, and associative/excluded-family rejection remain unchanged.
+
+No runtime or native ABI extension is needed because iterator spelling is
+lexical frontend information and does not survive into `ContainerReduction`.
+The shared interpreter/native kernel therefore preserves all five operations,
+empty identities, exact-width arithmetic and bitwise behavior, four-state
+conditional merging, receiver nonmutation, and declared/current index
+evaluation. Schema 37 intentionally remains current: it already serializes
+the complete semantic transformation graph, operation, and provenance while
+excluding nonsemantic binder spelling. Existing cold/warm cache tests continue
+to distinguish every semantic graph change.
+
+Positive evidence covers explicit source spans, implicit/named graph equality,
+all five operators, exact signed and four-state values, empty sources,
+negative declared and current indices, unbounded and bounded containers,
+module objects, direct static/dynamic ports, nested/generated hierarchy,
+automatic functions, tasks across suspension, interpreter, LLVM O0/O2, and
+cold/warm application builds. Negative evidence covers non-Identifier and
+multiple binders, a binder without `with`, collision and leakage, unknown or
+indirect references, mixed profiles, arithmetic, calls, side effects, wrong
+roots, associative receivers, and the retained metadata bounds.
+
+The diagnostic catalog now covers 1,211 production codes and the source gate
+still covers 286 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 204.23 seconds, including scoped locals in 0.91 seconds and the
+expanded container differential in 132.53 seconds. Release passed all 59
+tests in 60.69 seconds, including scoped locals in 0.80 seconds and containers
+in 27.12 seconds, on 2026-07-30. Batch 85 is not a ten-batch GitHub
+CI-inspection boundary, so no Actions run is required.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

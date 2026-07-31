@@ -530,6 +530,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             || member.text == "unique_index";
         const bool valid_iterator_argument =
             (predicate_locator_method
+             || reduction_method
              || ordering_key_method
              || locator_method)
             && argument_count == 1
@@ -553,7 +554,6 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             : member.text == "size"
                     || member.text == "pop_front"
                     || member.text == "pop_back"
-                    || reduction_method
                     || member.text == "reverse"
                     || unsupported_shuffle
                 ? std::optional<std::size_t>{0}
@@ -584,6 +584,21 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "FSIM-SV-SEM-090",
               "predicate container locator method '" + member.text
                   + "' accepts at most one iterator identifier");
+        }
+        if (reduction_method
+            && (argument_count > 1
+                || (argument_count == 1
+                    && operands[1].kind
+                        != ExpressionKind::Identifier)
+                || (argument_count == 1
+                    && operands[1].text.find('.')
+                        != std::string::npos))) {
+          error(
+              member,
+              "FSIM-SV-SEM-094",
+              "container reduction method '" + member.text
+                  + "' accepts at most one transformation iterator "
+                    "identifier");
         }
         if (ordering_key_method
             && (argument_count > 1
@@ -621,32 +636,47 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "FSIM-SV-SEM-085",
               "container reduction methods require SystemVerilog 2017");
         }
-        if (reduction_method
-            && current().text == "with") {
-          advance();
-          expect(
-              TokenKind::LeftParen,
-              "'(' after container reduction with",
-              "FSIM-SV-PARSE-167");
-          const bool iterator_scope_inserted =
-              current_procedural_names_.insert("item").second;
-          container_iterator_names_.insert("item");
-          if (at(TokenKind::RightParen)) {
-            error(
-                current(),
-                "FSIM-SV-SEM-091",
-                "a container reduction with-clause requires a "
-                "transformation expression");
+        if (reduction_method) {
+          const auto iterator_scope_name =
+              valid_iterator_argument
+                  ? operands[1].text
+                  : std::string{"item"};
+          if (current().text != "with") {
+            if (argument_count != 0) {
+              error(
+                  current(),
+                  "FSIM-SV-SEM-094",
+                  "a named container reduction transformation iterator "
+                  "requires a with-clause");
+            }
           } else {
-            operands.push_back(parse_expression());
+            container_iterator_names_.insert(iterator_scope_name);
+            const bool iterator_scope_inserted =
+                current_procedural_names_.insert(
+                    iterator_scope_name).second;
+            advance();
+            expect(
+                TokenKind::LeftParen,
+                "'(' after container reduction with",
+                "FSIM-SV-PARSE-167");
+            if (at(TokenKind::RightParen)) {
+              error(
+                  current(),
+                  "FSIM-SV-SEM-091",
+                  "a container reduction with-clause requires a "
+                  "transformation expression");
+            } else {
+              operands.push_back(parse_expression());
+            }
+            if (iterator_scope_inserted) {
+              current_procedural_names_.erase(
+                  iterator_scope_name);
+            }
+            expect(
+                TokenKind::RightParen,
+                "')' after container reduction transformation",
+                "FSIM-SV-PARSE-168");
           }
-          if (iterator_scope_inserted) {
-            current_procedural_names_.erase("item");
-          }
-          expect(
-              TokenKind::RightParen,
-              "')' after container reduction transformation",
-              "FSIM-SV-PARSE-168");
         }
         if ((ordering_method || unsupported_shuffle)
             && language_ != Language::SystemVerilog2017) {

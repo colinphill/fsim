@@ -88,6 +88,9 @@ module containers;
     assert (
         values.sum() with (
             item.index >= 0 ? item : 0) == 6);
+    assert (
+        values.xor(entry) with (
+            entry.index >= 0 ? entry : 0) == 0);
     values.reverse();
     values.sort();
     values.rsort();
@@ -292,11 +295,20 @@ endmodule
         return nullptr;
       };
   const Expression* transformed_reduction{};
+  const Expression* named_transformed_reduction{};
   for (const auto& statement : query_statements) {
     transformed_reduction =
         find_call(
             find_call, statement.condition, ".sum", 2);
     if (transformed_reduction != nullptr) {
+      break;
+    }
+  }
+  for (const auto& statement : query_statements) {
+    named_transformed_reduction =
+        find_call(
+            find_call, statement.condition, ".xor", 3);
+    if (named_transformed_reduction != nullptr) {
       break;
     }
   }
@@ -310,6 +322,21 @@ endmodule
           && !transformed_reduction->operands[1].span.empty(),
       "reduction with transformation remains explicit source-spanned "
       "HIR");
+  require(
+      named_transformed_reduction != nullptr
+          && named_transformed_reduction->operands[1].kind
+              == ExpressionKind::Identifier
+          && named_transformed_reduction->operands[1].text
+              == "entry"
+          && named_transformed_reduction->operands[1].span.source_name
+              == "containers.sv"
+          && !named_transformed_reduction->operands[1].span.empty()
+          && named_transformed_reduction->operands[2].kind
+              == ExpressionKind::Call
+          && named_transformed_reduction->operands[2].text
+              == "?:",
+      "named reduction iterator and transformation remain explicit "
+      "source-spanned HIR");
   require(
       std::ranges::count_if(
           query_statements,
@@ -613,14 +640,35 @@ endmodule
   const auto named_reduction_iterator = parse_text(
       "container-reduction-named-iterator.sv",
       "module m; int values[]; int result; "
-      "initial result = values.sum(entry) with (entry); endmodule",
+      "initial begin "
+      "result = values.sum(entry) with (entry); "
+      "result = values.product(cell) with "
+      "(cell.index > 0 ? cell : 1); "
+      "end endmodule",
       Language::SystemVerilog2017);
   require(
-      !named_reduction_iterator.ok()
+      named_reduction_iterator.ok(),
+      "named reduction transformation iterators parse");
+  const auto invalid_reduction_iterator = parse_text(
+      "container-reduction-invalid-iterator.sv",
+      "module m; int values[]; int result; "
+      "initial begin "
+      "result = values.sum(entry); "
+      "result = values.product(first, second) with (first); "
+      "result = values.xor(1) with (item); "
+      "result = entry; "
+      "end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_reduction_iterator.ok()
           && has_code(
-              named_reduction_iterator,
-              "FSIM-SV-SEM-081"),
-      "named reduction iterators remain outside the bounded subset");
+              invalid_reduction_iterator,
+              "FSIM-SV-SEM-094")
+          && has_code(
+              invalid_reduction_iterator,
+              "FSIM-SV-SEM-090"),
+      "named reduction transformation iterators diagnose malformed, "
+      "multiple, missing-clause, and leaked bindings");
   const auto leaked_reduction_iterator = parse_text(
       "container-reduction-item-leak.sv",
       "module m; int values[]; int result; "

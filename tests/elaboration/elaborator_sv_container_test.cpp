@@ -114,6 +114,9 @@ module container_lowering #(
         values.sum() with (
             item.index == 1 ? item : 0) == 8);
     assert (
+        values.sum(entry) with (
+            entry.index == 1 ? entry : 0) == 8);
+    assert (
         values.xor() with (
             item > 7 ? item : 0) == 8);
     located = values.min();
@@ -472,6 +475,18 @@ endmodule
                           == right_node.value_kind;
                 });
       };
+  std::vector<const ContainerReduction*> transformed_reductions;
+  for (const auto& operation : process.operations) {
+    if (const auto* reduction =
+            std::get_if<ContainerReduction>(&operation);
+        reduction && !reduction->transformation.empty()) {
+      transformed_reductions.push_back(reduction);
+    }
+  }
+  assert(transformed_reductions.size() >= 5);
+  assert(same_predicate(
+      transformed_reductions[1]->transformation,
+      transformed_reductions[2]->transformation));
   bool spelling_independent = false;
   for (std::size_t left = 0;
        left < predicate_locators.size(); ++left) {
@@ -903,6 +918,7 @@ module container_invalid_lowering;
     result = result.sum();
     lookup.sum();
     result = lookup.sum() with (item);
+    result = fixed.sum(collision) with (collision);
     result = fixed.sum() with (item + 1);
     result = fixed.sum() with (identity(item));
     result = fixed.sum() with (item > 0);
@@ -1004,6 +1020,8 @@ endmodule
       rejected, "FSIM-ELAB-SVREDUCE-005"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVREDUCE-006"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVREDUCE-007"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVORDER-001"));
   assert(has_diagnostic(

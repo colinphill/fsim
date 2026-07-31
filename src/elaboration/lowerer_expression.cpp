@@ -101,19 +101,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (container_reduction
             && (language_
                     != frontend::Language::SystemVerilog2017
-                || (expression.operands.size() != 1
-                    && expression.operands.size() != 2)
+                || expression.operands.empty()
+                || expression.operands.size() > 3
                 || !is_container_expression(
                     expression.operands.front()))) {
             report(
                 expression.operands.empty()
-                        || expression.operands.size() > 2
+                        || expression.operands.size() > 3
                     ? "FSIM-ELAB-SVREDUCE-002"
                     : "FSIM-ELAB-SVREDUCE-001",
                 expression.operands.empty()
-                        || expression.operands.size() > 2
+                        || expression.operands.size() > 3
                     ? "container reduction methods take no arguments "
-                      "and at most one with-clause transformation"
+                      "and retain at most one iterator plus one "
+                      "with-clause transformation"
                     : "container reduction methods require a direct "
                       "SystemVerilog unpacked-container receiver",
                 expression.span);
@@ -189,8 +190,25 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 return std::nullopt;
             }
             if (container_reduction) {
+                const bool explicit_iterator =
+                    expression.operands.size() == 3;
                 const bool has_transformation =
-                    expression.operands.size() == 2;
+                    expression.operands.size() >= 2;
+                if (explicit_iterator
+                    && expression.operands[1].kind
+                        != ExpressionKind::Identifier) {
+                    report(
+                        "FSIM-ELAB-SVREDUCE-007",
+                        "a named container reduction iterator must be "
+                        "one identifier",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+                const std::string_view iterator_name =
+                    explicit_iterator
+                        ? std::string_view{
+                              expression.operands[1].text}
+                        : std::string_view{"item"};
                 if (has_transformation
                     && runtime_type->associative) {
                     report(
@@ -200,11 +218,35 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                         expression.span);
                     return std::nullopt;
                 }
+                const auto iterator_key =
+                    std::string{iterator_name};
+                const bool iterator_collision =
+                    explicit_iterator
+                    && (object_type(iterator_name) != nullptr
+                        || locals_.contains(iterator_key)
+                        || string_locals_.contains(iterator_key)
+                        || container_locals_.contains(iterator_key)
+                        || signals_.contains(iterator_key)
+                        || string_objects_.contains(iterator_key)
+                        || container_objects_.contains(iterator_key));
+                if (iterator_collision) {
+                    report(
+                        "FSIM-ELAB-SVREDUCE-007",
+                        "named container reduction iterator '"
+                            + std::string{iterator_name}
+                            + "' collides with a visible object",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
                 std::vector<ContainerPredicateNode> transformation;
                 if (has_transformation) {
+                    const auto& transformation_expression =
+                        expression.operands[
+                            explicit_iterator ? 2U : 1U];
                     const auto lowered =
                         lower_container_expression_graph(
-                            expression.operands[1], "item",
+                            transformation_expression,
+                            iterator_name,
                             *type, *runtime_type,
                             ContainerExpressionPurpose::
                                 reduction_transformation);

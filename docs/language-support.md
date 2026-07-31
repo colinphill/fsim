@@ -173,15 +173,16 @@ static arrays expose declared signed indices and dynamic arrays/queues expose
 current zero-based indices.
 The five exact-element reductions also accept one optional parenthesized
 `with` transformation on nonassociative containers. The pure bounded form
-binds implicit `item` and direct signed 32-bit `item.index`, admits locally
-constant element alternatives, comparisons and logical composition, and one
-conditional element selection for masking. It is evaluated once per element
-in declared/current order before the reduction; empty identities, four-state
-conditional merging, receiver nonmutation, object/port/callable coherence,
-and interpreter/native parity are preserved. Named iterators, associative
-receivers, arithmetic or function calls involving `item`, side effects,
-multiple/nested conditionals, and non-element transformation roots remain
-unsupported.
+binds implicit `item` or one named iterator and its direct signed 32-bit
+`.index`, admits locally constant element alternatives, comparisons and
+logical composition, and one conditional element selection for masking. The
+binder is scoped to its transformation and does not affect semantic cache
+identity. The graph is evaluated once per element in declared/current order
+before the reduction; empty identities, four-state conditional merging,
+receiver nonmutation, object/port/callable coherence, and interpreter/native
+parity are preserved. Associative receivers, arithmetic or function calls
+involving the iterator, side effects, multiple/nested conditionals, and
+non-element transformation roots remain unsupported.
 `$readmemb` and `$readmemh` load fixed arrays through the manifest-root file
 service with optional start/finish indices, line/block comments, hexadecimal
 `@` addresses, a 1 MiB input bound, and exact X/Z digit preservation.

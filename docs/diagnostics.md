@@ -745,6 +745,7 @@ therefore excluded.
 | `FSIM-SV-SEM-091` | error | An unpacked-container reduction has an empty `with` transformation. |
 | `FSIM-SV-SEM-092` | error | A `sort` or `rsort` key has an empty `with` clause, a malformed or multiple iterator binder, or a named binder without a `with` clause. |
 | `FSIM-SV-SEM-093` | error | An extrema/uniqueness locator transformation has an empty `with` clause, a malformed or multiple iterator binder, or a named binder without a `with` clause. |
+| `FSIM-SV-SEM-094` | error | A reduction transformation has a malformed or multiple iterator binder, or a named binder without a `with` clause. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -1094,6 +1095,7 @@ therefore excluded.
 | `FSIM-ELAB-SVREDUCE-004` | error | A reduction `with` transformation uses unsupported arithmetic, calls, side effects, nonconstant operands, more than one conditional, or more than 64 graph nodes. |
 | `FSIM-ELAB-SVREDUCE-005` | error | A reduction `with` transformation contains an invalid iterator/index reference or mixes element and index comparison profiles. |
 | `FSIM-ELAB-SVREDUCE-006` | error | A reduction `with` transformation has a non-element root or uses an associative or otherwise excluded receiver profile. |
+| `FSIM-ELAB-SVREDUCE-007` | error | A named reduction transformation iterator is malformed or collides with a visible object. |
 | `FSIM-ELAB-SVORDER-001` | error | Container ordering lacks a direct writable supported SystemVerilog unpacked-container receiver. |
 | `FSIM-ELAB-SVORDER-002` | error | A container ordering method has an invalid retained receiver, optional iterator, or key-expression shape. |
 | `FSIM-ELAB-SVORDER-003` | error | A container ordering method is applied to an associative array. |

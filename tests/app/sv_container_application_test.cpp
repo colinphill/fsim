@@ -469,8 +469,9 @@ module static_port_leaf #(
     result = '{8'h10, 8'h20, 8'h30, 8'h40};
     assert (result.sum() == 8'ha0);
     assert (
-        result.sum() with (
-            item.index < 2 ? item : 8'h00) == 8'h70);
+        result.sum(reduced_item) with (
+            reduced_item.index < 2
+                ? reduced_item : 8'h00) == 8'h70);
     located =
         result.unique() with (
             item.index >= 2 ? 8'h00 : item);
@@ -562,8 +563,9 @@ module dynamic_port_leaf #(
     assert (source[0] == 11);
     assert (source.sum() == 23);
     assert (
-        source.sum() with (
-            item.index == 1 ? item : 0) == 12);
+        source.sum(source_sum_item) with (
+            source_sum_item.index == 1
+                ? source_sum_item : 0) == 12);
     located = source.min();
     assert (located[0] == 11);
     located = source.max();
@@ -699,8 +701,8 @@ module container_top;
     assert ($bits(source) == 16);
     assert (source.sum() == 6);
     assert (
-        source.sum() with (
-            item.index > 0 ? item : 0) == source[1]);
+        source.sum(sum_item) with (
+            sum_item.index > 0 ? sum_item : 0) == source[1]);
     return $size(source);
   endfunction
   function automatic int lookup_count(input byte source[key_t]);
@@ -719,8 +721,8 @@ module container_top;
     int locations[$];
     ordered = '{8'h03, 8'hff, 8'h03, 8'h02, 8'hfe};
     assert (
-        ordered.sum() with (
-            item < 0 ? item : 0) == 8'hfd);
+        ordered.sum(signed_item) with (
+            signed_item < 0 ? signed_item : 0) == 8'hfd);
     ordered.sort();
     assert (ordered[0] == -2);
     assert (ordered[1] == -1);
@@ -902,11 +904,18 @@ module container_top;
     assert (values.or() == -1);
     assert (values.xor() == -8);
     assert (
+        values.and(and_item) with (and_item) == 0);
+    assert (
+        values.or(or_item) with (or_item) == -1);
+    assert (
+        values.xor(xor_item) with (xor_item) == -8);
+    assert (
         values.sum() with (
             item < 0 ? item : 0) == -8);
     assert (
-        values.product() with (
-            item.index == 1 ? item : 1) == -8);
+        values.product(product_item) with (
+            product_item.index == 1
+                ? product_item : 1) == -8);
     located = values.min();
     assert (located[0] == -8);
     located = values.max();
@@ -996,8 +1005,8 @@ module container_top;
     assert (pending.or() == 0);
     assert (pending.xor() == 0);
     assert (
-        pending.product() with (
-            item.index >= 0 ? item : 1) == 1);
+        pending.product(empty_item) with (
+            empty_item.index >= 0 ? empty_item : 1) == 1);
     pending = '{1, 2};
     mutate(pending);
     assert (pending.sum() == 6);
@@ -1006,8 +1015,9 @@ module container_top;
     assert (pending.or() == 6);
     assert (pending.xor() == 6);
     assert (
-        pending.sum() with (
-            item.index > 0 ? item : 0) == pending[1]);
+        pending.sum(pending_item) with (
+            pending_item.index > 0
+                ? pending_item : 0) == pending[1]);
     mutate_memory(memory);
     assert (port_result[3] == 8'h32);
     assert (port_result[0] == 8'h06);
