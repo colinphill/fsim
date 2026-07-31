@@ -213,6 +213,9 @@ module fixed_function_returns;
   logic [7:0] conditional_fixed[3:0];
   logic [7:0] merged_fixed[3:0];
   int fixed_query;
+  logic fixed_logical_equal;
+  logic fixed_case_equal;
+  logic fixed_case_not_equal;
 
   function automatic logic [7:0] from_slice[10:7](
       input logic [7:0] value[7:2]);
@@ -271,6 +274,12 @@ module fixed_function_returns;
         + $high(named_result(8'h60))
         + $increment(named_result(8'h60))
         + $size(named_result(8'h60));
+    fixed_logical_equal =
+        from_slice(source) == from_slice(source);
+    fixed_case_equal =
+        from_slice(source) === from_slice(source);
+    fixed_case_not_equal =
+        named_result(8'h20) !== named_result(8'h21);
   end
 endmodule
 )",
@@ -294,7 +303,7 @@ endmodule
                return std::holds_alternative<
                    fsim::runtime::simir::Call>(operation);
              })
-         == 11);
+         == 17);
   assert(std::ranges::count_if(
              fixed_process.operations,
              [](const auto& operation) {
@@ -353,6 +362,21 @@ endmodule
       fixed_query
       && fixed_interpreter->signal_value(*fixed_query)
              .low_word().aval == 46);
+  const auto fixed_logical_equal =
+      fixed_elaborated.design->find_signal("fixed_logical_equal");
+  const auto fixed_case_equal =
+      fixed_elaborated.design->find_signal("fixed_case_equal");
+  const auto fixed_case_not_equal =
+      fixed_elaborated.design->find_signal("fixed_case_not_equal");
+  assert(
+      fixed_logical_equal && fixed_case_equal
+      && fixed_case_not_equal
+      && fixed_interpreter->signal_value(*fixed_logical_equal)
+             .low_word().bval == 1
+      && fixed_interpreter->signal_value(*fixed_case_equal)
+             .low_word().aval == 1
+      && fixed_interpreter->signal_value(*fixed_case_not_equal)
+             .low_word().aval == 1);
   const auto& merged_fixed = object_value("merged_fixed");
   assert(
       merged_fixed.elements.size() == 4
@@ -377,6 +401,7 @@ module nonstatic_function_returns;
   byte queue_source[$:3];
   byte queue_result[$:3];
   byte associative_source[int];
+  byte associative_alternative[int];
   byte associative_result[int];
   int query_result;
   logic [7:0] reduction_result;
@@ -391,6 +416,10 @@ module nonstatic_function_returns;
   byte found_result[$];
   int found_index_result[$];
   byte unique_result[$];
+  logic dynamic_equal;
+  logic queue_not_equal;
+  logic associative_case_equal;
+  logic associative_not_equal;
 
   function automatic byte copy_dynamic[](
       input byte value[]);
@@ -411,6 +440,7 @@ module nonstatic_function_returns;
     dynamic_source = '{11, 12, 13};
     queue_source = '{21, 22, 23};
     associative_source = '{-1: 31, 4: 44};
+    associative_alternative = '{-1: 31, 5: 44};
     dynamic_alternative = '{11, 99, 13};
     dynamic_short = '{11, 12};
     dynamic_result = copy_dynamic(
@@ -451,6 +481,17 @@ module nonstatic_function_returns;
     unique_result =
         copy_dynamic(dynamic_source).unique() with (
             item == 13 ? 12 : item);
+    dynamic_equal =
+        copy_dynamic(dynamic_source)
+        == copy_dynamic(dynamic_source);
+    queue_not_equal =
+        copy_queue(queue_source) != copy_queue(queue_source);
+    associative_case_equal =
+        copy_associative(associative_source)
+        === copy_associative(associative_source);
+    associative_not_equal =
+        copy_associative(associative_source)
+        != copy_associative(associative_alternative);
   end
 endmodule
 )",
@@ -474,7 +515,7 @@ endmodule
                return std::holds_alternative<
                    fsim::runtime::simir::Call>(operation);
              })
-         == 22);
+         == 30);
   assert(std::ranges::count_if(
              nonstatic_process.operations,
              [](const auto& operation) {
@@ -580,6 +621,27 @@ endmodule
           == std::vector<std::uint64_t>({1, 2})
       && bytes(nonstatic_value("unique_result"))
           == std::vector<std::uint64_t>({11, 12}));
+  const auto dynamic_equal =
+      nonstatic_elaborated.design->find_signal("dynamic_equal");
+  const auto queue_not_equal =
+      nonstatic_elaborated.design->find_signal("queue_not_equal");
+  const auto associative_case_equal =
+      nonstatic_elaborated.design->find_signal(
+          "associative_case_equal");
+  const auto associative_not_equal =
+      nonstatic_elaborated.design->find_signal(
+          "associative_not_equal");
+  assert(
+      dynamic_equal && queue_not_equal && associative_case_equal
+      && associative_not_equal
+      && nonstatic_interpreter->signal_value(*dynamic_equal)
+             .low_word().aval == 1
+      && nonstatic_interpreter->signal_value(*queue_not_equal)
+             .low_word().aval == 0
+      && nonstatic_interpreter->signal_value(*associative_case_equal)
+             .low_word().aval == 1
+      && nonstatic_interpreter->signal_value(*associative_not_equal)
+             .low_word().aval == 1);
 
   const auto reject_fixed_return =
       [](const std::string_view path,
@@ -653,6 +715,60 @@ endmodule
 )",
       "sv:work.mutating_temporary_function_result",
       "FSIM-ELAB-SVCONTAINER-022");
+  reject_fixed_return(
+      "container_equality_scalar_operand.sv",
+      R"(
+module container_equality_scalar_operand;
+  byte source[];
+  logic result;
+  function automatic byte value[](); return source; endfunction
+  initial result = value() == 1;
+endmodule
+)",
+      "sv:work.container_equality_scalar_operand",
+      "FSIM-ELAB-SVEQUAL-002");
+  reject_fixed_return(
+      "container_equality_profile_mismatch.sv",
+      R"(
+module container_equality_profile_mismatch;
+  byte dynamic_source[];
+  byte queue_source[$];
+  logic result;
+  function automatic byte dynamic_value[]();
+    return dynamic_source;
+  endfunction
+  function automatic byte queue_value[$]();
+    return queue_source;
+  endfunction
+  initial result = dynamic_value() == queue_value();
+endmodule
+)",
+      "sv:work.container_equality_profile_mismatch",
+      "FSIM-ELAB-SVEQUAL-003");
+  reject_fixed_return(
+      "container_relational_unsupported.sv",
+      R"(
+module container_relational_unsupported;
+  byte source[];
+  logic result;
+  function automatic byte value[](); return source; endfunction
+  initial result = value() < value();
+endmodule
+)",
+      "sv:work.container_relational_unsupported",
+      "FSIM-ELAB-SVEQUAL-001");
+  reject_fixed_return(
+      "container_wildcard_equality_unsupported.sv",
+      R"(
+module container_wildcard_equality_unsupported;
+  byte source[];
+  logic result;
+  function automatic byte value[](); return source; endfunction
+  initial result = value() ==? value();
+endmodule
+)",
+      "sv:work.container_wildcard_equality_unsupported",
+      "FSIM-ELAB-SVEQUAL-001");
   reject_fixed_return(
       "dynamic_function_return.sv",
       R"(

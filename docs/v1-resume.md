@@ -9,19 +9,19 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-95 container-valued
-  function-result consumers and compatible conditionals on top of the
-  feature-batch-94 nonstatic-container-function-return handoff.
+- Implementation baseline: completed feature-batch-96 bounded whole-container
+  equality on top of the feature-batch-95 container-valued function-result
+  consumer and conditional handoff.
 - The source-size refactor is complete: all 291 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 443.17 seconds, and Release passed all 59 configured
-  tests in 136.97 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 0.96/0.89 seconds, the expanded function differential in 11.55/10.08
-  seconds, containers in 358.54/94.70 seconds, and the monolithic application
-  in 42.38/14.53 seconds.
-- The diagnostic catalog covers all 1,230 production codes.
+  configured tests in 423.91 seconds, and Release passed all 59 configured
+  tests in 129.03 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.93/0.82 seconds, the expanded function differential in 11.00/9.92
+  seconds, containers in 343.67/88.69 seconds, and the monolithic application
+  in 40.03/13.64 seconds.
+- The diagnostic catalog covers all 1,233 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -954,31 +954,68 @@ application 14.53). The catalog covers 1,230 codes and the source gate covers
 291 files. Batch 95 is not a CI-inspection boundary, so no Actions run was
 inspected.
 
+## Completed feature batch 96
+
+Exactly compatible fixed arrays, dynamic arrays, queues, bounded queues, and
+integral-key associative arrays now support whole-container `==`, `!=`, `===`,
+and `!==`. The elaborator retains both operands as exact typed container
+expressions, validates kind, fixed range or queue bound, element profile, and
+associative index profile, then emits one `CompareContainers` operation.
+
+Logical equality compares exact size or key sets and elements in deterministic
+container order. A known mismatch returns false immediately; otherwise any
+unknown element comparison propagates X for four-state profiles, while
+two-state profiles return a bit. Case equality compares the value and X/Z
+planes exactly and always returns a known bit. Negated forms reuse the common
+comparison followed by scalar logical negation. Function-result and compatible
+conditional operands are evaluated once into isolated snapshots in lexical
+order.
+
+Interpreter and LLVM O0/O2 call the same semantic helper. Module/package,
+imported/qualified calls, specialization, debugger metadata, scalar VCD
+witnesses, cold/warm reuse, and package-edit invalidation agree. Mixed scalar
+operands, profile mismatches, relational ordering, and wildcard equality retain
+targeted diagnostics. Native-object schema 48 and container semantic revision
+24 serialize the comparison mode and exact operand graph; the dedicated matrix
+contains 15 distinct native objects without a public ABI change.
+
+The complete exact-LLVM Debug regression passed all 59 tests in 423.91 seconds
+(scoped locals 0.93, functions 11.00, containers 343.67, application 40.03).
+Release passed all 59 tests in 129.03 seconds (scoped locals 0.82, functions
+9.92, containers 88.69, application 13.64). The catalog covers 1,233 codes and
+the source gate covers 291 files. Batch 96 is not a CI-inspection boundary, so
+no Actions run was inspected.
+
 ## Next ten-feature batch
 
-Resume with **feature batch 96: bounded whole-container equality**:
+Resume with **feature batch 97: bounded SystemVerilog membership
+expressions**:
 
-1. Retain two compatible container operands as explicitly typed equality HIR.
-2. Support `==` and `!=` for fixed unpacked arrays in declared ordinal order.
-3. Support `==` and `!=` for dynamic arrays and queues including exact size.
-4. Support integral-key associative equality including exact ordered key sets.
-5. Support `===` and `!==` with exact X/Z element comparison.
-6. Apply SystemVerilog logical equality unknown propagation and two-state
-   result rules without element conversion.
-7. Compare function-result and compatible conditional snapshots exactly once
-   in lexical order.
-8. Cover module/package/imported/qualified/specialized calls, debugger/VCD,
-   interpreter, LLVM O0/O2, cold/warm reuse, and edit invalidation.
-9. Diagnose kind/profile/range/index mismatches, relational/wildcard forms,
-   multidimensional values, recursion, and cross-language comparisons.
-10. Raise native-object schema 47 to 48 and container semantic revision 23 to
-    24; complete frontend, elaboration, runtime, application, cache, and full
-    Debug/Release evidence, then push the non-boundary batch.
+1. Retain `inside` as source-spanned HIR with one ordered left operand and a
+   nonempty ordered membership list.
+2. Support scalar integral constant and runtime left operands with exact
+   self-determined width, signedness, and state.
+3. Support exact scalar value members evaluated in lexical order.
+4. Support closed integral `[low:high]` range members with direction-neutral
+   inclusive bounds.
+5. Support mixed value/range membership lists and deterministic short-circuit
+   observation without re-evaluating the left operand.
+6. Apply SystemVerilog X/Z wildcard membership matching and exact known-result
+   Boolean semantics at the compared width.
+7. Admit bounded module/package/imported/qualified function calls in the left
+   operand, values, and range bounds with one-evaluation snapshots.
+8. Cover constant folding, interpreter, LLVM O0/O2, debugger/VCD, cold/warm
+   reuse, and package-edit invalidation.
+9. Diagnose empty/malformed lists, incompatible widths/types, reversed or
+   unknown ranges, unpacked/container members, nested sets, and `case inside`.
+10. Raise native-object schema 48 to 49, serialize membership values/ranges and
+    evaluation order, complete focused and full Debug/Release evidence, then
+    push the non-boundary batch.
 
-Keep Batch 96 to read-only whole-container equality over exactly compatible
-bounded values. Relational ordering, membership, element conversion, general
-concatenation, multidimensional arrays, DPI, and cross-language values remain
-separate release-gate work.
+Keep Batch 97 to bounded scalar integral membership expressions. General open
+ranges, type membership, unpacked values, class handles, distribution syntax,
+`case inside`, element conversion, and cross-language values remain separate
+release-gate work.
 
 ## Working cadence
 
@@ -1049,7 +1086,8 @@ static-array-slice-module-port handoff, followed by the Batch 92 bounded
 indexed-static-array-slice handoff and the Batch 93 bounded fixed-array-function
 return handoff, followed by the Batch 94 bounded nonstatic-container-function
 return handoff and Batch 95 bounded function-result-consumer/conditional
-handoff. Treat the newest pushed commit on the same branch as the
+handoff, then the Batch 96 bounded whole-container-equality handoff. Treat the
+newest pushed commit on the same branch as the
 authoritative continuation and read this file from that checkout before doing
 work.
 
@@ -1082,7 +1120,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 96 below and return to focused tests until its tenth feature.
+resume Batch 97 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1100,11 +1138,11 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin Batch 96 at item 1 above. Do not rerun Batch 95's full regression
-   until the whole-container-equality implementation and evidence are complete
+3. Begin Batch 97 at item 1 above. Do not rerun Batch 96's full regression
+   until the membership-expression implementation and evidence are complete
    unless an intervening repair needs it.
-4. Keep Batch 96 within read-only whole-container equality over exactly
-   compatible bounded SystemVerilog values.
+4. Keep Batch 97 within scalar integral SystemVerilog membership expressions
+   over the bounded value/range list described above.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -1117,17 +1155,17 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 96 is in progress, extending the
-frontend, equality elaboration, native cache, function application, and
-container application tests as whole-container comparisons appear:
+Use a narrow test expression while Batch 97 is in progress, extending the
+frontend, expression elaboration, native cache, and function/expression
+application tests as membership expressions appear:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
-  -R 'fsim\.(frontend|runtime|elaboration|llvm|application\.sv_functions|application\.sv_containers|diagnostics-catalog|source-line-budget)'
+  -R 'fsim\.(frontend|runtime|elaboration|llvm|application\.expressions|application\.sv_functions|diagnostics-catalog|source-line-budget)'
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 95.
+recorded 59-test inventories are clean after feature batch 96.
 
 Before declaring any row complete, consult:
 

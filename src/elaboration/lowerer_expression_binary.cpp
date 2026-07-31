@@ -11,6 +11,77 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
         const frontend::Type*) {
         if (expression.kind == ExpressionKind::Binary
             && expression.operands.size() == 2
+            && (is_container_expression(expression.operands[0])
+                || is_container_expression(expression.operands[1]))) {
+            const bool supported =
+                expression.text == "=="
+                || expression.text == "!="
+                || expression.text == "==="
+                || expression.text == "!==";
+            if (language_ != frontend::Language::SystemVerilog2017
+                || !supported) {
+                report(
+                    "FSIM-ELAB-SVEQUAL-001",
+                    "bounded whole-container comparison supports only "
+                    "SystemVerilog ==, !=, ===, and !==",
+                    expression.span);
+                return std::nullopt;
+            }
+            if (!is_container_expression(expression.operands[0])
+                || !is_container_expression(expression.operands[1])) {
+                report(
+                    "FSIM-ELAB-SVEQUAL-002",
+                    "whole-container equality requires two typed "
+                    "container operands",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto lhs_type = container_expression_runtime_type(
+                expression.operands[0]);
+            const auto rhs_type = container_expression_runtime_type(
+                expression.operands[1]);
+            if (!lhs_type || !rhs_type) {
+                return std::nullopt;
+            }
+            if (*lhs_type != *rhs_type) {
+                report(
+                    "FSIM-ELAB-SVEQUAL-003",
+                    "whole-container equality requires an exactly "
+                    "compatible kind and profile",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto lhs = lower_container_expression(
+                expression.operands[0]);
+            const auto rhs = lower_container_expression(
+                expression.operands[1]);
+            if (!lhs || !rhs) {
+                return std::nullopt;
+            }
+            const bool case_equal =
+                expression.text == "==="
+                || expression.text == "!==";
+            const auto result_domain =
+                case_equal || lhs_type->two_state
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            const auto destination =
+                allocate_register(1, result_domain);
+            process_.operations.emplace_back(
+                CompareContainers{
+                    destination, *lhs, *rhs, case_equal});
+            if (expression.text == "!="
+                || expression.text == "!==") {
+                const auto inverted =
+                    allocate_register(1, result_domain);
+                process_.operations.emplace_back(
+                    UnaryNot{inverted, destination});
+                return inverted;
+            }
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2
             && (expression.text == "=="
                 || expression.text == "!=")
             && (is_string_expression(expression.operands[0])

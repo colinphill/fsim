@@ -31,7 +31,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 10> values;
+  std::array<std::string, 13> values;
   fsim::runtime::simir::ContainerValue returned;
   fsim::runtime::simir::ContainerValue qualified_returned;
   fsim::runtime::simir::ContainerValue selected;
@@ -135,7 +135,7 @@ Capture run_once(
         capture.points.push_back(point);
       });
 
-  constexpr std::array<std::string_view, 10> paths{
+  constexpr std::array<std::string_view, 13> paths{
       "function_top.imported_result",
       "function_top.qualified_result",
       "function_top.array_witness",
@@ -145,7 +145,10 @@ Capture run_once(
       "function_top.task_witness",
       "function_top.consumer_query",
       "function_top.consumer_reduction",
-      "function_top.consumer_condition"};
+      "function_top.consumer_condition",
+      "function_top.dynamic_equality",
+      "function_top.queue_case_equality",
+      "function_top.conditional_case_inequality"};
   std::array<fsim::runtime::simir::SignalId, paths.size()>
       signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -246,7 +249,7 @@ Capture run_once(
 
 void verify(
     const Capture& capture,
-    const std::array<std::string, 10>& expected) {
+    const std::array<std::string, 13>& expected) {
   assert(capture.result.status == fsim::runtime::RunStatus::stopped);
   assert(capture.result.time == 1);
   if (capture.values != expected) {
@@ -280,11 +283,11 @@ void verify(
               << calls << '\n';
   }
   assert(calls == 11);
-  if (capture.call_operations != 27) {
+  if (capture.call_operations != 34) {
     std::cerr << "unexpected lowered Call operation count: "
               << capture.call_operations << '\n';
   }
-  assert(capture.call_operations == 27);
+  assert(capture.call_operations == 34);
   assert(std::ranges::find(
              capture.locals, "inner.temporary")
          != capture.locals.end());
@@ -496,6 +499,9 @@ module function_top #(
   logic [31:0] consumer_query;
   logic [7:0] consumer_reduction;
   logic [7:0] consumer_condition;
+  logic dynamic_equality;
+  logic queue_case_equality;
+  logic conditional_case_inequality;
 
   function automatic logic [WIDTH-1:0] inner(
       input logic [WIDTH-1:0] value);
@@ -606,6 +612,15 @@ module function_top #(
     consumer_condition = conditional_returned[1];
     located_returned =
         package_queue(queue_source).find() with (item > 61);
+    dynamic_equality =
+        nested_dynamic(dynamic_source)
+        == package_dynamic(dynamic_source);
+    queue_case_equality =
+        package_queue(queue_source) === package_queue(queue_source);
+    conditional_case_inequality =
+        (1'bx ? nested_dynamic(dynamic_source)
+              : package_dynamic(consumer_alternative))
+        !== nested_dynamic(dynamic_source);
     #1;
     $finish;
   end
@@ -629,11 +644,11 @@ endmodule
         run_once(config, fsim::app::SimulationEngine::compiled);
     const auto warm =
         run_once(config, fsim::app::SimulationEngine::compiled);
-    const std::array<std::string, 10> expected{
+    const std::array<std::string, 13> expected{
         "00101010", "00000011", "00101100", "1",
         "01001011", "1", "00111110",
         "00000000000000000000000000011011",
-        "00110100", "00100000"};
+        "00110100", "00100000", "1", "1", "1"};
     verify(reference, expected);
     verify(cold, expected);
     verify(warm, expected);
@@ -671,7 +686,7 @@ endmodule
       {"00101011", "00000100", "00101101", "1",
        "01001011", "1", "00111110",
        "00000000000000000000000000011011",
-       "00110100", "00100000"});
+       "00110100", "00100000", "1", "1", "1"});
   assert(baseline_o2_keys.size() == 1);
   assert(changed.keys.size() == 1);
   assert(changed.keys.front() != baseline_o2_keys.front());

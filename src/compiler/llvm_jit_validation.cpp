@@ -527,6 +527,19 @@ validate_process(const Process &process,
                     "ConditionalContainerSelect profiles differ");
               }
             },
+            [&](const CompareContainers& operation) {
+              result.uses_containers = true;
+              validate_container_register(operation.lhs, index, "lhs");
+              validate_container_register(operation.rhs, index, "rhs");
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 1U, index);
+              if (operation.lhs < process.container_register_types.size()
+                  && operation.rhs < process.container_register_types.size()
+                  && process.container_register_types[operation.lhs]
+                      != process.container_register_types[operation.rhs]) {
+                reject(process, index, "CompareContainers profiles differ");
+              }
+            },
             [&](const ReadContainerObject& operation) {
               result.uses_containers = true;
               validate_container_register(

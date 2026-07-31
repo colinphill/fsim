@@ -570,6 +570,16 @@ std::uint32_t LlvmProcessExecutor::container_operation(
               1, input0_aval, input0_bval),
           when_true,
           when_false);
+    } else if (const auto* comparison =
+                   std::get_if<runtime::simir::CompareContainers>(
+                       &operation)) {
+      const auto result = runtime::simir::compare_container_values(
+          registers.at(comparison->lhs),
+          registers.at(comparison->rhs),
+          comparison->case_equal);
+      const auto word = result.low_word();
+      *result_aval = word.aval;
+      *result_bval = word.bval;
     } else if (const auto* read_object =
                    std::get_if<
                        runtime::simir::ReadContainerObject>(

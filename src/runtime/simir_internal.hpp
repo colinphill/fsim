@@ -402,6 +402,7 @@ struct Interpreter::Impl {
   void execute_container(ProcessState&, const ResizeContainer&);
   void execute_container(ProcessState&, const CopyContainerRegister&);
   void execute_container(ProcessState&, const ConditionalContainerSelect&);
+  void execute_container(ProcessState&, const CompareContainers&);
   void execute_container(ProcessState&, const ReadContainerObject&);
   void execute_container(ProcessState&, const WriteContainerObject&);
   void execute_container(ProcessState&, const ContainerSize&);

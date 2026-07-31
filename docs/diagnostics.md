@@ -1091,6 +1091,9 @@ therefore excluded.
 | `FSIM-ELAB-SVCOND-002` | error | Container conditional alternatives do not have an exactly compatible kind and profile. |
 | `FSIM-ELAB-SVCOND-003` | error | An associative-array conditional value is used outside the bounded consumer subset. |
 | `FSIM-ELAB-SVCOND-004` | error | A container conditional condition does not produce one bit. |
+| `FSIM-ELAB-SVEQUAL-001` | error | A container operand is used with an unsupported comparison operator or outside SystemVerilog. |
+| `FSIM-ELAB-SVEQUAL-002` | error | Whole-container equality does not have two typed container operands. |
+| `FSIM-ELAB-SVEQUAL-003` | error | Whole-container equality operands do not have an exactly compatible kind and profile. |
 | `FSIM-ELAB-SVQUERY-001` | error | A bounded unpacked-container query has the wrong language or arity, an indirect expression, or no direct typed container object. |
 | `FSIM-ELAB-SVQUERY-002` | error | A bounded unpacked-container query dimension is not the locally constant dimension `1`. |
 | `FSIM-ELAB-SVQUERY-003` | error | A finite-bound query is applied to an associative array. |

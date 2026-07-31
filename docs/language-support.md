@@ -181,11 +181,18 @@ compatible fixed, dynamic, and queue results may also be conditional
 alternatives. Known conditions copy one isolated result; X/Z conditions merge
 equal-shape four-state elements bitwise, coerce unknown bits to zero for
 two-state elements, and reset unequal nonstatic shapes to the empty value.
-Associative conditional values and mutating methods on temporary results remain
-unsupported. Schema 47 and container semantic revision 23 cover result kinds,
-ranges/bounds, element/index profiles, consumer and conditional operations,
-specialization, and transitive source provenance; normalized equivalent values
-share native cache identity without a public ABI change.
+Exactly compatible fixed, dynamic, queue, and integral-key associative values
+also support whole-container `==`, `!=`, `===`, and `!==`. Logical equality
+returns false for a known size, key, or element mismatch and otherwise
+propagates an unknown four-state result; two-state element profiles produce a
+two-state result. Case equality compares X/Z planes exactly and always returns
+a known bit. Each function-result or conditional operand is evaluated once in
+lexical order. Associative conditional values and mutating methods on temporary
+results remain unsupported. Schema 48 and container semantic revision 24 cover
+result kinds, ranges/bounds, element/index profiles, consumer, conditional, and
+comparison operations, specialization, and transitive source provenance;
+normalized equivalent values share native cache identity without a public ABI
+change.
 Variable or unknown bounds or indexed widths, nonpositive widths, indirect
 slice receivers, general expression port actuals, unrestricted
 container-valued expressions, multidimensional and nonstatic-container slices, element

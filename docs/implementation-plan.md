@@ -5245,6 +5245,44 @@ scoped locals in 0.89 seconds, functions in 10.08 seconds, containers in 94.70
 seconds, and the monolithic application in 14.53 seconds, on 2026-07-31. Batch
 95 is not a ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### Ninety-sixth feature batch — bounded whole-container equality
+
+Exactly compatible one-dimensional SystemVerilog fixed arrays, dynamic arrays,
+queues, bounded queues, and integral-key associative arrays now lower as typed
+operands of `==`, `!=`, `===`, and `!==`. Compatibility is deliberately exact:
+kind, fixed declared range or queue bound, element width/signedness/state, and
+associative index width/signedness/state must agree before an executable
+comparison is emitted. Relational and wildcard operators retain targeted
+diagnostics rather than silently flattening containers into packed values.
+
+The new `CompareContainers` SimIR operation writes a width-one scalar result.
+Logical equality first rejects size or key-set mismatches, then returns false
+for any known unequal element, X when no known mismatch exists but an element
+comparison is unknown, and true otherwise. A two-state element profile produces
+a two-state result. Case equality compares every value and X/Z plane exactly
+and always returns a known bit. Inequality reuses the same comparison followed
+by scalar negation. Function-result and compatible conditional operands are
+evaluated once into isolated snapshots in lexical order.
+
+Interpreter execution and compiled LLVM O0/O2 callbacks call the same runtime
+semantic helper. Positive evidence spans fixed/dynamic/queue/associative
+values, exact and unknown elements, size/key mismatch, returned and conditional
+operands, module/package/imported/qualified calls, one-evaluation counts,
+debugger metadata, scalar VCD witnesses, cold/warm cache reuse, and package-edit
+invalidation. Native-object schema 48 and container semantic revision 24
+serialize the comparison mode and exact operation/type/provenance graph; the
+cache matrix contains 15 distinct objects without changing the public ABI.
+
+The diagnostic catalog now covers all 1,233 production codes, and the source
+gate covers 291 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests in
+423.91 seconds, including scoped locals in 0.93 seconds, functions in 11.00
+seconds, containers in 343.67 seconds, and the monolithic application in 40.03
+seconds. Release passed all 59 tests in 129.03 seconds, including scoped locals
+in 0.82 seconds, functions in 9.92 seconds, containers in 88.69 seconds, and
+the monolithic application in 13.64 seconds, on 2026-07-31. Batch 96 is not a
+ten-batch CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

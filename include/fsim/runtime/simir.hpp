@@ -119,6 +119,13 @@ void select_container_value(
     const ContainerValue& when_true,
     const ContainerValue& when_false);
 
+/// Compare exactly compatible bounded containers with SystemVerilog logical
+/// or case-equality semantics.
+[[nodiscard]] PackedLogic4 compare_container_values(
+    const ContainerValue& lhs,
+    const ContainerValue& rhs,
+    bool case_equal);
+
 /// Construct a process-local byte string from immutable SimIR literal bytes.
 struct LoadStringConstant {
   StringRegisterId destination{};
@@ -196,6 +203,13 @@ struct ConditionalContainerSelect {
   RegisterId condition{};
   ContainerRegisterId when_true{};
   ContainerRegisterId when_false{};
+};
+
+struct CompareContainers {
+  RegisterId destination{};
+  ContainerRegisterId lhs{};
+  ContainerRegisterId rhs{};
+  bool case_equal{};
 };
 
 struct ReadContainerObject {
@@ -1096,6 +1110,7 @@ using Operation =
                  StringLength, StringIndex, StringReplaceByte,
                  ResizeContainer, CopyContainerRegister,
                  ConditionalContainerSelect,
+                 CompareContainers,
                  ReadContainerObject, WriteContainerObject,
                  ContainerSize, ContainerReduction,
                  OrderContainer, LocateContainer,

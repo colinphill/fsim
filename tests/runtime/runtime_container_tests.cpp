@@ -43,6 +43,34 @@ void test_simir_containers() {
       queue_type,
       {value(8, 3), value(8, 5), value(8, 7)},
       {}};
+  const auto unknown_element =
+      PackedLogic4::from_aval_bval(8, 5, 1);
+  const ContainerValue equal_unknown{
+      queue_type,
+      {value(8, 3), unknown_element}, {}};
+  const ContainerValue unequal_known{
+      queue_type,
+      {value(8, 3), value(8, 6), value(8, 7)}, {}};
+  const ContainerValue unequal_size{
+      queue_type,
+      {value(8, 3)}, {}};
+  require(
+      compare_container_values(
+          reduction_values, reduction_values, false)
+              == value(1, 1)
+          && compare_container_values(
+                 reduction_values, unequal_known, false)
+              == value(1, 0)
+          && compare_container_values(
+                 equal_unknown, equal_unknown, false)
+                 .get(0) == Logic4::x
+          && compare_container_values(
+                 equal_unknown, equal_unknown, true)
+              == value(1, 1)
+          && compare_container_values(
+                 reduction_values, unequal_size, true)
+              == value(1, 0),
+      "container logical and case equality preserve shape and X policy");
   require(
       reduce_container_value(
           reduction_values,

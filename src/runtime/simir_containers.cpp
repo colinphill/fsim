@@ -612,6 +612,48 @@ void select_container_value(
   }
 }
 
+PackedLogic4 compare_container_values(
+    const ContainerValue& lhs,
+    const ContainerValue& rhs,
+    const bool case_equal) {
+  validate_container_value(lhs);
+  validate_container_value(rhs);
+  if (lhs.type != rhs.type) {
+    throw std::invalid_argument{
+        "container equality profiles differ"};
+  }
+  if (lhs.elements.size() != rhs.elements.size()
+      || lhs.keys != rhs.keys) {
+    return PackedLogic4(1, Logic4::zero);
+  }
+  bool unknown{};
+  for (std::size_t element = 0;
+       element < lhs.elements.size(); ++element) {
+    const auto& left = lhs.elements[element];
+    const auto& right = rhs.elements[element];
+    for (std::size_t bit = 0; bit < lhs.type.element_width; ++bit) {
+      const auto left_bit = left.get(bit);
+      const auto right_bit = right.get(bit);
+      if (case_equal) {
+        if (left_bit != right_bit) {
+          return PackedLogic4(1, Logic4::zero);
+        }
+        continue;
+      }
+      const auto left_known =
+          left_bit == Logic4::zero || left_bit == Logic4::one;
+      const auto right_known =
+          right_bit == Logic4::zero || right_bit == Logic4::one;
+      if (left_known && right_known && left_bit != right_bit) {
+        return PackedLogic4(1, Logic4::zero);
+      }
+      unknown |= !left_known || !right_known;
+    }
+  }
+  return PackedLogic4(
+      1, unknown ? Logic4::x : Logic4::one);
+}
+
 PackedLogic4 reduce_container_value(
     const ContainerValue& value,
     const ContainerReductionOperator operation,
@@ -1204,6 +1246,22 @@ void Interpreter::Impl::execute_container(
   try {
     select_container_value(
         destination, condition, when_true, when_false);
+  } catch (const std::exception& error) {
+    container_error(
+        process.program.id, process.pc, error.what());
+  }
+  ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const CompareContainers& operation) {
+  try {
+    get_register(process, operation.destination) =
+        compare_container_values(
+            get_container_register(process, operation.lhs),
+            get_container_register(process, operation.rhs),
+            operation.case_equal);
   } catch (const std::exception& error) {
     container_error(
         process.program.id, process.pc, error.what());

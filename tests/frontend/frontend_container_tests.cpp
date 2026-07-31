@@ -906,6 +906,7 @@ module container_function_return;
   logic [7:0] source[7:2];
   logic [7:0] result[10:7];
   byte dynamic_target[];
+  logic equality_result;
   function automatic logic [7:0] copy_slice[3:0](
       input logic [7:0] value[7:2]);
     return value[6 -: 4];
@@ -929,6 +930,7 @@ module container_function_return;
     result = copy_slice(source);
     dynamic_target = 1'b1
         ? dynamic_result() : dynamic_result();
+    equality_result = dynamic_result() == dynamic_result();
   end
 endmodule
 )",
@@ -1027,6 +1029,19 @@ endmodule
           && conditional.operands[2].text == "dynamic_result"
           && !conditional.span.empty(),
       "container-returning conditional alternatives retain nested "
+      "source-spanned call HIR");
+  const auto& equality =
+      fixed_return_unit->processes[0].statements[2].value;
+  require(
+      equality.kind == ExpressionKind::Binary
+          && equality.text == "=="
+          && equality.operands.size() == 2
+          && equality.operands[0].kind == ExpressionKind::Call
+          && equality.operands[0].text == "dynamic_result"
+          && equality.operands[1].kind == ExpressionKind::Call
+          && equality.operands[1].text == "dynamic_result"
+          && !equality.span.empty(),
+      "container-returning equality operands retain nested "
       "source-spanned call HIR");
 
   const auto multidimensional_return = parse_text(

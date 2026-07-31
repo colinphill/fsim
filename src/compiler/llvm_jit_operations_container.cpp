@@ -111,6 +111,12 @@ void ContainerOperationLowerer::lower(
       "container.conditional");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::CompareContainers& value) {
+  invoke(
+      std::nullopt, std::nullopt, value.destination,
+      "container.compare");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::ReadContainerObject&) {
   invoke(std::nullopt, std::nullopt, std::nullopt, "container.read-object");
 }
