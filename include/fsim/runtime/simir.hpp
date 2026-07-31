@@ -202,19 +202,6 @@ enum class ContainerReductionOperator : std::uint8_t {
   bit_xor,
 };
 
-struct ContainerReduction {
-  ContainerReductionOperator operation{
-      ContainerReductionOperator::sum};
-  RegisterId destination{};
-  ContainerRegisterId source{};
-};
-
-/// Reduce container elements in their canonical storage order. Empty
-/// containers use the SystemVerilog identity for the selected operation.
-[[nodiscard]] PackedLogic4 reduce_container_value(
-    const ContainerValue& value,
-    ContainerReductionOperator operation);
-
 enum class ContainerOrderingOperator : std::uint8_t {
   reverse,
   ascending,
@@ -259,6 +246,7 @@ enum class ContainerPredicateOperator : std::uint8_t {
   logical_and,
   logical_or,
   logical_not,
+  conditional,
 };
 
 enum class ContainerPredicateValueKind : std::uint8_t {
@@ -267,7 +255,7 @@ enum class ContainerPredicateValueKind : std::uint8_t {
   logical,
 };
 
-/// One node in a validated, source-ordered container-locator predicate.
+/// One node in a validated, source-ordered bounded container expression.
 /// Non-leaf operands refer only to earlier nodes. The final node is the root.
 struct ContainerPredicateNode {
   ContainerPredicateOperator operation{
@@ -277,7 +265,25 @@ struct ContainerPredicateNode {
   PackedLogic4 constant;
   ContainerPredicateValueKind value_kind{
       ContainerPredicateValueKind::element};
+  std::uint32_t third{};
 };
+
+struct ContainerReduction {
+  ContainerReductionOperator operation{
+      ContainerReductionOperator::sum};
+  RegisterId destination{};
+  ContainerRegisterId source{};
+  std::vector<ContainerPredicateNode> transformation;
+};
+
+/// Reduce container elements in their canonical storage order. Empty
+/// containers use the SystemVerilog identity for the selected operation.
+/// A nonempty transformation is evaluated once per source element before
+/// applying the reduction.
+[[nodiscard]] PackedLogic4 reduce_container_value(
+    const ContainerValue& value,
+    ContainerReductionOperator operation,
+    std::span<const ContainerPredicateNode> transformation = {});
 
 struct LocateContainer {
   ContainerLocatorOperator operation{

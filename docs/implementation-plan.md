@@ -4441,6 +4441,65 @@ and the source gate still covers 286 authored files with an empty allowlist and
 a 2,000-line maximum. Batch 81 is not a ten-batch GitHub CI-inspection
 boundary, so no Actions run was inspected.
 
+### Eighty-second feature batch — bounded reduction `with` transformations
+
+SystemVerilog `sum`, `product`, `and`, `or`, and `xor` now retain one optional
+parenthesized `with` transformation as explicit source-spanned HIR. The
+transformation binds only implicit `item` and direct signed two-state 32-bit
+`item.index`; parser scope suppression prevents either reference from becoming
+an implicit net, while later undeclared use diagnoses leakage. Named reduction
+iterators remain outside this bounded slice.
+
+Lowering reuses the bounded typed container-expression graph introduced for
+predicate locators. Element, index, and logical value kinds remain explicit;
+one added conditional node records condition, true, and false edges, and the
+validated final node must match the receiver's exact element width, state
+domain, and signedness. The supported pure form admits direct `item`, locally
+constant element alternatives, signed index comparisons, logical composition,
+and one conditional element selection. Arithmetic or calls involving the
+iterator, side effects, nonconstant operands, indirect index selection,
+mixed element/index comparison profiles, multiple conditionals, non-element
+roots, graphs beyond 64 nodes, associative receivers, and the broader excluded
+container/element families fail through stable diagnostics.
+
+The shared reduction kernel evaluates a retained graph once per source element
+before applying the existing exact-width reduction. Static arrays project
+storage offsets to signed declared indices, while dynamic arrays and queues
+use current zero-based positions. Empty reductions preserve their existing
+operation identities. Conditional selection applies SystemVerilog truth
+conversion and bitwise X/Z alternative merging, then the existing arithmetic
+or bitwise kernel preserves four-state propagation. Receivers remain
+nonmutating and coherent across module objects, direct ports,
+nested/generated hierarchy, automatic callable values, and suspended tasks.
+
+Both the reference interpreter and native executor call that common kernel.
+The LLVM validator checks every typed leaf, constant, edge, comparison,
+logical result, conditional branch, root, and bound before execution; the
+public append-only native ABI remains unchanged. Native-object schema 35
+records transformation absence/presence, every typed operator and edge
+including the third conditional edge, and exact constant payloads. Dedicated
+cold/warm tests distinguish no transformation, exact constants, and
+element-versus-index profiles.
+
+Positive evidence covers all five operations, no-`with` compatibility, empty
+identities, four-state conditional merging, negative declared static indices,
+dynamic and queue current indices, bounded queues, signed byte and integer
+elements, direct ports, generated hierarchy, functions, suspended tasks,
+interpreter, LLVM O0/O2, and cache identity. Negative evidence covers
+malformed/empty clauses, leakage, named/argument forms, unsupported
+expressions, calls and nonconstant operands, invalid index selection,
+mixed profiles, nested conditionals, wrong roots/branches, associative
+receivers, malformed edges, and oversized metadata.
+
+The diagnostic catalog now covers 1,198 production codes and the source gate
+still covers 286 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 161.02 seconds, including scoped locals in 0.88 seconds and the
+expanded container differential in 91.71 seconds. Release passed all 59 tests
+in 48.28 seconds, including scoped locals in 0.79 seconds and containers in
+17.85 seconds, on 2026-07-30. Batch 82 is not a ten-batch GitHub
+CI-inspection boundary, so no Actions run is required.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

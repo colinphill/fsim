@@ -39,7 +39,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   body_port_declarations_.clear();
   port_type_refinements_.clear();
   implicit_net_references_.clear();
-  locator_iterator_names_.clear();
+  container_iterator_names_.clear();
   current_procedural_names_.clear();
   current_generate_names_.clear();
   declared_genvars_.clear();

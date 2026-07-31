@@ -88,12 +88,21 @@ module container_lowering #(
     assert (values.and() == -1);
     assert (values.or() == 0);
     assert (values.xor() == 0);
+    assert (
+        values.product() with (
+            item.index >= 0 ? item : 1) == 1);
     values = '{7, 8, 7};
     assert (values.sum() == 22);
     assert (values.product() == 392);
     assert (values.and() == 0);
     assert (values.or() == 15);
     assert (values.xor() == 8);
+    assert (
+        values.sum() with (
+            item.index == 1 ? item : 0) == 8);
+    assert (
+        values.xor() with (
+            item > 7 ? item : 0) == 8);
     located = values.min();
     assert (located.size() == 1);
     assert (located[0] == 7);
@@ -159,6 +168,9 @@ module container_lowering #(
     assert (locations[0] == 1);
     lookup = '{-1: 10, 3: 30};
     assert (pending.sum() == 3);
+    assert (
+        pending.sum() with (
+            item.index > 0 ? item : 0) == 2);
     assert (lookup.sum() == 40);
     fixed_down = '{8'h31, 8'h21, 8'h11};
     fixed_up = '{4'ha, 4'hb, 4'hc};
@@ -211,6 +223,9 @@ module container_lowering #(
     assert (fixed_down[2] == 8'h21);
     assert (fixed_up[-1] == 4'ha);
     assert (fixed_up[0] == 0);
+    assert (
+        fixed_up.sum() with (
+            item.index < 0 ? item : 0) == 4'ha);
     assert (lookup.size() == 2);
     assert (isolated_count(lookup) == 1);
     assert (lookup.size() == 2);
@@ -269,6 +284,38 @@ endmodule
                 ContainerReduction>(operation);
           })
       >= 12);
+  assert(std::ranges::any_of(
+      process.operations,
+      [](const auto& operation) {
+        const auto* reduction =
+            std::get_if<ContainerReduction>(&operation);
+        if (reduction == nullptr
+            || reduction->transformation.empty()) {
+          return false;
+        }
+        const auto& graph = reduction->transformation;
+        return graph.back().value_kind
+                == ContainerPredicateValueKind::element
+            && std::ranges::any_of(
+                graph,
+                [](const auto& node) {
+                  return node.operation
+                          == ContainerPredicateOperator::index
+                      && node.value_kind
+                          == ContainerPredicateValueKind::index;
+                })
+            && std::ranges::any_of(
+                graph,
+                [&](const auto& node) {
+                  return node.operation
+                          == ContainerPredicateOperator::conditional
+                      && node.value_kind
+                          == ContainerPredicateValueKind::element
+                      && node.left < graph.size()
+                      && node.right < graph.size()
+                      && node.third < graph.size();
+                });
+      }));
   assert(
       std::ranges::count_if(
           process.operations,
@@ -339,6 +386,7 @@ endmodule
                           == right_node.operation
                       && left_node.left == right_node.left
                       && left_node.right == right_node.right
+                      && left_node.third == right_node.third
                       && left_node.constant
                           == right_node.constant
                       && left_node.value_kind
@@ -742,12 +790,31 @@ module container_invalid_lowering;
   int locator_indices[$];
   int result;
   int collision;
+  function automatic byte identity(input byte value);
+    return value;
+  endfunction
   initial begin
     lookup.push_back(1);
     result = lookup.sort();
     result = lookup.find() with (item);
     result = result.sum();
     lookup.sum();
+    result = lookup.sum() with (item);
+    result = fixed.sum() with (item + 1);
+    result = fixed.sum() with (identity(item));
+    result = fixed.sum() with (item > 0);
+    result =
+        fixed.sum() with (
+            item ? (item ? item : 0) : 0);
+    result =
+        fixed.sum() with (
+            item.index.member == 0 ? item : 0);
+    result =
+        fixed.sum() with (
+            item == item.index ? item : 0);
+    result =
+        fixed.sum() with (
+            runtime_bound ? item : 0);
     result.sort();
     lookup.sort();
     fixed[0].sort();
@@ -794,6 +861,12 @@ endmodule
       rejected, "FSIM-ELAB-SVREDUCE-001"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVREDUCE-003"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVREDUCE-004"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVREDUCE-005"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVREDUCE-006"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVORDER-001"));
   assert(has_diagnostic(

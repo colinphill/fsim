@@ -537,6 +537,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-164` | error | Expected `}` after a SystemVerilog assignment pattern. |
 | `FSIM-SV-PARSE-165` | error | Expected `(` after a predicate container locator's `with` keyword. |
 | `FSIM-SV-PARSE-166` | error | Expected `)` after a predicate container locator expression. |
+| `FSIM-SV-PARSE-167` | error | Expected `(` after a container reduction's `with` keyword. |
+| `FSIM-SV-PARSE-168` | error | Expected `)` after a container reduction transformation. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -735,7 +737,8 @@ therefore excluded.
 | `FSIM-SV-SEM-087` | error | An unpacked-container locator method is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-088` | error | A predicate unpacked-container locator method is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-089` | error | A predicate unpacked-container locator omits its required nonempty `with` clause. |
-| `FSIM-SV-SEM-090` | error | A predicate unpacked-container locator has malformed or multiple iterator binders, or a locator iterator leaks outside its `with` predicate. |
+| `FSIM-SV-SEM-090` | error | A predicate unpacked-container locator has malformed or multiple iterator binders, or a scoped container iterator leaks outside its `with` expression. |
+| `FSIM-SV-SEM-091` | error | An unpacked-container reduction has an empty `with` transformation. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -767,7 +770,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-036` | error | A bounded function uses an unpacked/default argument or a classic body argument declaration. |
 | `FSIM-SV-UNSUPPORTED-037` | error | A bounded task is static or omits the explicit `automatic` lifetime required by the current activation-frame implementation. |
 | `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
-| `FSIM-SV-UNSUPPORTED-039` | error | An unpacked-container reduction uses the unsupported `with` clause. |
 | `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
 | `FSIM-SV-UNSUPPORTED-041` | error | An unpacked-container ordering method uses the unsupported `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | An unpacked-container locator method uses the unsupported `with` clause. |
@@ -1082,8 +1084,11 @@ therefore excluded.
 | `FSIM-ELAB-SVPATTERN-003` | error | An associative pattern key is not locally constant and known or duplicates another converted key. |
 | `FSIM-ELAB-SVPATTERN-004` | error | A container assignment pattern mixes keyed and positional members or uses an unsupported `default` member. |
 | `FSIM-ELAB-SVREDUCE-001` | error | A container reduction is outside SystemVerilog-2017 or lacks a direct supported unpacked-container receiver. |
-| `FSIM-ELAB-SVREDUCE-002` | error | A container reduction method has one or more arguments. |
+| `FSIM-ELAB-SVREDUCE-002` | error | A container reduction method has an argument or more than one retained `with` transformation. |
 | `FSIM-ELAB-SVREDUCE-003` | error | A result-producing container reduction is used as a standalone statement. |
+| `FSIM-ELAB-SVREDUCE-004` | error | A reduction `with` transformation uses unsupported arithmetic, calls, side effects, nonconstant operands, more than one conditional, or more than 64 graph nodes. |
+| `FSIM-ELAB-SVREDUCE-005` | error | A reduction `with` transformation contains an invalid iterator/index reference or mixes element and index comparison profiles. |
+| `FSIM-ELAB-SVREDUCE-006` | error | A reduction `with` transformation has a non-element root or uses an associative or otherwise excluded receiver profile. |
 | `FSIM-ELAB-SVORDER-001` | error | Container ordering lacks a direct writable supported SystemVerilog unpacked-container receiver. |
 | `FSIM-ELAB-SVORDER-002` | error | A container ordering method has one or more arguments. |
 | `FSIM-ELAB-SVORDER-003` | error | A container ordering method is applied to an associative array. |

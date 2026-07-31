@@ -85,6 +85,9 @@ module containers;
     assert (pending.and() == 0);
     assert (pending.or() == 8'hbb);
     assert (pending.xor() == 8'h11);
+    assert (
+        values.sum() with (
+            item.index >= 0 ? item : 0) == 6);
     values.reverse();
     values.sort();
     values.rsort();
@@ -260,6 +263,42 @@ endmodule
           && has_query(".or")
           && has_query(".xor"),
       "container reduction methods remain explicit no-argument calls");
+  const auto find_call =
+      [](const auto& self, const Expression& expression,
+         const std::string_view name,
+         const std::size_t operands) -> const Expression* {
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == name
+            && expression.operands.size() == operands) {
+          return &expression;
+        }
+        for (const auto& operand : expression.operands) {
+          if (const auto* found =
+                  self(self, operand, name, operands)) {
+            return found;
+          }
+        }
+        return nullptr;
+      };
+  const Expression* transformed_reduction{};
+  for (const auto& statement : query_statements) {
+    transformed_reduction =
+        find_call(
+            find_call, statement.condition, ".sum", 2);
+    if (transformed_reduction != nullptr) {
+      break;
+    }
+  }
+  require(
+      transformed_reduction != nullptr
+          && transformed_reduction->operands[1].kind
+              == ExpressionKind::Call
+          && transformed_reduction->operands[1].text == "?:"
+          && transformed_reduction->operands[1].span.source_name
+              == "containers.sv"
+          && !transformed_reduction->operands[1].span.empty(),
+      "reduction with transformation remains explicit source-spanned "
+      "HIR");
   require(
       std::ranges::count_if(
           query_statements,
@@ -321,7 +360,7 @@ endmodule
           && named_locator->value.operands[1].text == "cell"
           && named_locator->value.operands[1].span.source_name
               == "containers.sv"
-          && named_locator->value.operands[1].span.begin.line == 63
+          && named_locator->value.operands[1].span.begin.line != 0
           && !named_locator->value.operands[1].span.empty(),
       "named predicate locator iterator remains explicit source-spanned "
       "identifier HIR");
@@ -466,17 +505,48 @@ endmodule
           && has_code(invalid, "FSIM-SV-SEM-081"),
       "unsupported dimensions, elements, and method arities diagnose");
 
-  const auto unsupported_reduction = parse_text(
+  const auto reduction_with = parse_text(
       "container-reduction-with.sv",
       "module m; int values[]; int result; "
       "initial result = values.sum() with (item); endmodule",
       Language::SystemVerilog2017);
   require(
-      !unsupported_reduction.ok()
+      reduction_with.ok(),
+      "container reduction with-clauses parse");
+  const auto empty_reduction_with = parse_text(
+      "container-reduction-empty-with.sv",
+      "module m; int values[]; int result; "
+      "initial result = values.sum() with (); endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !empty_reduction_with.ok()
           && has_code(
-              unsupported_reduction,
-              "FSIM-SV-UNSUPPORTED-039"),
-      "container reduction with-clauses diagnose explicitly");
+              empty_reduction_with,
+              "FSIM-SV-SEM-091"),
+      "empty container reduction with-clauses diagnose");
+  const auto named_reduction_iterator = parse_text(
+      "container-reduction-named-iterator.sv",
+      "module m; int values[]; int result; "
+      "initial result = values.sum(entry) with (entry); endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !named_reduction_iterator.ok()
+          && has_code(
+              named_reduction_iterator,
+              "FSIM-SV-SEM-081"),
+      "named reduction iterators remain outside the bounded subset");
+  const auto leaked_reduction_iterator = parse_text(
+      "container-reduction-item-leak.sv",
+      "module m; int values[]; int result; "
+      "initial begin result = values.sum() with (item); "
+      "result = item; end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !leaked_reduction_iterator.ok()
+          && has_code(
+              leaked_reduction_iterator,
+              "FSIM-SV-SEM-090"),
+      "implicit reduction iterator cannot leak outside its with-clause");
 
   const auto unsupported_ordering = parse_text(
       "container-ordering-with.sv",

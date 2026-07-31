@@ -580,20 +580,35 @@ Lowerer::lower_container_pattern(
 }
 
 std::optional<std::vector<ContainerPredicateNode>>
-Lowerer::lower_container_predicate(
+Lowerer::lower_container_expression_graph(
     const Expression& expression,
     const std::string_view iterator_name,
     const frontend::Type& source_type,
-    const ContainerType& runtime_type) {
+    const ContainerType& runtime_type,
+    const bool transformation) {
   using PredicateKind = ContainerPredicateValueKind;
   std::vector<ContainerPredicateNode> nodes;
+  std::size_t conditional_count{};
+  const auto unsupported_code =
+      transformation
+          ? "FSIM-ELAB-SVREDUCE-004"
+          : "FSIM-ELAB-SVFIND-004";
+  const auto reference_code =
+      transformation
+          ? "FSIM-ELAB-SVREDUCE-005"
+          : "FSIM-ELAB-SVFIND-008";
+  const auto expression_name =
+      transformation
+          ? std::string_view{"reduction transformation"}
+          : std::string_view{"container locator predicate"};
   const auto append =
       [&](ContainerPredicateNode node)
           -> std::optional<std::uint32_t> {
         if (nodes.size() >= maximum_container_predicate_nodes) {
           report(
-              "FSIM-ELAB-SVFIND-004",
-              "container locator predicates are limited to 64 nodes",
+              unsupported_code,
+              std::string{expression_name}
+                  + " is limited to 64 nodes",
               expression.span);
           return std::nullopt;
         }
@@ -658,8 +673,8 @@ Lowerer::lower_container_predicate(
       [&](const Expression& candidate,
           const std::string_view reason) {
         report(
-            "FSIM-ELAB-SVFIND-008",
-            "container locator iterator '" + std::string{iterator_name}
+            reference_code,
+            "container iterator '" + std::string{iterator_name}
                 + "' " + std::string{reason},
             candidate.span);
       };
@@ -708,8 +723,9 @@ Lowerer::lower_container_predicate(
             return std::nullopt;
           }
           report(
-              "FSIM-ELAB-SVFIND-004",
-              "container locator predicate constants must be locally "
+              unsupported_code,
+              std::string{expression_name}
+                  + " constants must be locally "
               "constant and convertible to the selected "
                   + std::string{
                       value_kind == PredicateKind::index
@@ -752,8 +768,9 @@ Lowerer::lower_container_predicate(
                 "supports only its direct value or direct .index leaf");
           } else {
             report(
-                "FSIM-ELAB-SVFIND-004",
-                "container locator comparisons accept only the scoped '"
+                unsupported_code,
+                std::string{expression_name}
+                    + " accepts only the scoped '"
                     + std::string{iterator_name}
                     + "' iterator or locally constant operands",
                 candidate.span);
@@ -810,6 +827,39 @@ Lowerer::lower_container_predicate(
               ContainerPredicateOperator::logical_not;
           node.left = *operand;
           node.value_kind = PredicateKind::logical;
+          return append(std::move(node));
+        }
+        if (transformation
+            && candidate.kind == ExpressionKind::Call
+            && candidate.text == "?:"
+            && candidate.operands.size() == 3) {
+          if (++conditional_count > 1U) {
+            report(
+                unsupported_code,
+                "container reduction transformations permit one "
+                "conditional element selection",
+                candidate.span);
+            return std::nullopt;
+          }
+          const auto condition = lower(candidate.operands[0]);
+          const auto when_true =
+              lower_value(
+                  candidate.operands[1],
+                  PredicateKind::element);
+          const auto when_false =
+              lower_value(
+                  candidate.operands[2],
+                  PredicateKind::element);
+          if (!condition || !when_true || !when_false) {
+            return std::nullopt;
+          }
+          ContainerPredicateNode node;
+          node.operation =
+              ContainerPredicateOperator::conditional;
+          node.left = *condition;
+          node.right = *when_true;
+          node.third = *when_false;
+          node.value_kind = PredicateKind::element;
           return append(std::move(node));
         }
         if (candidate.kind == ExpressionKind::Binary
@@ -884,15 +934,29 @@ Lowerer::lower_container_predicate(
           }
         }
         report(
-            "FSIM-ELAB-SVFIND-004",
-            "container locator predicates support the scoped '"
+            unsupported_code,
+            std::string{expression_name}
+                + " supports the scoped '"
                 + std::string{iterator_name}
                 + "' iterator, its direct .index leaf, locally constant "
-                  "operands, comparisons, and logical &&, ||, and !",
+                  "operands, comparisons, logical &&, ||, and !"
+                + (transformation
+                       ? ", and one conditional element selection"
+                       : ""),
             candidate.span);
         return std::nullopt;
       };
-  if (!lower(expression)) {
+  const auto root = lower(expression);
+  if (!root) {
+    return std::nullopt;
+  }
+  if (transformation
+      && nodes[*root].value_kind != PredicateKind::element) {
+    report(
+        "FSIM-ELAB-SVREDUCE-006",
+        "container reduction transformation root must have the "
+        "receiver element type",
+        expression.span);
     return std::nullopt;
   }
   return nodes;
@@ -1042,10 +1106,10 @@ bool Lowerer::lower_container_locator(
     const auto& predicate_expression =
         expression.operands[
             explicit_iterator ? 2U : 1U];
-    const auto lowered = lower_container_predicate(
+    const auto lowered = lower_container_expression_graph(
         predicate_expression, iterator_name,
         *source_frontend_type,
-        *source_type);
+        *source_type, false);
     if (!lowered) {
       return false;
     }

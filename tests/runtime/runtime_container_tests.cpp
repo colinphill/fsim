@@ -65,6 +65,47 @@ void test_simir_containers() {
                  ContainerReductionOperator::bit_xor)
               == value(8, 1),
       "container reductions retain exact element width and values");
+  const std::vector<ContainerPredicateNode> positive_index_mask{
+      {ContainerPredicateOperator::item, 0, 0,
+       PackedLogic4{}, ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::index, 0, 0,
+       PackedLogic4{}, ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::constant, 0, 0,
+       value(32, 0), ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::greater, 1, 2,
+       PackedLogic4{}, ContainerPredicateValueKind::logical},
+      {ContainerPredicateOperator::constant, 0, 0,
+       value(8, 0), ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::conditional, 3, 0,
+       PackedLogic4{}, ContainerPredicateValueKind::element, 4}};
+  require(
+      reduce_container_value(
+          reduction_values,
+          ContainerReductionOperator::sum,
+          positive_index_mask)
+              == value(8, 12),
+      "reduction transformations use current queue indices once per "
+      "element");
+  ContainerType fixed_reduction_type = queue_type;
+  fixed_reduction_type.queue = false;
+  fixed_reduction_type.fixed = true;
+  fixed_reduction_type.maximum_elements.reset();
+  fixed_reduction_type.index_left = -1;
+  fixed_reduction_type.index_right = 1;
+  const ContainerValue fixed_reduction_values{
+      fixed_reduction_type,
+      {value(8, 3), value(8, 5), value(8, 7)},
+      {}};
+  auto negative_index_mask = positive_index_mask;
+  negative_index_mask[3].operation =
+      ContainerPredicateOperator::less;
+  require(
+      reduce_container_value(
+          fixed_reduction_values,
+          ContainerReductionOperator::sum,
+          negative_index_mask)
+              == value(8, 3),
+      "reduction transformations use signed declared static indices");
   const ContainerValue empty_values{queue_type, {}, {}};
   require(
       reduce_container_value(
@@ -87,6 +128,13 @@ void test_simir_containers() {
                  ContainerReductionOperator::bit_xor)
               == value(8, 0),
       "empty container reductions use SystemVerilog identities");
+  require(
+      reduce_container_value(
+          empty_values,
+          ContainerReductionOperator::product,
+          positive_index_mask)
+              == value(8, 1),
+      "empty transformed reductions preserve their operation identity");
   const ContainerValue unknown_values{
       queue_type,
       {value(8, 3),
@@ -104,6 +152,30 @@ void test_simir_containers() {
                  .to_msb_string()
               == "000000X1",
       "arithmetic and bitwise reductions propagate four-state values");
+  const std::vector<ContainerPredicateNode> unknown_mask{
+      {ContainerPredicateOperator::item, 0, 0,
+       PackedLogic4{}, ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::constant, 0, 0,
+       value(8, 3), ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::equal, 0, 1,
+       PackedLogic4{}, ContainerPredicateValueKind::logical},
+      {ContainerPredicateOperator::constant, 0, 0,
+       value(8, 0), ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::conditional, 2, 0,
+       PackedLogic4{}, ContainerPredicateValueKind::element, 3}};
+  const ContainerValue one_unknown{
+      queue_type,
+      {PackedLogic4::from_aval_bval(8, 3, 2)},
+      {}};
+  require(
+      reduce_container_value(
+          one_unknown,
+          ContainerReductionOperator::bit_or,
+          unknown_mask)
+              .to_msb_string()
+          == "000000XX",
+      "unknown transformation conditions merge element alternatives "
+      "with four-state conditional semantics");
   ContainerType signed_order_type = queue_type;
   signed_order_type.signed_elements = true;
   signed_order_type.maximum_elements.reset();

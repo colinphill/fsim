@@ -356,6 +356,25 @@ void require_associative(
       values.push_back(logical_not(operand(node.left)));
       value_kinds.push_back(node.value_kind);
       break;
+    case ContainerPredicateOperator::conditional: {
+      const auto& condition = operand(node.left);
+      const auto& when_true = operand(node.right);
+      const auto& when_false = operand(node.third);
+      if (node.value_kind
+              != ContainerPredicateValueKind::element
+          || value_kinds[node.right]
+              != ContainerPredicateValueKind::element
+          || value_kinds[node.third]
+              != ContainerPredicateValueKind::element) {
+        throw std::invalid_argument{
+            "SimIR container conditional type mismatch"};
+      }
+      values.push_back(conditional_value(
+          PackedLogic4{1, truth_value(condition)},
+          when_true, when_false));
+      value_kinds.push_back(node.value_kind);
+      break;
+    }
     default:
       throw std::invalid_argument{
           "invalid SimIR container predicate operator"};
@@ -473,8 +492,18 @@ ContainerValue default_container_value(
 
 PackedLogic4 reduce_container_value(
     const ContainerValue& value,
-    const ContainerReductionOperator operation) {
+    const ContainerReductionOperator operation,
+    const std::span<const ContainerPredicateNode> transformation) {
   validate_container_value(value);
+  if (!transformation.empty()
+      && (value.type.associative
+          || transformation.size()
+              > maximum_container_predicate_nodes
+          || transformation.back().value_kind
+              != ContainerPredicateValueKind::element)) {
+    throw std::invalid_argument{
+        "SimIR container reduction transformation is invalid"};
+  }
   auto identity = std::uint64_t{0};
   auto binary = BinaryOperator::add_unsigned;
   switch (operation) {
@@ -504,8 +533,26 @@ PackedLogic4 reduce_container_value(
   }
   auto result = PackedLogic4::from_aval_bval(
       value.type.element_width, identity, 0);
-  for (const auto& element : value.elements) {
-    result = binary_value(binary, result, element);
+  const auto declared_index =
+      [&](const std::size_t offset) {
+        return value.type.fixed
+            ? value.type.index_left >= value.type.index_right
+                  ? value.type.index_left
+                        - static_cast<std::int32_t>(offset)
+                  : value.type.index_left
+                        + static_cast<std::int32_t>(offset)
+            : static_cast<std::int32_t>(offset);
+      };
+  for (std::size_t offset = 0;
+       offset < value.elements.size(); ++offset) {
+    const auto& element = value.elements[offset];
+    const auto transformed =
+        transformation.empty()
+            ? element
+            : evaluate_container_predicate(
+                  value.type, element,
+                  declared_index(offset), transformation);
+    result = binary_value(binary, result, transformed);
   }
   return result;
 }
@@ -988,7 +1035,7 @@ void Interpreter::Impl::execute_container(
   get_register(process, operation.destination) =
       reduce_container_value(
           get_container_register(process, operation.source),
-          operation.operation);
+          operation.operation, operation.transformation);
   ++process.pc;
 }
 

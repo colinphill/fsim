@@ -1393,6 +1393,106 @@ void test_container_predicate_cache_identity(
   assert(cached_object_paths(cache_directory).size() == 4);
 }
 
+void test_container_reduction_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  const auto make_process =
+      [](const bool with_transformation,
+         const std::uint32_t threshold,
+         const ContainerPredicateValueKind comparison_kind,
+         const bool swap_branches = false) {
+        ContainerType queue;
+        queue.element_width = 32;
+        queue.queue = true;
+        Process process;
+        process.id = 32;
+        process.name = "cached_container_reduction";
+        process.register_count = 1;
+        process.container_register_count = 1;
+        process.container_register_types = {queue};
+        std::vector<ContainerPredicateNode> transformation;
+        if (with_transformation) {
+          transformation = {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {comparison_kind
+                       == ContainerPredicateValueKind::index
+                   ? ContainerPredicateOperator::index
+                   : ContainerPredicateOperator::item,
+               0, 0, PackedLogic4{}, comparison_kind},
+              {ContainerPredicateOperator::constant, 0, 0,
+               PackedLogic4::from_aval_bval(
+                   32, threshold, 0),
+               comparison_kind},
+              {ContainerPredicateOperator::greater, 1, 2,
+               PackedLogic4{},
+               ContainerPredicateValueKind::logical},
+              {ContainerPredicateOperator::constant, 0, 0,
+               PackedLogic4::from_aval_bval(32, 0, 0),
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::conditional, 3,
+               swap_branches ? 4U : 0U,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element,
+               swap_branches ? 0U : 4U},
+          };
+        }
+        process.operations = {
+            ContainerReduction{
+                ContainerReductionOperator::sum,
+                0,
+                0,
+                std::move(transformation)},
+            Halt{},
+        };
+        return process;
+      };
+  constexpr std::string_view symbol =
+      "cached_container_reduction";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_cache_statistics(jit, hits, misses, misses);
+      };
+  materialize(
+      make_process(
+          false, 0, ContainerPredicateValueKind::index),
+      0, 1);
+  materialize(
+      make_process(
+          false, 0, ContainerPredicateValueKind::index),
+      1, 0);
+  materialize(
+      make_process(
+          true, 0, ContainerPredicateValueKind::index),
+      0, 1);
+  materialize(
+      make_process(
+          true, 0, ContainerPredicateValueKind::index),
+      1, 0);
+  materialize(
+      make_process(
+          true, 1, ContainerPredicateValueKind::index),
+      0, 1);
+  materialize(
+      make_process(
+          true, 1, ContainerPredicateValueKind::element),
+      0, 1);
+  materialize(
+      make_process(
+          true, 1, ContainerPredicateValueKind::element,
+          true),
+      0, 1);
+  assert(cached_object_paths(cache_directory).size() == 5);
+}
+
 void test_persistent_object_cache() {
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
@@ -1419,6 +1519,8 @@ void test_persistent_object_cache() {
   test_signal_kind_cache_identity(root / "signal-kind");
   test_container_predicate_cache_identity(
       root / "container-predicate");
+  test_container_reduction_cache_identity(
+      root / "container-reduction");
 
   std::filesystem::remove_all(root, error);
   assert(!error);

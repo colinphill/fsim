@@ -115,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v34";
+    "fsim-llvm-native-object-v35";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -225,7 +225,7 @@ void add_dynamic_index_key(
   }
   builder.add(
       "container-semantics",
-      "bounded-static-associative-v10-iterator-indices");
+      "bounded-static-associative-v11-reduction-transformations");
   add_key_u64(
       builder,
       "container-entry-limit",
@@ -435,6 +435,36 @@ void add_dynamic_index_key(
                   static_cast<std::uint64_t>(value.operation));
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder, "transformation-count",
+                  value.transformation.size());
+              for (const auto& node : value.transformation) {
+                add_key_u64(
+                    builder, "transformation-operation",
+                    static_cast<std::uint64_t>(node.operation));
+                add_key_u64(
+                    builder, "transformation-value-kind",
+                    static_cast<std::uint64_t>(node.value_kind));
+                add_key_u64(
+                    builder, "transformation-left", node.left);
+                add_key_u64(
+                    builder, "transformation-right", node.right);
+                add_key_u64(
+                    builder, "transformation-third", node.third);
+                add_key_u64(
+                    builder, "transformation-constant-width",
+                    node.constant.width());
+                const auto word =
+                    node.constant.empty()
+                        ? runtime::Logic4Word{}
+                        : node.constant.low_word();
+                add_key_u64(
+                    builder, "transformation-constant-aval",
+                    word.aval);
+                add_key_u64(
+                    builder, "transformation-constant-bval",
+                    word.bval);
+              }
             },
             [&](const runtime::simir::OrderContainer& value) {
               builder.add("operation", "OrderContainer");
@@ -464,6 +494,8 @@ void add_dynamic_index_key(
                     builder, "predicate-left", node.left);
                 add_key_u64(
                     builder, "predicate-right", node.right);
+                add_key_u64(
+                    builder, "predicate-third", node.third);
                 add_key_u64(
                     builder, "predicate-constant-width",
                     node.constant.width());

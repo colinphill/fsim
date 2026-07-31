@@ -276,6 +276,112 @@ void test_rejections() {
       },
       "comparison operands are invalid");
 
+  Process invalid_reduction_root;
+  invalid_reduction_root.name = "invalid_reduction_root";
+  invalid_reduction_root.register_count = 1;
+  invalid_reduction_root.container_register_count = 1;
+  invalid_reduction_root.container_register_types = {
+      locator_queue};
+  invalid_reduction_root.operations = {
+      ContainerReduction{
+          ContainerReductionOperator::sum, 0, 0,
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::constant, 0, 0,
+               PackedLogic4::from_aval_bval(8, 0, 0),
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::greater, 0, 1,
+               PackedLogic4{},
+               ContainerPredicateValueKind::logical},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_reduction_root",
+            invalid_reduction_root, no_signals);
+      },
+      "transformation root has the wrong type");
+
+  auto invalid_reduction_conditional =
+      invalid_reduction_root;
+  invalid_reduction_conditional.name =
+      "invalid_reduction_conditional";
+  invalid_reduction_conditional.operations = {
+      ContainerReduction{
+          ContainerReductionOperator::sum, 0, 0,
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::constant, 0, 0,
+               PackedLogic4::from_aval_bval(8, 0, 0),
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::conditional, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element, 99},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_reduction_conditional",
+            invalid_reduction_conditional, no_signals);
+      },
+      "conditional operands are invalid");
+
+  auto invalid_reduction_branch =
+      invalid_reduction_root;
+  invalid_reduction_branch.name =
+      "invalid_reduction_branch";
+  invalid_reduction_branch.operations = {
+      ContainerReduction{
+          ContainerReductionOperator::sum, 0, 0,
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::index, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::index},
+              {ContainerPredicateOperator::conditional, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element, 1},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_reduction_branch",
+            invalid_reduction_branch, no_signals);
+      },
+      "conditional operands are invalid");
+
+  auto oversized_reduction = invalid_reduction_root;
+  oversized_reduction.name = "oversized_reduction";
+  std::vector<ContainerPredicateNode> oversized_graph(
+      maximum_container_predicate_nodes + 1U,
+      ContainerPredicateNode{
+          ContainerPredicateOperator::item,
+          0,
+          0,
+          PackedLogic4{},
+          ContainerPredicateValueKind::element});
+  oversized_reduction.operations = {
+      ContainerReduction{
+          ContainerReductionOperator::sum, 0, 0,
+          std::move(oversized_graph)},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "oversized_reduction",
+            oversized_reduction, no_signals);
+      },
+      "invalid transformation metadata");
+
   const auto projected_process =
       [](const ProjectedDelayMode mode,
          const std::uint64_t delay,

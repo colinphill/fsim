@@ -528,6 +528,13 @@ validate_process(const Process &process,
               record_definition(operation.destination, index);
               if (operation.source
                   < process.container_register_types.size()) {
+                if (const auto error =
+                        validate_container_reduction_metadata(
+                            operation,
+                            process.container_register_types[
+                                operation.source])) {
+                  reject(process, index, *error);
+                }
                 constrain_width(
                     operation.destination,
                     process.container_register_types[operation.source]

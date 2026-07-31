@@ -101,15 +101,19 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (container_reduction
             && (language_
                     != frontend::Language::SystemVerilog2017
-                || expression.operands.size() != 1
+                || (expression.operands.size() != 1
+                    && expression.operands.size() != 2)
                 || !is_container_expression(
                     expression.operands.front()))) {
             report(
-                expression.operands.size() != 1
+                expression.operands.empty()
+                        || expression.operands.size() > 2
                     ? "FSIM-ELAB-SVREDUCE-002"
                     : "FSIM-ELAB-SVREDUCE-001",
-                expression.operands.size() != 1
-                    ? "container reduction methods take no arguments"
+                expression.operands.empty()
+                        || expression.operands.size() > 2
+                    ? "container reduction methods take no arguments "
+                      "and at most one with-clause transformation"
                     : "container reduction methods require a direct "
                       "SystemVerilog unpacked-container receiver",
                 expression.span);
@@ -185,6 +189,28 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 return std::nullopt;
             }
             if (container_reduction) {
+                const bool has_transformation =
+                    expression.operands.size() == 2;
+                if (has_transformation
+                    && runtime_type->associative) {
+                    report(
+                        "FSIM-ELAB-SVREDUCE-006",
+                        "container reduction with-clauses do not "
+                        "support associative-array receivers",
+                        expression.span);
+                    return std::nullopt;
+                }
+                std::vector<ContainerPredicateNode> transformation;
+                if (has_transformation) {
+                    const auto lowered =
+                        lower_container_expression_graph(
+                            expression.operands[1], "item",
+                            *type, *runtime_type, true);
+                    if (!lowered) {
+                        return std::nullopt;
+                    }
+                    transformation = std::move(*lowered);
+                }
                 auto operation =
                     ContainerReductionOperator::sum;
                 if (expression.text == ".product") {
@@ -204,7 +230,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     allocate_register(*width, type->domain);
                 process_.operations.emplace_back(
                     ContainerReduction{
-                        operation, destination, *source});
+                        operation, destination, *source,
+                        std::move(transformation)});
                 return destination;
             }
             if (expression.kind == ExpressionKind::Call

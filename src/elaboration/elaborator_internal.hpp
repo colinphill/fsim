@@ -934,11 +934,12 @@ private:
         ContainerRegisterId destination,
         const ContainerType& destination_type);
     std::optional<std::vector<ContainerPredicateNode>>
-    lower_container_predicate(
+    lower_container_expression_graph(
         const Expression& expression,
         std::string_view iterator_name,
         const frontend::Type& source_type,
-        const ContainerType& runtime_type);
+        const ContainerType& runtime_type,
+        bool transformation);
     ContainerRegisterId allocate_container_register(
         const ContainerType& type);
     void lower_container_method(const Statement& statement);

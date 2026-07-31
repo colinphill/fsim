@@ -204,4 +204,120 @@ validate_container_locator_metadata(
   return std::nullopt;
 }
 
+[[nodiscard]] std::optional<std::string>
+validate_container_reduction_metadata(
+    const runtime::simir::ContainerReduction& operation,
+    const runtime::simir::ContainerType& source) {
+  using namespace runtime::simir;
+  if (operation.transformation.empty()) {
+    return std::nullopt;
+  }
+  if (source.associative
+      || operation.transformation.size()
+          > maximum_container_predicate_nodes) {
+    return "ContainerReduction has invalid transformation metadata";
+  }
+  std::vector<ContainerPredicateValueKind> value_kinds;
+  value_kinds.reserve(operation.transformation.size());
+  std::size_t conditional_count{};
+  for (std::size_t index = 0;
+       index < operation.transformation.size(); ++index) {
+    const auto& node = operation.transformation[index];
+    const auto earlier =
+        [index](const std::uint32_t operand) {
+          return operand < index;
+        };
+    const bool comparison =
+        node.operation >= ContainerPredicateOperator::equal
+        && node.operation
+            <= ContainerPredicateOperator::greater_equal;
+    if (node.operation > ContainerPredicateOperator::conditional) {
+      return "ContainerReduction transformation has an invalid operator";
+    }
+    if (node.operation != ContainerPredicateOperator::conditional
+        && node.third != 0) {
+      return "ContainerReduction transformation has an unused third edge";
+    }
+    if (node.operation == ContainerPredicateOperator::item) {
+      if (node.value_kind
+          != ContainerPredicateValueKind::element) {
+        return "ContainerReduction transformation item has the "
+               "wrong type";
+      }
+    } else if (
+        node.operation == ContainerPredicateOperator::index) {
+      if (node.value_kind
+          != ContainerPredicateValueKind::index) {
+        return "ContainerReduction transformation index has the "
+               "wrong type";
+      }
+    } else if (
+        node.operation == ContainerPredicateOperator::constant) {
+      if (node.value_kind == ContainerPredicateValueKind::logical
+          || node.constant.width()
+              != (node.value_kind
+                          == ContainerPredicateValueKind::index
+                      ? 32U
+                      : source.element_width)
+          || node.constant.is_logic9()
+          || ((node.value_kind
+                       == ContainerPredicateValueKind::index
+                   || source.two_state)
+              && node.constant.low_word().bval != 0)) {
+        return "ContainerReduction transformation constant has the "
+               "wrong type";
+      }
+    } else if (comparison) {
+      if (!earlier(node.left) || !earlier(node.right)
+          || node.value_kind
+              != ContainerPredicateValueKind::logical
+          || value_kinds[node.left]
+              != value_kinds[node.right]
+          || value_kinds[node.left]
+              == ContainerPredicateValueKind::logical) {
+        return "ContainerReduction transformation comparison operands "
+               "are invalid";
+      }
+    } else if (
+        node.operation
+            == ContainerPredicateOperator::logical_not) {
+      if (!earlier(node.left)
+          || node.value_kind
+              != ContainerPredicateValueKind::logical) {
+        return "ContainerReduction transformation logical operand is "
+               "invalid";
+      }
+    } else if (
+        node.operation
+            == ContainerPredicateOperator::conditional) {
+      ++conditional_count;
+      if (conditional_count > 1U
+          || !earlier(node.left)
+          || !earlier(node.right)
+          || !earlier(node.third)
+          || node.value_kind
+              != ContainerPredicateValueKind::element
+          || value_kinds[node.right]
+              != ContainerPredicateValueKind::element
+          || value_kinds[node.third]
+              != ContainerPredicateValueKind::element) {
+        return "ContainerReduction conditional operands are invalid";
+      }
+    } else {
+      if (!earlier(node.left) || !earlier(node.right)
+          || node.value_kind
+              != ContainerPredicateValueKind::logical) {
+        return "ContainerReduction transformation logical operands are "
+               "invalid";
+      }
+    }
+    value_kinds.push_back(node.value_kind);
+  }
+  if (value_kinds.back()
+      != ContainerPredicateValueKind::element) {
+    return "ContainerReduction transformation root has the wrong type";
+  }
+  return std::nullopt;
+}
+
 }  // namespace fsim::compiler::llvm_detail

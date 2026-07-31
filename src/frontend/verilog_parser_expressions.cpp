@@ -533,7 +533,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
         if (valid_iterator_argument) {
           implicit_net_references_.resize(
               implicit_reference_count);
-          locator_iterator_names_.insert(
+          container_iterator_names_.insert(
               operands[1].text);
         }
         const auto expected_arguments =
@@ -590,10 +590,30 @@ Expression VerilogParser::parse_postfix(Expression expression) {
         }
         if (reduction_method
             && current().text == "with") {
-          error(
-              current(),
-              "FSIM-SV-UNSUPPORTED-039",
-              "container reduction with-clauses are not supported");
+          advance();
+          expect(
+              TokenKind::LeftParen,
+              "'(' after container reduction with",
+              "FSIM-SV-PARSE-167");
+          const bool iterator_scope_inserted =
+              current_procedural_names_.insert("item").second;
+          container_iterator_names_.insert("item");
+          if (at(TokenKind::RightParen)) {
+            error(
+                current(),
+                "FSIM-SV-SEM-091",
+                "a container reduction with-clause requires a "
+                "transformation expression");
+          } else {
+            operands.push_back(parse_expression());
+          }
+          if (iterator_scope_inserted) {
+            current_procedural_names_.erase("item");
+          }
+          expect(
+              TokenKind::RightParen,
+              "')' after container reduction transformation",
+              "FSIM-SV-PARSE-168");
         }
         if ((ordering_method || unsupported_shuffle)
             && language_ != Language::SystemVerilog2017) {
@@ -631,12 +651,14 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "SystemVerilog 2017");
         }
         if (predicate_locator_method) {
-          bool iterator_scope_inserted = false;
-          if (valid_iterator_argument) {
-            iterator_scope_inserted =
-                current_procedural_names_.insert(
-                    operands[1].text).second;
-          }
+          const auto iterator_scope_name =
+              valid_iterator_argument
+                  ? operands[1].text
+                  : std::string{"item"};
+          container_iterator_names_.insert(iterator_scope_name);
+          const bool iterator_scope_inserted =
+              current_procedural_names_.insert(
+                  iterator_scope_name).second;
           if (current().text != "with") {
             error(
                 current(),
@@ -664,7 +686,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
           }
           if (iterator_scope_inserted) {
             current_procedural_names_.erase(
-                operands[1].text);
+                iterator_scope_name);
           }
         }
         expression = Expression{

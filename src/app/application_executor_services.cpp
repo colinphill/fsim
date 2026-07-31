@@ -583,7 +583,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        &operation)) {
       const auto result = runtime::simir::reduce_container_value(
           registers.at(reduction->source),
-          reduction->operation);
+          reduction->operation,
+          reduction->transformation);
       const auto word = result.low_word();
       *result_aval = word.aval;
       *result_bval = word.bval;
