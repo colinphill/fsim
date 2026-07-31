@@ -4988,37 +4988,62 @@ Windows MSVC Debug completed in 18 minutes 45 seconds, Windows MSVC LLVM
 Debug in 28 minutes 45 seconds, and ASan/UBSan in 43 minutes 59 seconds. The
 sanitizer result confirms the 45-minute CI budget remains necessary.
 
-### Batch 91 reboot checkpoint — static-array slice module-port actuals
+### Ninety-first feature batch — static-array slice module-port actuals
 
-An intentionally incomplete reboot checkpoint begins the Batch 91 module-port
-boundary. Runtime objects can now retain a typed slice alias to an earlier
-container object. Common recursive helpers materialize alias reads in the
-child formal's ordinal order and merge complete alias writes into one copied
-parent value before committing it. Interpreter operations, native callbacks,
-public inspection, and deposits share these helpers, so the design adds no
-SimIR operation or public native ABI slot.
+Direct named and positional `[left:right]` selections of one-dimensional
+integral static arrays now connect to compatible same-language static-array
+module ports. The frontend retains every actual as the same compact,
+source-spanned colon `Slice` HIR used by assignment, consumers, callables, and
+ordering. Specialization substitutes parent parameters before connection, so
+locally constant parameter-dependent actual bounds remain exact.
 
-Same-language hierarchy binding now routes whole and direct colon-slice
-static-array connections through one helper. The slice path validates a fixed
-receiver, constant signed bounds, direction and range, equal element count,
-exact element profile, and parent input-port writability before allocating the
-formal-typed alias. Boundary-driver ownership includes an optional selected
-interval, admitting disjoint slices while rejecting overlap or a simultaneous
-whole-object writer through `SVPORT-008`.
+Each sliced connection allocates a formal-typed `ContainerSliceAlias` that
+references an earlier parent object and records the selected parent bounds.
+Reads recursively materialize the selected range into formal ordinal order;
+writes recursively copy the complete parent, merge the complete formal value,
+and commit one replacement. Child input ports are read-only. Output ports
+replace only their selected parent range, and inout ports see the exact
+initial selected value before the same atomic writeback. Different declared
+indices and directions are allowed when element count, width, signedness, and
+two-/four-state domain match exactly; X/Z bits are copied without conversion
+or packed reinterpretation.
 
-The exact LLVM 22.1.8 warnings-as-errors Debug build of the runtime and both
-elaboration executables is current with `--parallel 8`. Their three existing
-test suites pass in 0.57 seconds total. This is compile/regression evidence
-only: no new Batch 91 tests, schema change, application differential, VCD,
-debugger evidence, complete documentation, or full Debug/Release regression
-exists yet.
+Whole aliases below a sliced connection retain the same object identity, and
+recursive aliases are valid only when every target precedes its view. This
+carries sliced bindings through parameter specialization and nested/generated
+hierarchy. Interpreter container operations, native execution callbacks,
+public inspection, deposits, debugger paths, and VCD-visible scalar witnesses
+share the alias-aware runtime path. No new SimIR operation, callback slot,
+public native ABI revision, or partial parent mutation was required.
 
-Resume by checking specialization-dependent slice-bound folding and the
-earlier-target invariant, then add direct runtime alias coverage, a dedicated
-elaboration matrix, explicit frontend HIR assertions, the split application
-differential, debugger/VCD coverage, schema 43 plus container semantic
-revision 19, cache identity tests, negative diagnostics, and full exact-LLVM
-Debug/Release gates. Batch 91 remains a non-CI-inspection boundary.
+Boundary-driver ownership now includes an optional selected interval. Two
+disjoint output/inout slices may coexist; overlapping slices, a slice plus a
+whole writer, or unrelated multiple writers retain deterministic
+`SVPORT-008` rejection. Stable checks also reject read-only descendants,
+runtime/unknown or wrong-direction/out-of-range bounds, indexed and indirect
+actuals, element and nonstatic receivers, unknown objects, count/width/
+signedness/state mismatch, and the existing multidimensional, recursive, and
+cross-language forms.
+
+Positive evidence spans direct runtime aliases, nested deposits, exact X/Z
+ordinal values, specialization-dependent named connections, positional
+connections, all three directions, disjoint writers, nested/generated whole
+forwarding, debugger formal paths, scalar VCD, interpreter, LLVM O0/O2, and
+cold/warm reuse. Native-object schema 43 and container semantic revision 19
+record formal profile, object operation/identity, specialization, and source
+provenance. Selected parent bounds remain validated runtime alias metadata,
+and the cache matrix proves that changing only those external bounds safely
+reuses identical machine code while every code-relevant difference misses.
+
+The diagnostic catalog still covers all 1,222 production codes, and the
+source gate covers 291 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 412.19 seconds, including scoped locals in 0.90 seconds, the
+expanded container differential in 342.15 seconds, and the monolithic
+application in 40.03 seconds. Release passed all 59 tests in 116.86 seconds,
+including scoped locals in 0.86 seconds, containers in 85.11 seconds, and the
+monolithic application in 13.55 seconds, on 2026-07-31. Batch 91 is not a
+ten-batch CI-inspection boundary, so no Actions run was inspected.
 
 ## v1 release condition
 

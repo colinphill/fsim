@@ -915,6 +915,108 @@ void test_simir_containers() {
       "descending signed static indices map to dense declared-order "
       "storage and whole copies preserve every element");
 
+  ContainerType slice_parent_type = static_type;
+  slice_parent_type.index_left = 5;
+  slice_parent_type.index_right = 0;
+  ContainerValue slice_parent{
+      slice_parent_type,
+      {value(8, 0x50),
+       value(8, 0x40),
+       PackedLogic4::from_msb_string("0000000X"),
+       PackedLogic4::from_msb_string("0000000Z"),
+       value(8, 0x10),
+       value(8, 0x00)},
+      {}};
+  ContainerType slice_formal_type = static_type;
+  slice_formal_type.index_left = -2;
+  slice_formal_type.index_right = 0;
+  ContainerType nested_formal_type = static_type;
+  nested_formal_type.index_left = 9;
+  nested_formal_type.index_right = 8;
+  Interpreter slice_aliases;
+  const auto slice_parent_object =
+      slice_aliases.add_container_object(
+          {"slice_parent", slice_parent, std::nullopt});
+  const auto slice_formal_object =
+      slice_aliases.add_container_object(
+          {"slice_formal",
+           default_container_value(slice_formal_type),
+           ContainerSliceAlias{
+               slice_parent_object, 4, 2}});
+  const auto nested_formal_object =
+      slice_aliases.add_container_object(
+          {"nested_formal",
+           default_container_value(nested_formal_type),
+           ContainerSliceAlias{
+               slice_formal_object, -1, 0}});
+  require(
+      slice_aliases.container_object_value(
+          slice_formal_object)
+              .elements
+          == std::vector<PackedLogic4>{
+              value(8, 0x40),
+              PackedLogic4::from_msb_string("0000000X"),
+              PackedLogic4::from_msb_string("0000000Z")}
+          && slice_aliases.container_object_value(
+                 nested_formal_object)
+                 .elements
+              == std::vector<PackedLogic4>{
+                  PackedLogic4::from_msb_string("0000000X"),
+                  PackedLogic4::from_msb_string("0000000Z")},
+      "slice aliases materialize exact X/Z elements in formal ordinal "
+      "order across differing declared indices and directions");
+  slice_aliases.deposit_container_object(
+      nested_formal_object,
+      ContainerValue{
+          nested_formal_type,
+          {value(8, 0xa3), value(8, 0xa2)},
+          {}});
+  require(
+      slice_aliases.container_object_value(
+          slice_parent_object)
+              .elements
+          == std::vector<PackedLogic4>{
+              value(8, 0x50),
+              value(8, 0x40),
+              value(8, 0xa3),
+              value(8, 0xa2),
+              value(8, 0x10),
+              value(8, 0x00)}
+          && slice_aliases.container_object_value(
+                 slice_formal_object)
+                 .elements
+              == std::vector<PackedLogic4>{
+                  value(8, 0x40),
+                  value(8, 0xa3),
+                  value(8, 0xa2)},
+      "nested slice-alias deposits atomically replace only the selected "
+      "root range and refresh every ordinal view");
+
+  const auto expect_invalid_slice_alias =
+      [&](const ContainerType& formal,
+          const ContainerSliceAlias alias) {
+        Interpreter invalid;
+        (void)invalid.add_container_object(
+            {"parent", slice_parent, std::nullopt});
+        try {
+          (void)invalid.add_container_object(
+              {"invalid",
+               default_container_value(formal),
+               alias});
+          require(false, "invalid slice alias must be rejected");
+        } catch (const std::invalid_argument&) {
+        }
+      };
+  expect_invalid_slice_alias(
+      slice_formal_type,
+      ContainerSliceAlias{1, 4, 2});
+  expect_invalid_slice_alias(
+      slice_formal_type,
+      ContainerSliceAlias{0, 6, 4});
+  expect_invalid_slice_alias(
+      nested_formal_type,
+      ContainerSliceAlias{0, 4, 2});
+
   ContainerType memory_type;
   memory_type.element_width = 8;
   memory_type.fixed = true;

@@ -18,6 +18,12 @@ enum class SliceCallMode : std::uint8_t {
   task_inout,
 };
 
+enum class SlicePortMode : std::uint8_t {
+  input,
+  output,
+  inout,
+};
+
 void expect_slice_cache_statistics(
     const LlvmJit& jit,
     const std::uint64_t hits,
@@ -303,6 +309,56 @@ void expect_slice_cache_statistics(
   return process;
 }
 
+[[nodiscard]] Process make_slice_port_process(
+    const std::int32_t actual_left,
+    const std::int32_t formal_left,
+    const std::int32_t formal_right,
+    const std::uint32_t element_width,
+    const bool two_state,
+    const bool signed_elements,
+    const SlicePortMode mode,
+    const ContainerObjectId object,
+    const std::string_view specialization,
+    const std::string_view source_path,
+    const std::uint32_t source_line) {
+  // The selected actual range belongs to the runtime ContainerSliceAlias,
+  // not to native code. Varying it must therefore reuse an otherwise
+  // identical process object while the formal profile and binding operation
+  // remain cache-key inputs.
+  (void)actual_left;
+  ContainerType formal;
+  formal.element_width = element_width;
+  formal.two_state = two_state;
+  formal.signed_elements = signed_elements;
+  formal.fixed = true;
+  formal.index_left = formal_left;
+  formal.index_right = formal_right;
+
+  Process process;
+  process.id = 43;
+  process.name =
+      "cached_static_slice_port." + std::string{specialization};
+  process.container_register_count = 1;
+  process.container_register_types = {formal};
+  process.operations.push_back(
+      DebugPoint{
+          DebugPointKind::statement,
+          SourceLocation{
+              std::string{source_path}, source_line, 5}});
+  if (mode == SlicePortMode::input
+      || mode == SlicePortMode::inout) {
+    process.operations.push_back(
+        ReadContainerObject{0, object});
+  }
+  if (mode == SlicePortMode::output
+      || mode == SlicePortMode::inout) {
+    process.operations.push_back(
+        WriteContainerObject{object, 0});
+  }
+  process.operations.push_back(Halt{});
+  return process;
+}
+
 }  // namespace
 
 void test_static_slice_consumer_cache_identity(
@@ -519,6 +575,97 @@ void test_static_slice_ordering_cache_identity(
   materialize(make(4, 8, ContainerOrderingOperator::reverse,
                    std::nullopt, true, 24), 0, 1);
   assert(slice_cached_object_count(cache_directory) == 9);
+}
+
+void test_static_slice_port_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol =
+      "cached_static_slice_port";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_slice_cache_statistics(
+            jit, hits, misses);
+      };
+  const auto make =
+      [&](const std::int32_t actual_left = 4,
+          const std::int32_t formal_left = -2,
+          const std::int32_t formal_right = 0,
+          const std::uint32_t width = 8,
+          const bool two_state = false,
+          const bool signed_elements = false,
+          const SlicePortMode mode = SlicePortMode::input,
+          const ContainerObjectId object = 3,
+          const std::string_view specialization = "WIDTH=8",
+          const std::string_view source = "slice-port-leaf.sv",
+          const std::uint32_t line = 27) {
+        return make_slice_port_process(
+            actual_left,
+            formal_left,
+            formal_right,
+            width,
+            two_state,
+            signed_elements,
+            mode,
+            object,
+            specialization,
+            source,
+            line);
+      };
+
+  materialize(make(), 0, 1);
+  materialize(make(3), 1, 0);
+  materialize(make(4, -3, -1), 0, 1);
+  materialize(make(4, 2, 0), 0, 1);
+  materialize(make(4, -2, 0, 4), 0, 1);
+  materialize(make(4, -2, 0, 8, true), 0, 1);
+  materialize(make(4, -2, 0, 8, false, true), 0, 1);
+  materialize(
+      make(
+          4, -2, 0, 8, false, false,
+          SlicePortMode::output),
+      0,
+      1);
+  materialize(
+      make(
+          4, -2, 0, 8, false, false,
+          SlicePortMode::inout),
+      0,
+      1);
+  materialize(
+      make(
+          4, -2, 0, 8, false, false,
+          SlicePortMode::input, 4),
+      0,
+      1);
+  materialize(
+      make(
+          4, -2, 0, 8, false, false,
+          SlicePortMode::input, 3, "WIDTH=4"),
+      0,
+      1);
+  materialize(
+      make(
+          4, -2, 0, 8, false, false,
+          SlicePortMode::input, 3, "WIDTH=8",
+          "edited-slice-port-leaf.sv"),
+      0,
+      1);
+  materialize(
+      make(
+          4, -2, 0, 8, false, false,
+          SlicePortMode::input, 3, "WIDTH=8",
+          "slice-port-leaf.sv", 28),
+      0,
+      1);
+  assert(slice_cached_object_count(cache_directory) == 12);
 }
 
 }  // namespace fsim::tests::compiler

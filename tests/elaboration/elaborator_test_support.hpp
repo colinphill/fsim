@@ -105,6 +105,7 @@ void test_systemverilog_file_lowering();
 void test_systemverilog_container_lowering();
 void test_systemverilog_static_slice_calls();
 void test_systemverilog_static_slice_ordering();
+void test_systemverilog_static_slice_ports();
 void test_case_and_expression_lowering();
 void test_numeric_and_system_function_lowering();
 void test_selection_and_assignment_lowering();

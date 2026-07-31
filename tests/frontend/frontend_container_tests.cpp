@@ -904,6 +904,82 @@ endmodule
               == ExpressionKind::Call,
       "slice ordering retains optional implicit and named key graphs");
 
+  const auto slice_ports = parse_text(
+      "container-slice-ports.sv",
+      R"(
+module slice_port_child(
+    input logic [7:0] source[-2:0],
+    output logic [7:0] result[9:7]);
+endmodule
+module container_slice_ports;
+  logic [7:0] source[5:0];
+  logic [7:0] result[4:0];
+  slice_port_child named(
+      .source(source[4:2]),
+      .result(result[3:1]));
+  slice_port_child positional(
+      source[4:2], result[3:1]);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      slice_ports.ok(),
+      "named and positional direct static-array slice port actuals parse");
+  const auto* slice_port_unit =
+      slice_ports.design.find(
+          UnitKind::VerilogModule,
+          "container_slice_ports");
+  require(
+      slice_port_unit != nullptr
+          && slice_port_unit->instances.size() == 2
+          && slice_port_unit->instances[0].connections.size() == 2
+          && slice_port_unit->instances[1].connections.size() == 2,
+      "slice port connections remain distinct instance associations");
+  const auto direct_port_slice =
+      [](const PortConnection& connection,
+         const std::string_view base,
+         const std::string_view source_name) {
+        const auto& actual = connection.value;
+        return actual.kind == ExpressionKind::Slice
+            && actual.text == ":"
+            && actual.operands.size() == 3
+            && actual.operands[0].kind
+                == ExpressionKind::Identifier
+            && actual.operands[0].text == base
+            && actual.operands[1].kind
+                == ExpressionKind::IntegerLiteral
+            && actual.operands[2].kind
+                == ExpressionKind::IntegerLiteral
+            && actual.span.source_name == source_name
+            && !actual.span.empty();
+      };
+  require(
+      slice_port_unit->instances[0].connections[0].port
+          == std::optional<std::string>{"source"}
+          && slice_port_unit->instances[0].connections[1].port
+              == std::optional<std::string>{"result"}
+          && direct_port_slice(
+              slice_port_unit->instances[0].connections[0],
+              "source",
+              "container-slice-ports.sv")
+          && direct_port_slice(
+              slice_port_unit->instances[0].connections[1],
+              "result",
+              "container-slice-ports.sv"),
+      "named port actuals retain source-spanned colon Slice HIR");
+  require(
+      !slice_port_unit->instances[1].connections[0].port
+          && !slice_port_unit->instances[1].connections[1].port
+          && direct_port_slice(
+              slice_port_unit->instances[1].connections[0],
+              "source",
+              "container-slice-ports.sv")
+          && direct_port_slice(
+              slice_port_unit->instances[1].connections[1],
+              "result",
+              "container-slice-ports.sv"),
+      "positional port actuals retain source-spanned colon Slice HIR");
+
   const auto invalid = parse_text(
       "container-invalid.sv",
       R"(

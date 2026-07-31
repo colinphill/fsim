@@ -1120,6 +1120,8 @@ void test_static_slice_call_cache_identity(
     const std::filesystem::path& cache_directory);
 void test_static_slice_ordering_cache_identity(
     const std::filesystem::path& cache_directory);
+void test_static_slice_port_cache_identity(
+    const std::filesystem::path& cache_directory);
 void test_rejections();
 void test_display_at_level(
     fsim::compiler::JitOptimizationLevel optimization,

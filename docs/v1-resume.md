@@ -9,10 +9,10 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-90 bounded static-array
-  slice ordering mutation on top of the feature-batch-89 callable-slice
+- Implementation baseline: completed feature-batch-91 bounded static-array
+  slice module-port actuals on top of the feature-batch-90 slice-ordering
   handoff.
-- The source-size refactor is complete: all 290 authored C/C++ source, header,
+- The source-size refactor is complete: all 291 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
@@ -148,6 +148,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   12 jobs. Windows MSVC Debug completed in 18 minutes 45 seconds, Windows
   MSVC LLVM Debug in 28 minutes 45 seconds, and ASan/UBSan in 43 minutes 59
   seconds, confirming the 45-minute job budget remains necessary.
+- Batch 91 adds direct named and positional locally constant static-array
+  `[left:right]` module-port actuals. Formal-typed recursive aliases provide
+  read-only input views and atomic selected output/inout updates across
+  differing compatible indices and directions, preserving exact signed,
+  two-/four-state X/Z elements. Interval-aware driver ownership admits
+  disjoint writers and rejects overlap. Nested/generated hierarchy,
+  specialization, debugger, VCD, interpreter/LLVM O0/O2, schema 43, and
+  container semantic revision 19 are covered without a native ABI change.
+  Exact-LLVM Debug/Release passed all 59 tests in 412.19/116.86 seconds.
+  Batch 91 is not a CI-inspection boundary, so no Actions run was inspected.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -192,7 +202,9 @@ not rebuilt:
   access, dynamic/queue/associative methods, dense direction-aware fixed
   storage, manifest-confined `$readmemb`/`$readmemh`, suspending-task copy-out,
   direct same-language whole-container module-port aliases across
-  nested/generated hierarchy, direct bound/size/bit/dimension system queries
+  nested/generated hierarchy, compatible formal-typed direct static-array
+  slice port aliases with read-only input and atomic selected output/inout
+  updates, direct bound/size/bit/dimension system queries
   and contextual positional/keyed assignment patterns plus exact-element-type
   `sum`/`product`/`and`/`or`/`xor` reductions with optional bounded pure
   `item`/named-iterator conditional transformations and deterministic
@@ -471,7 +483,8 @@ remain intact through schema-37 locator semantics carried forward by the
 current schema-40 interpreter/native/cache identity.
 Unicode
 code-point semantics, multidimensional or
-aggregate/string-element containers, sliced/expression port actuals,
+aggregate/string-element containers, general expression or indexed/dynamic
+port actuals,
 cross-language container boundaries, and unrestricted allocation remain
 separate release-gate work.
 
@@ -742,15 +755,10 @@ concurrency policy. Final replacement run `30613827882` passed all 12 jobs.
 Windows MSVC Debug completed in 18 minutes 45 seconds, Windows MSVC LLVM
 Debug in 28 minutes 45 seconds, and ASan/UBSan in 43 minutes 59 seconds.
 
-## Reboot checkpoint — Batch 91 in progress
+## Completed feature batch 91
 
-The newest pushed commit after the Batch 90 closure is an intentionally
-incomplete Batch 91 implementation checkpoint. It is based on `92a4f23` and
-contains the first runtime and hierarchy pieces for direct static-array slice
-module-port actuals. Do not treat the batch or any Batch 91 feature-matrix row
-as complete yet.
-
-The checkpoint makes these architectural choices:
+Batch 91 completes bounded direct static-array slice module-port actuals. Its
+implementation retains these architectural choices:
 
 - `ContainerObject` and public elaboration metadata may carry a
   `ContainerSliceAlias` consisting of an earlier target object plus the
@@ -786,8 +794,7 @@ The following files contain that implementation:
 - aggregate-initializer compatibility adjustments in
   `tests/runtime/runtime_container_tests.cpp`.
 
-At the checkpoint, this exact warnings-as-errors command is clean with no work
-remaining:
+The exact warnings-as-errors focused build uses:
 
 ```sh
 cmake --build build/llvm22-ninja-debug --parallel 8 \
@@ -795,81 +802,68 @@ cmake --build build/llvm22-ninja-debug --parallel 8 \
   fsim_sv_container_elaboration_tests
 ```
 
-The three existing Debug suites pass:
+The focused Debug suites pass:
 
 ```text
-fsim.elaboration                 0.41 s
-fsim.elaboration.sv-container    0.11 s
+fsim.elaboration                 0.43 s
+fsim.elaboration.sv-container    0.12 s
 fsim.runtime                     0.05 s
 ```
 
-No new Batch 91 positive, negative, application, cache, debugger, or VCD
-evidence has been added yet, and neither full Debug nor Release has been run
-for this checkpoint. Resume by reviewing the locally constant-bound evaluation
-against parent specialization, then complete the following work:
+New evidence covers runtime aliases and deposits, parameter-substituted named
+and positional HIR, input/output/inout, differing formal ranges and
+directions, exact X/Z state, nested/generated whole forwarding, disjoint and
+overlapping writers, read-only and malformed actuals, debugger paths, scalar
+VCD, interpreter, LLVM O0/O2, and cold/warm cache identity. Schema 43 and
+container semantic revision 19 retain code-relevant formal profile, operation,
+object, specialization, and source identity while selected bounds remain
+validated runtime metadata.
 
-1. Add direct runtime tests for descending/ascending and nested slice aliases,
-   exact X/Z ordinal reads, atomic writes, preservation of surrounding
-   elements, deposits, and invalid alias metadata.
-2. Add a dedicated elaboration fixture and wire it into both elaboration test
-   executables. Cover named/positional connections, differing formal indices
-   and directions, input/output/inout, nested/generated whole aliases,
-   disjoint writers, overlap rejection, read-only parents, profile/count and
-   bound errors, and all bounded unsupported receiver forms.
-3. Extend frontend evidence to assert that named and positional actuals remain
-   source-spanned colon `Slice` HIR.
-4. Extend the split SystemVerilog container application fixture without
-   exceeding MSVC's string-literal limit. Compare interpreter, LLVM O0, and
-   LLVM O2; inspect formal and parent paths; retain exact X/Z and surrounding
-   elements; and add scalar VCD observation.
-5. Raise native-object schema 42 to 43 and container semantic revision 18 to
-   19, then add cache matrices for formal range/profile, selected actual range,
-   binding direction, specialization, and transitive source provenance.
-6. Run the focused expression below, then the complete exact-LLVM Debug and
-   Release builds with `--parallel 8` and all tests.
-7. Finish the four Batch 91 documents, commit, and push. Batch 91 is not a
-   ten-batch CI-inspection boundary.
-
-Before expanding the tests, review two implementation details: slice-bound
-folding currently uses an empty `ConstantEnvironment`, so a
-specialization-dependent actual must be proven or repaired; and nested aliases
-must preserve the invariant that every target object precedes its alias.
+The complete exact-LLVM Debug regression passed all 59 tests in 412.19
+seconds, including scoped locals in 0.90 seconds, containers in 342.15
+seconds, and the monolithic application in 40.03 seconds. Release passed all
+59 tests in 116.86 seconds, including scoped locals in 0.86 seconds,
+containers in 85.11 seconds, and the monolithic application in 13.55 seconds.
+The diagnostic catalog covers 1,222 production codes and the source gate
+covers 291 authored files. Batch 91 is not a CI-inspection boundary, so no
+Actions run was inspected.
 
 ## Next ten-feature batch
 
-Resume with **feature batch 91: bounded static-array slice module-port
-actuals**:
+Resume with **feature batch 92: bounded locally constant indexed static-array
+slices**:
 
-1. Retain direct named and positional static-array slice port actuals as
-   explicit source-spanned colon `Slice` HIR.
-2. Bind a compatible slice to a child input static-array port as a read-only
-   ordinal view without exposing unselected parent elements.
-3. Bind a compatible writable slice to a child output static-array port and
-   atomically update only the selected parent range.
-4. Bind a compatible writable slice to a child inout static-array port with
-   exact initial visibility and bidirectional selected updates.
-5. Map equal-count compatible parent and formal ranges ordinally across
-   different declared indices and ascending/descending directions.
-6. Preserve exact element width, signedness, two-/four-state domain, and X/Z
-   bits without conversion or packed reinterpretation.
-7. Keep overlapping or multiply driven selected connections deterministic
-   through the existing object/driver ownership and resolution rules.
-8. Carry sliced port actuals through nested/generated same-language hierarchy,
-   specialization, debugger paths, VCD, interpreter, LLVM O0, and LLVM O2.
-9. Diagnose read-only output/inout, count/profile mismatch,
-   nonconstant/indexed/indirect/nonstatic/multidimensional, overlapping
-   unsupported, recursive, and cross-language forms through stable coverage.
-10. Version formal direction/range/profile, selected actual range, binding or
-    copy operations, specialization, and transitive source provenance in
-    schema 43; add full positive/negative/cache evidence and push the
+1. Retain direct unpacked `base +: width` and `base -: width` selections as
+   explicit source-spanned indexed-slice HIR distinct from packed
+   part-selects.
+2. Fold the base and width as known signed 32-bit constants, require a positive
+   bounded width, and normalize only operator/direction combinations that
+   select a nonempty in-range direction-preserving static-array interval.
+3. Preserve the normalized selected left/right range and exact element profile
+   in one contextual fixed `ContainerType`.
+4. Extend whole/slice assignment reads and atomic selected writes, including
+   overlapping snapshots and ordinal mapping across compatible ranges.
+5. Extend system queries, `.size()`, reductions, transformations, and
+   extrema/predicate locators to indexed-slice receivers.
+6. Extend automatic function input and task input/output/inout actuals with
+   suspension-safe atomic selected copy-out.
+7. Extend `reverse`, `sort`, and `rsort`, including implicit/named keys and
+   normalized selected signed `.index`.
+8. Extend named/positional same-language static-array input/output/inout
+   module-port actuals through the Batch 91 recursive alias model.
+9. Diagnose runtime/unknown/zero/negative/overflowing width or base,
+   wrong-direction operator, out-of-range, indirect/nonstatic/multidimensional,
+   read-only, profile mismatch, overlap, recursion, and cross-language forms.
+10. Raise native-object schema 43 to 44 and container semantic revision 19 to
+    20; add complete frontend, elaboration, runtime, debugger, VCD,
+    interpreter/O0/O2, cache, and full Debug/Release evidence, then push the
     non-boundary batch.
 
-Keep Batch 91 to direct locally constant direction-preserving slices of
-one-dimensional integral static-array objects connected to already supported
-same-language static-array module ports. Expression adapters beyond direct
-slices, slice returns, variable/indexed slices, element conversion, unsupported
-overlapping drivers, recursion, multidimensional/nonstatic containers, and
-cross-language slice boundaries remain separate release-gate work.
+Keep Batch 92 to locally constant indexed selections of direct
+one-dimensional integral static-array objects. Runtime-variable indexed
+slices, slice returns, general expression receivers/actuals, element
+conversion, multidimensional/nonstatic containers, recursive boundaries, and
+cross-language slices remain separate release-gate work.
 
 ## Working cadence
 
@@ -935,9 +929,10 @@ default/index-key assignment-pattern handoff, and Batch 87 bounded
 static-array-slice handoff follow it, followed by the Batch 88 bounded
 read-only static-array-slice-consumer handoff and Batch 89 bounded
 static-array-slice-callable-actual handoff, followed by Batch 90 bounded
-static-array-slice-ordering-mutation handoff. Treat the newest pushed commit
-on the same branch as the authoritative continuation and read this file from
-that checkout before doing work.
+static-array-slice-ordering-mutation handoff and Batch 91 bounded
+static-array-slice-module-port handoff. Treat the newest pushed commit on the
+same branch as the authoritative continuation and read this file from that
+checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -968,7 +963,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 91 below and return to focused tests until its tenth feature.
+resume Batch 92 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -977,7 +972,6 @@ Start by confirming that no newer implementation supersedes this handoff:
 ```sh
 git status --short --branch
 git log -5 --oneline --decorate
-gh run view 30613827882 --json status,conclusion,url,headSha,jobs
 ```
 
 For a clean-context restart:
@@ -987,14 +981,11 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Continue from the Batch 91 reboot checkpoint above. Its implementation
-   compiles and the pre-existing runtime/elaboration tests pass, but it has no
-   new feature evidence and is not a completed batch. Do not rerun Batch 90's
-   full regression until the Batch 91 implementation and evidence are
-   complete unless an intervening repair needs it.
-4. Keep Batch 91 within direct locally constant direction-preserving slices of
-   one-dimensional integral static-array objects connected to the existing
-   same-language static-array module-port forms.
+3. Begin Batch 92 at item 1 above. Do not rerun Batch 91's full regression
+   until the indexed-slice implementation and evidence are complete unless an
+   intervening repair needs it.
+4. Keep Batch 92 within locally constant direction-preserving indexed slices
+   of direct one-dimensional integral static-array objects.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -1007,8 +998,9 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 91 is in progress, extending the
-hierarchy, port, and container tests as static-array slice bindings appear:
+Use a narrow test expression while Batch 92 is in progress, extending the
+slice assignment, consumer, callable, ordering, port, and container tests as
+locally constant indexed selections appear:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
@@ -1016,7 +1008,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 90.
+recorded 59-test inventories are clean after feature batch 91.
 
 Before declaring any row complete, consult:
 

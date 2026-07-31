@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -34,7 +35,11 @@ struct Capture {
   fsim::runtime::simir::ContainerValue dynamic_bounded;
   fsim::runtime::simir::ContainerValue dynamic_scores;
   fsim::runtime::simir::ContainerValue dynamic_work;
+  fsim::runtime::simir::ContainerValue slice_source;
+  fsim::runtime::simir::ContainerValue slice_result;
+  fsim::runtime::simir::ContainerValue slice_shared;
   std::vector<std::string> output;
+  std::string vcd;
   std::size_t compiled{};
 };
 
@@ -82,9 +87,34 @@ Capture run_once(
           const auto) {
         capture.output.emplace_back(text);
       });
+  const auto observed =
+      simulation.find_signal("container_top.slice_observed");
+  assert(observed);
+  std::ostringstream vcd_output;
+  fsim::runtime::VcdWriter vcd{
+      vcd_output, "1ns", 32};
+  const auto observed_trace =
+      vcd.declare_signal(
+          "container_top.slice_observed", 8);
+  vcd.begin(simulation.now());
+  vcd.change(
+      observed_trace, simulation.read_signal(*observed));
+  simulation.set_signal_change_hook(
+      [&](const fsim::runtime::simir::SignalId signal,
+          const fsim::runtime::PackedLogic4& value,
+          const fsim::runtime::SimulationTick time,
+          const std::uint64_t) {
+        if (signal != *observed) {
+          return;
+        }
+        vcd.set_time(time);
+        vcd.change(observed_trace, value);
+      });
   capture.result = simulation.run();
+  vcd.flush();
+  capture.vcd = vcd_output.str();
   const auto& objects = simulation.design().container_objects();
-  assert(objects.size() == 13);
+  assert(objects.size() == 19);
   capture.values =
       simulation.read_container_object(objects[0].id);
   capture.pending =
@@ -129,6 +159,22 @@ Capture run_once(
       simulation.read_container_object(*dynamic_scores);
   capture.dynamic_work =
       simulation.read_container_object(*dynamic_work);
+  const auto slice_source =
+      simulation.design().find_container(
+          "container_top.slice_source");
+  const auto slice_result =
+      simulation.design().find_container(
+          "container_top.slice_result");
+  const auto slice_shared =
+      simulation.design().find_container(
+          "container_top.slice_shared");
+  assert(slice_source && slice_result && slice_shared);
+  capture.slice_source =
+      simulation.read_container_object(*slice_source);
+  capture.slice_result =
+      simulation.read_container_object(*slice_result);
+  capture.slice_shared =
+      simulation.read_container_object(*slice_shared);
   return capture;
 }
 
@@ -354,6 +400,78 @@ void inspect_static_port_aliases(
       debugger_output.str().find("3:00110010")
           != std::string::npos
       && debugger_output.str().find("0:00000110")
+          != std::string::npos);
+}
+
+void inspect_static_slice_port_aliases(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  const auto parent_source =
+      simulation.design().find_container(
+          "container_top.slice_source");
+  const auto mid_source =
+      simulation.design().find_container(
+          "container_top.slice_mid.source");
+  const auto leaf_source =
+      simulation.design().find_container(
+          "container_top.slice_mid.generated.child.source");
+  const auto parent_result =
+      simulation.design().find_container(
+          "container_top.slice_result");
+  const auto mid_result =
+      simulation.design().find_container(
+          "container_top.slice_mid.result");
+  assert(
+      parent_source && mid_source && leaf_source
+      && parent_result && mid_result
+      && *parent_source != *mid_source
+      && *mid_source == *leaf_source
+      && *parent_result != *mid_result);
+  const auto& source_info =
+      simulation.design().container_objects().at(*mid_source);
+  const auto& result_info =
+      simulation.design().container_objects().at(*mid_result);
+  assert(
+      source_info.type.index_left == -2
+      && source_info.type.index_right == 0
+      && source_info.slice_alias
+      && source_info.slice_alias->object == *parent_source
+      && source_info.slice_alias->selected_left == 4
+      && source_info.slice_alias->selected_right == 2
+      && result_info.type.index_left == 9
+      && result_info.type.index_right == 7
+      && result_info.slice_alias
+      && result_info.slice_alias->object == *parent_result
+      && result_info.slice_alias->selected_left == 3
+      && result_info.slice_alias->selected_right == 1);
+  std::ostringstream debugger_output;
+  std::ostringstream debugger_error;
+  fsim::app::DebuggerControl debugger{
+      simulation, debugger_output, debugger_error};
+  debugger.execute({"scope", "slice_mid.generated.child"});
+  debugger.execute({"show", "source"});
+  assert(
+      debugger_error.str().empty()
+      && debugger_output.str().find(
+             "slice_mid.generated.child.source = [-2:")
+          != std::string::npos);
+  const auto result = simulation.run();
+  assert(
+      result.status == fsim::runtime::RunStatus::completed
+      && result.time == 4);
+  debugger.execute({"show", "result"});
+  debugger.execute({"show", "shared"});
+  assert(
+      debugger_output.str().find("9:10XZ0011")
+          != std::string::npos
+      && debugger_output.str().find("8:0000Z010")
+          != std::string::npos
+      && debugger_output.str().find("5:0000X001")
           != std::string::npos);
 }
 
@@ -756,6 +874,41 @@ endmodule
 
 )";
     output << R"(
+module slice_port_leaf(
+    input logic [7:0] source[-2:0],
+    output logic [7:0] result[9:7],
+    inout logic [7:0] shared[4:6]);
+  initial begin
+    #1;
+    assert (source[-2] === 8'b10xz0011);
+    assert (source[-1] === 8'h32);
+    assert (source[0] === 8'h22);
+    assert (shared[4] === 8'h11);
+    assert (shared[5] === 8'b0000x001);
+    assert (shared[6] === 8'h13);
+    result[9] = source[-2];
+    result[8] = source[-1];
+    result[7] = source[0];
+    shared[4] = 8'ha1;
+    shared[5] = 8'b0000z010;
+    shared[6] = 8'ha3;
+    #1;
+    result[8] = 8'b0000z010;
+    shared[5] = 8'b0000x001;
+  end
+endmodule
+
+module slice_port_mid(
+    input logic [7:0] source[-2:0],
+    output logic [7:0] result[9:7],
+    inout logic [7:0] shared[4:6]);
+  generate
+    if (1) begin : generated
+      slice_port_leaf child(source, result, shared);
+    end
+  endgenerate
+endmodule
+
 module container_top;
   typedef logic signed [31:0] key_t;
   typedef logic signed [3:0] dynamic_key_t;
@@ -772,6 +925,10 @@ module container_top;
   bit dynamic_bounded[$:3];
   logic [15:0] dynamic_scores[dynamic_key_t];
   int dynamic_work[];
+  logic [7:0] slice_source[5:0];
+  logic [7:0] slice_result[4:0];
+  logic [7:0] slice_shared[-2:2];
+  logic [7:0] slice_observed;
   static_port_mid port_child(
       .source(port_source),
       .result(port_result),
@@ -783,6 +940,10 @@ module container_top;
       .bounded(dynamic_bounded),
       .scores(dynamic_scores),
       .work(dynamic_work));
+  slice_port_mid slice_mid(
+      .source(slice_source[4:2]),
+      .result(slice_result[3:1]),
+      .shared(slice_shared[-1:1]));
   function automatic int count(input byte source[$:2]);
     byte copy[$:2];
     copy = '{5, 6};
@@ -974,6 +1135,13 @@ module container_top;
     logic [7:0] logic_located[$];
     port_source[3] = 8'h31;
     port_source[0] = 8'h04;
+    slice_source = '{
+        8'h52, 8'b10xz0011, 8'h32,
+        8'h22, 8'h12, 8'h02};
+    slice_result = '{
+        8'hee, 8'h43, 8'h33, 8'h23, 8'hdd};
+    slice_shared = '{
+        8'hf2, 8'h11, 8'b0000x001, 8'h13, 8'he2};
     dynamic_source = '{11, 12};
     binary = '{
         32'hffffffff: 8'h01,
@@ -1231,6 +1399,21 @@ module container_top;
     assert (port_shared[-1] == 4'ha);
     assert (port_shared[0] == 0);
     assert (port_shared[1] == 4'hc);
+    assert (slice_source[5] === 8'h52);
+    assert (slice_source[4] === 8'b10xz0011);
+    assert (slice_source[2] === 8'h22);
+    assert (slice_source[0] === 8'h02);
+    assert (slice_result[4] === 8'hee);
+    assert (slice_result[3] === 8'b10xz0011);
+    assert (slice_result[2] === 8'b0000z010);
+    assert (slice_result[1] === 8'h22);
+    assert (slice_result[0] === 8'hdd);
+    assert (slice_shared[-2] === 8'hf2);
+    assert (slice_shared[-1] === 8'ha1);
+    assert (slice_shared[0] === 8'b0000x001);
+    assert (slice_shared[1] === 8'ha3);
+    assert (slice_shared[2] === 8'he2);
+    slice_observed = slice_result[2];
     assert (dynamic_result.size() == 2);
     assert (dynamic_result[0] == 8'h21);
     assert (dynamic_result[1] == 8'h22);
@@ -1289,6 +1472,10 @@ endmodule
         reference.dynamic_bounded == compiled.dynamic_bounded);
     assert(reference.dynamic_scores == compiled.dynamic_scores);
     assert(reference.dynamic_work == compiled.dynamic_work);
+    assert(reference.slice_source == compiled.slice_source);
+    assert(reference.slice_result == compiled.slice_result);
+    assert(reference.slice_shared == compiled.slice_shared);
+    assert(reference.vcd == compiled.vcd);
     assert(
         compiled.pending.elements.size() == 2
         && compiled.pending.elements[0].low_word().aval == 2
@@ -1353,8 +1540,33 @@ endmodule
             == 41
         && compiled.dynamic_work.elements[1].low_word().aval
             == 42);
+    assert(
+        compiled.slice_source.elements[0].low_word().aval
+            == 0x52
+        && compiled.slice_source.elements[1].to_msb_string()
+            == "10XZ0011"
+        && compiled.slice_source.elements[5].low_word().aval
+            == 0x02
+        && compiled.slice_result.elements[0].low_word().aval
+            == 0xee
+        && compiled.slice_result.elements[1].to_msb_string()
+            == "10XZ0011"
+        && compiled.slice_result.elements[2].to_msb_string()
+            == "0000Z010"
+        && compiled.slice_result.elements[4].low_word().aval
+            == 0xdd
+        && compiled.slice_shared.elements[0].low_word().aval
+            == 0xf2
+        && compiled.slice_shared.elements[2].to_msb_string()
+            == "0000X001"
+        && compiled.slice_shared.elements[4].low_word().aval
+            == 0xe2);
+    assert(
+        compiled.vcd.find("#4") != std::string::npos
+        && compiled.vcd.find("b0000z010")
+            != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled == 3);
+    assert(compiled.compiled == 4);
 #endif
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);
@@ -1371,6 +1583,10 @@ endmodule
     inspect_static_port_aliases(
         config, fsim::app::SimulationEngine::interpreter);
     inspect_static_port_aliases(
+        config, fsim::app::SimulationEngine::compiled);
+    inspect_static_slice_port_aliases(
+        config, fsim::app::SimulationEngine::interpreter);
+    inspect_static_slice_port_aliases(
         config, fsim::app::SimulationEngine::compiled);
     inspect_dynamic_port_aliases(
         config, fsim::app::SimulationEngine::interpreter);
