@@ -65,6 +65,10 @@ validate_container_locator_metadata(
     const runtime::simir::ContainerType& destination,
     const runtime::simir::ContainerType& source);
 [[nodiscard]] std::optional<std::string>
+validate_container_locator_transformation_metadata(
+    const runtime::simir::LocateContainer& operation,
+    const runtime::simir::ContainerType& source);
+[[nodiscard]] std::optional<std::string>
 validate_container_reduction_metadata(
     const runtime::simir::ContainerReduction& operation,
     const runtime::simir::ContainerType& source);

@@ -933,14 +933,19 @@ private:
         const Expression& expression,
         ContainerRegisterId destination,
         const ContainerType& destination_type);
+    enum class ContainerExpressionPurpose : std::uint8_t {
+        predicate,
+        reduction_transformation,
+        ordering_key,
+        locator_transformation,
+    };
     std::optional<std::vector<ContainerPredicateNode>>
     lower_container_expression_graph(
         const Expression& expression,
         std::string_view iterator_name,
         const frontend::Type& source_type,
         const ContainerType& runtime_type,
-        bool transformation,
-        bool ordering_key = false);
+        ContainerExpressionPurpose purpose);
     ContainerRegisterId allocate_container_register(
         const ContainerType& type);
     void lower_container_method(const Statement& statement);

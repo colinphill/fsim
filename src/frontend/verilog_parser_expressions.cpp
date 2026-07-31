@@ -530,7 +530,8 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             || member.text == "unique_index";
         const bool valid_iterator_argument =
             (predicate_locator_method
-             || ordering_key_method)
+             || ordering_key_method
+             || locator_method)
             && argument_count == 1
             && operands[1].kind == ExpressionKind::Identifier
             && operands[1].text.find('.') == std::string::npos;
@@ -555,7 +556,6 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                     || reduction_method
                     || member.text == "reverse"
                     || unsupported_shuffle
-                    || locator_method
                 ? std::optional<std::size_t>{0}
             : member.text == "delete"
                 ? (argument_count <= 1
@@ -598,6 +598,21 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "FSIM-SV-SEM-092",
               "container ordering method '" + member.text
                   + "' accepts at most one iterator identifier");
+        }
+        if (locator_method
+            && (argument_count > 1
+                || (argument_count == 1
+                    && operands[1].kind
+                        != ExpressionKind::Identifier)
+                || (argument_count == 1
+                    && operands[1].text.find('.')
+                        != std::string::npos))) {
+          error(
+              member,
+              "FSIM-SV-SEM-093",
+              "container locator method '" + member.text
+                  + "' accepts at most one transformation iterator "
+                    "identifier");
         }
         if (reduction_method
             && language_ != Language::SystemVerilog2017) {
@@ -697,11 +712,47 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "FSIM-SV-SEM-087",
               "container locator methods require SystemVerilog 2017");
         }
-        if (locator_method && current().text == "with") {
-          error(
-              current(),
-              "FSIM-SV-UNSUPPORTED-042",
-              "container locator with-clauses are not supported");
+        if (locator_method) {
+          const auto iterator_scope_name =
+              valid_iterator_argument
+                  ? operands[1].text
+                  : std::string{"item"};
+          if (current().text != "with") {
+            if (argument_count != 0) {
+              error(
+                  current(),
+                  "FSIM-SV-SEM-093",
+                  "a named container locator transformation iterator "
+                  "requires a with-clause");
+            }
+          } else {
+            container_iterator_names_.insert(iterator_scope_name);
+            const bool iterator_scope_inserted =
+                current_procedural_names_.insert(
+                    iterator_scope_name).second;
+            advance();
+            expect(
+                TokenKind::LeftParen,
+                "'(' after container locator transformation with",
+                "FSIM-SV-PARSE-171");
+            if (at(TokenKind::RightParen)) {
+              error(
+                  current(),
+                  "FSIM-SV-SEM-093",
+                  "a container locator with-clause requires a "
+                  "transformation expression");
+            } else {
+              operands.push_back(parse_expression());
+            }
+            if (iterator_scope_inserted) {
+              current_procedural_names_.erase(
+                  iterator_scope_name);
+            }
+            expect(
+                TokenKind::RightParen,
+                "')' after container locator transformation",
+                "FSIM-SV-PARSE-172");
+          }
         }
         if (predicate_locator_method
             && language_ != Language::SystemVerilog2017) {

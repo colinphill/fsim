@@ -650,7 +650,8 @@ void locate_container_values(
     ContainerValue& destination,
     const ContainerValue& source,
     const ContainerLocatorOperator operation,
-    const std::span<const ContainerPredicateNode> predicate) {
+    const std::span<const ContainerPredicateNode> predicate,
+    const std::span<const ContainerPredicateNode> transformation) {
   validate_container_value(source);
   validate_container_value(destination);
   if (source.type.associative || !destination.type.queue
@@ -672,11 +673,20 @@ void locate_container_values(
     throw std::invalid_argument{
         "invalid SimIR container locator operator"};
   }
-  if (predicate_locator != !predicate.empty()) {
+  if (predicate_locator != !predicate.empty()
+      || (predicate_locator && !transformation.empty())) {
     throw std::invalid_argument{
         predicate_locator
-            ? "predicate container locator requires metadata"
+            ? "predicate container locator requires only predicate metadata"
             : "non-predicate container locator has predicate metadata"};
+  }
+  if (!transformation.empty()
+      && (transformation.size()
+              > maximum_container_predicate_nodes
+          || transformation.back().value_kind
+              != ContainerPredicateValueKind::element)) {
+    throw std::invalid_argument{
+        "SimIR container locator transformation is invalid"};
   }
   if (index_result
           ? destination.type.element_width != 32
@@ -725,6 +735,19 @@ void locate_container_values(
           append(elements[offset]);
         }
       };
+  std::vector<PackedLogic4> transformed;
+  if (!transformation.empty()) {
+    transformed.reserve(elements.size());
+    for (std::size_t offset = 0;
+         offset < elements.size(); ++offset) {
+      transformed.push_back(
+          evaluate_container_predicate(
+              source_type, elements[offset],
+              declared_index(offset), transformation));
+    }
+  }
+  const auto& keys =
+      transformation.empty() ? elements : transformed;
   if (predicate_locator) {
     const bool select_last =
         operation == ContainerLocatorOperator::find_last
@@ -756,26 +779,28 @@ void locate_container_values(
     if (elements.empty()) {
       return;
     }
-    auto selected = elements.begin();
-    for (auto current = std::next(selected);
-         current != elements.end(); ++current) {
+    std::size_t selected{};
+    for (std::size_t current = 1U;
+         current < elements.size(); ++current) {
       const bool replace =
           operation == ContainerLocatorOperator::minimum
-              ? element_less(source_type, *current, *selected)
-              : element_less(source_type, *selected, *current);
+              ? element_less(
+                    source_type, keys[current], keys[selected])
+              : element_less(
+                    source_type, keys[selected], keys[current]);
       if (replace) {
         selected = current;
       }
     }
-    append(*selected);
+    append(elements[selected]);
     return;
   }
   std::vector<PackedLogic4> seen;
   for (std::size_t offset = 0; offset < elements.size(); ++offset) {
-    if (std::ranges::find(seen, elements[offset]) != seen.end()) {
+    if (std::ranges::find(seen, keys[offset]) != seen.end()) {
       continue;
     }
-    seen.push_back(elements[offset]);
+    seen.push_back(keys[offset]);
     if (!index_result) {
       append(elements[offset]);
       continue;
@@ -1111,7 +1136,7 @@ void Interpreter::Impl::execute_container(
       get_container_register(process, operation.source);
   locate_container_values(
       destination, source, operation.operation,
-      operation.predicate);
+      operation.predicate, operation.transformation);
   ++process.pc;
 }
 

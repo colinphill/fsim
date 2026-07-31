@@ -358,4 +358,22 @@ validate_container_ordering_metadata(
       operation.key, target, "OrderContainer", "key");
 }
 
+[[nodiscard]] std::optional<std::string>
+validate_container_locator_transformation_metadata(
+    const runtime::simir::LocateContainer& operation,
+    const runtime::simir::ContainerType& source) {
+  using runtime::simir::ContainerLocatorOperator;
+  if (operation.transformation.empty()) {
+    return std::nullopt;
+  }
+  if (operation.operation >= ContainerLocatorOperator::find
+      || !operation.predicate.empty()) {
+    return "LocateContainer transformation metadata requires "
+           "min, max, unique, or unique_index";
+  }
+  return validate_container_element_graph(
+      operation.transformation, source,
+      "LocateContainer", "transformation");
+}
+
 }  // namespace fsim::compiler::llvm_detail

@@ -115,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v36";
+    "fsim-llvm-native-object-v37";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -225,7 +225,7 @@ void add_dynamic_index_key(
   }
   builder.add(
       "container-semantics",
-      "bounded-static-associative-v12-ordering-keys");
+      "bounded-static-associative-v13-locator-transformations");
   add_key_u64(
       builder,
       "container-entry-limit",
@@ -538,6 +538,39 @@ void add_dynamic_index_key(
                     word.aval);
                 add_key_u64(
                     builder, "predicate-constant-bval",
+                    word.bval);
+              }
+              add_key_u64(
+                  builder, "locator-transformation-count",
+                  value.transformation.size());
+              for (const auto& node : value.transformation) {
+                add_key_u64(
+                    builder, "locator-transformation-operation",
+                    static_cast<std::uint64_t>(node.operation));
+                add_key_u64(
+                    builder, "locator-transformation-value-kind",
+                    static_cast<std::uint64_t>(node.value_kind));
+                add_key_u64(
+                    builder, "locator-transformation-left",
+                    node.left);
+                add_key_u64(
+                    builder, "locator-transformation-right",
+                    node.right);
+                add_key_u64(
+                    builder, "locator-transformation-third",
+                    node.third);
+                add_key_u64(
+                    builder, "locator-transformation-constant-width",
+                    node.constant.width());
+                const auto word =
+                    node.constant.empty()
+                        ? runtime::Logic4Word{}
+                        : node.constant.low_word();
+                add_key_u64(
+                    builder, "locator-transformation-constant-aval",
+                    word.aval);
+                add_key_u64(
+                    builder, "locator-transformation-constant-bval",
                     word.bval);
               }
             },

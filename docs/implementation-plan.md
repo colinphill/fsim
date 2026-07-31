@@ -4558,6 +4558,68 @@ tests in 52.64 seconds, including scoped locals in 0.81 seconds and containers
 in 22.11 seconds, on 2026-07-30. Batch 83 is not a ten-batch GitHub
 CI-inspection boundary, so no Actions run is required.
 
+### Eighty-fourth feature batch — bounded locator `with` transformations
+
+SystemVerilog `min`, `max`, `unique`, and `unique_index` now retain one
+optional parenthesized `with` transformation as explicit source-spanned call
+HIR. The clause binds implicit `item` or one optional named iterator and its
+direct signed two-state 32-bit `.index`. Parser scope suppression prevents
+either name from becoming an implicit net, while stable diagnostics cover
+malformed, colliding, missing, empty, and leaked bindings.
+
+Lowering reuses the bounded typed container-expression graph under an explicit
+locator-transformation purpose, keeping it distinct from `find*` predicates,
+reduction transformations, and ordering keys. Element, index, and logical
+profiles remain explicit; the final node must match the receiver's exact
+integral element type, and at most one conditional key selection is retained.
+Direct iterator values, locally constant alternatives, signed index and
+element comparisons, and logical composition are supported. Arithmetic,
+calls, side effects, nonconstant operands, indirect index selection, mixed
+profiles, multiple conditionals, non-element roots, graphs beyond 64 nodes,
+associative receivers, and the broader excluded container/element families
+fail deterministically.
+
+The shared locator kernel snapshots the source and computes every transformed
+key before clearing or replacing the destination. It evaluates each key once
+with the element's original signed declared static index or original current
+dynamic/queue index. Extrema compare transformed keys through the existing
+exact signed/unsigned four-state total order but return the first original
+element with the selected key. Uniqueness compares exact transformed-key
+identity and returns the first original element or signed original index for
+each key. No-`with`, empty, bounded-capacity, exact result typing, source
+nonmutation, and aliased queue assignment remain compatible with Batch 79.
+
+`LocateContainer` now carries separate predicate and transformation graphs.
+Both the reference interpreter and native executor invoke the common kernel.
+LLVM validation rejects malformed graphs and transformations attached to
+predicate locators before execution; the public append-only native ABI remains
+unchanged. Native-object schema 37 records transformation absence/presence,
+locator mode, every typed operator and edge including the third conditional
+edge, and exact constant payloads while intentionally excluding iterator
+spelling. Cold/warm cache tests distinguish presence, constants,
+element/index profiles, conditional edges, and locator mode.
+
+Positive evidence covers all four methods, implicit and named transformations,
+no-`with` compatibility, empty sources, exact four-state extrema, transformed
+first-occurrence identity, negative declared and current indices, destination
+capacity, transformed alias safety, static and dynamic arrays, queues and
+bounded queues, objects, direct ports, generated hierarchy, automatic task
+values across suspension, interpreter, LLVM O0/O2, validation, and cache
+identity. Negative evidence covers malformed/empty clauses, invalid binders
+and leakage, collision, unsupported expressions and calls, nonconstant
+operands, mixed profiles, nested conditionals, wrong roots/edges,
+predicate-locator transformation metadata, associative receivers, and
+oversized graphs.
+
+The diagnostic catalog now covers 1,209 production codes and the source gate
+still covers 286 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 199.60 seconds, including scoped locals in 0.89 seconds and the
+expanded container differential in 131.20 seconds. Release passed all 59
+tests in 57.57 seconds, including scoped locals in 0.80 seconds and containers
+in 26.89 seconds, on 2026-07-30. Batch 84 is not a ten-batch GitHub
+CI-inspection boundary, so no Actions run is required.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

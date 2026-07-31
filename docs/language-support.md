@@ -135,16 +135,24 @@ suspension. Arbitrary value arguments, keys on `reverse`, associative arrays,
 indirect or read-only receivers, arithmetic/calls/side effects in keys,
 expression-result use, and nondeterministic `shuffle()` remain unsupported.
 Direct nonassociative static arrays, dynamic arrays, queues, and bounded
-queues also support no-argument `min()`, `max()`, `unique()`, and
-`unique_index()` when their result is assigned to a compatible queue.
+queues also support `min()`, `max()`, `unique()`, and `unique_index()` with
+an optional parenthesized `with` transformation when their result is assigned
+to a compatible queue.
 Value results preserve the exact element profile; index results use signed
 two-state 32-bit elements. Empty sources produce empty results, extrema return
 one first-occurring value, uniqueness preserves first occurrences by
 four-state identity, and unique indices use signed declared static indices or
 current dynamic/queue indices. Results remain bounded to 4,096 elements or the
 destination queue capacity, and aliased queue assignment evaluates the source
-before replacement. Predicate `with` clauses on these four no-argument
-locators, associative locators, indirect receivers, and locator results
+before replacement. A transformation binds implicit `item` or one named
+iterator, exposes its original signed declared/current `.index`, and reuses
+the bounded pure element/index graph: local constants, comparisons, logical
+composition, and one exact element-typed conditional key selection. Keys are
+computed once before selection. Extrema compare keys but return the first
+original extremal element; uniqueness returns the first original element or
+original signed index for each exact four-state key. Arithmetic or calls,
+side effects, nonconstant operands, indirect index selection, mixed profiles,
+multiple conditionals, associative locators, indirect receivers, and results
 outside a compatible whole-queue assignment remain unsupported.
 The same direct nonassociative containers support `find()`, `find_index()`,
 `find_first()`, `find_first_index()`, `find_last()`, and

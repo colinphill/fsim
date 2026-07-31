@@ -294,16 +294,19 @@ struct LocateContainer {
   ContainerRegisterId destination{};
   ContainerRegisterId source{};
   std::vector<ContainerPredicateNode> predicate;
+  std::vector<ContainerPredicateNode> transformation;
 };
 
 /// Populate a queue with extrema, unique values, first-occurrence indices, or
 /// predicate-selected values/indices using the deterministic SystemVerilog
-/// subset policy.
+/// subset policy. A nonempty transformation is evaluated once per original
+/// source element and selects the comparison/identity key.
 void locate_container_values(
     ContainerValue& destination,
     const ContainerValue& source,
     ContainerLocatorOperator operation,
-    std::span<const ContainerPredicateNode> predicate = {});
+    std::span<const ContainerPredicateNode> predicate = {},
+    std::span<const ContainerPredicateNode> transformation = {});
 
 struct ContainerRead {
   RegisterId destination{};

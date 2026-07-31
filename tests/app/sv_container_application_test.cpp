@@ -449,6 +449,11 @@ module static_port_leaf #(
     assert (located[0] == 8'h04);
     located = source.max();
     assert ($isunknown(located[0]));
+    located =
+        source.min() with (
+            item.index >= 2 ? 8'hff : item);
+    assert (located.size() == 1);
+    assert (located[0] == 8'h04);
     located = source.unique();
     assert (located.size() == 3);
     locations = source.unique_index();
@@ -466,6 +471,20 @@ module static_port_leaf #(
     assert (
         result.sum() with (
             item.index < 2 ? item : 8'h00) == 8'h70);
+    located =
+        result.unique() with (
+            item.index >= 2 ? 8'h00 : item);
+    assert (located.size() == 3);
+    assert (located[0] == 8'h10);
+    assert (located[1] == 8'h30);
+    assert (located[2] == 8'h40);
+    locations =
+        result.unique_index(entry) with (
+            entry.index >= 2 ? 8'h00 : entry);
+    assert (locations.size() == 3);
+    assert (locations[0] == LEFT);
+    assert (locations[1] == RIGHT + 1);
+    assert (locations[2] == RIGHT);
     result.rsort(cell) with (
         cell.index >= 2 ? 8'h00 : cell);
     assert (result[LEFT] == 8'h40);
@@ -549,7 +568,17 @@ module dynamic_port_leaf #(
     assert (located[0] == 11);
     located = source.max();
     assert (located[0] == 12);
+    located =
+        source.min() with (
+            item.index == 0 ? 99 : item);
+    assert (located.size() == 1);
+    assert (located[0] == 12);
     locations = source.unique_index();
+    assert (locations[0] == 0);
+    locations =
+        source.unique_index(source_item) with (
+            source_item.index < 2 ? 0 : source_item);
+    assert (locations.size() == 1);
     assert (locations[0] == 0);
     located =
         source.find(source_item) with (
@@ -702,8 +731,22 @@ module container_top;
     assert (located[0] == 3);
     located = ordered.unique();
     assert (located.size() == 4);
+    located =
+        ordered.unique() with (
+            item < 0 ? 0 : item);
+    assert (located.size() == 3);
+    assert (located[0] == -2);
+    assert (located[1] == 2);
+    assert (located[2] == 3);
     locations = ordered.unique_index();
     assert (locations.size() == 4);
+    locations =
+        ordered.unique_index(sorted_item) with (
+            sorted_item < 0 ? 0 : sorted_item);
+    assert (locations.size() == 3);
+    assert (locations[0] == 0);
+    assert (locations[1] == 2);
+    assert (locations[2] == 3);
     located = ordered.find() with (item < 0);
     assert (located.size() == 2);
     assert (located[0] == -2);
@@ -735,6 +778,12 @@ module container_top;
     assert (target[2] == 1);
     target.sort();
     #1;
+    located =
+        target.unique() with (
+            item.index < 2 ? 0 : item);
+    assert (located.size() == 2);
+    assert (located[0] == 1);
+    assert (located[1] == 4);
     target.pop_front();
   endtask
   task automatic mutate_lookup(inout byte target[key_t]);
@@ -862,14 +911,29 @@ module container_top;
     assert (located[0] == -8);
     located = values.max();
     assert (located[0] == 7);
+    located =
+        values.min() with (
+            item < 0 ? 99 : item);
+    assert (located.size() == 1);
+    assert (located[0] == 7);
     located = values.unique();
     assert (located.size() == 2);
     assert (located[0] == 7);
     assert (located[1] == -8);
+    located =
+        values.unique() with (
+            item < 0 ? 7 : item);
+    assert (located.size() == 1);
+    assert (located[0] == 7);
     locations = values.unique_index();
     assert (locations.size() == 2);
     assert (locations[0] == 0);
     assert (locations[1] == 1);
+    locations =
+        values.unique_index(value_item) with (
+            value_item < 0 ? 7 : value_item);
+    assert (locations.size() == 1);
+    assert (locations[0] == 0);
     located = values.find() with (item == 7);
     assert (located.size() == 2);
     assert (located[0] == 7);

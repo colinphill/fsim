@@ -121,14 +121,39 @@ module container_lowering #(
     assert (located[0] == 7);
     located = values.max();
     assert (located[0] == 8);
+    located =
+        values.min() with (
+            item == 7 ? 9 : item);
+    assert (located.size() == 1);
+    assert (located[0] == 8);
+    located =
+        values.max(entry) with (
+            entry.index == 1 ? 0 : entry);
+    assert (located.size() == 1);
+    assert (located[0] == 7);
     located = values.unique();
     assert (located.size() == 2);
     assert (located[0] == 7);
     assert (located[1] == 8);
+    located =
+        values.unique() with (
+            item == 8 ? 7 : item);
+    assert (located.size() == 1);
+    assert (located[0] == 7);
+    located =
+        values.unique(alias_item) with (
+            alias_item == 8 ? 7 : alias_item);
+    assert (located.size() == 1);
+    assert (located[0] == 7);
     locations = values.unique_index();
     assert (locations.size() == 2);
     assert (locations[0] == 0);
     assert (locations[1] == 1);
+    locations =
+        values.unique_index(entry) with (
+            entry == 8 ? 7 : entry);
+    assert (locations.size() == 1);
+    assert (locations[0] == 0);
     located = values.find() with (item == 7);
     assert (located.size() == 2);
     assert (located[0] == 7);
@@ -211,6 +236,12 @@ module container_lowering #(
     assert (fixed_up[0] == 4'hb);
     assert (fixed_up[1] == 4'hc);
     fixed_up[0] = 0;
+    locations =
+        fixed_up.unique_index() with (
+            item.index < 0 ? 0 : item);
+    assert (locations.size() == 2);
+    assert (locations[0] == -1);
+    assert (locations[1] == 1);
     locations = fixed_up.find_index() with (item != 0);
     assert (locations.size() == 2);
     assert (locations[0] == -1);
@@ -379,7 +410,7 @@ endmodule
             return std::holds_alternative<
                 LocateContainer>(operation);
           })
-      >= 4);
+      >= 10);
   assert(
       std::ranges::count_if(
           process.operations,
@@ -455,6 +486,18 @@ endmodule
     }
   }
   assert(spelling_independent);
+  std::vector<const LocateContainer*> transformed_locators;
+  for (const auto& operation : process.operations) {
+    if (const auto* locator =
+            std::get_if<LocateContainer>(&operation);
+        locator && !locator->transformation.empty()) {
+      transformed_locators.push_back(locator);
+    }
+  }
+  assert(transformed_locators.size() >= 6);
+  assert(same_predicate(
+      transformed_locators[2]->transformation,
+      transformed_locators[3]->transformation));
   std::vector<const OrderContainer*> keyed_orderings;
   for (const auto& operation : process.operations) {
     if (const auto* ordering =
@@ -875,6 +918,27 @@ module container_invalid_lowering;
     result =
         fixed.sum() with (
             runtime_bound ? item : 0);
+    locator_result = fixed.min() with (item + 1);
+    locator_result = fixed.max() with (identity(item));
+    locator_result = fixed.unique() with (item > 0);
+    locator_result =
+        fixed.unique() with (
+            item ? (item ? item : 0) : 0);
+    locator_result =
+        fixed.unique_index() with (
+            item.index.member == 0 ? item : 0);
+    locator_result =
+        fixed.unique() with (
+            item == item.index ? item : 0);
+    locator_result =
+        fixed.min() with (
+            runtime_bound ? item : 0);
+    locator_result =
+        fixed.max(collision) with (collision);
+    locator_result =
+        fixed.unique(entry) with (
+            unknown.index == 0 ? entry : 0);
+    locator_result = lookup.min() with (item);
     fixed.sort() with (item + 1);
     fixed.sort() with (identity(item));
     fixed.sort() with (item > 0);
@@ -962,6 +1026,12 @@ endmodule
       rejected, "FSIM-ELAB-SVLOCATOR-004"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVLOCATOR-005"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVLOCATOR-006"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVLOCATOR-007"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVLOCATOR-008"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVFIND-001"));
   assert(has_diagnostic(

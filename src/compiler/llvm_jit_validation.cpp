@@ -584,6 +584,13 @@ validate_process(const Process &process,
                                 operation.source])) {
                   reject(process, index, *error);
                 }
+                if (const auto error =
+                        validate_container_locator_transformation_metadata(
+                            operation,
+                            process.container_register_types[
+                                operation.source])) {
+                  reject(process, index, *error);
+                }
               }
             },
             [&](const ContainerRead& operation) {

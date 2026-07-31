@@ -585,29 +585,40 @@ Lowerer::lower_container_expression_graph(
     const std::string_view iterator_name,
     const frontend::Type& source_type,
     const ContainerType& runtime_type,
-    const bool transformation,
-    const bool ordering_key) {
+    const ContainerExpressionPurpose purpose) {
   using PredicateKind = ContainerPredicateValueKind;
+  const bool transformation =
+      purpose != ContainerExpressionPurpose::predicate;
+  const bool ordering_key =
+      purpose == ContainerExpressionPurpose::ordering_key;
+  const bool locator_transformation =
+      purpose == ContainerExpressionPurpose::locator_transformation;
   std::vector<ContainerPredicateNode> nodes;
   std::size_t conditional_count{};
   const auto unsupported_code =
       ordering_key
           ? "FSIM-ELAB-SVORDER-006"
-      : transformation
-          ? "FSIM-ELAB-SVREDUCE-004"
-          : "FSIM-ELAB-SVFIND-004";
+          : locator_transformation
+              ? "FSIM-ELAB-SVLOCATOR-006"
+          : transformation
+              ? "FSIM-ELAB-SVREDUCE-004"
+              : "FSIM-ELAB-SVFIND-004";
   const auto reference_code =
       ordering_key
           ? "FSIM-ELAB-SVORDER-007"
-      : transformation
-          ? "FSIM-ELAB-SVREDUCE-005"
-          : "FSIM-ELAB-SVFIND-008";
+          : locator_transformation
+              ? "FSIM-ELAB-SVLOCATOR-007"
+          : transformation
+              ? "FSIM-ELAB-SVREDUCE-005"
+              : "FSIM-ELAB-SVFIND-008";
   const auto expression_name =
       ordering_key
           ? std::string_view{"container ordering key expression"}
-      : transformation
-          ? std::string_view{"reduction transformation"}
-          : std::string_view{"container locator predicate"};
+          : locator_transformation
+              ? std::string_view{"container locator transformation"}
+          : transformation
+              ? std::string_view{"reduction transformation"}
+              : std::string_view{"container locator predicate"};
   const auto append =
       [&](ContainerPredicateNode node)
           -> std::optional<std::uint32_t> {
@@ -846,8 +857,11 @@ Lowerer::lower_container_expression_graph(
                 ordering_key
                     ? "container ordering key expressions permit one "
                       "conditional key selection"
-                    : "container reduction transformations permit one "
-                      "conditional element selection",
+                    : locator_transformation
+                        ? "container locator transformations permit one "
+                          "conditional key selection"
+                        : "container reduction transformations permit one "
+                          "conditional element selection",
                 candidate.span);
             return std::nullopt;
           }
@@ -965,12 +979,17 @@ Lowerer::lower_container_expression_graph(
     report(
         ordering_key
             ? "FSIM-ELAB-SVORDER-008"
-            : "FSIM-ELAB-SVREDUCE-006",
+            : locator_transformation
+                ? "FSIM-ELAB-SVLOCATOR-008"
+                : "FSIM-ELAB-SVREDUCE-006",
         ordering_key
             ? "container ordering key root must have the receiver "
               "element type"
-            : "container reduction transformation root must have the "
-              "receiver element type",
+            : locator_transformation
+                ? "container locator transformation root must have the "
+                  "receiver element type"
+                : "container reduction transformation root must have the "
+                  "receiver element type",
         expression.span);
     return std::nullopt;
   }
@@ -988,6 +1007,9 @@ bool Lowerer::lower_container_locator(
       || expression.text == ".find_first_index"
       || expression.text == ".find_last"
       || expression.text == ".find_last_index";
+  const bool has_transformation =
+      !predicate_locator
+      && expression.operands.size() >= 2U;
   if (language_ != frontend::Language::SystemVerilog2017
       || expression.operands.empty()
       || expression.operands.front().kind
@@ -1002,7 +1024,9 @@ bool Lowerer::lower_container_locator(
         expression.span);
     return false;
   }
-  if ((!predicate_locator && expression.operands.size() != 1U)
+  if ((!predicate_locator
+       && (expression.operands.size() < 1U
+           || expression.operands.size() > 3U))
       || (predicate_locator
           && expression.operands.size() != 2U
           && expression.operands.size() != 3U)) {
@@ -1013,17 +1037,21 @@ bool Lowerer::lower_container_locator(
         predicate_locator
             ? "predicate container locator methods require exactly "
               "one with-clause predicate"
-            : "bounded container locator methods take no arguments",
+            : "bounded container locator methods take no value "
+              "arguments and retain at most one iterator plus one "
+              "with-clause transformation",
         expression.span);
     return false;
   }
   const bool explicit_iterator =
-      predicate_locator && expression.operands.size() == 3U;
+      expression.operands.size() == 3U;
   if (explicit_iterator
       && expression.operands[1].kind
           != ExpressionKind::Identifier) {
     report(
-        "FSIM-ELAB-SVFIND-007",
+        predicate_locator
+            ? "FSIM-ELAB-SVFIND-007"
+            : "FSIM-ELAB-SVLOCATOR-008",
         "a named container locator iterator must be one identifier",
         expression.operands[1].span);
     return false;
@@ -1039,13 +1067,25 @@ bool Lowerer::lower_container_locator(
       source_frontend_type
           ? container_type(*source_frontend_type, receiver.span)
           : std::nullopt;
-  if (!source || !source_type || source_type->associative) {
+  if (!source || !source_type) {
     report(
         predicate_locator
             ? "FSIM-ELAB-SVFIND-001"
             : "FSIM-ELAB-SVLOCATOR-001",
         "bounded container locators do not support associative "
         "or unresolved receivers",
+        expression.span);
+    return false;
+  }
+  if (source_type->associative) {
+    report(
+        has_transformation
+            ? "FSIM-ELAB-SVLOCATOR-008"
+            : predicate_locator
+                ? "FSIM-ELAB-SVFIND-001"
+                : "FSIM-ELAB-SVLOCATOR-001",
+        "bounded container locators do not support associative "
+        "receivers",
         expression.span);
     return false;
   }
@@ -1061,7 +1101,9 @@ bool Lowerer::lower_container_locator(
           || container_objects_.contains(iterator_key));
   if (iterator_collision) {
     report(
-        "FSIM-ELAB-SVFIND-007",
+        predicate_locator
+            ? "FSIM-ELAB-SVFIND-007"
+            : "FSIM-ELAB-SVLOCATOR-008",
         "named container locator iterator '" + std::string{iterator_name}
             + "' collides with a visible object",
         expression.operands[1].span);
@@ -1117,6 +1159,7 @@ bool Lowerer::lower_container_locator(
     operation = ContainerLocatorOperator::find_last_index;
   }
   std::vector<ContainerPredicateNode> predicate;
+  std::vector<ContainerPredicateNode> transformation;
   if (predicate_locator) {
     const auto& predicate_expression =
         expression.operands[
@@ -1124,16 +1167,30 @@ bool Lowerer::lower_container_locator(
     const auto lowered = lower_container_expression_graph(
         predicate_expression, iterator_name,
         *source_frontend_type,
-        *source_type, false);
+        *source_type,
+        ContainerExpressionPurpose::predicate);
     if (!lowered) {
       return false;
     }
     predicate = std::move(*lowered);
+  } else if (has_transformation) {
+    const auto& transformation_expression =
+        expression.operands[
+            explicit_iterator ? 2U : 1U];
+    const auto lowered = lower_container_expression_graph(
+        transformation_expression, iterator_name,
+        *source_frontend_type, *source_type,
+        ContainerExpressionPurpose::locator_transformation);
+    if (!lowered) {
+      return false;
+    }
+    transformation = std::move(*lowered);
   }
   process_.operations.emplace_back(
       LocateContainer{
           operation, destination, *source,
-          std::move(predicate)});
+          std::move(predicate),
+          std::move(transformation)});
   return true;
 }
 
@@ -1392,7 +1449,8 @@ void Lowerer::lower_container_method(
       const auto lowered =
           lower_container_expression_graph(
               key_expression, iterator_name,
-              *type, *runtime_type, true, true);
+              *type, *runtime_type,
+              ContainerExpressionPurpose::ordering_key);
       if (!lowered) {
         return;
       }

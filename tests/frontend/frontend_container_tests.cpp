@@ -102,6 +102,14 @@ module containers;
     located = values.unique();
     located_indices = values.unique_index();
     located =
+        values.min() with (
+            item.index < 0 ? 0 : item);
+    located = values.max(entry) with (entry);
+    located = values.unique() with (item);
+    located_indices =
+        values.unique_index(entry) with (
+            entry.index >= 0 ? entry : 0);
+    located =
         values.find(cell) with (cell > 0 && cell.index >= 0);
     located_indices = values.find_index() with (item != 2);
     located = values.find_first() with (item >= 1 && item < 3);
@@ -372,8 +380,46 @@ endmodule
                     || statement.value.text == ".unique"
                     || statement.value.text == ".unique_index");
           })
-          == 4,
-      "container locator methods remain explicit no-argument call HIR");
+          == 8,
+      "container locator methods remain explicit call HIR");
+  const auto implicit_locator_transformation =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.value.kind == ExpressionKind::Call
+                && statement.value.text == ".min"
+                && statement.value.operands.size() == 2;
+          });
+  require(
+      implicit_locator_transformation != query_statements.end()
+          && implicit_locator_transformation
+                 ->value.operands[1].kind
+              == ExpressionKind::Call
+          && implicit_locator_transformation
+                 ->value.operands[1].text == "?:"
+          && !implicit_locator_transformation
+                  ->value.operands[1].span.empty(),
+      "implicit locator transformation remains explicit source-spanned "
+      "HIR");
+  const auto named_locator_transformation =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.value.kind == ExpressionKind::Call
+                && statement.value.text == ".max"
+                && statement.value.operands.size() == 3;
+          });
+  require(
+      named_locator_transformation != query_statements.end()
+          && named_locator_transformation->value.operands[1].kind
+              == ExpressionKind::Identifier
+          && named_locator_transformation->value.operands[1].text
+              == "entry"
+          && named_locator_transformation->value.operands[2].kind
+              == ExpressionKind::Identifier
+          && named_locator_transformation->value.operands[2].text
+              == "entry",
+      "named locator transformation iterator remains explicit HIR");
   require(
       std::ranges::count_if(
           query_statements,
@@ -630,17 +676,44 @@ endmodule
               "FSIM-SV-SEM-090"),
       "container ordering with-clauses diagnose empty, malformed, invalid, "
       "leaked, and excluded forms");
-  const auto unsupported_locator = parse_text(
+  const auto locator_with = parse_text(
       "container-locator-with.sv",
-      "module m; int values[]; int result[$]; "
-      "initial result = values.unique() with (item); endmodule",
+      "module m; int values[]; int result[$]; initial begin "
+      "result = values.unique() with (item); "
+      "result = values.min(entry) with (entry.index < 0 ? 0 : entry); "
+      "end endmodule",
       Language::SystemVerilog2017);
   require(
-      !unsupported_locator.ok()
+      locator_with.ok(),
+      "extrema and uniqueness locator transformations parse");
+  const auto invalid_locator_with = parse_text(
+      "container-locator-invalid-with.sv",
+      "module m; int values[]; int result[$]; int scalar; "
+      "initial begin "
+      "result = values.min() with (); "
+      "result = values.max(entry); "
+      "result = values.unique(first, second) with (first); "
+      "result = values.unique_index() with item; "
+      "result = values.min() with (item; "
+      "scalar = item; "
+      "end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_locator_with.ok()
           && has_code(
-              unsupported_locator,
-              "FSIM-SV-UNSUPPORTED-042"),
-      "container locator with-clauses diagnose explicitly");
+              invalid_locator_with,
+              "FSIM-SV-SEM-093")
+          && has_code(
+              invalid_locator_with,
+              "FSIM-SV-PARSE-171")
+          && has_code(
+              invalid_locator_with,
+              "FSIM-SV-PARSE-172")
+          && has_code(
+              invalid_locator_with,
+              "FSIM-SV-SEM-090"),
+      "locator transformations diagnose empty, malformed, invalid, and "
+      "leaked binders");
   const auto missing_predicate = parse_text(
       "container-find-missing.sv",
       "module m; int values[]; int result[$]; "

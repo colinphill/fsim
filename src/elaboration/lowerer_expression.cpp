@@ -205,7 +205,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     const auto lowered =
                         lower_container_expression_graph(
                             expression.operands[1], "item",
-                            *type, *runtime_type, true);
+                            *type, *runtime_type,
+                            ContainerExpressionPurpose::
+                                reduction_transformation);
                     if (!lowered) {
                         return std::nullopt;
                     }

@@ -223,7 +223,7 @@ void test_rejections() {
       locator_queue, locator_queue};
   invalid_container_predicate.operations = {
       LocateContainer{
-          ContainerLocatorOperator::find, 0, 1, {}},
+          ContainerLocatorOperator::find, 0, 1, {}, {}},
       Halt{}};
   expect_error(
       [&] {
@@ -241,7 +241,8 @@ void test_rejections() {
           ContainerLocatorOperator::find, 0, 1,
           {{ContainerPredicateOperator::index, 0, 0,
             PackedLogic4{},
-            ContainerPredicateValueKind::element}}},
+            ContainerPredicateValueKind::element}},
+          {}},
       Halt{}};
   expect_error(
       [&] {
@@ -266,7 +267,8 @@ void test_rejections() {
               {ContainerPredicateOperator::equal, 0, 1,
                PackedLogic4{},
                ContainerPredicateValueKind::logical},
-          }},
+          },
+          {}},
       Halt{}};
   expect_error(
       [&] {
@@ -473,6 +475,116 @@ void test_rejections() {
             oversized_ordering, no_signals);
       },
       "invalid key metadata");
+
+  Process invalid_locator_transformation_root;
+  invalid_locator_transformation_root.name =
+      "invalid_locator_transformation_root";
+  invalid_locator_transformation_root.container_register_count = 2;
+  invalid_locator_transformation_root.container_register_types = {
+      locator_queue, locator_queue};
+  invalid_locator_transformation_root.operations = {
+      LocateContainer{
+          ContainerLocatorOperator::minimum, 0, 1, {},
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::constant, 0, 0,
+               PackedLogic4::from_aval_bval(8, 0, 0),
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::greater, 0, 1,
+               PackedLogic4{},
+               ContainerPredicateValueKind::logical},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_locator_transformation_root",
+            invalid_locator_transformation_root, no_signals);
+      },
+      "transformation root has the wrong type");
+
+  auto invalid_find_transformation =
+      invalid_locator_transformation_root;
+  invalid_find_transformation.name =
+      "invalid_find_transformation";
+  invalid_find_transformation.operations = {
+      LocateContainer{
+          ContainerLocatorOperator::find, 0, 1,
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::constant, 0, 0,
+               PackedLogic4::from_aval_bval(8, 0, 0),
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::greater, 0, 1,
+               PackedLogic4{},
+               ContainerPredicateValueKind::logical},
+          },
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_find_transformation",
+            invalid_find_transformation, no_signals);
+      },
+      "transformation metadata requires");
+
+  auto invalid_locator_conditional =
+      invalid_locator_transformation_root;
+  invalid_locator_conditional.name =
+      "invalid_locator_conditional";
+  invalid_locator_conditional.operations = {
+      LocateContainer{
+          ContainerLocatorOperator::unique, 0, 1, {},
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::conditional, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element, 99},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_locator_conditional",
+            invalid_locator_conditional, no_signals);
+      },
+      "conditional operands are invalid");
+
+  auto oversized_locator_transformation =
+      invalid_locator_transformation_root;
+  oversized_locator_transformation.name =
+      "oversized_locator_transformation";
+  std::vector<ContainerPredicateNode> oversized_locator_graph(
+      maximum_container_predicate_nodes + 1U,
+      ContainerPredicateNode{
+          ContainerPredicateOperator::item,
+          0,
+          0,
+          PackedLogic4{},
+          ContainerPredicateValueKind::element});
+  oversized_locator_transformation.operations = {
+      LocateContainer{
+          ContainerLocatorOperator::maximum, 0, 1, {},
+          std::move(oversized_locator_graph)},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "oversized_locator_transformation",
+            oversized_locator_transformation, no_signals);
+      },
+      "invalid transformation metadata");
 
   const auto projected_process =
       [](const ProjectedDelayMode mode,

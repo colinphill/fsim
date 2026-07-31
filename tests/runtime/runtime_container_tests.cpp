@@ -312,6 +312,16 @@ void test_simir_containers() {
           && four_state_keyed.elements[3].to_msb_string()
               == "0000000Z",
       "transformed keys preserve exact four-state total ordering");
+  ContainerValue four_state_locator{
+      four_state_order_type, {}, {}};
+  locate_container_values(
+      four_state_locator, four_state_order,
+      ContainerLocatorOperator::maximum, {}, item_key);
+  require(
+      four_state_locator.elements.size() == 1
+          && four_state_locator.elements[0].to_msb_string()
+              == "0000000Z",
+      "transformed extrema use the exact four-state total order");
   try {
     order_container_value(
         four_state_keyed, ContainerOrderingOperator::reverse,
@@ -343,6 +353,11 @@ void test_simir_containers() {
     require(
         empty_result.elements.empty(),
         "empty container locators return an empty queue");
+    locate_container_values(
+        empty_result, empty_locator_source, operation, {}, item_key);
+    require(
+        empty_result.elements.empty(),
+        "empty transformed container locators return an empty queue");
   }
   locate_container_values(
       locator_result, signed_order,
@@ -402,6 +417,110 @@ void test_simir_containers() {
               value(32, UINT32_C(0xffffffff)),
               value(32, 1)},
       "static unique_index preserves signed declared indices");
+  const std::vector<ContainerPredicateNode> map_five_to_ten{
+      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{},
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 5),
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::equal, 0, 1, PackedLogic4{},
+       ContainerPredicateValueKind::logical},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 10),
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::conditional, 2, 3, PackedLogic4{},
+       ContainerPredicateValueKind::element, 0}};
+  locate_container_values(
+      locator_result, fixed_locator,
+      ContainerLocatorOperator::minimum, {}, map_five_to_ten);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{value(8, 7)},
+      "transformed minimum compares keys and returns the original "
+      "first extremum");
+  auto map_nine_to_zero = map_five_to_ten;
+  map_nine_to_zero[1].constant = value(8, 9);
+  map_nine_to_zero[3].constant = value(8, 0);
+  locate_container_values(
+      locator_result, fixed_locator,
+      ContainerLocatorOperator::maximum, {}, map_nine_to_zero);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{value(8, 7)},
+      "transformed maximum compares keys and returns the original "
+      "first extremum");
+  auto map_seven_to_five = map_five_to_ten;
+  map_seven_to_five[1].constant = value(8, 7);
+  map_seven_to_five[3].constant = value(8, 5);
+  locate_container_values(
+      locator_result, fixed_locator,
+      ContainerLocatorOperator::unique, {}, map_seven_to_five);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{
+              value(8, 5), value(8, 9)},
+      "transformed unique preserves the first original element for "
+      "each exact four-state key");
+  locate_container_values(
+      index_result, fixed_locator,
+      ContainerLocatorOperator::unique_index, {},
+      map_seven_to_five);
+  require(
+      index_result.elements
+          == std::vector<PackedLogic4>{
+              value(32, UINT32_C(0xfffffffe)),
+              value(32, 1)},
+      "transformed unique_index returns original signed declared "
+      "indices");
+  const std::vector<ContainerPredicateNode> static_index_key{
+      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{},
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::index, 0, 0, PackedLogic4{},
+       ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::constant, 0, 0, value(32, 0),
+       ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::less, 1, 2, PackedLogic4{},
+       ContainerPredicateValueKind::logical},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 0),
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::conditional, 3, 4, PackedLogic4{},
+       ContainerPredicateValueKind::element, 0}};
+  locate_container_values(
+      index_result, fixed_locator,
+      ContainerLocatorOperator::unique_index, {},
+      static_index_key);
+  require(
+      index_result.elements
+          == std::vector<PackedLogic4>{
+              value(32, UINT32_C(0xfffffffe)),
+              value(32, 0),
+              value(32, 1)},
+      "locator transformations use original signed declared indices "
+      "and preserve the first equal key");
+  auto dynamic_index_key = static_index_key;
+  dynamic_index_key[2].constant = value(32, 2);
+  const ContainerValue dynamic_locator_source{
+      signed_order_type,
+      {value(8, 5), value(8, 7),
+       value(8, 5), value(8, 9)},
+      {}};
+  locate_container_values(
+      index_result, dynamic_locator_source,
+      ContainerLocatorOperator::unique_index, {},
+      dynamic_index_key);
+  require(
+      index_result.elements
+          == std::vector<PackedLogic4>{
+              value(32, 0), value(32, 2), value(32, 3)},
+      "locator transformations use original current zero-based indices");
+  auto aliased_transformed = dynamic_locator_source;
+  locate_container_values(
+      aliased_transformed, aliased_transformed,
+      ContainerLocatorOperator::unique, {},
+      map_seven_to_five);
+  require(
+      aliased_transformed.elements
+          == std::vector<PackedLogic4>{
+              value(8, 5), value(8, 9)},
+      "transformed locators safely support an aliased queue receiver");
   const std::vector<ContainerPredicateNode> greater_than_five{
       {ContainerPredicateOperator::item, 0, 0, PackedLogic4{},
        ContainerPredicateValueKind::element},
@@ -553,6 +672,15 @@ void test_simir_containers() {
       bounded_find.elements
           == std::vector<PackedLogic4>{value(8, 7)},
       "find respects a bounded result queue");
+  bounded_find.elements.clear();
+  locate_container_values(
+      bounded_find, fixed_locator,
+      ContainerLocatorOperator::unique, {},
+      map_seven_to_five);
+  require(
+      bounded_find.elements
+          == std::vector<PackedLogic4>{value(8, 5)},
+      "transformed uniqueness respects destination queue capacity");
   locate_container_values(
       locator_result, locator_result,
       ContainerLocatorOperator::find,

@@ -541,6 +541,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-168` | error | Expected `)` after a container reduction transformation. |
 | `FSIM-SV-PARSE-169` | error | Expected `(` after a container ordering method's `with` keyword. |
 | `FSIM-SV-PARSE-170` | error | Expected `)` after a container ordering key expression. |
+| `FSIM-SV-PARSE-171` | error | Expected `(` after an extrema/uniqueness locator's transformation `with` keyword. |
+| `FSIM-SV-PARSE-172` | error | Expected `)` after an extrema/uniqueness locator transformation. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -742,6 +744,7 @@ therefore excluded.
 | `FSIM-SV-SEM-090` | error | A predicate unpacked-container locator has malformed or multiple iterator binders, or a scoped container iterator leaks outside its `with` expression. |
 | `FSIM-SV-SEM-091` | error | An unpacked-container reduction has an empty `with` transformation. |
 | `FSIM-SV-SEM-092` | error | A `sort` or `rsort` key has an empty `with` clause, a malformed or multiple iterator binder, or a named binder without a `with` clause. |
+| `FSIM-SV-SEM-093` | error | An extrema/uniqueness locator transformation has an empty `with` clause, a malformed or multiple iterator binder, or a named binder without a `with` clause. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -775,7 +778,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
 | `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
-| `FSIM-SV-UNSUPPORTED-042` | error | An unpacked-container locator method uses the unsupported `with` clause. |
 
 ## Elaboration and SimIR lowering
 
@@ -1105,6 +1107,9 @@ therefore excluded.
 | `FSIM-ELAB-SVLOCATOR-003` | error | A container locator result target is not a compatible queue. |
 | `FSIM-ELAB-SVLOCATOR-004` | error | A container locator result is used outside a whole-queue assignment. |
 | `FSIM-ELAB-SVLOCATOR-005` | error | A result-producing container locator is used as a standalone statement. |
+| `FSIM-ELAB-SVLOCATOR-006` | error | An extrema/uniqueness locator transformation uses unsupported arithmetic, calls, side effects, nonconstant operands, more than one conditional, or more than 64 graph nodes. |
+| `FSIM-ELAB-SVLOCATOR-007` | error | An extrema/uniqueness locator transformation contains an invalid iterator/index reference or mixes element and index comparison profiles. |
+| `FSIM-ELAB-SVLOCATOR-008` | error | An extrema/uniqueness locator transformation has a malformed or colliding named iterator, a non-element root, or an associative or otherwise excluded receiver profile. |
 | `FSIM-ELAB-SVFIND-001` | error | A predicate container locator lacks a direct supported nonassociative SystemVerilog unpacked-container receiver. |
 | `FSIM-ELAB-SVFIND-002` | error | A predicate container locator does not retain exactly one `with`-clause predicate. |
 | `FSIM-ELAB-SVFIND-003` | error | A predicate container locator result target is not a compatible value or signed 32-bit index queue. |
