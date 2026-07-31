@@ -1569,9 +1569,6 @@ endmodule
       rejected_slices, "FSIM-ELAB-SVLOCATOR-001"));
   assert(has_diagnostic(
       rejected_slices, "FSIM-ELAB-SVFIND-001"));
-  assert(has_diagnostic(
-      rejected_slices, "FSIM-ELAB-SVORDER-001"));
-
   const auto leaked_iterator = fsim::frontend::parse_text(
       "container-iterator-leak.sv",
       "module container_iterator_leak; "

@@ -1394,6 +1394,11 @@ void Lowerer::lower_container_method(
   const bool unsupported_shuffle =
       call.kind == ExpressionKind::Call
       && call.text == ".shuffle";
+  const bool ordering_slice_receiver =
+      ordering_method
+      && !call.operands.empty()
+      && is_static_container_slice_candidate(
+          call.operands.front());
   const bool locator_method =
       call.kind == ExpressionKind::Call
       && (call.text == ".min"
@@ -1421,10 +1426,11 @@ void Lowerer::lower_container_method(
     if (language_
             != frontend::Language::SystemVerilog2017
         || call.operands.empty()
-        || call.operands.front().kind
-            != ExpressionKind::Identifier
-        || !is_container_expression(
-            call.operands.front())) {
+        || (!ordering_slice_receiver
+            && (call.operands.front().kind
+                    != ExpressionKind::Identifier
+                || !is_container_expression(
+                    call.operands.front())))) {
       report(
           "FSIM-ELAB-SVORDER-001",
           "container ordering requires a direct writable "
@@ -1491,8 +1497,9 @@ void Lowerer::lower_container_method(
   }
   if (call.kind != ExpressionKind::Call
       || call.operands.empty()
-      || call.operands.front().kind
-          != ExpressionKind::Identifier) {
+      || (call.operands.front().kind
+              != ExpressionKind::Identifier
+          && !ordering_slice_receiver)) {
     report(
         "FSIM-ELAB-SVCONTAINER-007",
         "container method requires a direct object receiver",
@@ -1500,6 +1507,10 @@ void Lowerer::lower_container_method(
     return;
   }
   const auto& receiver = call.operands.front();
+  const auto& receiver_base =
+      ordering_slice_receiver
+          ? receiver.operands.front()
+          : receiver;
   const auto mutates_receiver =
       call.text == ".delete"
       || call.text == ".push_front"
@@ -1510,15 +1521,16 @@ void Lowerer::lower_container_method(
       || unsupported_shuffle;
   if (mutates_receiver
       && read_only_container_objects_.contains(
-          receiver.text)) {
+          receiver_base.text)) {
     report(
         "FSIM-ELAB-SVPORT-009",
         "an input container port is read-only within its module",
-        receiver.span);
+        receiver_base.span);
     return;
   }
-  const auto target = lower_container_expression(receiver);
-  const auto* type = object_type(receiver.text);
+  const auto target =
+      lower_container_expression(receiver_base);
+  const auto* type = object_type(receiver_base.text);
   if (!target || type == nullptr) {
     return;
   }
@@ -1597,7 +1609,24 @@ void Lowerer::lower_container_method(
             discarded, *target,
             call.text == ".pop_front"});
   } else if (ordering_method) {
-    if (runtime_type->associative) {
+    auto ordering_target = *target;
+    auto ordering_type = *runtime_type;
+    if (ordering_slice_receiver) {
+      const auto selection =
+          static_container_slice(receiver);
+      if (!selection) {
+        return;
+      }
+      ordering_type = selection->selected_type;
+      ordering_target =
+          allocate_container_register(ordering_type);
+      copy_static_container_ordinals(
+          ordering_target,
+          ordering_type,
+          *target,
+          ordering_type);
+    }
+    if (ordering_type.associative) {
       report(
           "FSIM-ELAB-SVORDER-003",
           "container ordering does not support associative arrays",
@@ -1638,7 +1667,7 @@ void Lowerer::lower_container_method(
       const auto lowered =
           lower_container_expression_graph(
               key_expression, iterator_name,
-              *type, *runtime_type,
+              *type, ordering_type,
               ContainerExpressionPurpose::ordering_key);
       if (!lowered) {
         return;
@@ -1656,7 +1685,20 @@ void Lowerer::lower_container_method(
     }
     process_.operations.emplace_back(
         OrderContainer{
-            operation, *target, std::move(key)});
+            operation, ordering_target, std::move(key)});
+    if (ordering_slice_receiver) {
+      const auto replacement =
+          allocate_container_register(*runtime_type);
+      process_.operations.emplace_back(
+          CopyContainerRegister{replacement, *target});
+      copy_static_container_ordinals(
+          replacement,
+          ordering_type,
+          ordering_target,
+          ordering_type);
+      process_.operations.emplace_back(
+          CopyContainerRegister{*target, replacement});
+    }
   } else {
     report(
         "FSIM-ELAB-SVCONTAINER-008",
@@ -1665,7 +1707,7 @@ void Lowerer::lower_container_method(
     return;
   }
   if (const auto object =
-          container_objects_.find(receiver.text);
+          container_objects_.find(receiver_base.text);
       object != container_objects_.end()) {
     process_.operations.emplace_back(
         WriteContainerObject{object->second, *target});

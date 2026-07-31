@@ -836,6 +836,74 @@ endmodule
       "task input, output, and inout slice actuals remain distinct "
       "source-spanned colon HIR");
 
+  const auto slice_ordering = parse_text(
+      "container-slice-ordering.sv",
+      R"(
+module container_slice_ordering;
+  logic [7:0] values[5:0];
+  initial begin
+    values[4:1].reverse();
+    values[4:1].sort() with (
+        item.index < 3 ? 8'h00 : 8'h01);
+    values[4:1].rsort(entry) with (
+        entry.index < 3 ? 8'h01 : 8'h00);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      slice_ordering.ok(),
+      "direct static-array slice ordering receivers parse");
+  const auto* slice_ordering_unit =
+      slice_ordering.design.find(
+          UnitKind::VerilogModule,
+          "container_slice_ordering");
+  require(
+      slice_ordering_unit != nullptr
+          && slice_ordering_unit->processes.size() == 1
+          && slice_ordering_unit->processes[0].statements.size() == 3,
+      "slice ordering method statements remain explicit HIR");
+  const auto& slice_ordering_statements =
+      slice_ordering_unit->processes[0].statements;
+  require(
+      std::ranges::all_of(
+          slice_ordering_statements,
+          [](const auto& statement) {
+            return statement.kind
+                    == StatementKind::ContainerMethod
+                && !statement.value.operands.empty()
+                && statement.value.operands[0].kind
+                    == ExpressionKind::Slice
+                && statement.value.operands[0].text == ":"
+                && statement.value.operands[0].operands.size() == 3
+                && statement.value.operands[0].operands[0].text
+                    == "values"
+                && statement.value.operands[0].operands[1].text == "4"
+                && statement.value.operands[0].operands[2].text == "1"
+                && statement.value.operands[0].span.source_name
+                    == "container-slice-ordering.sv"
+                && !statement.value.operands[0].span.empty();
+          }),
+      "reverse, sort, and rsort retain direct source-spanned slice HIR");
+  require(
+      slice_ordering_statements[0].value.text == ".reverse"
+          && slice_ordering_statements[0].value.operands.size() == 1
+          && slice_ordering_statements[1].value.text == ".sort"
+          && slice_ordering_statements[1].value.operands.size() == 2
+          && slice_ordering_statements[1].value.operands[1].kind
+              == ExpressionKind::Call
+          && slice_ordering_statements[1].value.operands[1].text
+              == "?:"
+          && slice_ordering_statements[2].value.text == ".rsort"
+          && slice_ordering_statements[2].value.operands.size() == 3
+          && slice_ordering_statements[2].value.operands[1].kind
+              == ExpressionKind::Identifier
+          && slice_ordering_statements[2].value.operands[1].text
+              == "entry"
+          && slice_ordering_statements[2].value.operands[2].kind
+              == ExpressionKind::Call,
+      "slice ordering retains optional implicit and named key graphs");
+
   const auto invalid = parse_text(
       "container-invalid.sv",
       R"(

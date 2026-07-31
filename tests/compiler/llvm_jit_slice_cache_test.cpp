@@ -222,6 +222,87 @@ void expect_slice_cache_statistics(
   return process;
 }
 
+[[nodiscard]] Process make_slice_ordering_process(
+    const std::int32_t selected_left,
+    const std::uint32_t element_width,
+    const ContainerOrderingOperator ordering,
+    const std::optional<std::uint8_t> key_constant,
+    const bool atomic_commit,
+    const std::uint32_t source_line) {
+  ContainerType whole;
+  whole.element_width = element_width;
+  whole.fixed = true;
+  whole.index_left = selected_left + 1;
+  whole.index_right = selected_left - 2;
+  auto selected = whole;
+  selected.index_left = selected_left;
+  selected.index_right = selected_left - 1;
+
+  Process process;
+  process.id = 42;
+  process.name = "cached_static_slice_ordering";
+  process.register_count = 4;
+  process.container_register_count = 3;
+  process.container_register_types = {
+      whole, selected, whole};
+  process.operations.push_back(
+      DebugPoint{
+          DebugPointKind::statement,
+          SourceLocation{
+              "cached_static_slice_ordering.sv",
+              source_line,
+              5}});
+  for (std::uint32_t ordinal = 0; ordinal < 2; ++ordinal) {
+    const auto index =
+        static_cast<std::uint32_t>(
+            selected_left - static_cast<std::int32_t>(ordinal));
+    process.operations.push_back(
+        LoadConstant{
+            0,
+            PackedLogic4::from_aval_bval(32, index, 0)});
+    process.operations.push_back(ContainerRead{1, 0, 0, true});
+    process.operations.push_back(
+        LoadConstant{
+            2,
+            PackedLogic4::from_aval_bval(32, index, 0)});
+    process.operations.push_back(ContainerWrite{1, 2, 1, true});
+  }
+  std::vector<ContainerPredicateNode> key;
+  if (key_constant) {
+    key.push_back(
+        ContainerPredicateNode{
+            ContainerPredicateOperator::constant,
+            0,
+            0,
+            PackedLogic4::from_aval_bval(
+                element_width, *key_constant, 0),
+            ContainerPredicateValueKind::element});
+  }
+  process.operations.push_back(
+      OrderContainer{ordering, 1, std::move(key)});
+  process.operations.push_back(CopyContainerRegister{2, 0});
+  for (std::uint32_t ordinal = 0; ordinal < 2; ++ordinal) {
+    const auto index =
+        static_cast<std::uint32_t>(
+            selected_left - static_cast<std::int32_t>(ordinal));
+    process.operations.push_back(
+        LoadConstant{
+            0,
+            PackedLogic4::from_aval_bval(32, index, 0)});
+    process.operations.push_back(ContainerRead{1, 1, 0, true});
+    process.operations.push_back(
+        LoadConstant{
+            2,
+            PackedLogic4::from_aval_bval(32, index, 0)});
+    process.operations.push_back(ContainerWrite{2, 2, 1, true});
+  }
+  if (atomic_commit) {
+    process.operations.push_back(CopyContainerRegister{0, 2});
+  }
+  process.operations.push_back(Halt{});
+  return process;
+}
+
 }  // namespace
 
 void test_static_slice_consumer_cache_identity(
@@ -367,6 +448,70 @@ void test_static_slice_call_cache_identity(
           "callable.sv", 32),
       0,
       1);
+  assert(slice_cached_object_count(cache_directory) == 9);
+}
+
+void test_static_slice_ordering_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol =
+      "cached_static_slice_ordering";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_slice_cache_statistics(
+            jit, hits, misses);
+      };
+  const auto make =
+      [&](const std::int32_t left = 4,
+          const std::uint32_t width = 8,
+          const ContainerOrderingOperator ordering =
+              ContainerOrderingOperator::reverse,
+          const std::optional<std::uint8_t> key = std::nullopt,
+          const bool commit = true,
+          const std::uint32_t line = 23) {
+        return make_slice_ordering_process(
+            left, width, ordering, key, commit, line);
+      };
+
+  materialize(make(), 0, 1);
+  materialize(make(), 1, 0);
+  materialize(make(3), 0, 1);
+  materialize(make(4, 4), 0, 1);
+  materialize(
+      make(
+          4, 8,
+          ContainerOrderingOperator::ascending),
+      0,
+      1);
+  materialize(
+      make(
+          4, 8,
+          ContainerOrderingOperator::descending),
+      0,
+      1);
+  materialize(
+      make(
+          4, 8,
+          ContainerOrderingOperator::ascending, 1),
+      0,
+      1);
+  materialize(
+      make(
+          4, 8,
+          ContainerOrderingOperator::ascending, 2),
+      0,
+      1);
+  materialize(make(4, 8, ContainerOrderingOperator::reverse,
+                   std::nullopt, false), 0, 1);
+  materialize(make(4, 8, ContainerOrderingOperator::reverse,
+                   std::nullopt, true, 24), 0, 1);
   assert(slice_cached_object_count(cache_directory) == 9);
 }
 

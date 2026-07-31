@@ -1971,6 +1971,8 @@ void test_persistent_object_cache() {
       root / "static-slice-consumer");
   test_static_slice_call_cache_identity(
       root / "static-slice-call");
+  test_static_slice_ordering_cache_identity(
+      root / "static-slice-ordering");
   test_container_predicate_cache_identity(
       root / "container-predicate");
   test_container_reduction_cache_identity(

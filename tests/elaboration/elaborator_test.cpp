@@ -17,6 +17,7 @@ int main() {
   test_systemverilog_file_lowering();
   test_systemverilog_container_lowering();
   test_systemverilog_static_slice_calls();
+  test_systemverilog_static_slice_ordering();
   test_case_and_expression_lowering();
   test_numeric_and_system_function_lowering();
   test_selection_and_assignment_lowering();
