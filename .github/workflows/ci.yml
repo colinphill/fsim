@@ -90,7 +90,10 @@ jobs:
   linux-sanitizers:
     name: Ubuntu / GCC / ASan+UBSan
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Two-worker sanitizer builds avoid hosted-runner memory pressure, while
+    # the accumulated container differential now needs more than 45 minutes
+    # for configure, build, and the full test inventory.
+    timeout-minutes: 55
     steps:
       - name: Check out sources
         uses: actions/checkout@v7

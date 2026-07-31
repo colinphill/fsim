@@ -594,6 +594,9 @@ set_tests_properties(
     fsim.application.sv_containers
     PROPERTIES
       LABELS "fast;containers;tasks;timing;systemverilog;cache"
+      # The full sanitizer differential legitimately approaches the CTest
+      # default 1,500-second ceiling on two-worker hosted runners.
+      TIMEOUT 1800
   )
 
   add_executable(
