@@ -4859,6 +4859,64 @@ container differential in 181.18 seconds. Release passed all 59 tests in
 38.51 seconds, on 2026-07-30. Batch 88 is not a ten-batch GitHub
 CI-inspection boundary, so no Actions run was inspected.
 
+### Eighty-ninth feature batch — bounded static-array slice callable actuals
+
+Direct direction-preserving one-dimensional integral static-array slices now
+serve as value actuals for the existing bounded same-language automatic
+function and task container formals. The frontend retains each actual as the
+same compact source-spanned colon `Slice` HIR used by assignment and
+read-only consumers, without adding recursive fields to the common expression
+or statement footprint.
+
+For a fixed function input or task input/inout formal, lowering first
+materializes the selected actual and adapts it into a formal-typed staging
+container. Equal-count compatible ranges map by ordinal left-to-right
+position even when their declared indices differ. The adaptation bit-copies
+the exact element width, signedness, two-/four-state domain, and X/Z bits
+without packed reinterpretation or element conversion, then copies the
+snapshot into the callable activation frame.
+
+Task output/inout copy-out reuses the ordinary assignment path after the
+callee returns. A direct writable slice actual therefore receives one
+selected staging value merged into one whole-array replacement; no partial
+caller mutation is observable. Copy-out occurs only after normal or
+valueless-early return, including after suspension. Each fixed output formal
+is reset on every invocation from an immutable typed default container, so
+four-state elements begin as X rather than retaining a preceding call's
+values. The per-task default register IDs are vector-backed frame metadata,
+preserving the compact Windows MSVC Debug parser/lowerer stack footprint.
+
+Positive evidence covers explicit callable-actual HIR and source spans,
+nested function slice inputs, task input/output/inout slices, different
+actual/formal ranges, output X reset, exact X preservation, early-return
+copy-out, suspension, module objects, writable static ports, and
+nested/generated hierarchy. Interpreter, LLVM O0, and LLVM O2 agree through
+the expanded cold/warm application differential.
+
+Negative evidence covers runtime or unknown bounds, reversed and indexed
+selections, count/width/state/signedness mismatch, dynamic and indirect
+receivers, and read-only output/inout actuals through the existing stable
+slice and port diagnostics. Existing multidimensional, recursion, sliced
+module-port-actual, and cross-language callable boundaries remain diagnosed
+by their owning bounded suites.
+
+Native-object schema 41 and container semantic revision 17 carry the formal
+mode/range/profile, selected actual type, copy-in/copy-out operation shape,
+return provenance, and transitive callable source identity. A dedicated cache
+matrix varies actual and formal ranges, element width, function versus task
+use, task direction, callable source, and return line while keeping the cache
+test compilation units below the source limit. No new SimIR operation,
+runtime callback, native ABI slot, or public API was required.
+
+The diagnostic catalog still covers 1,222 production codes and the source gate
+covers 289 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 299.83 seconds, including scoped locals in 0.89 seconds and the expanded
+container differential in 230.95 seconds. Release passed all 59 tests in
+89.83 seconds, including scoped locals in 0.80 seconds and containers in
+58.79 seconds, on 2026-07-31. Batch 89 is not a ten-batch GitHub
+CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
