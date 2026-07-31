@@ -153,11 +153,89 @@ ContainerRegisterId Lowerer::allocate_container_register(
 
 bool Lowerer::is_container_expression(
     const Expression& expression) const {
-  if (expression.kind == ExpressionKind::Identifier) {
-    return container_locals_.contains(expression.text)
-        || container_objects_.contains(expression.text);
+  if (expression.kind != ExpressionKind::Identifier
+      && expression.kind != ExpressionKind::Call) {
+    return false;
   }
-  return false;
+  return container_expression_type(expression) != nullptr;
+}
+
+const frontend::Type* Lowerer::container_expression_type(
+    const Expression& expression) const {
+  if (expression.kind == ExpressionKind::Identifier) {
+    const auto* type = object_type(expression.text);
+    return type != nullptr && type->systemverilog_container
+        ? type
+        : nullptr;
+  }
+  if (expression.kind == ExpressionKind::Call) {
+    if (expression.text == "?:"
+        && expression.operands.size() == 3) {
+      const auto* when_true =
+          container_expression_type(expression.operands[1]);
+      const auto* when_false =
+          container_expression_type(expression.operands[2]);
+      return when_true != nullptr && when_false != nullptr
+          ? when_true
+          : nullptr;
+    }
+    const auto* function = visible_function(expression.text);
+    return function != nullptr
+            && function->return_type.systemverilog_container
+        ? &function->return_type
+        : nullptr;
+  }
+  if (expression.kind == ExpressionKind::Slice
+      && !expression.operands.empty()
+      && expression.operands.front().kind
+          == ExpressionKind::Identifier) {
+    const auto* type =
+        object_type(expression.operands.front().text);
+    return type != nullptr && type->systemverilog_container
+        ? type
+        : nullptr;
+  }
+  return nullptr;
+}
+
+std::optional<ContainerType>
+Lowerer::container_expression_runtime_type(
+    const Expression& expression) {
+  if (expression.kind == ExpressionKind::Call
+      && expression.text == "?:"
+      && expression.operands.size() == 3) {
+    const auto when_true =
+        container_expression_runtime_type(expression.operands[1]);
+    const auto when_false =
+        container_expression_runtime_type(expression.operands[2]);
+    if (!when_true || !when_false || *when_true != *when_false) {
+      report(
+          "FSIM-ELAB-SVCOND-002",
+          "container conditional alternatives require an exactly "
+          "compatible kind and profile",
+          expression.span);
+      return std::nullopt;
+    }
+    if (when_true->associative) {
+      report(
+          "FSIM-ELAB-SVCOND-003",
+          "associative-array conditional values are outside the "
+          "bounded read-only consumer subset",
+          expression.span);
+      return std::nullopt;
+    }
+    return when_true;
+  }
+  if (expression.kind == ExpressionKind::Slice) {
+    const auto selection = static_container_slice(expression);
+    return selection
+        ? std::optional<ContainerType>{selection->selected_type}
+        : std::nullopt;
+  }
+  const auto* type = container_expression_type(expression);
+  return type != nullptr
+      ? container_type(*type, expression.span)
+      : std::nullopt;
 }
 
 std::optional<ContainerRegisterId>
@@ -171,6 +249,65 @@ Lowerer::lower_container_expression(
         : std::nullopt;
   }
   if (expression.kind == ExpressionKind::Call) {
+    if (expression.text == "?:") {
+      if (language_ != frontend::Language::SystemVerilog2017
+          || expression.operands.size() != 3) {
+        report(
+            "FSIM-ELAB-SVCOND-001",
+            "a container conditional requires one condition and two "
+            "container alternatives",
+            expression.span);
+        return std::nullopt;
+      }
+      const auto* when_true_type =
+          container_expression_type(expression.operands[1]);
+      const auto* when_false_type =
+          container_expression_type(expression.operands[2]);
+      const auto when_true_runtime =
+          container_expression_runtime_type(expression.operands[1]);
+      const auto when_false_runtime =
+          container_expression_runtime_type(expression.operands[2]);
+      if (when_true_type == nullptr || when_false_type == nullptr
+          || !when_true_runtime || !when_false_runtime
+          || *when_true_runtime != *when_false_runtime) {
+        report(
+            "FSIM-ELAB-SVCOND-002",
+            "container conditional alternatives require an exactly "
+            "compatible kind and profile",
+            expression.span);
+        return std::nullopt;
+      }
+      if (when_true_runtime->associative) {
+        report(
+            "FSIM-ELAB-SVCOND-003",
+            "associative-array conditional values are outside the "
+            "bounded read-only consumer subset",
+            expression.span);
+        return std::nullopt;
+      }
+      const auto condition =
+          lower_expression(expression.operands[0], 1);
+      if (!condition || register_width(*condition) != 1) {
+        report(
+            "FSIM-ELAB-SVCOND-004",
+            "a container conditional condition must produce one bit",
+            expression.operands[0].span);
+        return std::nullopt;
+      }
+      const auto when_true =
+          lower_container_expression(expression.operands[1]);
+      const auto when_false =
+          lower_container_expression(expression.operands[2]);
+      if (!when_true || !when_false) {
+        return std::nullopt;
+      }
+      const auto destination =
+          allocate_container_register(*when_true_runtime);
+      process_.operations.emplace_back(
+          ConditionalContainerSelect{
+              destination, *condition, *when_true, *when_false});
+      return destination;
+    }
     return lower_user_container_function_expression(expression);
   }
   if (expression.kind != ExpressionKind::Identifier) {
@@ -280,30 +417,15 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
     }
   }
   const auto& operand = expression.operands.front();
-  const auto* source_type =
-      operand.kind == ExpressionKind::Identifier
-          ? object_type(operand.text)
-          : is_static_container_slice_candidate(operand)
-              ? object_type(
-                    operand.operands.front().text)
-          : nullptr;
-  std::optional<ContainerType> runtime_type;
-  if (source_type
-      && operand.kind == ExpressionKind::Slice) {
-    const auto selection =
-        static_container_slice(operand);
-    if (selection) {
-      runtime_type = selection->selected_type;
-    }
-  } else if (source_type) {
-    runtime_type =
-        container_type(*source_type, operand.span);
-  }
+  const auto* source_type = container_expression_type(operand);
+  const auto runtime_type =
+      container_expression_runtime_type(operand);
   if (!source_type || !runtime_type) {
     report(
         "FSIM-ELAB-SVQUERY-001",
         expression.text
-            + " requires a direct typed container object",
+            + " requires a typed container object, slice, or function "
+              "result",
         operand.span);
     return std::nullopt;
   }
@@ -1244,21 +1366,9 @@ bool Lowerer::lower_container_locator(
   const auto& receiver = expression.operands.front();
   const auto source = lower_container_expression(receiver);
   const auto* source_frontend_type =
-      receiver.kind == ExpressionKind::Identifier
-          ? object_type(receiver.text)
-          : object_type(receiver.operands.front().text);
-  std::optional<ContainerType> source_type;
-  if (source_frontend_type
-      && receiver.kind == ExpressionKind::Slice) {
-    const auto selection =
-        static_container_slice(receiver);
-    if (selection) {
-      source_type = selection->selected_type;
-    }
-  } else if (source_frontend_type) {
-    source_type =
-        container_type(*source_frontend_type, receiver.span);
-  }
+      container_expression_type(receiver);
+  const auto source_type =
+      container_expression_runtime_type(receiver);
   if (!source || !source_type) {
     report(
         predicate_locator

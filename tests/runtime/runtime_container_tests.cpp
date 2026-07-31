@@ -763,6 +763,88 @@ void test_simir_containers() {
           == array.elements,
       "container locals remain debugger-visible");
 
+  ContainerType conditional_type;
+  conditional_type.element_width = 8;
+  Interpreter conditional_interpreter;
+  const auto when_true_object =
+      conditional_interpreter.add_container_object({
+          "when_true",
+          ContainerValue{
+              conditional_type,
+              {value(8, 0x11), value(8, 0x22)}, {}},
+          std::nullopt});
+  const auto when_false_object =
+      conditional_interpreter.add_container_object({
+          "when_false",
+          ContainerValue{
+              conditional_type,
+              {value(8, 0x11), value(8, 0x2a)}, {}},
+          std::nullopt});
+  const auto short_object =
+      conditional_interpreter.add_container_object({
+          "short",
+          ContainerValue{
+              conditional_type, {value(8, 0x11)}, {}},
+          std::nullopt});
+  const auto selected_object =
+      conditional_interpreter.add_container_object({
+          "selected", default_container_value(conditional_type),
+          std::nullopt});
+  const auto merged_object =
+      conditional_interpreter.add_container_object({
+          "merged", default_container_value(conditional_type),
+          std::nullopt});
+  const auto shape_object =
+      conditional_interpreter.add_container_object({
+          "shape", default_container_value(conditional_type),
+          std::nullopt});
+  Process conditional_process;
+  conditional_process.id = 0;
+  conditional_process.name = "container-conditional";
+  conditional_process.register_count = 1;
+  conditional_process.container_register_count = 6;
+  conditional_process.container_register_types.assign(
+      6, conditional_type);
+  conditional_process.operations = {
+      ReadContainerObject{0, when_true_object},
+      ReadContainerObject{1, when_false_object},
+      ReadContainerObject{2, short_object},
+      LoadConstant{0, value(1, 1)},
+      ConditionalContainerSelect{3, 0, 0, 1},
+      WriteContainerObject{selected_object, 3},
+      LoadConstant{
+          0, PackedLogic4::from_aval_bval(1, 1, 1)},
+      ConditionalContainerSelect{4, 0, 0, 1},
+      WriteContainerObject{merged_object, 4},
+      ConditionalContainerSelect{5, 0, 0, 2},
+      WriteContainerObject{shape_object, 5},
+      Halt{}};
+  (void)conditional_interpreter.add_process(
+      std::move(conditional_process));
+  require(
+      conditional_interpreter.run().status
+          == RunStatus::completed,
+      "container conditional process completes");
+  require(
+      conditional_interpreter
+              .container_object_value(selected_object)
+              .elements
+          == std::vector<PackedLogic4>{
+              value(8, 0x11), value(8, 0x22)},
+      "known container conditional selects one isolated snapshot");
+  const auto& merged =
+      conditional_interpreter.container_object_value(merged_object);
+  require(
+      merged.elements.size() == 2
+          && merged.elements[0] == value(8, 0x11)
+          && merged.elements[1].low_word().aval == 0x2a
+          && merged.elements[1].low_word().bval == 0x08,
+      "unknown container conditional merges equal-shape elements");
+  require(
+      conditional_interpreter
+          .container_object_value(shape_object).elements.empty(),
+      "unknown nonstatic container conditional resets unequal shapes");
+
   ContainerType associative_type;
   associative_type.element_width = 8;
   associative_type.associative = true;

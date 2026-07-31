@@ -105,6 +105,12 @@ void ContainerOperationLowerer::lower(
   invoke(std::nullopt, std::nullopt, std::nullopt, "container.copy");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::ConditionalContainerSelect& value) {
+  invoke(
+      value.condition, std::nullopt, std::nullopt,
+      "container.conditional");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::ReadContainerObject&) {
   invoke(std::nullopt, std::nullopt, std::nullopt, "container.read-object");
 }

@@ -287,6 +287,7 @@ struct ContainerOperationLowerer {
 
   void lower(const runtime::simir::ResizeContainer&);
   void lower(const runtime::simir::CopyContainerRegister&);
+  void lower(const runtime::simir::ConditionalContainerSelect&);
   void lower(const runtime::simir::ReadContainerObject&);
   void lower(const runtime::simir::WriteContainerObject&);
   void lower(const runtime::simir::ContainerSize&);

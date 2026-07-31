@@ -153,6 +153,18 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 && (expression.text == ".pop_front"
                     || expression.text == ".pop_back")
                 && source_expression.kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-SVCONTAINER-022",
+                    "mutating container methods require a direct "
+                    "writable object receiver",
+                    source_expression.span);
+                return std::nullopt;
+            }
+            if (expression.kind == ExpressionKind::Call
+                && (expression.text == ".pop_front"
+                    || expression.text == ".pop_back")
+                && source_expression.kind
                     == ExpressionKind::Identifier
                 && read_only_container_objects_.contains(
                     source_expression.text)) {
@@ -178,14 +190,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 return destination;
             }
             const auto* type =
-                source_expression.kind
-                        == ExpressionKind::Identifier
-                    ? object_type(source_expression.text)
-                    : static_slice_receiver
-                        ? object_type(
-                              source_expression
-                                  .operands.front().text)
-                    : nullptr;
+                container_expression_type(source_expression);
             if (type == nullptr) {
                 report(
                     "FSIM-ELAB-SVCONTAINER-002",
@@ -197,20 +202,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             if (!width) {
                 return std::nullopt;
             }
-            std::optional<ContainerType> runtime_type;
-            if (source_expression.kind
-                    == ExpressionKind::Slice) {
-                const auto selection =
-                    static_container_slice(
-                        source_expression);
-                if (selection) {
-                    runtime_type =
-                        selection->selected_type;
-                }
-            } else {
-                runtime_type =
-                    container_type(*type, expression.span);
-            }
+            const auto runtime_type =
+                container_expression_runtime_type(
+                    source_expression);
             if (!runtime_type) {
                 return std::nullopt;
             }

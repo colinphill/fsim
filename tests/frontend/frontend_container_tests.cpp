@@ -905,6 +905,7 @@ endmodule
 module container_function_return;
   logic [7:0] source[7:2];
   logic [7:0] result[10:7];
+  byte dynamic_target[];
   function automatic logic [7:0] copy_slice[3:0](
       input logic [7:0] value[7:2]);
     return value[6 -: 4];
@@ -924,7 +925,11 @@ module container_function_return;
   function automatic byte associative_result[int]();
     associative_result = associative_result;
   endfunction
-  initial result = copy_slice(source);
+  initial begin
+    result = copy_slice(source);
+    dynamic_target = 1'b1
+        ? dynamic_result() : dynamic_result();
+  end
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -1008,6 +1013,21 @@ endmodule
               == 32,
       "dynamic, bounded-queue, and integral-key associative function "
       "result kinds retain exact HIR profiles");
+  const auto& conditional =
+      fixed_return_unit->processes[0].statements[1].value;
+  require(
+      conditional.kind == ExpressionKind::Call
+          && conditional.text == "?:"
+          && conditional.operands.size() == 3
+          && conditional.operands[1].kind
+              == ExpressionKind::Call
+          && conditional.operands[1].text == "dynamic_result"
+          && conditional.operands[2].kind
+              == ExpressionKind::Call
+          && conditional.operands[2].text == "dynamic_result"
+          && !conditional.span.empty(),
+      "container-returning conditional alternatives retain nested "
+      "source-spanned call HIR");
 
   const auto multidimensional_return = parse_text(
       "multidimensional-function-return.sv",

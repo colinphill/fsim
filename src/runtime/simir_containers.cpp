@@ -565,6 +565,53 @@ ContainerValue default_container_value(
   return result;
 }
 
+void select_container_value(
+    ContainerValue& destination,
+    const PackedLogic4& condition,
+    const ContainerValue& when_true,
+    const ContainerValue& when_false) {
+  validate_container_value(destination);
+  validate_container_value(when_true);
+  validate_container_value(when_false);
+  if (destination.type != when_true.type
+      || destination.type != when_false.type) {
+    throw std::invalid_argument{
+        "container conditional profiles differ"};
+  }
+  if (condition.width() != 1) {
+    throw std::invalid_argument{
+        "container conditional condition must be scalar"};
+  }
+  const auto state = condition.get(0);
+  if (state == Logic4::one || state == Logic4::zero) {
+    destination = state == Logic4::one ? when_true : when_false;
+    return;
+  }
+  if (when_true.elements.size() != when_false.elements.size()
+      || when_true.keys != when_false.keys) {
+    destination = default_container_value(destination.type);
+    return;
+  }
+  destination.keys = when_true.keys;
+  destination.elements.clear();
+  destination.elements.reserve(when_true.elements.size());
+  for (std::size_t index = 0;
+       index < when_true.elements.size(); ++index) {
+    auto merged = conditional_value(
+        condition,
+        when_true.elements[index],
+        when_false.elements[index]);
+    if (destination.type.two_state) {
+      const auto word = merged.low_word();
+      merged = PackedLogic4::from_aval_bval(
+          destination.type.element_width,
+          word.aval & ~word.bval,
+          0);
+    }
+    destination.elements.push_back(std::move(merged));
+  }
+}
+
 PackedLogic4 reduce_container_value(
     const ContainerValue& value,
     const ContainerReductionOperator operation,
@@ -1140,6 +1187,27 @@ void Interpreter::Impl::execute_container(
       destination.type, source.type);
   destination.elements = source.elements;
   destination.keys = source.keys;
+  ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const ConditionalContainerSelect& operation) {
+  auto& destination =
+      get_container_register(process, operation.destination);
+  const auto& when_true =
+      get_container_register(process, operation.when_true);
+  const auto& when_false =
+      get_container_register(process, operation.when_false);
+  const auto& condition =
+      get_register(process, operation.condition);
+  try {
+    select_container_value(
+        destination, condition, when_true, when_false);
+  } catch (const std::exception& error) {
+    container_error(
+        process.program.id, process.pc, error.what());
+  }
   ++process.pc;
 }
 

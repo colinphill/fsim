@@ -498,6 +498,35 @@ validate_process(const Process &process,
               validate_container_register(
                   operation.source, index, "source");
             },
+            [&](const ConditionalContainerSelect& operation) {
+              result.uses_containers = true;
+              validate_container_register(
+                  operation.destination, index, "destination");
+              validate_container_register(
+                  operation.when_true, index, "when_true");
+              validate_container_register(
+                  operation.when_false, index, "when_false");
+              record_use(operation.condition, index);
+              constrain_width(operation.condition, 1U, index);
+              if (operation.destination
+                      < process.container_register_types.size()
+                  && operation.when_true
+                      < process.container_register_types.size()
+                  && operation.when_false
+                      < process.container_register_types.size()
+                  && (process.container_register_types[
+                          operation.destination]
+                          != process.container_register_types[
+                              operation.when_true]
+                      || process.container_register_types[
+                             operation.destination]
+                          != process.container_register_types[
+                              operation.when_false])) {
+                reject(
+                    process, index,
+                    "ConditionalContainerSelect profiles differ");
+              }
+            },
             [&](const ReadContainerObject& operation) {
               result.uses_containers = true;
               validate_container_register(

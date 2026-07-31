@@ -565,8 +565,9 @@ using namespace elaboration_detail;
                     runtime_type->fixed
                     && (statement.value.kind
                             == ExpressionKind::Slice
-                        || statement.value.kind
-                            == ExpressionKind::Call)) {
+                        || (statement.value.kind
+                                == ExpressionKind::Call
+                            && statement.value.text != "?:"))) {
                     const auto value =
                         lower_static_container_assignment_value(
                             statement.value, *runtime_type);

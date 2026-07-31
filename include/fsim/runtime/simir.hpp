@@ -111,6 +111,14 @@ struct ContainerValue {
 [[nodiscard]] ContainerValue
 default_container_value(const ContainerType& type);
 
+/// Apply SystemVerilog four-state conditional selection to exactly
+/// compatible bounded container values.
+void select_container_value(
+    ContainerValue& destination,
+    const PackedLogic4& condition,
+    const ContainerValue& when_true,
+    const ContainerValue& when_false);
+
 /// Construct a process-local byte string from immutable SimIR literal bytes.
 struct LoadStringConstant {
   StringRegisterId destination{};
@@ -177,6 +185,17 @@ struct ResizeContainer {
 struct CopyContainerRegister {
   ContainerRegisterId destination{};
   ContainerRegisterId source{};
+};
+
+/// Select one of two exactly compatible container snapshots. A known scalar
+/// condition copies one alternative. X/Z merges equal-shape four-state
+/// elements bitwise and produces the empty value for differing nonstatic
+/// shapes; fixed arrays always have equal shape.
+struct ConditionalContainerSelect {
+  ContainerRegisterId destination{};
+  RegisterId condition{};
+  ContainerRegisterId when_true{};
+  ContainerRegisterId when_false{};
 };
 
 struct ReadContainerObject {
@@ -1076,6 +1095,7 @@ using Operation =
                  WriteStringObject, ConcatenateStrings, CompareStrings,
                  StringLength, StringIndex, StringReplaceByte,
                  ResizeContainer, CopyContainerRegister,
+                 ConditionalContainerSelect,
                  ReadContainerObject, WriteContainerObject,
                  ContainerSize, ContainerReduction,
                  OrderContainer, LocateContainer,

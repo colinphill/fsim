@@ -954,6 +954,12 @@ private:
         const ContainerType& source_range);
     [[nodiscard]] bool is_container_expression(
         const Expression& expression) const;
+    [[nodiscard]] const frontend::Type*
+    container_expression_type(
+        const Expression& expression) const;
+    [[nodiscard]] std::optional<ContainerType>
+    container_expression_runtime_type(
+        const Expression& expression);
     [[nodiscard]] std::optional<ContainerType> container_type(
         const frontend::Type& type,
         const frontend::SourceSpan& span);

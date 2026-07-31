@@ -557,6 +557,19 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       require_same(target, source);
       target.elements = source.elements;
       target.keys = source.keys;
+    } else if (const auto* conditional =
+                   std::get_if<
+                       runtime::simir::ConditionalContainerSelect>(
+                       &operation)) {
+      auto& target = registers.at(conditional->destination);
+      const auto& when_true = registers.at(conditional->when_true);
+      const auto& when_false = registers.at(conditional->when_false);
+      runtime::simir::select_container_value(
+          target,
+          PackedLogic4::from_aval_bval(
+              1, input0_aval, input0_bval),
+          when_true,
+          when_false);
     } else if (const auto* read_object =
                    std::get_if<
                        runtime::simir::ReadContainerObject>(

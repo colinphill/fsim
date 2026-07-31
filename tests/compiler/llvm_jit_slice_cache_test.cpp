@@ -491,12 +491,13 @@ void expect_slice_cache_statistics(
 [[nodiscard]] Process make_nonstatic_return_process(
     const ContainerType& type,
     const bool clear_before_return,
+    const bool reverse_conditional,
     const std::string_view function_source,
     const std::uint32_t function_line) {
   Process process;
   process.id = 46;
   process.name = "cached_nonstatic_function_return";
-  process.register_count = 2;
+  process.register_count = 3;
   process.container_register_count = 4;
   process.container_register_types = {type, type, type, type};
   process.operations = {
@@ -504,9 +505,15 @@ void expect_slice_cache_statistics(
           0, PackedLogic4::from_aval_bval(32, 0, 0)},
       LoadConstant{
           1, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{
+          2, PackedLogic4::from_aval_bval(1, 1, 1)},
       CopyContainerRegister{0, 1},
-      Call{6, 4, CallStack{0, 1, 1}},
+      Call{8, 5, CallStack{0, 1, 1}},
       CopyContainerRegister{2, 0},
+      ConditionalContainerSelect{
+          3, 2,
+          reverse_conditional ? 1U : 2U,
+          reverse_conditional ? 2U : 1U},
       Halt{},
       DebugPoint{
           DebugPointKind::statement,
@@ -972,11 +979,13 @@ void test_nonstatic_function_return_cache_identity(
   const auto make =
       [&](const ContainerType& type,
           const bool clear_before_return = false,
+          const bool reverse_conditional = false,
           const std::string_view source =
               "nonstatic-function-return.sv",
           const std::uint32_t line = 18) {
         return make_nonstatic_return_process(
-            type, clear_before_return, source, line);
+            type, clear_before_return, reverse_conditional,
+            source, line);
       };
   const auto dynamic_type = [] {
     ContainerType type;
@@ -1015,16 +1024,17 @@ void test_nonstatic_function_return_cache_identity(
   changed.signed_elements = true;
   materialize(make(changed), 0, 1);
   materialize(make(dynamic_type(), true), 0, 1);
+  materialize(make(dynamic_type(), false, true), 0, 1);
   materialize(
       make(
-          dynamic_type(), false,
+          dynamic_type(), false, false,
           "edited-nonstatic-function-return.sv"),
       0,
       1);
-  materialize(make(dynamic_type(), false,
+  materialize(make(dynamic_type(), false, false,
                    "nonstatic-function-return.sv", 19),
               0, 1);
-  assert(slice_cached_object_count(cache_directory) == 13);
+  assert(slice_cached_object_count(cache_directory) == 14);
 }
 
 }  // namespace fsim::tests::compiler

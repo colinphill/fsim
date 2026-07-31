@@ -210,6 +210,9 @@ module fixed_function_returns;
   logic [7:0] selected[5:0];
   logic [7:0] partial_first[3:0];
   logic [7:0] partial_second[3:0];
+  logic [7:0] conditional_fixed[3:0];
+  logic [7:0] merged_fixed[3:0];
+  int fixed_query;
 
   function automatic logic [7:0] from_slice[10:7](
       input logic [7:0] value[7:2]);
@@ -255,6 +258,19 @@ module fixed_function_returns;
     nested = relay(named_result(8'h20));
     partial_first = partial(1'b1);
     partial_second = partial(1'b0);
+    conditional_fixed = 1'b0
+        ? named_result(8'h30) : named_result(8'h40);
+    merged_fixed = 1'bx
+        ? named_result(8'h50) : named_result(8'h58);
+    fixed_query = $bits(named_result(8'h60))
+        + $dimensions(named_result(8'h60))
+        + $unpacked_dimensions(named_result(8'h60))
+        + $left(named_result(8'h60))
+        + $right(named_result(8'h60))
+        + $low(named_result(8'h60))
+        + $high(named_result(8'h60))
+        + $increment(named_result(8'h60))
+        + $size(named_result(8'h60));
   end
 endmodule
 )",
@@ -278,7 +294,15 @@ endmodule
                return std::holds_alternative<
                    fsim::runtime::simir::Call>(operation);
              })
-         == 7);
+         == 11);
+  assert(std::ranges::count_if(
+             fixed_process.operations,
+             [](const auto& operation) {
+               return std::holds_alternative<
+                   fsim::runtime::simir::ConditionalContainerSelect>(
+                   operation);
+             })
+         == 2);
   assert(std::ranges::any_of(
       fixed_process.debug_container_locals,
       [](const auto& local) {
@@ -321,6 +345,21 @@ endmodule
          == std::vector<std::uint64_t>({0x20, 0x21, 0x22, 0x23}));
   assert(bytes(object_value("partial_first"))
          == std::vector<std::uint64_t>({0x91, 0x82, 0x73, 0x64}));
+  assert(bytes(object_value("conditional_fixed"))
+         == std::vector<std::uint64_t>({0x40, 0x41, 0x42, 0x43}));
+  const auto fixed_query =
+      fixed_elaborated.design->find_signal("fixed_query");
+  assert(
+      fixed_query
+      && fixed_interpreter->signal_value(*fixed_query)
+             .low_word().aval == 46);
+  const auto& merged_fixed = object_value("merged_fixed");
+  assert(
+      merged_fixed.elements.size() == 4
+      && merged_fixed.elements[0].low_word().bval == 0x08
+      && merged_fixed.elements[1].low_word().bval == 0x08
+      && merged_fixed.elements[2].low_word().bval == 0x08
+      && merged_fixed.elements[3].low_word().bval == 0x08);
   const auto& reset = object_value("partial_second");
   assert(
       reset.elements[0].low_word().aval == 0x91
@@ -339,6 +378,19 @@ module nonstatic_function_returns;
   byte queue_result[$:3];
   byte associative_source[int];
   byte associative_result[int];
+  int query_result;
+  logic [7:0] reduction_result;
+  byte maximum_result[$];
+  logic [7:0] direct_result;
+  byte dynamic_alternative[];
+  byte dynamic_short[];
+  byte conditional_result[];
+  byte conditional_merged[];
+  byte conditional_shape[];
+  logic [7:0] transformed_result;
+  byte found_result[$];
+  int found_index_result[$];
+  byte unique_result[$];
 
   function automatic byte copy_dynamic[](
       input byte value[]);
@@ -359,11 +411,46 @@ module nonstatic_function_returns;
     dynamic_source = '{11, 12, 13};
     queue_source = '{21, 22, 23};
     associative_source = '{-1: 31, 4: 44};
+    dynamic_alternative = '{11, 99, 13};
+    dynamic_short = '{11, 12};
     dynamic_result = copy_dynamic(
         copy_dynamic(dynamic_source));
     queue_result = copy_queue(queue_source);
     associative_result = copy_associative(
         associative_source);
+    query_result = $size(copy_dynamic(dynamic_source))
+        + copy_queue(queue_source).size()
+        + $bits(copy_dynamic(dynamic_source))
+        + $dimensions(copy_dynamic(dynamic_source))
+        + $unpacked_dimensions(copy_dynamic(dynamic_source))
+        + $left(copy_dynamic(dynamic_source))
+        + $low(copy_dynamic(dynamic_source))
+        + $increment(copy_dynamic(dynamic_source))
+        + $right(copy_dynamic(dynamic_source))
+        + $high(copy_dynamic(dynamic_source));
+    reduction_result = copy_dynamic(dynamic_source).sum();
+    maximum_result = copy_queue(queue_source).max();
+    direct_result = copy_dynamic(dynamic_source)[1];
+    conditional_result = 1'b1
+        ? copy_dynamic(dynamic_source)
+        : copy_dynamic(dynamic_alternative);
+    conditional_merged = 1'bx
+        ? copy_dynamic(dynamic_source)
+        : copy_dynamic(dynamic_alternative);
+    conditional_shape = 1'bx
+        ? copy_dynamic(dynamic_source)
+        : copy_dynamic(dynamic_short);
+    transformed_result =
+        copy_dynamic(dynamic_source).sum() with (
+            item.index == 1 ? item : 0);
+    found_result = copy_dynamic(dynamic_source).find() with (
+        item > 11);
+    found_index_result =
+        copy_queue(queue_source).find_index() with (
+            item >= 22);
+    unique_result =
+        copy_dynamic(dynamic_source).unique() with (
+            item == 13 ? 12 : item);
   end
 endmodule
 )",
@@ -387,7 +474,15 @@ endmodule
                return std::holds_alternative<
                    fsim::runtime::simir::Call>(operation);
              })
-         == 4);
+         == 22);
+  assert(std::ranges::count_if(
+             nonstatic_process.operations,
+             [](const auto& operation) {
+               return std::holds_alternative<
+                   fsim::runtime::simir::ConditionalContainerSelect>(
+                   operation);
+             })
+         == 3);
   assert(std::ranges::any_of(
       nonstatic_process.debug_container_locals,
       [](const auto& local) {
@@ -446,6 +541,45 @@ endmodule
       && associative_value.keys[0].low_word().aval
           == UINT64_C(0xffffffff)
       && associative_value.keys[1].low_word().aval == 4);
+  const auto query_result =
+      nonstatic_elaborated.design->find_signal("query_result");
+  const auto reduction_result =
+      nonstatic_elaborated.design->find_signal("reduction_result");
+  const auto direct_result =
+      nonstatic_elaborated.design->find_signal("direct_result");
+  assert(query_result && reduction_result && direct_result);
+  assert(
+      nonstatic_interpreter->signal_value(*query_result)
+              .low_word().aval == 36
+      && nonstatic_interpreter->signal_value(*reduction_result)
+              .low_word().aval == 36
+      && nonstatic_interpreter->signal_value(*direct_result)
+              .low_word().aval == 12
+      && bytes(nonstatic_value("maximum_result"))
+          == std::vector<std::uint64_t>({23}));
+  assert(bytes(nonstatic_value("conditional_result"))
+         == std::vector<std::uint64_t>({11, 12, 13}));
+  const auto& conditional_merged =
+      nonstatic_value("conditional_merged");
+  assert(
+      bytes(conditional_merged)
+          == std::vector<std::uint64_t>({11, 0, 13})
+      && conditional_merged.elements[0].low_word().bval == 0
+      && conditional_merged.elements[1].low_word().bval == 0
+      && conditional_merged.elements[2].low_word().bval == 0);
+  assert(nonstatic_value("conditional_shape").elements.empty());
+  const auto transformed_result =
+      nonstatic_elaborated.design->find_signal("transformed_result");
+  assert(
+      transformed_result
+      && nonstatic_interpreter->signal_value(*transformed_result)
+             .low_word().aval == 12
+      && bytes(nonstatic_value("found_result"))
+          == std::vector<std::uint64_t>({12, 13})
+      && bytes(nonstatic_value("found_index_result"))
+          == std::vector<std::uint64_t>({1, 2})
+      && bytes(nonstatic_value("unique_result"))
+          == std::vector<std::uint64_t>({11, 12}));
 
   const auto reject_fixed_return =
       [](const std::string_view path,
@@ -472,6 +606,53 @@ endmodule
             !rejected_result.ok()
             && has_diagnostic(rejected_result, code));
       };
+  reject_fixed_return(
+      "conditional_container_profile_mismatch.sv",
+      R"(
+module conditional_container_profile_mismatch;
+  byte dynamic_source[];
+  byte queue_source[$];
+  int target;
+  function automatic byte dynamic_value[]();
+    return dynamic_source;
+  endfunction
+  function automatic byte queue_value[$]();
+    return queue_source;
+  endfunction
+  initial target = $dimensions(
+      1'b1 ? dynamic_value() : queue_value());
+endmodule
+)",
+      "sv:work.conditional_container_profile_mismatch",
+      "FSIM-ELAB-SVCOND-002");
+  reject_fixed_return(
+      "conditional_associative_result.sv",
+      R"(
+module conditional_associative_result;
+  byte source[int];
+  byte target[int];
+  function automatic byte value[int]();
+    return source;
+  endfunction
+  initial target = 1'b1 ? value() : value();
+endmodule
+)",
+      "sv:work.conditional_associative_result",
+      "FSIM-ELAB-SVCOND-003");
+  reject_fixed_return(
+      "mutating_temporary_function_result.sv",
+      R"(
+module mutating_temporary_function_result;
+  byte source[$];
+  logic [7:0] target;
+  function automatic byte value[$]();
+    return source;
+  endfunction
+  initial target = value().pop_front();
+endmodule
+)",
+      "sv:work.mutating_temporary_function_result",
+      "FSIM-ELAB-SVCONTAINER-022");
   reject_fixed_return(
       "dynamic_function_return.sv",
       R"(

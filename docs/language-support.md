@@ -174,14 +174,21 @@ value into one copied parent value and commit only the selected range.
 Equal-count ranges may use different indices and directions, while width,
 signedness, state domain, and X/Z bits remain exact. Recursive aliasing carries
 the view through nested/generated hierarchy, and disjoint selected writers
-coexist while overlaps retain deterministic rejection. Schema 46 and
-container semantic revision 22 additionally cover fixed and nonstatic
-function-result kinds, ranges/bounds, element/index profiles, result
-operations, specialization, and transitive source provenance; normalized
-equivalent values share native cache identity without a public ABI change.
+coexist while overlaps retain deterministic rejection. Fixed and nonstatic
+container-returning calls may be consumed directly by supported queries,
+indexing, reductions, extrema, uniqueness, and predicate locators. Exactly
+compatible fixed, dynamic, and queue results may also be conditional
+alternatives. Known conditions copy one isolated result; X/Z conditions merge
+equal-shape four-state elements bitwise, coerce unknown bits to zero for
+two-state elements, and reset unequal nonstatic shapes to the empty value.
+Associative conditional values and mutating methods on temporary results remain
+unsupported. Schema 47 and container semantic revision 23 cover result kinds,
+ranges/bounds, element/index profiles, consumer and conditional operations,
+specialization, and transitive source provenance; normalized equivalent values
+share native cache identity without a public ABI change.
 Variable or unknown bounds or indexed widths, nonpositive widths, indirect
-slice receivers, general expression port actuals, general container-valued
-expressions, multidimensional and nonstatic-container slices, element
+slice receivers, general expression port actuals, unrestricted
+container-valued expressions, multidimensional and nonstatic-container slices, element
 conversion, and cross-language slices remain unsupported.
 Direct writable static arrays, dynamic arrays, queues, and bounded queues also
 accept no-argument `reverse()` plus `sort()` and `rsort()` method statements

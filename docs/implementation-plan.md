@@ -5198,6 +5198,53 @@ seconds, containers in 89.85 seconds, and the monolithic application in 13.91
 seconds, on 2026-07-31. Batch 94 is not a ten-batch CI-inspection boundary, so
 no Actions run was inspected.
 
+### Ninety-fifth feature batch — container function-result consumers
+
+Fixed, dynamic-array, and queue-valued SystemVerilog function calls now retain
+their exact container type while nested directly inside supported queries,
+element indexing, reductions, extrema, uniqueness, predicate locators, and
+container-valued conditional expressions. The shared resolver carries fixed
+ranges, current nonstatic bounds, element width/signedness/state, queue bounds,
+and source spans from the visible specialized function declaration into each
+consumer without admitting unrestricted container expressions.
+
+`$bits`, `$dimensions`, `$unpacked_dimensions`, the six bound queries,
+`$size`, and `.size()` use static profile results where the language permits
+and evaluate one isolated runtime snapshot where current nonstatic size is
+required. Plain and transformed reductions, max/unique, find/find-index, and
+direct indexing likewise evaluate each returned call once in lexical order.
+Nested module and package calls therefore cannot alias the shared function
+result frame or observe a later invocation's elements.
+
+The new `ConditionalContainerSelect` SimIR operation accepts exactly compatible
+fixed, dynamic, or queue alternatives. Known conditions copy the selected
+snapshot. X/Z conditions merge equal-shape four-state elements with the scalar
+conditional bit policy, coerce unknown bits to zero for two-state elements,
+and reset unequal nonstatic shapes to their exact empty default. Interpreter
+and LLVM callback execution share one semantic helper. Associative conditional
+values, incompatible profiles, and mutating methods on temporary results retain
+bounded diagnostics.
+
+Positive evidence covers nested source-spanned HIR, fixed and nonstatic query
+families, transformed reductions, extrema/uniqueness/predicate locators,
+known/X and unequal-shape conditionals, one-evaluation call counts,
+module/package/imported/qualified calls, debugger metadata, scalar VCD
+witnesses, interpreter, LLVM O0/O2, cold/warm reuse, and package-edit
+invalidation. Native-object schema 47 and container semantic revision 23
+serialize the conditional operation and exact consumer/profile/provenance
+graph; the dedicated matrix now contains 14 distinct native objects without a
+public ABI change.
+
+The diagnostic catalog now covers all 1,230 production codes, and the source
+gate covers 291 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 443.17 seconds, including scoped locals in 0.96 seconds, functions
+in 11.55 seconds, containers in 358.54 seconds, and the monolithic application
+in 42.38 seconds. Release passed all 59 tests in 136.97 seconds, including
+scoped locals in 0.89 seconds, functions in 10.08 seconds, containers in 94.70
+seconds, and the monolithic application in 14.53 seconds, on 2026-07-31. Batch
+95 is not a ten-batch CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:
