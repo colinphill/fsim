@@ -474,6 +474,29 @@ void test_simir_force_release() {
   require(!interpreter.signal_is_forced(signal), "release state");
   require(interpreter.signal_value(signal).to_msb_string() == "0",
           "release must publish the last underlying value");
+
+  const auto selected = interpreter.add_signal(
+      {"top.selected_force", PackedLogic4::from_msb_string("1010")});
+  interpreter.force_signal_slice(
+      selected, PackedLogic4::from_msb_string("11"), 1);
+  require(
+      interpreter.signal_value(selected).to_msb_string() == "1110",
+      "selected force must preserve surrounding driven bits");
+  interpreter.deposit_signal(
+      selected, PackedLogic4::from_msb_string("0001"));
+  require(
+      interpreter.signal_value(selected).to_msb_string() == "0111",
+      "selected force must mask only its region over new driver values");
+  interpreter.release_signal_slice(selected, 2, 1);
+  require(
+      interpreter.signal_is_forced(selected)
+          && interpreter.signal_value(selected).to_msb_string() == "0011",
+      "partial release must reveal only the released driven bit");
+  interpreter.release_signal_slice(selected, 1, 1);
+  require(
+      !interpreter.signal_is_forced(selected)
+          && interpreter.signal_value(selected).to_msb_string() == "0001",
+      "final selected release must reveal the complete underlying value");
 }
 
 void test_simir_design_stop_identity() {

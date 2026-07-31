@@ -363,6 +363,7 @@ namespace fsim::runtime::simir {
     const PackedLogic4& base,
     const std::int64_t left,
     const std::int64_t right,
+    const std::uint32_t base_offset,
     const std::uint32_t width,
     const bool increasing,
     const bool source_descending,
@@ -415,16 +416,116 @@ namespace fsim::runtime::simir {
     const auto offset = selected >= right
         ? static_cast<std::uint64_t>(selected - right)
         : static_cast<std::uint64_t>(right - selected);
-    if (offset >= source.width()) {
+    if (offset > std::numeric_limits<std::uint32_t>::max()
+                     - base_offset
+        || base_offset + offset >= source.width()) {
       continue;
     }
+    const auto source_offset = base_offset
+        + static_cast<std::uint32_t>(offset);
     if (source.is_logic9()) {
-      result.set_logic9(bit, source.get_logic9(offset));
+      result.set_logic9(bit, source.get_logic9(source_offset));
     } else {
-      result.set(bit, source.get(offset));
+      result.set(bit, source.get(source_offset));
     }
   }
   return result;
+}
+
+[[nodiscard]] std::optional<DynamicPartWrite>
+dynamic_part_write_value(
+    const PackedLogic4& source,
+    const PackedLogic4& base,
+    const DynamicPartIndex& selection) {
+  if (base.width() != 32
+      || selection.width == 0
+      || selection.width > 64
+      || source.width() != selection.width) {
+    throw std::invalid_argument(
+        "dynamic part-select write requires a signed 32-bit base and a "
+        "matching fixed width from 1 through 64");
+  }
+  std::uint32_t raw{};
+  for (std::size_t bit = 0; bit < 32; ++bit) {
+    const auto value = base.get(bit);
+    if (value == Logic4::x || value == Logic4::z) {
+      return std::nullopt;
+    }
+    if (value == Logic4::one) {
+      raw |= UINT32_C(1) << bit;
+    }
+  }
+  const auto signed_base =
+      raw <= static_cast<std::uint32_t>(
+                 std::numeric_limits<std::int32_t>::max())
+          ? static_cast<std::int64_t>(raw)
+          : static_cast<std::int64_t>(raw)
+                - (INT64_C(1) << 32);
+  const auto lower = std::min(selection.left, selection.right);
+  const auto upper = std::max(selection.left, selection.right);
+  const auto edge_distance =
+      static_cast<std::int64_t>(selection.width - 1U);
+  const auto selected_right = selection.increasing
+      ? signed_base
+            + (selection.source_descending ? 0 : edge_distance)
+      : signed_base
+            - (selection.source_descending ? edge_distance : 0);
+  std::optional<std::uint32_t> first_source_bit;
+  std::optional<std::uint32_t> first_target_offset;
+  std::uint32_t selected_width{};
+  for (std::uint32_t bit = 0; bit < selection.width; ++bit) {
+    const auto selected = selection.source_descending
+        ? selected_right + static_cast<std::int64_t>(bit)
+        : selected_right - static_cast<std::int64_t>(bit);
+    if (selected < lower || selected > upper) {
+      continue;
+    }
+    const auto offset = selected >= selection.right
+        ? static_cast<std::uint64_t>(selected - selection.right)
+        : static_cast<std::uint64_t>(selection.right - selected);
+    if (offset > std::numeric_limits<std::uint32_t>::max()) {
+      throw std::invalid_argument(
+          "dynamic part-select write offset is not representable");
+    }
+    if (!first_source_bit) {
+      first_source_bit = bit;
+      if (offset
+          > std::numeric_limits<std::uint32_t>::max()
+                - selection.base_offset) {
+        throw std::invalid_argument(
+            "dynamic part-select write offset is not representable");
+      }
+      first_target_offset = selection.base_offset
+          + static_cast<std::uint32_t>(offset);
+    } else if (
+        bit != *first_source_bit + selected_width
+        || selection.base_offset + offset
+            != *first_target_offset + selected_width) {
+      throw std::invalid_argument(
+          "dynamic part-select write intersection is not contiguous");
+    }
+    ++selected_width;
+  }
+  if (!first_source_bit) {
+    return std::nullopt;
+  }
+  return DynamicPartWrite{
+      extract_value(source, *first_source_bit, selected_width),
+      *first_target_offset};
+}
+
+[[nodiscard]] PackedLogic4 dynamic_part_insert_value(
+    PackedLogic4 target,
+    const PackedLogic4& source,
+    const PackedLogic4& base,
+    const DynamicPartIndex& selection) {
+  const auto write =
+      dynamic_part_write_value(source, base, selection);
+  if (!write) {
+    return target;
+  }
+  return insert_value(
+      std::move(target), write->value, write->offset);
 }
 
 [[nodiscard]] PackedLogic4 concatenate_values(

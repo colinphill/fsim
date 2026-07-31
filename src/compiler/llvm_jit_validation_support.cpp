@@ -3,8 +3,38 @@
 
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 
 namespace fsim::compiler::llvm_detail {
+
+namespace {
+
+[[nodiscard]] std::string instruction_error(
+    const runtime::simir::Process& process,
+    const std::size_t instruction,
+    const std::string_view message) {
+  std::ostringstream result;
+  result << "cannot JIT SimIR process " << process.id << " ('" << process.name
+         << "'), instruction " << instruction << ": " << message;
+  return result.str();
+}
+
+}  // namespace
+
+[[noreturn]] void reject(
+    const runtime::simir::Process& process,
+    const std::size_t instruction,
+    const std::string_view message) {
+  throw LlvmJitError(instruction_error(process, instruction, message));
+}
+
+[[noreturn]] void reject_unsupported(
+    const runtime::simir::Process& process,
+    const std::size_t instruction,
+    const std::string_view message) {
+  throw LlvmJitUnsupportedError(
+      instruction_error(process, instruction, message));
+}
 
 [[nodiscard]] bool valid_symbol(const std::string_view symbol) noexcept {
   if (symbol.empty()) {

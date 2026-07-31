@@ -324,7 +324,11 @@ endmodule
 module dynamic_target;
   logic [15:0] target;
   logic signed [31:0] base;
-  initial target[base +: 4] = 4'ha;
+  initial begin
+    target = 16'h1234;
+    base = 14;
+    target[base +: 4] = 4'ha;
+  end
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
@@ -336,13 +340,24 @@ endmodule
     assert(!rejected_dynamic_width.ok());
     assert(has_diagnostic(
         rejected_dynamic_width, "FSIM-ELAB-SVEXPR-004"));
-    const auto rejected_dynamic_target =
+    const auto elaborated_dynamic_target =
         fsim::elaboration::elaborate(
             invalid_dynamic_parts.design,
             "sv:work.dynamic_target");
-    assert(!rejected_dynamic_target.ok());
-    assert(has_diagnostic(
-        rejected_dynamic_target, "FSIM-ELAB-SVEXPR-005"));
+    assert(elaborated_dynamic_target.ok());
+    const auto dynamic_target_signal =
+        elaborated_dynamic_target.design->find_signal("target");
+    assert(dynamic_target_signal);
+    auto dynamic_target_interpreter =
+        elaborated_dynamic_target.design->create_interpreter();
+    assert(
+        dynamic_target_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        dynamic_target_interpreter
+            ->signal_value(*dynamic_target_signal)
+            .to_msb_string()
+        == "1001001000110100");
 
     const auto invalid_streams = fsim::frontend::parse_text(
         "invalid_streams.sv",

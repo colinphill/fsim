@@ -28,6 +28,8 @@ SignalId Interpreter::add_signal(Signal signal) {
   impl_->external_driver_values.emplace_back();
   impl_->signal_last_values.push_back(signal.initial_value);
   impl_->forced_values.emplace_back();
+  impl_->forced_masks.emplace_back(
+      signal.initial_value.width(), Logic4::zero);
   impl_->signals.push_back(std::move(signal));
   impl_->static_fanout.emplace_back();
   impl_->dynamic_fanout.emplace_back();
@@ -303,22 +305,30 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value) {
 }
 
 void Interpreter::force_signal(SignalId signal, PackedLogic4 value) {
-  if (impl_->get_signal(signal).initial_value.width() != value.width()) {
+  const auto width = impl_->get_signal(signal).initial_value.width();
+  if (width != value.width()) {
     throw std::invalid_argument("SimIR signal force width mismatch");
   }
-  value = impl_->normalize_signal_value(
-      signal, std::move(value));
-  impl_->forced_values[signal] = value;
-  impl_->publish(signal, std::move(value));
+  impl_->force_slice(signal, std::move(value), 0);
 }
 
 void Interpreter::release_signal(SignalId signal) {
-  (void)impl_->get_signal(signal);
-  if (!impl_->forced_values[signal].has_value()) {
-    return;
-  }
-  impl_->forced_values[signal].reset();
-  impl_->publish(signal, impl_->driven_values[signal]);
+  const auto width = impl_->get_signal(signal).initial_value.width();
+  impl_->release_slice(signal, 0, width);
+}
+
+void Interpreter::force_signal_slice(
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset) {
+  impl_->force_slice(signal, std::move(value), offset);
+}
+
+void Interpreter::release_signal_slice(
+    const SignalId signal,
+    const std::size_t offset,
+    const std::size_t width) {
+  impl_->release_slice(signal, offset, width);
 }
 
 bool Interpreter::signal_is_forced(const SignalId signal) const {

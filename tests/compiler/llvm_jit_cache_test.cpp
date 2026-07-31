@@ -1983,6 +1983,7 @@ void test_persistent_object_cache() {
       root / "nonstatic-function-return");
   test_expression_selection_cache_identity(
       root / "expression-selection");
+  test_procedural_update_cache_identity(root / "procedural-update");
   test_container_predicate_cache_identity(
       root / "container-predicate");
   test_container_reduction_cache_identity(

@@ -113,6 +113,9 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     runtime.write_projected_waveform_slice_logic9 =
         write_projected_waveform_slice_logic9;
     runtime.write_formatted_logic9 = write_formatted_logic9;
+    runtime.force_signal_slice = force_signal_slice;
+    runtime.force_signal_slice_logic9 = force_signal_slice_logic9;
+    runtime.release_signal_slice = release_signal_slice;
     runtime.load_string = load_string;
     runtime.copy_string = copy_string;
     runtime.read_string_object = read_string_object;

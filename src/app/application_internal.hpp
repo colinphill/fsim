@@ -283,6 +283,27 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       const std::uint32_t width,
       const fsim_jit_logic9_word_v1* value) noexcept;
 
+  static void force_signal_slice(
+      void* context,
+      std::uint32_t signal,
+      std::uint32_t offset,
+      std::uint32_t width,
+      std::uint64_t aval,
+      std::uint64_t bval) noexcept;
+
+  static void force_signal_slice_logic9(
+      void* context,
+      std::uint32_t signal,
+      std::uint32_t offset,
+      std::uint32_t width,
+      const fsim_jit_logic9_word_v1* value) noexcept;
+
+  static void release_signal_slice(
+      void* context,
+      std::uint32_t signal,
+      std::uint32_t offset,
+      std::uint32_t width) noexcept;
+
   static void write_update_slice(
       void* context,
       const std::uint32_t signal,

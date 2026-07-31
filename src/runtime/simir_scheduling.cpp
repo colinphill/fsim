@@ -11,10 +11,80 @@ void Interpreter::Impl::commit(SignalId signal_id, PackedLogic4 value)  {
     value = normalize_signal_value(
         signal_id, std::move(value));
     driven_values[signal_id] = value;
-    if (!forced_values[signal_id].has_value()) {
-      publish(signal_id, std::move(value));
+    publish(signal_id, apply_force(signal_id, std::move(value)));
+  }
+
+PackedLogic4 Interpreter::Impl::apply_force(
+    const SignalId signal_id,
+    PackedLogic4 value) const {
+  if (!forced_values[signal_id]) {
+    return value;
+  }
+  const auto& forced = *forced_values[signal_id];
+  const auto& mask = forced_masks[signal_id];
+  for (std::size_t bit = 0; bit < value.width(); ++bit) {
+    if (mask.get(bit) != Logic4::one) {
+      continue;
+    }
+    if (value.is_logic9()) {
+      value.set_logic9(bit, forced.get_logic9(bit));
+    } else {
+      value.set(bit, forced.get(bit));
     }
   }
+  return value;
+}
+
+void Interpreter::Impl::force_slice(
+    const SignalId signal_id,
+    PackedLogic4 value,
+    const std::size_t offset) {
+  const auto& signal = get_signal(signal_id);
+  if (offset > signal.initial_value.width()
+      || value.width() > signal.initial_value.width() - offset) {
+    throw std::invalid_argument("SimIR signal force slice is out of range");
+  }
+  value = coerce_value_kind(std::move(value), signal.value_kind);
+  if (!forced_values[signal_id]) {
+    forced_values[signal_id] = driven_values[signal_id];
+  }
+  forced_values[signal_id] = insert_value(
+      std::move(*forced_values[signal_id]), value, offset);
+  for (std::size_t bit = 0; bit < value.width(); ++bit) {
+    forced_masks[signal_id].set(offset + bit, Logic4::one);
+  }
+  publish(
+      signal_id,
+      apply_force(signal_id, driven_values[signal_id]));
+}
+
+void Interpreter::Impl::release_slice(
+    const SignalId signal_id,
+    const std::size_t offset,
+    const std::size_t width) {
+  const auto& signal = get_signal(signal_id);
+  if (offset > signal.initial_value.width()
+      || width > signal.initial_value.width() - offset) {
+    throw std::invalid_argument("SimIR signal release slice is out of range");
+  }
+  if (!forced_values[signal_id]) {
+    return;
+  }
+  for (std::size_t bit = 0; bit < width; ++bit) {
+    forced_masks[signal_id].set(offset + bit, Logic4::zero);
+  }
+  bool any_forced = false;
+  for (std::size_t bit = 0; bit < signal.initial_value.width(); ++bit) {
+    any_forced = any_forced
+        || forced_masks[signal_id].get(bit) == Logic4::one;
+  }
+  if (!any_forced) {
+    forced_values[signal_id].reset();
+  }
+  publish(
+      signal_id,
+      apply_force(signal_id, driven_values[signal_id]));
+}
 
 [[nodiscard]] PackedLogic4 Interpreter::Impl::initial_driver_value(
     const SignalId signal_id) const  {
@@ -642,6 +712,93 @@ void Interpreter::Impl::schedule_projected(
         rejection,
         mode);
   }
+
+void Interpreter::Impl::handle_external_boundary(
+    ProcessState& process,
+    const InstructionIndex instruction,
+    const InstructionIndex next_instruction,
+    const ExternalSuspension& suspension) {
+  if (instruction >= process.program.operations.size()) {
+    process.pc = instruction;
+    fail(process, "executor returned an invalid dynamic boundary instruction");
+  }
+  if (instruction == std::numeric_limits<InstructionIndex>::max()
+      || next_instruction != instruction + 1) {
+    process.pc = instruction;
+    fail(
+        process,
+        "executor returned a non-sequential dynamic boundary resume "
+        "instruction");
+  }
+  process.pc = next_instruction;
+  clear_wait_timeout(process);
+
+  switch (suspension.kind) {
+  case ExternalSuspendKind::simir_boundary:
+    process.pc = instruction;
+    fail(process, "missing dynamic suspension kind");
+  case ExternalSuspendKind::wait_for:
+    if (suspension.delay == 0) {
+      queue_next_delta(process.program.id);
+    } else {
+      if (suspension.delay
+          > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
+        process.pc = instruction;
+        fail(process, "simulation time overflow in dynamic wait");
+      }
+      queue_at(process.program.id, scheduler.now() + suspension.delay);
+    }
+    break;
+  case ExternalSuspendKind::wait_on:
+    if (suspension.sensitivity.empty()) {
+      process.pc = instruction;
+      fail(process, "dynamic wait requires at least one event");
+    }
+    process.waiting_on_signal = true;
+    process.dynamic_sensitivity = suspension.sensitivity;
+    std::sort(
+        process.dynamic_sensitivity.begin(),
+        process.dynamic_sensitivity.end(),
+        [](const Sensitivity& lhs, const Sensitivity& rhs) {
+          return lhs.signal < rhs.signal
+              || (lhs.signal == rhs.signal && lhs.edge < rhs.edge);
+        });
+    process.dynamic_sensitivity.erase(
+        std::unique(
+            process.dynamic_sensitivity.begin(),
+            process.dynamic_sensitivity.end()),
+        process.dynamic_sensitivity.end());
+    process.dynamic_wait_all = suspension.wait_all;
+    process.dynamic_triggered.assign(
+        process.dynamic_sensitivity.size(), false);
+    for (const auto& sensitivity : process.dynamic_sensitivity) {
+      (void)get_signal(sensitivity.signal);
+      if (sensitivity.edge != EdgeKind::any) {
+        process.pc = instruction;
+        fail(process, "dynamic event wait must use any-change sensitivity");
+      }
+      dynamic_fanout[sensitivity.signal].push_back(
+          {process.program.id, sensitivity.edge});
+    }
+    break;
+  case ExternalSuspendKind::wait_sensitivity:
+    if (process.program.static_sensitivity.empty()) {
+      process.pc = instruction;
+      fail(process, "dynamic static wait has no sensitivity list");
+    }
+    process.waiting_on_static = true;
+    break;
+  case ExternalSuspendKind::yield:
+    queue_next_delta(process.program.id);
+    break;
+  case ExternalSuspendKind::halt:
+    process.halted = true;
+    break;
+  }
+  notify_execution_point(
+      process, instruction, ExecutionPointKind::process_suspend,
+      process.current_source);
+}
 
 [[noreturn]] void Interpreter::Impl::fail(const ProcessState &process,
                        const std::string &message) const  {

@@ -34,6 +34,8 @@ struct ValidatedProcess {
   bool uses_write_inertial_slice{};
   bool uses_write_projected_slice{};
   bool uses_write_projected_waveform_slice{};
+  bool uses_force_signal_slice{};
+  bool uses_release_signal_slice{};
   bool uses_debug_points{};
   bool uses_signal_event{};
   bool uses_signal_last_value{};
@@ -91,6 +93,13 @@ validate_dynamic_part_select_source_width(
     const runtime::simir::DynamicPartSelect& operation,
     std::uint32_t source_width);
 [[nodiscard]] std::optional<std::string>
+validate_dynamic_part_index_metadata(
+    const runtime::simir::DynamicPartIndex& selection);
+[[nodiscard]] std::optional<std::string>
+validate_dynamic_part_index_bounds(
+    const runtime::simir::DynamicPartIndex& selection,
+    std::uint64_t target_width);
+[[nodiscard]] std::optional<std::string>
 validate_expression_profile_metadata(
     std::span<const runtime::simir::ExpressionProfile> profiles);
 [[nodiscard]] std::optional<std::string>
@@ -102,6 +111,26 @@ validate_insert_bounds(
     const runtime::simir::Insert& operation,
     std::uint32_t target_width,
     std::uint32_t source_width);
+
+struct OperationValidationError {
+  std::size_t instruction{};
+  std::string message;
+};
+
+[[nodiscard]] std::optional<OperationValidationError>
+validate_selection_operation_bounds(
+    const runtime::simir::Process& process,
+    std::span<const std::uint32_t> register_widths,
+    std::span<const std::uint32_t> signal_widths);
+
+[[noreturn]] void reject(
+    const runtime::simir::Process& process,
+    std::size_t instruction,
+    std::string_view message);
+[[noreturn]] void reject_unsupported(
+    const runtime::simir::Process& process,
+    std::size_t instruction,
+    std::string_view message);
 
 [[nodiscard]] ValidatedProcess validate_process(
     const runtime::simir::Process& process,

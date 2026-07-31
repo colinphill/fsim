@@ -301,6 +301,50 @@ endmodule
     assert(has_diagnostic(
         rejected_assignment_control, "FSIM-ELAB-105"));
 
+    auto inconsistent_update = fsim::frontend::parse_text(
+        "inconsistent_update.sv",
+        R"(
+module inconsistent_update;
+  logic [3:0] source;
+  logic [3:0] result;
+  initial result += source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(inconsistent_update.ok());
+    inconsistent_update.design.units.front()
+        .processes.front()
+        .statements.front()
+        .procedural_update_operator = "-";
+    const auto rejected_update = fsim::elaboration::elaborate(
+        inconsistent_update.design, "inconsistent_update");
+    assert(!rejected_update.ok());
+    assert(has_diagnostic(rejected_update, "FSIM-ELAB-106"));
+
+    const auto invalid_force = fsim::frontend::parse_text(
+        "invalid_force.sv",
+        R"(
+module invalid_force;
+  logic [3:0] four_state;
+  bit [3:0] two_state;
+  logic [1:0] index;
+  initial begin
+    logic [3:0] local_value;
+    force local_value = 4'h1;
+    force four_state[index] = 1'b1;
+    force two_state = four_state;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_force.ok());
+    const auto rejected_force = fsim::elaboration::elaborate(
+        invalid_force.design, "invalid_force");
+    assert(!rejected_force.ok());
+    assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-001"));
+    assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-002"));
+    assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-003"));
+
     const auto width_conversion = fsim::frontend::parse_text(
         "width_conversion.sv",
         R"(

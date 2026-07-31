@@ -39,6 +39,22 @@ struct EncodedBit {
   llvm::Value* bval{};
 };
 
+struct EncodedDynamicPartWrite {
+  EncodedValue value;
+  llvm::Value* offset{};
+  llvm::Value* width{};
+};
+
+[[nodiscard]] EncodedDynamicPartWrite lower_dynamic_part_write(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    llvm::Type* i32,
+    llvm::Type* i64,
+    const std::vector<RegisterSlot>& registers,
+    runtime::simir::RegisterId source,
+    const runtime::simir::DynamicPartIndex& selection,
+    runtime::simir::ValueKind signal_kind);
+
 [[nodiscard]] runtime::simir::ShiftOperator reverse_shift(
     runtime::simir::ShiftOperator operation) noexcept;
 
@@ -137,6 +153,7 @@ struct ValueOperationLowerer {
   void lower(const runtime::simir::DynamicPartSelect& operation);
   void lower(const runtime::simir::Insert& operation);
   void lower(const runtime::simir::DynamicInsert& operation);
+  void lower(const runtime::simir::DynamicPartInsert& operation);
   void lower(const runtime::simir::Concatenate& operation);
   void lower(const runtime::simir::Binary& operation);
   void lower(const runtime::simir::IntegerUnary& operation);
@@ -356,6 +373,21 @@ struct SignalOperationLowerer {
   llvm::Value* context_pointer;
   llvm::Value* read_callback;
   llvm::Value* read_logic9_callback;
+  llvm::Value* write_callback;
+  llvm::Value* write_update_callback;
+  llvm::Value* write_after_callback;
+  llvm::Value* write_logic9_callback;
+  llvm::Value* write_update_logic9_callback;
+  llvm::Value* write_after_logic9_callback;
+  llvm::Value* write_blocking_slice_callback;
+  llvm::Value* write_update_slice_callback;
+  llvm::Value* write_after_slice_callback;
+  llvm::Value* write_blocking_slice_logic9_callback;
+  llvm::Value* write_update_slice_logic9_callback;
+  llvm::Value* write_after_slice_logic9_callback;
+  llvm::Value* force_signal_slice_callback;
+  llvm::Value* force_signal_slice_logic9_callback;
+  llvm::Value* release_signal_slice_callback;
   llvm::Value* write_projected_waveform_callback;
   llvm::Value* write_projected_waveform_logic9_callback;
   llvm::Value* write_projected_callback;
@@ -369,6 +401,15 @@ struct SignalOperationLowerer {
   llvm::Value* signal_active_callback;
   llvm::FunctionType* read_type;
   llvm::FunctionType* read_logic9_type;
+  llvm::FunctionType* write_type;
+  llvm::FunctionType* write_after_type;
+  llvm::FunctionType* write_logic9_type;
+  llvm::FunctionType* write_after_logic9_type;
+  llvm::FunctionType* write_slice_type;
+  llvm::FunctionType* write_after_slice_type;
+  llvm::FunctionType* write_slice_logic9_type;
+  llvm::FunctionType* write_after_slice_logic9_type;
+  llvm::FunctionType* release_slice_type;
   llvm::FunctionType* write_projected_waveform_type;
   llvm::FunctionType* write_projected_waveform_logic9_type;
   llvm::FunctionType* write_projected_type;
@@ -393,6 +434,14 @@ struct SignalOperationLowerer {
       std::string_view)> runtime_error_if;
 
   void lower(const runtime::simir::LoadConstant& operation);
+  void lower(const runtime::simir::WriteBlocking& operation);
+  void lower(const runtime::simir::WriteUpdate& operation);
+  void lower(const runtime::simir::WriteAfter& operation);
+  void lower(const runtime::simir::WriteBlockingSlice& operation);
+  void lower(const runtime::simir::WriteUpdateSlice& operation);
+  void lower(const runtime::simir::WriteAfterSlice& operation);
+  void lower(const runtime::simir::ForceSignalSlice& operation);
+  void lower(const runtime::simir::ReleaseSignalSlice& operation);
   void lower(const runtime::simir::WriteProjectedWaveform& operation);
   void lower(const runtime::simir::WriteProjected& operation);
   void lower(const runtime::simir::WriteInertial& operation);

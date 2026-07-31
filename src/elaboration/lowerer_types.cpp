@@ -8,6 +8,10 @@ using namespace elaboration_detail;
 
 
     std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) const {
+        if (expression.kind == ExpressionKind::Update
+            && expression.operands.size() == 1) {
+            return infer_width(expression.operands.front());
+        }
         if (expression.kind == ExpressionKind::BooleanLiteral) {
             return std::size_t{1};
         }
@@ -475,6 +479,9 @@ using namespace elaboration_detail;
                 return false;
             }
             return is_signed_expression(expression.operands[0]);
+        case ExpressionKind::Update:
+            return expression.operands.size() == 1
+                && is_signed_expression(expression.operands.front());
         case ExpressionKind::Call:
             if (expression.operands.size() == 1
                 && (expression.text == ".sum"
@@ -671,6 +678,8 @@ using namespace elaboration_detail;
                     || expression.text == "abs")
                 && is_integer_expression(
                     expression.operands.front());
+        case ExpressionKind::Update:
+            return false;
         case ExpressionKind::Binary:
             return expression.operands.size() == 2
                 && (expression.text == "+"
@@ -771,6 +780,13 @@ using namespace elaboration_detail;
                         collect_identifiers(element.value, output);
                     }
                 }
+                break;
+            case StatementKind::Force:
+                collect_identifiers(statement.value, output);
+                collect_identifiers(statement.target, output);
+                break;
+            case StatementKind::Release:
+                collect_identifiers(statement.target, output);
                 break;
             case StatementKind::If:
             case StatementKind::Assert:

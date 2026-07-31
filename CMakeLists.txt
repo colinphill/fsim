@@ -361,6 +361,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/hierarchy_systemc.cpp
       src/elaboration/hierarchy_types.cpp
       src/elaboration/lowerer_assignment.cpp
+      src/elaboration/lowerer_procedural_updates.cpp
       src/elaboration/lowerer_case_qualified.cpp
       src/elaboration/lowerer_control.cpp
       src/elaboration/lowerer_expression.cpp
@@ -511,6 +512,7 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit.cpp
       src/compiler/llvm_jit_cache_key.cpp
       src/compiler/llvm_jit_lowering.cpp
+      src/compiler/llvm_jit_dynamic_part.cpp
       src/compiler/llvm_jit_module.cpp
       src/compiler/llvm_jit_operations_control.cpp
       src/compiler/llvm_jit_operations_logic.cpp

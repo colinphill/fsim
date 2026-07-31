@@ -146,6 +146,20 @@ struct Interpreter::Impl::ExecutionContext final
         offset);
   }
 
+  void force_signal_slice(
+      const SignalId signal,
+      PackedLogic4 value,
+      const std::size_t offset) override {
+    owner.force_slice(signal, std::move(value), offset);
+  }
+
+  void release_signal_slice(
+      const SignalId signal,
+      const std::size_t offset,
+      const std::size_t width) override {
+    owner.release_slice(signal, offset, width);
+  }
+
   void write_update(
       const SignalId signal, PackedLogic4 value) override {
     owner.stage_update(process, signal, std::move(value));
@@ -840,94 +854,6 @@ void Interpreter::Impl::handle_boundary(
       "executor returned at an operation that is not a kernel boundary");
 }
 
-void Interpreter::Impl::handle_external_boundary(
-    ProcessState& process,
-    const InstructionIndex instruction,
-    const InstructionIndex next_instruction,
-    const ExternalSuspension& suspension) {
-  if (instruction >= process.program.operations.size()) {
-    process.pc = instruction;
-    fail(process, "executor returned an invalid dynamic boundary instruction");
-  }
-  if (instruction == std::numeric_limits<InstructionIndex>::max()
-      || next_instruction != instruction + 1) {
-    process.pc = instruction;
-    fail(
-        process,
-        "executor returned a non-sequential dynamic boundary resume "
-        "instruction");
-  }
-  process.pc = next_instruction;
-  clear_wait_timeout(process);
-
-  switch (suspension.kind) {
-  case ExternalSuspendKind::simir_boundary:
-    process.pc = instruction;
-    fail(process, "missing dynamic suspension kind");
-  case ExternalSuspendKind::wait_for:
-    if (suspension.delay == 0) {
-      queue_next_delta(process.program.id);
-    } else {
-      if (suspension.delay
-          > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
-        process.pc = instruction;
-        fail(process, "simulation time overflow in dynamic wait");
-      }
-      queue_at(
-          process.program.id, scheduler.now() + suspension.delay);
-    }
-    break;
-  case ExternalSuspendKind::wait_on:
-    if (suspension.sensitivity.empty()) {
-      process.pc = instruction;
-      fail(process, "dynamic wait requires at least one event");
-    }
-    process.waiting_on_signal = true;
-    process.dynamic_sensitivity = suspension.sensitivity;
-    std::sort(
-        process.dynamic_sensitivity.begin(),
-        process.dynamic_sensitivity.end(),
-        [](const Sensitivity& lhs, const Sensitivity& rhs) {
-          return lhs.signal < rhs.signal
-              || (lhs.signal == rhs.signal && lhs.edge < rhs.edge);
-        });
-    process.dynamic_sensitivity.erase(
-        std::unique(
-            process.dynamic_sensitivity.begin(),
-            process.dynamic_sensitivity.end()),
-        process.dynamic_sensitivity.end());
-    process.dynamic_wait_all = suspension.wait_all;
-    process.dynamic_triggered.assign(
-        process.dynamic_sensitivity.size(), false);
-    for (const auto& sensitivity : process.dynamic_sensitivity) {
-      (void)get_signal(sensitivity.signal);
-      if (sensitivity.edge != EdgeKind::any) {
-        process.pc = instruction;
-        fail(process, "dynamic event wait must use any-change sensitivity");
-      }
-      dynamic_fanout[sensitivity.signal].push_back(
-          {process.program.id, sensitivity.edge});
-    }
-    break;
-  case ExternalSuspendKind::wait_sensitivity:
-    if (process.program.static_sensitivity.empty()) {
-      process.pc = instruction;
-      fail(process, "dynamic static wait has no sensitivity list");
-    }
-    process.waiting_on_static = true;
-    break;
-  case ExternalSuspendKind::yield:
-    queue_next_delta(process.program.id);
-    break;
-  case ExternalSuspendKind::halt:
-    process.halted = true;
-    break;
-  }
-  notify_execution_point(
-      process, instruction, ExecutionPointKind::process_suspend,
-      process.current_source);
-}
-
 void Interpreter::Impl::execute(ProcessId id) {
   auto &process = get_process(id);
   if (process.executor) {
@@ -1239,6 +1165,7 @@ void Interpreter::Impl::execute(ProcessId id) {
                         get_register(process, op.base),
                         op.left,
                         op.right,
+                        op.base_offset,
                         op.width,
                         op.increasing,
                         op.source_descending,
@@ -1269,6 +1196,20 @@ void Interpreter::Impl::execute(ProcessId id) {
                         dynamic_index_offset(
                             get_register(process, op.selection.index),
                             op.selection));
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
+            [&](const DynamicPartInsert& op) {
+              try {
+                get_register(process, op.destination) =
+                    dynamic_part_insert_value(
+                        get_register(process, op.target),
+                        get_register(process, op.source),
+                        get_register(
+                            process, op.selection.base),
+                        op.selection);
               } catch (const std::invalid_argument& error) {
                 fail(process, error.what());
               }
@@ -1529,6 +1470,90 @@ void Interpreter::Impl::execute(ProcessId id) {
                         std::move(value),
                         offset);
                   });
+            },
+            [&](const WriteBlockingDynamicPartSlice& op) {
+              try {
+                const auto write = dynamic_part_write_value(
+                    get_register(process, op.source),
+                    get_register(process, op.selection.base),
+                    op.selection);
+                ++process.pc;
+                if (write) {
+                  commit_driver_slice(
+                      process.program.id,
+                      op.signal,
+                      write->value,
+                      write->offset);
+                }
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+            },
+            [&](const WriteUpdateDynamicPartSlice& op) {
+              try {
+                const auto write = dynamic_part_write_value(
+                    get_register(process, op.source),
+                    get_register(process, op.selection.base),
+                    op.selection);
+                ++process.pc;
+                if (write) {
+                  stage_update_slice(
+                      process.program.id,
+                      op.signal,
+                      write->value,
+                      write->offset);
+                }
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+            },
+            [&](const WriteAfterDynamicPartSlice& op) {
+              try {
+                auto write = dynamic_part_write_value(
+                    get_register(process, op.source),
+                    get_register(process, op.selection.base),
+                    op.selection);
+                ++process.pc;
+                if (write) {
+                  scheduler.schedule_after(
+                      op.delay,
+                      SchedulerPhase::update,
+                      process.program.id,
+                      [this,
+                       driver = process.program.id,
+                       signal = op.signal,
+                       write = std::move(*write)](
+                          Scheduler&) mutable {
+                        stage_update_slice(
+                            driver,
+                            signal,
+                            std::move(write.value),
+                            write.offset);
+                      });
+                }
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+            },
+            [&](const ForceSignalSlice& op) {
+              try {
+                force_slice(
+                    op.signal,
+                    get_register(process, op.source),
+                    op.offset);
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
+            [&](const ReleaseSignalSlice& op) {
+              try {
+                release_slice(
+                    op.signal, op.offset, op.width);
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
             },
             [&](const WriteInertialDynamicSlice& op) {
               auto value = get_register(process, op.source);

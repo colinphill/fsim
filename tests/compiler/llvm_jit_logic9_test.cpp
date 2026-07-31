@@ -272,11 +272,102 @@ void test_rejections() {
             "mismatched_dynamic_part_range",
             dynamic_part_process(
                 DynamicPartSelect{
-                    2, 0, 1, 7, 0, 4, true, true, false}),
+                    2, 0, 1, 7, 0, 4, true, true, false, 12}),
             no_signals);
       },
-      "DynamicPartSelect declared range does not match its source register "
-      "width");
+      "DynamicPartSelect declared range is outside its source register");
+  const auto dynamic_part_write_process =
+      [](const Operation operation) {
+        Process process;
+        process.name = "invalid_dynamic_part_write";
+        process.register_count = 4;
+        process.operations = {
+            LoadConstant{
+                0,
+                PackedLogic4::from_msb_string("1010101111001101")},
+            LoadConstant{
+                1, PackedLogic4::from_msb_string("1100")},
+            LoadConstant{
+                2, PackedLogic4::from_aval_bval(32, 4, 0)},
+            operation,
+            Halt{}};
+        return process;
+      };
+  expect_error(
+      [&] {
+        jit.add_process(
+            "zero_width_dynamic_part_insert",
+            dynamic_part_write_process(
+                DynamicPartInsert{
+                    3, 0, 1,
+                    DynamicPartIndex{
+                        2, 7, 0, 0, 0, true, true}}),
+            no_signals);
+      },
+      "dynamic part-select write width must be from 1 through 64");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "outside_dynamic_part_insert",
+            dynamic_part_write_process(
+                DynamicPartInsert{
+                    3, 0, 1,
+                    DynamicPartIndex{
+                        2, 7, 0, 12, 4, true, true}}),
+            no_signals);
+      },
+      "dynamic part-select write range is outside its packed target");
+  const std::array<std::uint32_t, 1> wide_signal{16};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "outside_dynamic_part_signal_write",
+            dynamic_part_write_process(
+                WriteBlockingDynamicPartSlice{
+                    0, 1,
+                    DynamicPartIndex{
+                        2, 7, 0, 12, 4, true, true}}),
+            wide_signal);
+      },
+      "dynamic part-select write range is outside its packed target");
+
+  const auto force_release_process =
+      [](const Operation operation) {
+        Process process;
+        process.name = "invalid_force_release";
+        process.register_count = 1;
+        process.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("1010")},
+            operation,
+            Halt{}};
+        return process;
+      };
+  const std::array<std::uint32_t, 1> four_bit_signal{4};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "outside_force_slice",
+            force_release_process(ForceSignalSlice{0, 0, 1}),
+            four_bit_signal);
+      },
+      "ForceSignalSlice range is outside its signal");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "zero_width_release_slice",
+            force_release_process(ReleaseSignalSlice{0, 0, 0}),
+            four_bit_signal);
+      },
+      "ReleaseSignalSlice width must be greater than zero");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "outside_release_slice",
+            force_release_process(ReleaseSignalSlice{0, 3, 2}),
+            four_bit_signal);
+      },
+      "ReleaseSignalSlice range is outside its signal");
   const auto invalid_profile_process =
       [&](const std::uint32_t width,
           const ExpressionSizingKind sizing,

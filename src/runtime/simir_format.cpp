@@ -67,6 +67,21 @@ template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
           [](const WriteAfterDynamicSlice& value) {
             return std::optional{value.signal};
           },
+          [](const WriteBlockingDynamicPartSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteUpdateDynamicPartSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const WriteAfterDynamicPartSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const ForceSignalSlice& value) {
+            return std::optional{value.signal};
+          },
+          [](const ReleaseSignalSlice& value) {
+            return std::optional{value.signal};
+          },
           [](const WriteInertialDynamicSlice& value) {
             return std::optional{value.signal};
           },

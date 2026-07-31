@@ -565,6 +565,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-192` | error | A streaming concatenation contains no operand. |
 | `FSIM-SV-PARSE-193` | error | Expected the inner `}` after streaming-concatenation operands. |
 | `FSIM-SV-PARSE-194` | error | Expected the outer `}` after a streaming concatenation. |
+| `FSIM-SV-PARSE-195` | error | Expected `=` in a procedural force statement. |
+| `FSIM-SV-PARSE-196` | error | Expected `;` after a procedural force or release statement. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -676,6 +678,8 @@ therefore excluded.
 | `FSIM-VERILOG-SEM-007` | error | `$fatal` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-008` | error | A nonblocking named-event trigger (`->>`) was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-009` | error | `$info`, `$warning`, or `$error` was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-010` | error | An increment or decrement expression was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-011` | error | A procedural force or release statement was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |
@@ -887,6 +891,7 @@ therefore excluded.
 | `FSIM-ELAB-103` | error | A value-sensitive `$monitor` operand is not yet a direct packed-signal reference. |
 | `FSIM-ELAB-104` | error | A random system function is used in an unsupported language or with an invalid argument count. |
 | `FSIM-ELAB-105` | error | Procedural assignment timing-control HIR has an inconsistent control kind, delay, or event payload. |
+| `FSIM-ELAB-106` | error | Procedural update metadata is inconsistent with its normalized expression or captured lvalue. |
 | `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers. |
 | `FSIM-ELAB-DRV-002` | error | A wired-AND or wired-OR net requires an unsupported resolution policy. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
@@ -1083,7 +1088,12 @@ therefore excluded.
 | `FSIM-ELAB-SVEXPR-002` | error | A streaming-concatenation slice size is not a positive locally constant value within the 64-bit integral contract. |
 | `FSIM-ELAB-SVEXPR-003` | error | A streaming concatenation has a container, aggregate, unknown-width, or wider-than-64-bit packed operand/result. |
 | `FSIM-ELAB-SVEXPR-004` | error | A runtime-base packed part-select width is not a positive locally constant value from 1 through 64. |
-| `FSIM-ELAB-SVEXPR-005` | error | A runtime-base packed part-select is used as a procedural assignment target before dynamic-lvalue closure. |
+| `FSIM-ELAB-SVEXPR-006` | error | A runtime-base packed part-select target is used with an unsupported assignment kind. |
+| `FSIM-ELAB-SVEXPR-007` | error | Update-expression HIR is not a supported SystemVerilog prefix or postfix increment/decrement of one writable operand. |
+| `FSIM-ELAB-SVEXPR-008` | error | A runtime-selected packed procedural target has a following selection. |
+| `FSIM-ELAB-SVFORCE-001` | error | A procedural force or release target is not a supported signal, static bit-select, static part-select, or packed member. |
+| `FSIM-ELAB-SVFORCE-002` | error | A procedural force or release target is not a visible packed signal with an executable layout. |
+| `FSIM-ELAB-SVFORCE-003` | error | A four-state value is forced onto a two-state target without explicit conversion. |
 | `FSIM-ELAB-SVFILE-001` | error | A bounded SystemVerilog text-file handle is not a 32-bit integer expression. |
 | `FSIM-ELAB-SVFILE-002` | error | A file read/error target is not a whole mutable string object or automatic local. |
 | `FSIM-ELAB-SVFILE-003` | error | `$fopen` does not have bounded SystemVerilog byte-string filename and mode operands. |

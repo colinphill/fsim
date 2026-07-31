@@ -17,6 +17,7 @@ using runtime::simir::DynamicExtract;
 using runtime::simir::DynamicPartSelect;
 using runtime::simir::Insert;
 using runtime::simir::DynamicInsert;
+using runtime::simir::DynamicPartInsert;
 using runtime::simir::Concatenate;
 using runtime::simir::Binary;
 using runtime::simir::IntegerUnary;
@@ -113,6 +114,8 @@ void ValueOperationLowerer::lower(
         builder.CreateICmpSGE(selected, right),
         builder.CreateSub(selected, right),
         builder.CreateSub(right, selected));
+    offset = builder.CreateAdd(
+        offset, constant_i64(context, operation.base_offset));
     auto* safe_offset = builder.CreateSelect(
         valid, offset, constant_i64(context, 0));
     const auto select_bit = [&](llvm::Value* plane,
@@ -272,6 +275,119 @@ void ValueOperationLowerer::lower(
                       destination_kind});
               branch_to_next();
             
+}
+
+void ValueOperationLowerer::lower(
+    const DynamicPartInsert& operation) {
+  const auto destination_kind =
+      registers[operation.destination].kind;
+  const auto target = coerce_value_kind(
+      builder,
+      load_register(builder, registers, operation.target),
+      destination_kind);
+  const auto source = coerce_value_kind(
+      builder,
+      load_register(builder, registers, operation.source),
+      destination_kind);
+  const auto base = coerce_value_kind(
+      builder,
+      load_register(
+          builder, registers, operation.selection.base),
+      ValueKind::logic4);
+  auto* base_unknown = builder.CreateICmpNE(
+      builder.CreateAnd(
+          base.bval,
+          constant_i64(
+              context,
+              std::numeric_limits<std::uint32_t>::max())),
+      constant_i64(context, 0));
+  auto* signed_base = builder.CreateSExt(
+      builder.CreateTrunc(base.aval, i32), i64);
+  auto* lower = llvm::ConstantInt::getSigned(
+      i64,
+      std::min(operation.selection.left, operation.selection.right));
+  auto* upper = llvm::ConstantInt::getSigned(
+      i64,
+      std::max(operation.selection.left, operation.selection.right));
+  const auto edge_distance = static_cast<std::int64_t>(
+      operation.selection.width - 1U);
+  const auto right_delta = operation.selection.increasing
+      ? (operation.selection.source_descending ? 0 : edge_distance)
+      : (operation.selection.source_descending ? -edge_distance : 0);
+  auto* selected_right = builder.CreateAdd(
+      signed_base,
+      llvm::ConstantInt::getSigned(i64, right_delta));
+
+  auto* aval = target.aval;
+  auto* bval = target.bval;
+  auto* plane2 = target.logic9_plane2;
+  auto* plane3 = target.logic9_plane3;
+  const auto target_mask =
+      constant_i64(context, width_mask(target.width));
+  for (std::uint32_t bit = 0;
+       bit < operation.selection.width;
+       ++bit) {
+    const auto delta = operation.selection.source_descending
+        ? static_cast<std::int64_t>(bit)
+        : -static_cast<std::int64_t>(bit);
+    auto* selected = builder.CreateAdd(
+        selected_right,
+        llvm::ConstantInt::getSigned(i64, delta));
+    auto* valid = builder.CreateAnd(
+        builder.CreateNot(base_unknown),
+        builder.CreateAnd(
+            builder.CreateICmpSGE(selected, lower),
+            builder.CreateICmpSLE(selected, upper)));
+    auto* right = llvm::ConstantInt::getSigned(
+        i64, operation.selection.right);
+    auto* offset = builder.CreateSelect(
+        builder.CreateICmpSGE(selected, right),
+        builder.CreateSub(selected, right),
+        builder.CreateSub(right, selected));
+    offset = builder.CreateAdd(
+        offset,
+        constant_i64(context, operation.selection.base_offset));
+    auto* safe_offset = builder.CreateSelect(
+        valid, offset, constant_i64(context, 0));
+    auto* selected_mask = builder.CreateSelect(
+        valid,
+        builder.CreateShl(
+            constant_i64(context, 1), safe_offset),
+        constant_i64(context, 0));
+    auto* keep_mask = builder.CreateAnd(
+        builder.CreateNot(selected_mask), target_mask);
+    const auto insert_plane =
+        [&](llvm::Value* target_plane,
+            llvm::Value* source_plane) {
+          auto* source_bit = builder.CreateAnd(
+              builder.CreateLShr(
+                  source_plane,
+                  constant_i64(context, bit)),
+              constant_i64(context, 1));
+          auto* shifted = builder.CreateShl(
+              source_bit, safe_offset);
+          return builder.CreateOr(
+              builder.CreateAnd(target_plane, keep_mask),
+              builder.CreateSelect(
+                  valid, shifted, constant_i64(context, 0)));
+        };
+    aval = insert_plane(aval, source.aval);
+    bval = insert_plane(bval, source.bval);
+    plane2 = insert_plane(plane2, source.logic9_plane2);
+    plane3 = insert_plane(plane3, source.logic9_plane3);
+  }
+  store_register(
+      builder,
+      registers,
+      operation.destination,
+      EncodedValue{
+          aval,
+          bval,
+          target.width,
+          plane2,
+          plane3,
+          destination_kind});
+  branch_to_next();
 }
 
 void ValueOperationLowerer::lower(

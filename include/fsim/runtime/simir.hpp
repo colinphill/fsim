@@ -573,9 +573,8 @@ struct DynamicExtract {
   DynamicIndex selection;
 };
 
-/// Extract a fixed-width indexed part-select from a runtime signed base.
-/// Unknown or out-of-range selected bits become X (or zero for a two-state
-/// source) instead of raising the scalar dynamic-index runtime error.
+/// Extract a fixed-width indexed part-select from a runtime signed base;
+/// out-of-range bits become X, or zero for a two-state source.
 struct DynamicPartSelect {
   RegisterId destination{};
   RegisterId source{};
@@ -586,8 +585,22 @@ struct DynamicPartSelect {
   bool increasing{};
   bool source_descending{};
   bool two_state{};
+  std::uint32_t base_offset{};
 };
 
+/// Runtime base and fixed-width metadata shared by indexed part-select writes.
+struct DynamicPartIndex {
+  RegisterId base{};
+  std::int64_t left{};
+  std::int64_t right{};
+  std::uint32_t base_offset{};
+  std::uint32_t width{};
+  bool increasing{};
+  bool source_descending{};
+
+  friend bool operator==(
+      const DynamicPartIndex&, const DynamicPartIndex&) = default;
+};
 /// Replace a contiguous normalized range in a packed value.
 struct Insert {
   RegisterId destination{};
@@ -604,6 +617,13 @@ struct DynamicInsert {
   DynamicIndex selection;
 };
 
+/// Replace representable bits; unknown or wholly out-of-range bases do nothing.
+struct DynamicPartInsert {
+  RegisterId destination{};
+  RegisterId target{};
+  RegisterId source{};
+  DynamicPartIndex selection;
+};
 /// Concatenate packed operands in source order. The first operand occupies
 /// the most-significant result bits.
 struct Concatenate {
@@ -840,6 +860,38 @@ struct WriteAfterDynamicSlice {
   SimulationTick delay{};
 };
 
+struct WriteBlockingDynamicPartSlice {
+  SignalId signal{};
+  RegisterId source{};
+  DynamicPartIndex selection;
+};
+
+struct WriteUpdateDynamicPartSlice {
+  SignalId signal{};
+  RegisterId source{};
+  DynamicPartIndex selection;
+};
+
+struct WriteAfterDynamicPartSlice {
+  SignalId signal{};
+  RegisterId source{};
+  DynamicPartIndex selection;
+  SimulationTick delay{};
+};
+
+/// Force a static packed region while drivers continue beneath its mask.
+struct ForceSignalSlice {
+  SignalId signal{};
+  RegisterId source{};
+  std::uint32_t offset{};
+};
+
+/// Release a static packed force region and reveal current driven bits.
+struct ReleaseSignalSlice {
+  SignalId signal{};
+  std::uint32_t offset{};
+  std::uint32_t width{};
+};
 struct WriteInertialDynamicSlice {
   SignalId signal{};
   RegisterId source{};
@@ -1162,6 +1214,7 @@ using Operation =
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
                  Shift, Extract, DynamicExtract, DynamicPartSelect,
                  Concatenate, Binary, Insert, DynamicInsert,
+                 DynamicPartInsert,
                  IntegerUnary, IntegerBinary, IntegerCheck,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteInertial, WriteProjected, WriteProjectedWaveform,
@@ -1172,6 +1225,10 @@ using Operation =
                  WriteBlockingDynamicSlice,
                  WriteUpdateDynamicSlice,
                  WriteAfterDynamicSlice,
+                 WriteBlockingDynamicPartSlice,
+                 WriteUpdateDynamicPartSlice,
+                 WriteAfterDynamicPartSlice,
+                 ForceSignalSlice, ReleaseSignalSlice,
                  WriteInertialDynamicSlice,
                  WriteProjectedDynamicSlice,
                  WriteProjectedWaveformDynamicSlice,
@@ -1393,6 +1450,21 @@ public:
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval),
         offset);
+  }
+
+  virtual void force_signal_slice(
+      SignalId,
+      PackedLogic4,
+      std::size_t) {
+    throw std::logic_error{
+        "alternate process executor does not support procedural force"};
+  }
+  virtual void release_signal_slice(
+      SignalId,
+      std::size_t,
+      std::size_t) {
+    throw std::logic_error{
+        "alternate process executor does not support procedural release"};
   }
 
   virtual void write_update(SignalId signal, PackedLogic4 value) = 0;
@@ -1877,6 +1949,10 @@ public:
   /// Releasing the force publishes the most recent underlying driven value.
   void force_signal(SignalId signal, PackedLogic4 value);
   void release_signal(SignalId signal);
+  void force_signal_slice(
+      SignalId signal, PackedLogic4 value, std::size_t offset);
+  void release_signal_slice(
+      SignalId signal, std::size_t offset, std::size_t width);
   [[nodiscard]] bool signal_is_forced(SignalId signal) const;
 
   /// Schedule an external drive in the update phase of an absolute timestamp.

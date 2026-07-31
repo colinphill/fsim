@@ -5523,7 +5523,62 @@ Release passed all 59 tests in 132.39 seconds, including scoped locals in 0.80
 seconds, parameter sizing in 1.89 seconds, functions in 10.62 seconds,
 containers in 84.09 seconds, assertions in 7.71 seconds, and the monolithic
 application in 13.12 seconds, on 2026-07-31. Batch 101 is not a CI-inspection
-boundary, so no Actions run is inspected for its eventual feature commit.
+boundary, so no Actions run was inspected for feature commit `5e713cc`.
+
+### One-hundred-second feature batch — SystemVerilog procedural-lvalue closure
+
+SystemVerilog compound, prefix, and postfix updates now retain explicit
+source-spanned update-kind and operator metadata independently of assignment
+kind and delay/event control. The normalized binary expression remains the
+single arithmetic source of truth, while elaboration checks that the metadata
+and expression agree. Prefix/postfix `++`/`--` are also valid expressions:
+the target is updated once and the expression returns the converted new value
+or the captured old value, respectively.
+
+Procedural assignment lowering now unwinds and composes whole, packed-member,
+static bit/part, chained static packed, runtime bit, and runtime-base indexed
+part targets. Read-modify-write operations capture the selected lvalue once,
+so function-valued indices and bases execute exactly once. Runtime-base
+`+:`/`-:` writes update only the representable contiguous portion, preserve
+surrounding bits, and perform no write for unknown or wholly out-of-range
+bases. Blocking, NBA, and delayed writes retain the same checked metadata;
+event-controlled compound assignments capture their target before suspension
+and defer RHS evaluation until the event, while delayed forms compute before
+waiting.
+
+Procedural `force` and `release` now support whole packed signals, packed
+members, and static bit/part selections. Per-bit force masks overlay the
+effective signal value while every underlying driver continues to update;
+partial release immediately reveals only the current driven bits in the
+released region. Automatic locals, runtime-selected force targets, and a
+selection following any runtime-selected procedural target remain explicitly
+diagnosed. Interpreter and LLVM Logic4/Logic9 paths share the same selected
+force and dynamic-part semantics.
+
+The version-1 native runtime structure remains append-only and is now 512
+bytes, adding Logic4 force-slice, Logic9 force-slice, and release-slice
+callbacks with capability-size validation. Native-object schema 54 records
+dynamic-part read/write base offsets, inserts, all three dynamic signal-write
+kinds, and force/release fields. A 13-object expression-selection matrix and
+seven-object procedural-update matrix prove semantic cache misses; the
+procedural application proves cold/warm reuse, exact interpreter/O0/O2 final
+state and scheduling, and normalized VCD agreement.
+
+Stable frontend, elaboration, and native diagnostics cover wrong-language and
+malformed update/force syntax, inconsistent update HIR, runtime-selection
+chaining, unsupported force targets, two-state force conversion, invalid
+dynamic-part metadata/ranges, and malformed force/release operations. The
+diagnostic catalog covers all 1,289 production codes, and the source gate
+covers 298 authored files with an empty allowlist and a 2,000-line maximum.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 432.69 seconds, including scoped locals in 0.86 seconds, functions in 13.39
+seconds, containers in 338.32 seconds, procedural assignments in 2.47 seconds,
+and the monolithic application in 39.94 seconds. Release passed all 59 tests
+in 138.83 seconds, including scoped locals in 0.81 seconds, functions in 11.00
+seconds, containers in 86.13 seconds, procedural assignments in 1.90 seconds,
+and the monolithic application in 14.17 seconds, on 2026-07-31. Batch 102 is
+not a ten-batch CI-inspection boundary, so no Actions run was inspected.
 
 ## Forward language-closure feature batches
 

@@ -968,6 +968,12 @@ module procedural_updates;
     --value;
     value++;
     value--;
+    value += #2 8'd1;
+    value ^= @(posedge signed_value) 8'h01;
+    value = value++;
+    value = --signed_value;
+    force value[3:0] = 4'ha;
+    release value[3:0];
   end
 endmodule
 )",
@@ -977,11 +983,11 @@ endmodule
       "SystemVerilog procedural update statements must parse");
   const auto& statements =
       result.design.units.front().processes.front().statements;
-  const std::array<std::string_view, 16> operations{
+  const std::array<std::string_view, 18> operations{
       "+", "-", "*", "/", "%", "&", "|", "^",
-      "<<", ">>", "<<<", ">>>", "+", "-", "+", "-"};
+      "<<", ">>", "<<<", ">>>", "+", "-", "+", "-", "+", "^"};
   require(
-      statements.size() == operations.size(),
+      statements.size() == operations.size() + 4,
       "all procedural update statements must be retained");
   for (std::size_t index = 0; index < operations.size(); ++index) {
     require(
@@ -1000,6 +1006,38 @@ endmodule
           && statements[12].value.operands[1].text == "1"
           && statements[15].value.operands[1].text == "1",
       "standalone increment/decrement must use a contextual unit step");
+  require(
+      statements[0].procedural_update_kind
+              == ProceduralUpdateKind::Compound
+          && statements[0].procedural_update_operator == "+"
+          && statements[12].procedural_update_kind
+              == ProceduralUpdateKind::Prefix
+          && statements[14].procedural_update_kind
+              == ProceduralUpdateKind::Postfix
+          && statements[16].procedural_assignment_control
+              == ProceduralAssignmentControl::Delay
+          && statements[16].delay
+          && statements[16].delay->magnitude == 2
+          && statements[17].procedural_assignment_control
+              == ProceduralAssignmentControl::Event
+          && statements[17].sensitivities.size() == 1
+          && statements[17].sensitivities.front().edge
+              == EdgeKind::Positive,
+      "procedural updates must retain syntax kind, operator, and controls");
+  require(
+      statements[18].value.kind == ExpressionKind::Update
+          && statements[18].value.text == "post++"
+          && statements[18].value.operands.size() == 1
+          && statements[19].value.kind == ExpressionKind::Update
+          && statements[19].value.text == "pre--",
+      "prefix/postfix expression updates must retain result-value order");
+  require(
+      statements[20].kind == StatementKind::Force
+          && statements[20].target.kind == ExpressionKind::Slice
+          && statements[20].value.kind == ExpressionKind::LogicLiteral
+          && statements[21].kind == StatementKind::Release
+          && statements[21].target.kind == ExpressionKind::Slice,
+      "procedural force/release must retain selected targets and force value");
 
   const auto unsupported = parse_text(
       "unsupported_update.sv",
@@ -1038,6 +1076,61 @@ endmodule
                     == "FSIM-VERILOG-SEM-005";
               }),
       "procedural compound assignments must remain SystemVerilog-only");
+
+  const auto verilog_expressions = parse_text(
+      "verilog_expression_updates.v",
+      R"(
+module verilog_expression_updates;
+  reg [7:0] value;
+  initial begin
+    value = value++;
+    force value = 8'h12;
+    release value;
+  end
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      !verilog_expressions.ok()
+          && std::ranges::any_of(
+              verilog_expressions.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VERILOG-SEM-010";
+              })
+          && std::ranges::any_of(
+              verilog_expressions.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VERILOG-SEM-011";
+              }),
+      "expression updates and procedural force/release remain SystemVerilog-only");
+
+  const auto malformed_force = parse_text(
+      "malformed_force.sv",
+      "module malformed_force; logic value; initial force value 1'b1; "
+      "endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_force.ok()
+          && std::ranges::any_of(
+              malformed_force.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-195";
+              }),
+      "procedural force must require an equals sign");
+
+  const auto malformed_release = parse_text(
+      "malformed_release.sv",
+      "module malformed_release; logic value; initial release value "
+      "endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_release.ok()
+          && std::ranges::any_of(
+              malformed_release.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-196";
+              }),
+      "procedural force/release must require a semicolon");
 }
 
 void test_systemverilog_final_procedures() {

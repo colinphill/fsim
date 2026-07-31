@@ -12,18 +12,21 @@ using namespace runtime::simir;
 namespace {
 
 [[nodiscard]] std::optional<std::uint64_t>
-dynamic_range_width(const DynamicIndex& selection) {
-  if (selection.left < std::numeric_limits<std::int32_t>::min()
-      || selection.left > std::numeric_limits<std::int32_t>::max()
-      || selection.right < std::numeric_limits<std::int32_t>::min()
-      || selection.right > std::numeric_limits<std::int32_t>::max()) {
+dynamic_range_width(const std::int64_t left, const std::int64_t right) {
+  if (left < std::numeric_limits<std::int32_t>::min()
+      || left > std::numeric_limits<std::int32_t>::max()
+      || right < std::numeric_limits<std::int32_t>::min()
+      || right > std::numeric_limits<std::int32_t>::max()) {
     return std::nullopt;
   }
-  const auto left = static_cast<std::int64_t>(selection.left);
-  const auto right = static_cast<std::int64_t>(selection.right);
   return static_cast<std::uint64_t>(
              left >= right ? left - right : right - left)
       + 1U;
+}
+
+[[nodiscard]] std::optional<std::uint64_t>
+dynamic_range_width(const DynamicIndex& selection) {
+  return dynamic_range_width(selection.left, selection.right);
 }
 
 }  // namespace
@@ -68,14 +71,97 @@ validate_dynamic_part_select_metadata(const DynamicPartSelect& operation) {
 validate_dynamic_part_select_source_width(
     const DynamicPartSelect& operation,
     const std::uint32_t source_width) {
-  const auto left = static_cast<std::int64_t>(operation.left);
-  const auto right = static_cast<std::int64_t>(operation.right);
-  const auto range_width = static_cast<std::uint64_t>(
-                               left >= right ? left - right : right - left)
-      + 1U;
-  if (range_width != source_width) {
-    return "DynamicPartSelect declared range does not match its source "
-           "register width";
+  const auto range_width =
+      dynamic_range_width(operation.left, operation.right);
+  if (!range_width) {
+    return "DynamicPartSelect bounds must fit signed 32-bit integers";
+  }
+  if (operation.base_offset > source_width
+      || *range_width > source_width - operation.base_offset) {
+    return "DynamicPartSelect declared range is outside its source "
+           "register";
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string>
+validate_dynamic_part_index_metadata(const DynamicPartIndex& selection) {
+  if (selection.width == 0 || selection.width > 64) {
+    return "dynamic part-select write width must be from 1 through 64";
+  }
+  if (!dynamic_range_width(selection.left, selection.right)) {
+    return "dynamic part-select write bounds must fit signed 32-bit integers";
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string>
+validate_dynamic_part_index_bounds(const DynamicPartIndex& selection,
+                                   const std::uint64_t target_width) {
+  if (const auto error = validate_dynamic_part_index_metadata(selection)) {
+    return error;
+  }
+  const auto range_width =
+      *dynamic_range_width(selection.left, selection.right);
+  if (selection.base_offset > target_width
+      || range_width > target_width - selection.base_offset) {
+    return "dynamic part-select write range is outside its packed target";
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<OperationValidationError>
+validate_selection_operation_bounds(
+    const Process& process,
+    const std::span<const std::uint32_t> register_widths,
+    const std::span<const std::uint32_t> signal_widths) {
+  for (std::size_t index = 0; index < process.operations.size(); ++index) {
+    const auto& operation = process.operations[index];
+    std::optional<std::string> error;
+    if (const auto* extract = std::get_if<Extract>(&operation)) {
+      error = validate_extract_bounds(
+          *extract, register_widths[extract->source]);
+    } else if (const auto* dynamic_extract =
+                   std::get_if<DynamicExtract>(&operation)) {
+      error = validate_dynamic_index_bounds(
+          dynamic_extract->selection,
+          register_widths[dynamic_extract->source]);
+    } else if (const auto* part_select =
+                   std::get_if<DynamicPartSelect>(&operation)) {
+      error = validate_dynamic_part_select_source_width(
+          *part_select, register_widths[part_select->source]);
+    } else if (const auto* insert = std::get_if<Insert>(&operation)) {
+      error = validate_insert_bounds(
+          *insert, register_widths[insert->target],
+          register_widths[insert->source]);
+    } else if (const auto* dynamic_insert =
+                   std::get_if<DynamicInsert>(&operation)) {
+      error = validate_dynamic_index_bounds(
+          dynamic_insert->selection,
+          register_widths[dynamic_insert->target]);
+    } else if (const auto* part_insert =
+                   std::get_if<DynamicPartInsert>(&operation)) {
+      error = validate_dynamic_part_index_bounds(
+          part_insert->selection, register_widths[part_insert->target]);
+    } else if (const auto* force =
+                   std::get_if<ForceSignalSlice>(&operation)) {
+      const auto target_width = signal_widths[force->signal];
+      const auto source_width = register_widths[force->source];
+      if (force->offset > target_width
+          || source_width > target_width - force->offset) {
+        error = "ForceSignalSlice range is outside its signal";
+      }
+    } else if (const auto* release =
+                   std::get_if<ReleaseSignalSlice>(&operation)) {
+      const auto target_width = signal_widths[release->signal];
+      if (release->offset > target_width
+          || release->width > target_width - release->offset) {
+        error = "ReleaseSignalSlice range is outside its signal";
+      }
+    }
+    if (error) {
+      return OperationValidationError{index, std::move(*error)};
+    }
   }
   return std::nullopt;
 }

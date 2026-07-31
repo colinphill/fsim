@@ -1107,7 +1107,8 @@ void test_expression_selection_cache_identity(
          const ExpressionSizingKind sizing =
              ExpressionSizingKind::context_determined,
          const ExpressionValueDomain domain =
-             ExpressionValueDomain::four_state) {
+             ExpressionValueDomain::four_state,
+         const std::uint32_t base_offset = 0) {
         Process process;
         process.id = 101;
         process.name = "cached_expression_selection";
@@ -1122,12 +1123,13 @@ void test_expression_selection_cache_identity(
                 2,
                 0,
                 1,
-                source_descending ? 15 : 0,
-                source_descending ? 0 : 15,
+                source_descending ? 7 : 0,
+                source_descending ? 0 : 7,
                 selection_width,
                 increasing,
                 source_descending,
-                two_state},
+                two_state,
+                base_offset},
             Halt{},
         };
         process.expression_profiles = {
@@ -1190,7 +1192,102 @@ void test_expression_selection_cache_identity(
            ExpressionValueDomain::two_state),
       0,
       1);
-  assert(slice_cached_object_count(cache_directory) == 12);
+  materialize(
+      make(4, true, true, false, "expression-selection.sv", 17, 9, 4,
+           false, ExpressionSizingKind::context_determined,
+           ExpressionValueDomain::four_state, 8),
+      0,
+      1);
+  assert(slice_cached_object_count(cache_directory) == 13);
+}
+
+void test_procedural_update_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const std::string_view symbol,
+          const Process& process,
+          const std::span<const std::uint32_t> signals,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, signals);
+        assert(jit.lookup(symbol));
+        expect_slice_cache_statistics(jit, hits, misses);
+      };
+  const auto insert_process =
+      [](const std::uint32_t base_offset,
+         const bool increasing) {
+        Process process;
+        process.id = 102;
+        process.name = "cached_dynamic_part_insert";
+        process.register_count = 4;
+        process.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("1010101111001101")},
+            LoadConstant{
+                1, PackedLogic4::from_msb_string("1100")},
+            LoadConstant{
+                2, PackedLogic4::from_aval_bval(32, 4, 0)},
+            DynamicPartInsert{
+                3,
+                0,
+                1,
+                DynamicPartIndex{
+                    2, 7, 0, base_offset, 4, increasing, true}},
+            Halt{},
+        };
+        return process;
+      };
+  const std::array<std::uint32_t, 0> no_signals{};
+  materialize(
+      "cached_dynamic_part_insert", insert_process(0, true), no_signals,
+      0, 1);
+  materialize(
+      "cached_dynamic_part_insert", insert_process(0, true), no_signals,
+      1, 0);
+  materialize(
+      "cached_dynamic_part_insert", insert_process(8, true), no_signals,
+      0, 1);
+  materialize(
+      "cached_dynamic_part_insert", insert_process(0, false), no_signals,
+      0, 1);
+
+  const auto force_process =
+      [](const std::uint32_t force_offset,
+         const std::uint32_t release_offset,
+         const std::uint32_t release_width) {
+        Process process;
+        process.id = 103;
+        process.name = "cached_force_release";
+        process.register_count = 1;
+        process.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("10xz")},
+            ForceSignalSlice{0, 0, force_offset},
+            ReleaseSignalSlice{0, release_offset, release_width},
+            Halt{},
+        };
+        return process;
+      };
+  const std::array<std::uint32_t, 1> signal_widths{8};
+  materialize(
+      "cached_force_release", force_process(0, 0, 4), signal_widths,
+      0, 1);
+  materialize(
+      "cached_force_release", force_process(0, 0, 4), signal_widths,
+      1, 0);
+  materialize(
+      "cached_force_release", force_process(4, 0, 4), signal_widths,
+      0, 1);
+  materialize(
+      "cached_force_release", force_process(0, 4, 4), signal_widths,
+      0, 1);
+  materialize(
+      "cached_force_release", force_process(0, 0, 2), signal_widths,
+      0, 1);
+  assert(slice_cached_object_count(cache_directory) == 7);
 }
 
 }  // namespace fsim::tests::compiler

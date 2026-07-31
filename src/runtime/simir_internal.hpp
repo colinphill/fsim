@@ -103,10 +103,28 @@ namespace fsim::runtime::simir {
     const PackedLogic4& base,
     std::int64_t left,
     std::int64_t right,
+    std::uint32_t base_offset,
     std::uint32_t width,
     bool increasing,
     bool source_descending,
     bool two_state);
+
+struct DynamicPartWrite {
+  PackedLogic4 value;
+  std::uint32_t offset{};
+};
+
+[[nodiscard]] std::optional<DynamicPartWrite>
+dynamic_part_write_value(
+    const PackedLogic4& source,
+    const PackedLogic4& base,
+    const DynamicPartIndex& selection);
+
+[[nodiscard]] PackedLogic4 dynamic_part_insert_value(
+    PackedLogic4 target,
+    const PackedLogic4& source,
+    const PackedLogic4& base,
+    const DynamicPartIndex& selection);
 
 [[nodiscard]] PackedLogic4 concatenate_values(
     const std::vector<PackedLogic4>& operands,
@@ -314,6 +332,7 @@ struct Interpreter::Impl {
   std::vector<std::optional<PackedLogic4>> external_driver_values;
   std::vector<PackedLogic4> signal_last_values;
   std::vector<std::optional<PackedLogic4>> forced_values;
+  std::vector<PackedLogic4> forced_masks;
   std::vector<ProcessState> processes;
   std::vector<std::vector<Fanout>> static_fanout;
   std::vector<std::vector<Fanout>> dynamic_fanout;
@@ -542,6 +561,15 @@ struct Interpreter::Impl {
       const std::optional<PackedLogic4>& minimum);
 
   void publish(SignalId signal_id, PackedLogic4 value);
+
+  [[nodiscard]] PackedLogic4 apply_force(
+      SignalId signal_id, PackedLogic4 value) const;
+
+  void force_slice(
+      SignalId signal_id, PackedLogic4 value, std::size_t offset);
+
+  void release_slice(
+      SignalId signal_id, std::size_t offset, std::size_t width);
 
   void commit(SignalId signal_id, PackedLogic4 value);
 

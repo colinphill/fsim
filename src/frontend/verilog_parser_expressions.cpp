@@ -329,6 +329,23 @@ Expression VerilogParser::parse_expression(int minimum_precedence) {
 }
 
 Expression VerilogParser::parse_unary() {
+  if (match(TokenKind::PlusPlus)
+      || match(TokenKind::MinusMinus)) {
+    const auto operation = previous();
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          operation,
+          "FSIM-VERILOG-SEM-010",
+          "increment and decrement expressions require SystemVerilog");
+    }
+    auto operand = parse_unary();
+    const auto combined = cover(operation.span, operand.span);
+    return Expression{
+        ExpressionKind::Update,
+        operation.kind == TokenKind::PlusPlus ? "pre++" : "pre--",
+        {std::move(operand)},
+        combined};
+  }
   if (at(TokenKind::Plus) || at(TokenKind::Minus) ||
       at(TokenKind::Bang) || at(TokenKind::Tilde) ||
       at(TokenKind::Ampersand) || at(TokenKind::Pipe) ||
@@ -1007,6 +1024,22 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                        {std::move(expression), std::move(first)},
                        cover(expression.span, previous().span)};
       }
+    } else if (match(TokenKind::PlusPlus)
+               || match(TokenKind::MinusMinus)) {
+      const auto operation = previous();
+      if (language_ != Language::SystemVerilog2017) {
+        error(
+            operation,
+            "FSIM-VERILOG-SEM-010",
+            "increment and decrement expressions require SystemVerilog");
+      }
+      const auto combined = cover(expression.span, operation.span);
+      expression = Expression{
+          ExpressionKind::Update,
+          operation.kind == TokenKind::PlusPlus ? "post++" : "post--",
+          {std::move(expression)},
+          combined};
+      break;
     } else {
       break;
     }

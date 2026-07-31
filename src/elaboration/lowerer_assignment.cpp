@@ -308,154 +308,6 @@ using namespace elaboration_detail;
 
 
 
-    std::optional<DynamicIndex>
-    Lowerer::lower_dynamic_index(
-        const Expression& source,
-        const Expression& index,
-        const std::size_t source_width,
-        const std::uint32_t base_offset,
-        const frontend::SourceSpan& span) {
-        const auto range =
-            expression_range(source, source_width);
-        if (!range
-            || range->left
-                < std::numeric_limits<std::int32_t>::min()
-            || range->left
-                > std::numeric_limits<std::int32_t>::max()
-            || range->right
-                < std::numeric_limits<std::int32_t>::min()
-            || range->right
-                > std::numeric_limits<std::int32_t>::max()
-            || range->width()
-                > static_cast<std::uint64_t>(
-                    std::numeric_limits<std::uint32_t>::max()
-                    - base_offset)
-                    + 1U) {
-            report(
-                "FSIM-ELAB-DYNINDEX-001",
-                "dynamic packed selection requires a concrete "
-                "one-dimensional range representable by signed 32-bit "
-                "indices and normalized offsets",
-                span);
-            return std::nullopt;
-        }
-        if (language_ == frontend::Language::Vhdl2008
-            && !is_integer_expression(index)) {
-            report(
-                "FSIM-ELAB-DYNINDEX-002",
-                "a dynamic VHDL array index requires an integer-family "
-                "expression",
-                index.span);
-            return std::nullopt;
-        }
-        const auto lowered = lower_expression(index, 32);
-        if (!lowered || register_width(*lowered) != 32) {
-            report(
-                "FSIM-ELAB-DYNINDEX-002",
-                "a dynamic packed index must lower to the signed 32-bit "
-                "runtime representation",
-                index.span);
-            return std::nullopt;
-        }
-        return DynamicIndex{
-            *lowered,
-            range->left,
-            range->right,
-            base_offset};
-    }
-
-
-
-    std::optional<Lowerer::ConstantSliceSelection>
-    Lowerer::constant_slice_selection(
-        const Expression& expression,
-        const std::size_t source_width) {
-        if (expression.kind != ExpressionKind::Slice
-            || expression.operands.size() != 3) {
-            return std::nullopt;
-        }
-        const auto& source = expression.operands[0];
-        const auto range =
-            expression_range(source, source_width);
-        if (!range) {
-            return std::nullopt;
-        }
-
-        std::int64_t left = 0;
-        std::int64_t right = 0;
-        std::uint64_t width = 0;
-        if (expression.text == "+:"
-            || expression.text == "-:") {
-            const auto base =
-                static_integer_value(expression.operands[1]);
-            const auto selected_width =
-                static_integer_value(expression.operands[2]);
-            if (!base || !selected_width
-                || *selected_width <= 0) {
-                return std::nullopt;
-            }
-            const auto distance = *selected_width - 1;
-            std::int64_t lower = 0;
-            std::int64_t upper = 0;
-            if (expression.text == "+:") {
-                if (*base
-                    > std::numeric_limits<std::int64_t>::max()
-                          - distance) {
-                    return std::nullopt;
-                }
-                lower = *base;
-                upper = *base + distance;
-            } else {
-                if (*base
-                    < std::numeric_limits<std::int64_t>::min()
-                          + distance) {
-                    return std::nullopt;
-                }
-                lower = *base - distance;
-                upper = *base;
-            }
-            if (range->left >= range->right) {
-                left = upper;
-                right = lower;
-            } else {
-                left = lower;
-                right = upper;
-            }
-            width = static_cast<std::uint64_t>(*selected_width);
-        } else {
-            const auto parsed_left =
-                static_integer_value(expression.operands[1]);
-            const auto parsed_right =
-                static_integer_value(expression.operands[2]);
-            if (!parsed_left || !parsed_right) {
-                return std::nullopt;
-            }
-            left = *parsed_left;
-            right = *parsed_right;
-            const bool selected_descending = left >= right;
-            if (left != right
-                && selected_descending
-                    != (range->left >= range->right)) {
-                return std::nullopt;
-            }
-            width = index_distance(left, right) + 1;
-        }
-        const auto offset =
-            select_offset(source, right, source_width);
-        const auto left_offset =
-            select_offset(source, left, source_width);
-        if (!offset || !left_offset
-            || width == 0
-            || width
-                > std::numeric_limits<std::size_t>::max()) {
-            return std::nullopt;
-        }
-        return ConstantSliceSelection{
-            *offset, static_cast<std::size_t>(width)};
-    }
-
-
-
     void Lowerer::lower_assignment(const Statement& statement) {
         const Expression* base = &statement.target;
         std::uint32_t selected_offset = 0;
@@ -463,26 +315,24 @@ using namespace elaboration_detail;
         std::optional<std::size_t> selected_width;
         std::optional<frontend::ValueDomain> selected_domain;
         std::optional<DynamicIndex> dynamic_selection;
-        if (statement.target.kind == ExpressionKind::Index
-            && statement.target.operands.size() == 2) {
-            base = &statement.target.operands[0];
-        } else if (
-            statement.target.kind == ExpressionKind::Slice
-            && statement.target.operands.size() == 3) {
-            base = &statement.target.operands[0];
-        } else if (statement.target.kind != ExpressionKind::Identifier) {
+        std::optional<DynamicPartIndex> dynamic_part_selection;
+        std::vector<const Expression*> packed_selections;
+        while (base->kind == ExpressionKind::Index
+               || base->kind == ExpressionKind::Slice) {
+            const auto expected_operands =
+                base->kind == ExpressionKind::Index ? 2U : 3U;
+            if (base->operands.size() != expected_operands) {
+                break;
+            }
+            packed_selections.push_back(base);
+            base = &base->operands.front();
+        }
+        std::ranges::reverse(packed_selections);
+        if (base->kind != ExpressionKind::Identifier) {
             report(
                 "FSIM-ELAB-031",
                 "an assignment target must be a packed object, bit-select, "
                 "or constant part-select",
-                statement.target.span);
-            return;
-        }
-        if (base->kind != ExpressionKind::Identifier) {
-            report(
-                "FSIM-ELAB-031",
-                "nested or aggregate selected assignment targets are not "
-                "executable yet",
                 statement.target.span);
             return;
         }
@@ -494,6 +344,14 @@ using namespace elaboration_detail;
             container_objects_.find(target_name);
         if (container_local != container_locals_.end()
             || container_object != container_objects_.end()) {
+            if (packed_selections.size() > 1) {
+                report(
+                    "FSIM-ELAB-031",
+                    "nested or aggregate selected assignment targets are not "
+                    "executable for unpacked containers",
+                    statement.target.span);
+                return;
+            }
             if (read_only_container_objects_.contains(
                     target_name)) {
                 report(
@@ -861,93 +719,154 @@ using namespace elaboration_detail;
             local != locals_.end()
                 ? register_width(local->second)
                 : design_.signal_info_[signal->second].width;
-        const auto selection_source_width =
-            selected_width.value_or(whole_width);
-
-        if (statement.target.kind == ExpressionKind::Index) {
-            const auto index =
-                static_integer_value(
-                    statement.target.operands[1]);
-            const auto base_offset =
-                static_cast<std::uint64_t>(
-                    selected_offset);
-            if (index) {
-                const auto offset = select_offset(
-                    *base, *index, selection_source_width);
-                if (!offset
-                    || base_offset + *offset
-                        > std::numeric_limits<
-                            std::uint32_t>::max()) {
-                    report(
-                        "FSIM-ELAB-068",
-                        "an assignment bit-select requires an index "
-                        "inside the target's declared packed range",
-                        statement.target.span);
-                    return;
-                }
-                selected_offset =
-                    static_cast<std::uint32_t>(
-                        base_offset + *offset);
-                has_selected_offset = true;
-            } else {
-                dynamic_selection = lower_dynamic_index(
-                    *base,
-                    statement.target.operands[1],
-                    selection_source_width,
-                    selected_offset,
-                    statement.target.span);
-                if (!dynamic_selection) {
-                    return;
-                }
-                selected_offset = 0;
-                has_selected_offset = false;
-            }
-            selected_width = 1;
-        } else if (statement.target.kind == ExpressionKind::Slice) {
-            const auto selection =
-                constant_slice_selection(
-                    statement.target, selection_source_width);
-            const auto base_offset =
-                static_cast<std::uint64_t>(
-                    selected_offset);
-            if (!selection
-                || base_offset + selection->offset
-                    > std::numeric_limits<std::uint32_t>::max()
-                || selection->width
-                    > std::numeric_limits<std::uint32_t>::max()) {
-                if (language_
-                        == frontend::Language::SystemVerilog2017
-                    && (statement.target.text == "+:"
-                        || statement.target.text == "-:")
-                    && !static_integer_value(
-                        statement.target.operands[1])) {
-                    report(
-                        "FSIM-ELAB-SVEXPR-005",
-                        "runtime-base packed part-selects are read-only in "
-                        "Batch 101; dynamic procedural targets remain in "
-                        "the procedural-lvalue batch",
-                        statement.target.span);
-                    return;
-                }
+        for (std::size_t selection_index = 0;
+             selection_index < packed_selections.size();
+             ++selection_index) {
+            const auto& selection_expression =
+                *packed_selections[selection_index];
+            const auto& selection_source =
+                selection_expression.operands.front();
+            const auto selection_source_width =
+                selected_width.value_or(whole_width);
+            const bool final_selection =
+                selection_index + 1U == packed_selections.size();
+            if (dynamic_selection || dynamic_part_selection) {
                 report(
-                    "FSIM-ELAB-068",
-                    "an assignment part-select requires constant in-range "
-                    "bounds, a positive indexed width, and a direction "
-                    "compatible with the target's declared packed range",
-                    statement.target.span);
+                    "FSIM-ELAB-SVEXPR-008",
+                    "a runtime-selected procedural target cannot be selected "
+                    "again",
+                    selection_expression.span);
                 return;
             }
-            selected_offset =
-                static_cast<std::uint32_t>(
+            const auto base_offset = static_cast<std::uint64_t>(
+                selected_offset);
+            if (selection_expression.kind == ExpressionKind::Index) {
+                const auto index = static_integer_value(
+                    selection_expression.operands[1]);
+                if (index) {
+                    const auto offset = select_offset(
+                        selection_source, *index, selection_source_width);
+                    if (!offset
+                        || base_offset + *offset
+                            > std::numeric_limits<std::uint32_t>::max()) {
+                        report(
+                            "FSIM-ELAB-068",
+                            "an assignment bit-select requires an index "
+                            "inside the target's declared packed range",
+                            selection_expression.span);
+                        return;
+                    }
+                    selected_offset = static_cast<std::uint32_t>(
+                        base_offset + *offset);
+                    has_selected_offset = true;
+                } else {
+                    if (!final_selection) {
+                        report(
+                            "FSIM-ELAB-SVEXPR-008",
+                            "a dynamic bit-select must be the final packed "
+                            "procedural target selection",
+                            selection_expression.span);
+                        return;
+                    }
+                    dynamic_selection = lower_dynamic_index(
+                        selection_source,
+                        selection_expression.operands[1],
+                        selection_source_width,
+                        selected_offset,
+                        selection_expression.span);
+                    if (!dynamic_selection) {
+                        return;
+                    }
+                    selected_offset = 0;
+                    has_selected_offset = false;
+                }
+                selected_width = 1;
+                continue;
+            }
+
+            const auto selection = constant_slice_selection(
+                selection_expression, selection_source_width);
+            if (selection
+                && base_offset + selection->offset
+                    <= std::numeric_limits<std::uint32_t>::max()
+                && selection->width
+                    <= std::numeric_limits<std::uint32_t>::max()) {
+                selected_offset = static_cast<std::uint32_t>(
                     base_offset + selection->offset);
-            has_selected_offset = true;
-            selected_width = selection->width;
+                has_selected_offset = true;
+                selected_width = selection->width;
+                continue;
+            }
+            const bool runtime_indexed_part =
+                language_ == frontend::Language::SystemVerilog2017
+                && (selection_expression.text == "+:"
+                    || selection_expression.text == "-:")
+                && !static_integer_value(
+                    selection_expression.operands[1]);
+            if (!runtime_indexed_part || !final_selection) {
+                report(
+                    runtime_indexed_part
+                        ? "FSIM-ELAB-SVEXPR-008"
+                        : "FSIM-ELAB-068",
+                    runtime_indexed_part
+                        ? "a runtime-base part-select must be the final "
+                          "packed procedural target selection"
+                        : "an assignment part-select requires constant "
+                          "in-range bounds, a positive indexed width, and a "
+                          "direction compatible with the target's declared "
+                          "packed range",
+                    selection_expression.span);
+                return;
+            }
+            const auto width = static_integer_value(
+                selection_expression.operands[2]);
+            const auto range = expression_range(
+                selection_source, selection_source_width);
+            if (!width || *width <= 0 || *width > 64 || !range) {
+                report(
+                    "FSIM-ELAB-SVEXPR-004",
+                    "a runtime-base procedural part-select requires a fixed "
+                    "width from 1 through 64 and an inferable packed target "
+                    "range",
+                    selection_expression.span);
+                return;
+            }
+            auto dynamic_base = lower_expression(
+                selection_expression.operands[1], 32);
+            if (!dynamic_base) {
+                return;
+            }
+            if (register_width(*dynamic_base) != 32) {
+                *dynamic_base = resize_register(*dynamic_base, 32, true);
+            }
+            dynamic_part_selection = DynamicPartIndex{
+                *dynamic_base,
+                range->left,
+                range->right,
+                selected_offset,
+                static_cast<std::uint32_t>(*width),
+                selection_expression.text == "+:",
+                range->descending};
+            selected_offset = 0;
+            has_selected_offset = false;
+            selected_width = static_cast<std::size_t>(*width);
         }
 
         const auto target_width =
             selected_width.value_or(whole_width);
+        if (dynamic_part_selection
+            && statement.assignment_kind != AssignmentKind::Blocking
+            && statement.assignment_kind != AssignmentKind::NonBlocking) {
+            report(
+                "FSIM-ELAB-SVEXPR-006",
+                "runtime-base packed part-select targets require a "
+                "procedural blocking or nonblocking assignment",
+                statement.target.span);
+            return;
+        }
         const auto* contextual_target_type =
             has_selected_offset || dynamic_selection
+                    || dynamic_part_selection
                 ? nullptr
                 : object_type(target_name);
         const auto assignment_control =
@@ -1020,11 +939,65 @@ using namespace elaboration_detail;
                     statement.span);
                 return;
             }
-            auto value =
-                lower_expression(
-                    statement.value,
-                    target_width,
-                    contextual_target_type);
+            std::optional<RegisterId> captured;
+            if (statement.procedural_update_kind
+                != frontend::ProceduralUpdateKind::None) {
+                if (dynamic_part_selection) {
+                    captured = allocate_register(
+                        target_width,
+                        selected_domain.value_or(
+                            register_domain(local->second)));
+                    process_.operations.emplace_back(
+                        DynamicPartSelect{
+                            *captured,
+                            local->second,
+                            dynamic_part_selection->base,
+                            dynamic_part_selection->left,
+                            dynamic_part_selection->right,
+                            dynamic_part_selection->width,
+                            dynamic_part_selection->increasing,
+                            dynamic_part_selection->source_descending,
+                            is_two_state_domain(
+                                register_domain(local->second)),
+                            dynamic_part_selection->base_offset});
+                } else if (dynamic_selection) {
+                    captured = allocate_register(
+                        target_width,
+                        selected_domain.value_or(
+                            register_domain(local->second)));
+                    process_.operations.emplace_back(
+                        DynamicExtract{
+                            *captured,
+                            local->second,
+                            *dynamic_selection});
+                } else if (has_selected_offset) {
+                    captured = allocate_register(
+                        target_width,
+                        selected_domain.value_or(
+                            register_domain(local->second)));
+                    process_.operations.emplace_back(Extract{
+                        *captured,
+                        local->second,
+                        selected_offset,
+                        static_cast<std::uint32_t>(target_width)});
+                } else {
+                    captured = allocate_register(
+                        target_width,
+                        register_domain(local->second));
+                    process_.operations.emplace_back(
+                        CopyRegister{*captured, local->second});
+                }
+            }
+            auto value = captured
+                ? lower_procedural_update_value(
+                      statement,
+                      *captured,
+                      target_width,
+                      contextual_target_type)
+                : lower_expression(
+                      statement.value,
+                      target_width,
+                      contextual_target_type);
             if (!value) {
                 return;
             }
@@ -1062,7 +1035,8 @@ using namespace elaboration_detail;
                 && target_domain
                     == frontend::ValueDomain::Integer
                 && !has_selected_offset
-                && !dynamic_selection) {
+                && !dynamic_selection
+                && !dynamic_part_selection) {
                 if (!is_integer_expression(statement.value)) {
                     report(
                         "FSIM-ELAB-INTEGER-004",
@@ -1085,6 +1059,7 @@ using namespace elaboration_detail;
             if (language_ == frontend::Language::Vhdl2008
                 && !has_selected_offset
                 && !dynamic_selection
+                && !dynamic_part_selection
                 && contextual_target_type != nullptr
                 && !contextual_target_type
                         ->enumeration_literals.empty()) {
@@ -1103,7 +1078,13 @@ using namespace elaboration_detail;
                 process_.operations.emplace_back(
                     WaitFor{statement.delay->magnitude});
             }
-            if (dynamic_selection) {
+            if (dynamic_part_selection) {
+                process_.operations.emplace_back(DynamicPartInsert{
+                    local->second,
+                    local->second,
+                    *value,
+                    *dynamic_part_selection});
+            } else if (dynamic_selection) {
                 process_.operations.emplace_back(DynamicInsert{
                     local->second,
                     local->second,
@@ -1266,10 +1247,66 @@ using namespace elaboration_detail;
             }
             return;
         }
-        auto value = lower_expression(
-            statement.value,
-            target_width,
-            contextual_target_type);
+        std::optional<RegisterId> captured;
+        if (statement.procedural_update_kind
+            != frontend::ProceduralUpdateKind::None) {
+            const auto* target_type = visible_type(target_name);
+            const auto target_domain = selected_domain.value_or(
+                target_type != nullptr
+                    ? target_type->domain
+                    : design_.signal_info_[signal->second]
+                          .source_domain);
+            const auto whole = allocate_register(
+                whole_width,
+                target_type != nullptr
+                    ? target_type->domain
+                    : design_.signal_info_[signal->second]
+                          .source_domain);
+            process_.operations.emplace_back(
+                ReadSignal{whole, signal->second});
+            if (dynamic_part_selection) {
+                captured = allocate_register(
+                    target_width, target_domain);
+                process_.operations.emplace_back(DynamicPartSelect{
+                    *captured,
+                    whole,
+                    dynamic_part_selection->base,
+                    dynamic_part_selection->left,
+                    dynamic_part_selection->right,
+                    dynamic_part_selection->width,
+                    dynamic_part_selection->increasing,
+                    dynamic_part_selection->source_descending,
+                    is_two_state_domain(target_domain),
+                    dynamic_part_selection->base_offset});
+            } else if (dynamic_selection) {
+                captured = allocate_register(
+                    target_width, target_domain);
+                process_.operations.emplace_back(DynamicExtract{
+                    *captured,
+                    whole,
+                    *dynamic_selection});
+            } else if (has_selected_offset) {
+                captured = allocate_register(
+                    target_width, target_domain);
+                process_.operations.emplace_back(Extract{
+                    *captured,
+                    whole,
+                    selected_offset,
+                    static_cast<std::uint32_t>(target_width)});
+            } else {
+                captured = whole;
+            }
+        }
+        auto value = captured
+            ? lower_procedural_update_value(
+                  statement,
+                  *captured,
+                  target_width,
+                  contextual_target_type)
+            : lower_expression(
+                  statement.value,
+                  target_width,
+                  contextual_target_type);
         if (!value) {
             return;
         }
@@ -1313,7 +1350,8 @@ using namespace elaboration_detail;
         if (language_ == frontend::Language::Vhdl2008
             && target_domain == frontend::ValueDomain::Integer
             && !has_selected_offset
-            && !dynamic_selection) {
+            && !dynamic_selection
+            && !dynamic_part_selection) {
             if (!is_integer_expression(statement.value)) {
                 report(
                     "FSIM-ELAB-INTEGER-004",
@@ -1337,6 +1375,7 @@ using namespace elaboration_detail;
         if (language_ == frontend::Language::Vhdl2008
             && !has_selected_offset
             && !dynamic_selection
+            && !dynamic_part_selection
             && contextual_target_type != nullptr
             && !contextual_target_type
                     ->enumeration_literals.empty()) {
@@ -1355,7 +1394,13 @@ using namespace elaboration_detail;
                 DebugPointKind::wait, statement.span);
             process_.operations.emplace_back(
                 WaitFor{statement.delay->magnitude});
-            if (dynamic_selection) {
+            if (dynamic_part_selection) {
+                process_.operations.emplace_back(
+                    WriteBlockingDynamicPartSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_part_selection});
+            } else if (dynamic_selection) {
                 process_.operations.emplace_back(
                     WriteBlockingDynamicSlice{
                         signal->second,
@@ -1453,6 +1498,13 @@ using namespace elaboration_detail;
                         WriteInertial{
                             signal->second, *value, delays});
                 }
+            } else if (dynamic_part_selection) {
+                process_.operations.emplace_back(
+                    WriteAfterDynamicPartSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_part_selection,
+                        statement.delay->magnitude});
             } else if (dynamic_selection) {
                 process_.operations.emplace_back(
                     WriteAfterDynamicSlice{
@@ -1475,7 +1527,13 @@ using namespace elaboration_detail;
             }
         } else if (
             statement.assignment_kind == AssignmentKind::Blocking) {
-            if (dynamic_selection) {
+            if (dynamic_part_selection) {
+                process_.operations.emplace_back(
+                    WriteBlockingDynamicPartSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_part_selection});
+            } else if (dynamic_selection) {
                 process_.operations.emplace_back(
                     WriteBlockingDynamicSlice{
                         signal->second,
@@ -1489,7 +1547,13 @@ using namespace elaboration_detail;
                     WriteBlocking{signal->second, *value});
             }
         } else {
-            if (dynamic_selection) {
+            if (dynamic_part_selection) {
+                process_.operations.emplace_back(
+                    WriteUpdateDynamicPartSlice{
+                        signal->second,
+                        *value,
+                        *dynamic_part_selection});
+            } else if (dynamic_selection) {
                 process_.operations.emplace_back(
                     WriteUpdateDynamicSlice{
                         signal->second,
@@ -1552,6 +1616,7 @@ using namespace elaboration_detail;
         case ExpressionKind::LogicLiteral:
             return true;
         case ExpressionKind::Unary:
+        case ExpressionKind::Update:
         case ExpressionKind::Binary:
         case ExpressionKind::Concatenation:
         case ExpressionKind::Replication:

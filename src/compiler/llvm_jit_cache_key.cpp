@@ -32,6 +32,8 @@ using runtime::simir::CopyStringRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::Display;
 using runtime::simir::DynamicExtract;
+using runtime::simir::DynamicPartIndex;
+using runtime::simir::DynamicPartInsert;
 using runtime::simir::DynamicPartSelect;
 using runtime::simir::DynamicIndex;
 using runtime::simir::DynamicInsert;
@@ -47,6 +49,7 @@ using runtime::simir::FileReadLine;
 using runtime::simir::FileWriteFormatted;
 using runtime::simir::FileWriteLiteral;
 using runtime::simir::FileWriteString;
+using runtime::simir::ForceSignalSlice;
 using runtime::simir::FormatDisplay;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
@@ -72,6 +75,7 @@ using runtime::simir::ReadSignal;
 using runtime::simir::ReadStringObject;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
+using runtime::simir::ReleaseSignalSlice;
 using runtime::simir::RegisterId;
 using runtime::simir::RandomValue;
 using runtime::simir::Report;
@@ -97,9 +101,11 @@ using runtime::simir::WaitSensitivity;
 using runtime::simir::WaitForever;
 using runtime::simir::WriteAfter;
 using runtime::simir::WriteAfterDynamicSlice;
+using runtime::simir::WriteAfterDynamicPartSlice;
 using runtime::simir::WriteAfterSlice;
 using runtime::simir::WriteBlocking;
 using runtime::simir::WriteBlockingDynamicSlice;
+using runtime::simir::WriteBlockingDynamicPartSlice;
 using runtime::simir::WriteBlockingSlice;
 using runtime::simir::WriteInertial;
 using runtime::simir::WriteInertialDynamicSlice;
@@ -112,13 +118,14 @@ using runtime::simir::WriteProjectedSlice;
 using runtime::simir::WriteProjectedWaveformSlice;
 using runtime::simir::WriteUpdate;
 using runtime::simir::WriteUpdateDynamicSlice;
+using runtime::simir::WriteUpdateDynamicPartSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::WriteStringObject;
 using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v53";
+    "fsim-llvm-native-object-v54";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -150,6 +157,28 @@ void add_dynamic_index_key(
       static_cast<std::uint64_t>(selection.right));
   add_key_u64(
       builder, "index-base-offset", selection.base_offset);
+}
+
+void add_dynamic_part_index_key(
+    CacheKeyBuilder& builder,
+    const DynamicPartIndex& selection) {
+  add_key_u64(builder, "part-base", selection.base);
+  add_key_u64(
+      builder,
+      "part-left",
+      static_cast<std::uint64_t>(selection.left));
+  add_key_u64(
+      builder,
+      "part-right",
+      static_cast<std::uint64_t>(selection.right));
+  add_key_u64(builder, "part-base-offset", selection.base_offset);
+  add_key_u64(builder, "part-width", selection.width);
+  add_key_u64(
+      builder, "part-increasing", selection.increasing ? 1U : 0U);
+  add_key_u64(
+      builder,
+      "part-source-descending",
+      selection.source_descending ? 1U : 0U);
 }
 
 [[nodiscard]] std::string make_native_object_cache_key(
@@ -841,6 +870,7 @@ void add_dynamic_index_key(
                   builder,
                   "right",
                   static_cast<std::uint64_t>(value.right));
+              add_key_u64(builder, "base-offset", value.base_offset);
               add_key_u64(builder, "width", value.width);
               add_key_u64(
                   builder, "increasing", value.increasing ? 1U : 0U);
@@ -864,6 +894,13 @@ void add_dynamic_index_key(
               add_key_u64(builder, "target", value.target);
               add_key_u64(builder, "source", value.source);
               add_dynamic_index_key(builder, value.selection);
+            },
+            [&](const DynamicPartInsert& value) {
+              builder.add("operation", "DynamicPartInsert");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_part_index_key(builder, value.selection);
             },
             [&](const Concatenate& value) {
               builder.add("operation", "Concatenate");
@@ -1082,6 +1119,50 @@ void add_dynamic_index_key(
               add_key_u64(builder, "source", value.source);
               add_dynamic_index_key(builder, value.selection);
               add_key_u64(builder, "delay", value.delay);
+            },
+            [&](const WriteBlockingDynamicPartSlice& value) {
+              builder.add(
+                  "operation", "WriteBlockingDynamicPartSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_part_index_key(builder, value.selection);
+            },
+            [&](const WriteUpdateDynamicPartSlice& value) {
+              builder.add(
+                  "operation", "WriteUpdateDynamicPartSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_part_index_key(builder, value.selection);
+            },
+            [&](const WriteAfterDynamicPartSlice& value) {
+              builder.add(
+                  "operation", "WriteAfterDynamicPartSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_dynamic_part_index_key(builder, value.selection);
+              add_key_u64(builder, "delay", value.delay);
+            },
+            [&](const ForceSignalSlice& value) {
+              builder.add("operation", "ForceSignalSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "offset", value.offset);
+            },
+            [&](const ReleaseSignalSlice& value) {
+              builder.add("operation", "ReleaseSignalSlice");
+              add_key_u64(builder, "signal", value.signal);
+              add_key_u64(
+                  builder, "signal-width", signal_widths[value.signal]);
+              add_key_u64(builder, "offset", value.offset);
+              add_key_u64(builder, "width", value.width);
             },
             [&](const WriteInertialDynamicSlice& value) {
               builder.add(

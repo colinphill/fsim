@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -39,9 +40,12 @@ using runtime::simir::DynamicExtract;
 using runtime::simir::DynamicPartSelect;
 using runtime::simir::DynamicIndex;
 using runtime::simir::DynamicInsert;
+using runtime::simir::DynamicPartIndex;
+using runtime::simir::DynamicPartInsert;
 using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
 using runtime::simir::FormatDisplay;
+using runtime::simir::ForceSignalSlice;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
 using runtime::simir::Insert;
@@ -67,6 +71,7 @@ using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
 using runtime::simir::RandomValue;
 using runtime::simir::Report;
+using runtime::simir::ReleaseSignalSlice;
 using runtime::simir::Return;
 using runtime::simir::Shift;
 using runtime::simir::ShiftOperator;
@@ -85,9 +90,11 @@ using runtime::simir::WaitSensitivity;
 using runtime::simir::WaitForever;
 using runtime::simir::WriteAfter;
 using runtime::simir::WriteAfterDynamicSlice;
+using runtime::simir::WriteAfterDynamicPartSlice;
 using runtime::simir::WriteAfterSlice;
 using runtime::simir::WriteBlocking;
 using runtime::simir::WriteBlockingDynamicSlice;
+using runtime::simir::WriteBlockingDynamicPartSlice;
 using runtime::simir::WriteBlockingSlice;
 using runtime::simir::WriteInertial;
 using runtime::simir::WriteInertialDynamicSlice;
@@ -100,6 +107,7 @@ using runtime::simir::WriteProjectedSlice;
 using runtime::simir::WriteProjectedWaveformSlice;
 using runtime::simir::WriteUpdate;
 using runtime::simir::WriteUpdateDynamicSlice;
+using runtime::simir::WriteUpdateDynamicPartSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
 template <class... Ts> struct Overloaded : Ts... {
@@ -126,7 +134,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -196,6 +205,30 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         builder.CreateStructGEP(
             runtime_type, runtime_argument, 12),
         "write_after_slice");
+  }
+  llvm::Value* force_signal_slice_callback = nullptr;
+  llvm::Value* force_signal_slice_logic9_callback = nullptr;
+  if (validated.uses_force_signal_slice) {
+    force_signal_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 63),
+        "force_signal_slice");
+    if (validated.uses_logic9) {
+      force_signal_slice_logic9_callback = builder.CreateLoad(
+          pointer,
+          builder.CreateStructGEP(
+              runtime_type, runtime_argument, 64),
+          "force_signal_slice_logic9");
+    }
+  }
+  llvm::Value* release_signal_slice_callback = nullptr;
+  if (validated.uses_release_signal_slice) {
+    release_signal_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 65),
+        "release_signal_slice");
   }
   llvm::Value* runtime_flags = nullptr;
   if (validated.uses_debug_points) {
@@ -424,6 +457,10 @@ void lower_process(llvm::Module &module, const std::string &symbol,
           llvm::Type::getVoidTy(context),
           {pointer, i32, i32, i32, i64, i64, i64},
           false);
+  auto* release_slice_type = llvm::FunctionType::get(
+      llvm::Type::getVoidTy(context),
+      {pointer, i32, i32, i32},
+      false);
   auto* write_inertial_type =
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
@@ -818,6 +855,82 @@ void lower_process(llvm::Module &module, const std::string &symbol,
           }
           branch_to_next();
         };
+    const auto emit_dynamic_part_slice =
+        [&](const std::uint32_t signal,
+            const RegisterId source_register,
+            const DynamicPartIndex& selection,
+            llvm::Value* logic4_callback,
+            llvm::Value* logic9_callback,
+            const std::optional<runtime::SimulationTick> delay) {
+          const auto signal_kind =
+              signal_value_kinds.empty()
+                  ? ValueKind::logic4
+                  : signal_value_kinds[signal];
+          const auto write = lower_dynamic_part_write(
+              builder,
+              context,
+              i32,
+              i64,
+              registers,
+              source_register,
+              selection,
+              signal_kind);
+          auto* write_block = llvm::BasicBlock::Create(
+              context,
+              "dynamic.part.write." + std::to_string(index),
+              function);
+          builder.CreateCondBr(
+              builder.CreateICmpNE(
+                  write.width, llvm::ConstantInt::get(i32, 0)),
+              write_block,
+              instruction_blocks[index + 1]);
+          builder.SetInsertPoint(write_block);
+          if (signal_kind == ValueKind::logic9) {
+            store_logic9_word(logic9_word_slot, write.value);
+            if (delay) {
+              builder.CreateCall(
+                  write_after_slice_logic9_type,
+                  logic9_callback,
+                  {context_pointer,
+                   llvm::ConstantInt::get(i32, signal),
+                   write.offset,
+                   write.width,
+                   logic9_word_slot,
+                   constant_i64(context, *delay)});
+            } else {
+              builder.CreateCall(
+                  write_slice_logic9_type,
+                  logic9_callback,
+                  {context_pointer,
+                   llvm::ConstantInt::get(i32, signal),
+                   write.offset,
+                   write.width,
+                   logic9_word_slot});
+            }
+          } else if (delay) {
+            builder.CreateCall(
+                write_after_slice_type,
+                logic4_callback,
+                {context_pointer,
+                 llvm::ConstantInt::get(i32, signal),
+                 write.offset,
+                 write.width,
+                 write.value.aval,
+                 write.value.bval,
+                 constant_i64(context, *delay)});
+          } else {
+            builder.CreateCall(
+                write_slice_type,
+                logic4_callback,
+                {context_pointer,
+                 llvm::ConstantInt::get(i32, signal),
+                 write.offset,
+                 write.width,
+                 write.value.aval,
+                 write.value.bval});
+          }
+          branch_to_next();
+        };
     const auto emit_dynamic_after_slice =
         [&](const WriteAfterDynamicSlice& operation,
             llvm::Value* offset) {
@@ -996,6 +1109,21 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         context_pointer,
         read_callback,
         read_logic9_callback,
+        write_callback,
+        write_update_callback,
+        write_after_callback,
+        write_logic9_callback,
+        write_update_logic9_callback,
+        write_after_logic9_callback,
+        write_blocking_slice_callback,
+        write_update_slice_callback,
+        write_after_slice_callback,
+        write_blocking_slice_logic9_callback,
+        write_update_slice_logic9_callback,
+        write_after_slice_logic9_callback,
+        force_signal_slice_callback,
+        force_signal_slice_logic9_callback,
+        release_signal_slice_callback,
         write_projected_waveform_callback,
         write_projected_waveform_logic9_callback,
         write_projected_callback,
@@ -1009,6 +1137,15 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         signal_active_callback,
         read_type,
         read_logic9_type,
+        write_type,
+        write_after_type,
+        write_logic9_type,
+        write_after_logic9_type,
+        write_slice_type,
+        write_after_slice_type,
+        write_slice_logic9_type,
+        write_after_slice_logic9_type,
+        release_slice_type,
         write_projected_waveform_type,
         write_projected_waveform_logic9_type,
         write_projected_type,
@@ -1131,6 +1268,9 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             [&](const DynamicInsert& operation) {
               value_lowerer.lower(operation);
             },
+            [&](const DynamicPartInsert& operation) {
+              value_lowerer.lower(operation);
+            },
             [&](const Concatenate& operation) {
               value_lowerer.lower(operation);
             },
@@ -1150,223 +1290,28 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               value_lowerer.lower(operation);
             },
             [&](const WriteBlocking &operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_logic9_type,
-                    write_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        logic9_word_slot});
-                branch_to_next();
-                return;
-              }
-              builder.CreateCall(
-                  write_type, write_callback,
-                  {context_pointer,
-                   llvm::ConstantInt::get(i32, operation.signal), source.aval,
-                   source.bval});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const WriteUpdate &operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_logic9_type,
-                    write_update_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        logic9_word_slot});
-                branch_to_next();
-                return;
-              }
-              builder.CreateCall(
-                  write_type, write_update_callback,
-                  {context_pointer,
-                   llvm::ConstantInt::get(i32, operation.signal), source.aval,
-                   source.bval});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const WriteAfter &operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_after_logic9_type,
-                    write_after_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        logic9_word_slot,
-                        constant_i64(
-                            context, operation.delay)});
-                branch_to_next();
-                return;
-              }
-              builder.CreateCall(
-                  write_after_type, write_after_callback,
-                  {context_pointer,
-                   llvm::ConstantInt::get(i32, operation.signal), source.aval,
-                   source.bval, constant_i64(context, operation.delay)});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const WriteBlockingSlice& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_slice_logic9_type,
-                    write_blocking_slice_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        llvm::ConstantInt::get(
-                            i32, operation.offset),
-                        llvm::ConstantInt::get(i32, source.width),
-                        logic9_word_slot});
-                branch_to_next();
-                return;
-              }
-              builder.CreateCall(
-                  write_slice_type,
-                  write_blocking_slice_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(
-                          i32, operation.signal),
-                      llvm::ConstantInt::get(
-                          i32, operation.offset),
-                      llvm::ConstantInt::get(
-                          i32, source.width),
-                      source.aval,
-                      source.bval});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const WriteUpdateSlice& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_slice_logic9_type,
-                    write_update_slice_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        llvm::ConstantInt::get(
-                            i32, operation.offset),
-                        llvm::ConstantInt::get(i32, source.width),
-                        logic9_word_slot});
-                branch_to_next();
-                return;
-              }
-              builder.CreateCall(
-                  write_slice_type,
-                  write_update_slice_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(
-                          i32, operation.signal),
-                      llvm::ConstantInt::get(
-                          i32, operation.offset),
-                      llvm::ConstantInt::get(
-                          i32, source.width),
-                      source.aval,
-                      source.bval});
-              branch_to_next();
+              signal_lowerer.lower(operation);
             },
             [&](const WriteAfterSlice& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_after_slice_logic9_type,
-                    write_after_slice_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        llvm::ConstantInt::get(
-                            i32, operation.offset),
-                        llvm::ConstantInt::get(i32, source.width),
-                        logic9_word_slot,
-                        constant_i64(
-                            context, operation.delay)});
-                branch_to_next();
-                return;
-              }
-              builder.CreateCall(
-                  write_after_slice_type,
-                  write_after_slice_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(
-                          i32, operation.signal),
-                      llvm::ConstantInt::get(
-                          i32, operation.offset),
-                      llvm::ConstantInt::get(
-                          i32, source.width),
-                      source.aval,
-                      source.bval,
-                      constant_i64(
-                          context, operation.delay)});
-              branch_to_next();
+              signal_lowerer.lower(operation);
+            },
+            [&](const ForceSignalSlice& operation) {
+              signal_lowerer.lower(operation);
+            },
+            [&](const ReleaseSignalSlice& operation) {
+              signal_lowerer.lower(operation);
             },
             [&](const WriteInertialSlice& operation) {
               const auto signal_kind =
@@ -1622,6 +1567,33 @@ void lower_process(llvm::Module &module, const std::string &symbol,
               emit_dynamic_after_slice(
                   operation,
                   dynamic_offset_i32(operation.selection));
+            },
+            [&](const WriteBlockingDynamicPartSlice& operation) {
+              emit_dynamic_part_slice(
+                  operation.signal,
+                  operation.source,
+                  operation.selection,
+                  write_blocking_slice_callback,
+                  write_blocking_slice_logic9_callback,
+                  std::nullopt);
+            },
+            [&](const WriteUpdateDynamicPartSlice& operation) {
+              emit_dynamic_part_slice(
+                  operation.signal,
+                  operation.source,
+                  operation.selection,
+                  write_update_slice_callback,
+                  write_update_slice_logic9_callback,
+                  std::nullopt);
+            },
+            [&](const WriteAfterDynamicPartSlice& operation) {
+              emit_dynamic_part_slice(
+                  operation.signal,
+                  operation.source,
+                  operation.selection,
+                  write_after_slice_callback,
+                  write_after_slice_logic9_callback,
+                  operation.delay);
             },
             [&](const WriteInertialDynamicSlice& operation) {
               emit_dynamic_inertial_slice(

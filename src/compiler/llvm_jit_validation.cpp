@@ -5,7 +5,6 @@
 #include <limits>
 #include <optional>
 #include <ranges>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <variant>
@@ -22,28 +21,6 @@ template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
 };
 template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
-
-
-[[nodiscard]] std::string instruction_error(const Process &process,
-                                            const std::size_t instruction,
-                                            const std::string_view message) {
-  std::ostringstream result;
-  result << "cannot JIT SimIR process " << process.id << " ('" << process.name
-         << "'), instruction " << instruction << ": " << message;
-  return result.str();
-}
-
-[[noreturn]] void reject(const Process &process, const std::size_t instruction,
-                         const std::string_view message) {
-  throw LlvmJitError(instruction_error(process, instruction, message));
-}
-
-[[noreturn]] void
-reject_unsupported(const Process &process, const std::size_t instruction,
-                   const std::string_view message) {
-  throw LlvmJitUnsupportedError(
-      instruction_error(process, instruction, message));
-}
 
 
 [[nodiscard]] ValidatedProcess
@@ -249,6 +226,19 @@ validate_process(const Process &process,
         constrain_width(selection.index, 32U, instruction);
         if (const auto error =
                 validate_dynamic_index_bounds(selection, target_width)) {
+          reject(process, instruction, *error);
+        }
+      };
+
+  const auto validate_dynamic_part_selection =
+      [&](const DynamicPartIndex& selection,
+          const std::uint64_t target_width,
+          const std::size_t instruction) {
+        record_use(selection.base, instruction);
+        constrain_width(selection.base, 32U, instruction);
+        if (const auto error =
+                validate_dynamic_part_index_bounds(
+                    selection, target_width)) {
           reject(process, instruction, *error);
         }
       };
@@ -963,6 +953,22 @@ validate_process(const Process &process,
               unify_registers(
                   operation.destination, operation.target, index);
             },
+            [&](const DynamicPartInsert& operation) {
+              if (const auto error =
+                      validate_dynamic_part_index_metadata(
+                          operation.selection)) {
+                reject(process, index, *error);
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.target, index);
+              record_use(operation.source, index);
+              record_use(operation.selection.base, index);
+              constrain_width(
+                  operation.source, operation.selection.width, index);
+              constrain_width(operation.selection.base, 32U, index);
+              unify_registers(
+                  operation.destination, operation.target, index);
+            },
             [&](const Concatenate& operation) {
               if (operation.operands.empty()) {
                 reject(
@@ -1449,6 +1455,50 @@ validate_process(const Process &process,
                   operation.selection, target_width, index);
               result.uses_write_after_slice = true;
             },
+            [&](const WriteBlockingDynamicPartSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              record_use(operation.source, index);
+              constrain_width(
+                  operation.source, operation.selection.width, index);
+              validate_dynamic_part_selection(
+                  operation.selection, target_width, index);
+              result.uses_write_blocking_slice = true;
+            },
+            [&](const WriteUpdateDynamicPartSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              record_use(operation.source, index);
+              constrain_width(
+                  operation.source, operation.selection.width, index);
+              validate_dynamic_part_selection(
+                  operation.selection, target_width, index);
+              result.uses_write_update_slice = true;
+            },
+            [&](const WriteAfterDynamicPartSlice& operation) {
+              const auto target_width =
+                  signal_width(operation.signal, index);
+              record_use(operation.source, index);
+              constrain_width(
+                  operation.source, operation.selection.width, index);
+              validate_dynamic_part_selection(
+                  operation.selection, target_width, index);
+              result.uses_write_after_slice = true;
+            },
+            [&](const ForceSignalSlice& operation) {
+              record_use(operation.source, index);
+              (void)signal_width(operation.signal, index);
+              result.uses_force_signal_slice = true;
+            },
+            [&](const ReleaseSignalSlice& operation) {
+              (void)signal_width(operation.signal, index);
+              if (operation.width == 0) {
+                reject(
+                    process, index,
+                    "ReleaseSignalSlice width must be greater than zero");
+              }
+              result.uses_release_signal_slice = true;
+            },
             [&](const WriteInertialDynamicSlice& operation) {
               const auto target_width =
                   signal_width(operation.signal, index);
@@ -1664,6 +1714,10 @@ validate_process(const Process &process,
       result.register_widths[index] = static_cast<std::uint32_t>(width);
     }
   }
+  if (const auto error = validate_selection_operation_bounds(
+          process, result.register_widths, signal_widths)) {
+    reject(process, error->instruction, error->message);
+  }
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     for (const auto definition : instruction_definitions[index]) {
       if (result.register_widths[definition] == 0) {
@@ -1676,47 +1730,6 @@ validate_process(const Process &process,
       }
       if (result.register_widths[used] == 0) {
         reject(process, index, "source register width cannot be inferred");
-      }
-    }
-    if (const auto* extract =
-            std::get_if<Extract>(&process.operations[index])) {
-      if (const auto error = validate_extract_bounds(
-              *extract, result.register_widths[extract->source])) {
-        reject(process, index, *error);
-      }
-    }
-    if (const auto* extract =
-            std::get_if<DynamicExtract>(
-                &process.operations[index])) {
-      if (const auto error = validate_dynamic_index_bounds(
-              extract->selection,
-              result.register_widths[extract->source])) {
-        reject(process, index, *error);
-      }
-    }
-    if (const auto* extract =
-            std::get_if<DynamicPartSelect>(
-                &process.operations[index])) {
-      if (const auto error = validate_dynamic_part_select_source_width(
-              *extract, result.register_widths[extract->source])) {
-        reject(process, index, *error);
-      }
-    }
-    if (const auto* insert =
-            std::get_if<Insert>(&process.operations[index])) {
-      if (const auto error = validate_insert_bounds(
-              *insert, result.register_widths[insert->target],
-              result.register_widths[insert->source])) {
-        reject(process, index, *error);
-      }
-    }
-    if (const auto* insert =
-            std::get_if<DynamicInsert>(
-                &process.operations[index])) {
-      if (const auto error = validate_dynamic_index_bounds(
-              insert->selection,
-              result.register_widths[insert->target])) {
-        reject(process, index, *error);
       }
     }
     if (const auto* concatenate =

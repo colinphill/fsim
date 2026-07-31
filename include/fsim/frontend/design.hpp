@@ -58,6 +58,7 @@ enum class ExpressionKind {
   LogicLiteral,
   StringLiteral,
   Unary,
+  Update,
   Binary,
   Call,
   Index,
@@ -669,6 +670,13 @@ enum class ProceduralAssignmentControl {
   Event,
 };
 
+enum class ProceduralUpdateKind {
+  None,
+  Compound,
+  Prefix,
+  Postfix,
+};
+
 struct DelayAlternative {
   std::uint64_t magnitude{};
   std::uint64_t divisor{1};
@@ -708,6 +716,8 @@ struct VhdlWaveformElement {
 
 enum class StatementKind {
   Assignment,
+  Force,
+  Release,
   If,
   Case,
   Loop,
@@ -846,6 +856,12 @@ struct Statement {
   // `sensitivities` payload is distinct from statement-level timing controls.
   ProceduralAssignmentControl procedural_assignment_control{
       ProceduralAssignmentControl::None};
+  // SystemVerilog update syntax remains explicit even though `value` retains
+  // the normalized binary expression used by older consumers. Elaboration
+  // uses this metadata to capture the lvalue once for read-modify-write.
+  ProceduralUpdateKind procedural_update_kind{
+      ProceduralUpdateKind::None};
+  std::string procedural_update_operator;
   std::optional<Delay> delay;
   // Present only on VHDL signal assignments. VHDL variable assignments and
   // assignments from the Verilog/SystemVerilog frontends leave this empty.

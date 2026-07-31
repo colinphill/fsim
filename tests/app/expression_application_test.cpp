@@ -519,7 +519,7 @@ void test_systemverilog_signedness_casts(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 62> signal_paths{
+  const std::array<std::string, 64> signal_paths{
       "signedness_cast_app.signed_less",
       "signedness_cast_app.unsigned_less",
       "signedness_cast_app.signed_shift",
@@ -581,7 +581,9 @@ void test_systemverilog_signedness_casts(
       "signedness_cast_app.countones_unknown",
       "signedness_cast_app.countbits_known",
       "signedness_cast_app.countbits_unknown",
-      "signedness_cast_app.countbits_zero_x"};
+      "signedness_cast_app.countbits_zero_x",
+      "signedness_cast_app.indexed_update",
+      "signedness_cast_app.update_calls"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -660,7 +662,9 @@ void test_systemverilog_signedness_casts(
           "00000000000000000000000000000001",
           "00000000000000000000000000000010",
           "00000000000000000000000000000010",
-          "00000000000000000000000000000010"}));
+          "00000000000000000000000000000010",
+          "10100100",
+          "00000000000000000000000000000001"}));
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 2);
   assert(compiled.compiled_modules == 1);
@@ -1246,6 +1250,12 @@ module signedness_cast_app #(
   logic signed [31:0] countbits_known;
   logic signed [31:0] countbits_unknown;
   logic signed [31:0] countbits_zero_x;
+  logic [7:0] indexed_update;
+  logic signed [31:0] update_calls;
+  function automatic int next_update_index();
+    update_calls = update_calls + 1;
+    return 2;
+  endfunction
   initial begin
     unsigned_value = 4'b1111;
     signed_value = 4'b0001;
@@ -1330,6 +1340,9 @@ module signedness_cast_app #(
     countbits_known = $countbits(4'b10xz, 1'b0, 1'b1);
     countbits_unknown = $countbits(4'b10xz, 1'bx, 1'bz);
     countbits_zero_x = $countbits(4'b10xz, 1'b0, 1'bx);
+    indexed_update = 8'ha0;
+    update_calls = 0;
+    indexed_update[next_update_index()] += 1'b1;
     $finish;
   end
   final begin

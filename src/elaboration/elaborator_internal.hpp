@@ -862,6 +862,19 @@ private:
         const Expression& expression,
         const std::size_t source_width);
 
+    std::optional<RegisterId> lower_procedural_update_value(
+        const Statement& statement,
+        RegisterId captured,
+        std::size_t target_width,
+        const frontend::Type* contextual_target_type);
+
+    std::optional<RegisterId> lower_procedural_update_expression(
+        const Expression& expression,
+        std::size_t expected_width,
+        const frontend::Type* expected_type);
+
+    void lower_force_release(const Statement& statement);
+
     void lower_assignment(const Statement& statement);
 
     void lower_if(const Statement& statement);
@@ -1122,6 +1135,7 @@ private:
     std::vector<std::size_t> register_widths_;
     std::vector<frontend::ValueDomain> register_domains_;
     std::unordered_map<std::string, RegisterId> locals_;
+    std::optional<RegisterId> procedural_update_result_;
     std::unordered_map<std::string, StringRegisterId>
         string_locals_;
     std::unordered_map<std::string, ContainerRegisterId>

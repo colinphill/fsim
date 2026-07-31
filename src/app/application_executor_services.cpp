@@ -890,6 +890,66 @@ std::uint32_t LlvmProcessExecutor::container_operation(
   }
 }
 
+void LlvmProcessExecutor::force_signal_slice(
+    void* context,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const std::uint64_t aval,
+    const std::uint64_t bval) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return;
+  }
+  try {
+    const auto value = checked_slice_word(
+        state, signal, offset, width, aval, bval);
+    state.context->force_signal_slice(
+        signal,
+        runtime::PackedLogic4::from_aval_bval(
+            value.width, value.aval, value.bval),
+        offset);
+  } catch (...) {
+    capture_failure(state);
+  }
+}
+
+void LlvmProcessExecutor::force_signal_slice_logic9(
+    void* context,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width,
+    const fsim_jit_logic9_word_v1* value) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return;
+  }
+  try {
+    state.context->force_signal_slice(
+        signal,
+        checked_logic9_slice(state, signal, offset, width, value),
+        offset);
+  } catch (...) {
+    capture_failure(state);
+  }
+}
+
+void LlvmProcessExecutor::release_signal_slice(
+    void* context,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return;
+  }
+  try {
+    state.context->release_signal_slice(signal, offset, width);
+  } catch (...) {
+    capture_failure(state);
+  }
+}
+
 compiler::JitOptimizationLevel jit_optimization(
     const project::Optimization optimization) noexcept {
   return optimization == project::Optimization::o0

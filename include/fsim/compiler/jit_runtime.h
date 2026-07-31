@@ -523,6 +523,26 @@ typedef struct fsim_jit_runtime_v1 {
       uint64_t input1_bval,
       uint64_t* result_aval,
       uint64_t* result_bval);
+
+  /* Append-only procedural force/release callbacks for static packed slices. */
+  void (*force_signal_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      uint64_t aval,
+      uint64_t bval);
+  void (*force_signal_slice_logic9)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      const fsim_jit_logic9_word_v1* value);
+  void (*release_signal_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width);
 } fsim_jit_runtime_v1;
 
 /*

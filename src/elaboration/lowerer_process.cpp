@@ -1011,6 +1011,10 @@ Lowerer::Lowerer(
         case StatementKind::Assignment:
             lower_assignment(statement);
             break;
+        case StatementKind::Force:
+        case StatementKind::Release:
+            lower_force_release(statement);
+            break;
         case StatementKind::ContainerMethod:
             lower_container_method(statement);
             break;

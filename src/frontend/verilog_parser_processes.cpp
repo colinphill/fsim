@@ -1448,6 +1448,35 @@ std::optional<Statement> VerilogParser::parse_statement() {
     return statement;
   }
 
+  if (keyword("force") || keyword("release")) {
+    const auto start = advance();
+    const bool force = start.text == "force";
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          start,
+          "FSIM-VERILOG-SEM-011",
+          "procedural force/release requires SystemVerilog");
+    }
+    Statement statement;
+    statement.kind = force
+        ? StatementKind::Force
+        : StatementKind::Release;
+    statement.target = parse_lvalue();
+    if (force) {
+      expect(
+          TokenKind::Assign,
+          "'=' in procedural force statement",
+          "FSIM-SV-PARSE-195");
+      statement.value = parse_expression();
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after procedural force/release",
+        "FSIM-SV-PARSE-196");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   bool container_method_statement = false;
   if (at(TokenKind::Identifier)) {
     std::size_t square_depth = 0;
@@ -1565,14 +1594,18 @@ std::optional<Statement> VerilogParser::parse_statement() {
     AssignmentKind assignment_kind{AssignmentKind::Blocking};
     std::optional<std::string> update_operation;
     bool unit_update = prefix_update.has_value();
+    ProceduralUpdateKind update_kind{
+        ProceduralUpdateKind::None};
     if (prefix_update) {
       update_operation =
           prefix_update->kind == TokenKind::PlusPlus ? "+" : "-";
+      update_kind = ProceduralUpdateKind::Prefix;
     } else if (match(TokenKind::PlusPlus)
                || match(TokenKind::MinusMinus)) {
       update_operation =
           previous().kind == TokenKind::PlusPlus ? "+" : "-";
       unit_update = true;
+      update_kind = ProceduralUpdateKind::Postfix;
     } else if (match(TokenKind::LessEqual)) {
       assignment_kind = AssignmentKind::NonBlocking;
     } else if (match(TokenKind::Assign)) {
@@ -1612,6 +1645,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
           }(current().kind);
       if (compound_operation) {
         update_operation = *compound_operation;
+        update_kind = ProceduralUpdateKind::Compound;
         advance();
       } else {
         rewind(before);
@@ -1636,7 +1670,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
     std::vector<Sensitivity> assignment_sensitivities;
     ProceduralAssignmentControl assignment_control{
         ProceduralAssignmentControl::None};
-    if (!prefix_update && !update_operation) {
+    if (!unit_update) {
       if (match(TokenKind::Hash)) {
         assignment_control =
             ProceduralAssignmentControl::Delay;
@@ -1711,6 +1745,9 @@ std::optional<Statement> VerilogParser::parse_statement() {
         std::move(assignment_sensitivities);
     statement.procedural_assignment_control =
         assignment_control;
+    statement.procedural_update_kind = update_kind;
+    statement.procedural_update_operator =
+        update_operation.value_or(std::string{});
     statement.span = span_from(start, previous());
     return statement;
   }
