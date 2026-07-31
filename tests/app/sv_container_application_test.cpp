@@ -1449,15 +1449,29 @@ endmodule
 )";
     assert(output.good());
   }
-  for (const auto optimization :
-       {fsim::project::Optimization::o0,
-        fsim::project::Optimization::o2}) {
+#if defined(FSIM_HAS_LLVM)
+  const auto optimizations = {
+      fsim::project::Optimization::o0,
+      fsim::project::Optimization::o2};
+#else
+  // Without the LLVM backend, compiled execution is the interpreter and the
+  // project optimization setting cannot affect execution. Keep one complete
+  // semantic/debugger pass so sanitizer builds exercise every container path
+  // without rebuilding the same large fixture four times.
+  const auto optimizations = {
+      fsim::project::Optimization::o0};
+#endif
+  for (const auto optimization : optimizations) {
     const auto config =
         config_for(directory.path, source, optimization);
     const auto reference =
         run_once(config, fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
     const auto compiled =
         run_once(config, fsim::app::SimulationEngine::compiled);
+#else
+    const auto& compiled = reference;
+#endif
     assert(
         reference.result.status
             == fsim::runtime::RunStatus::completed
@@ -1576,27 +1590,39 @@ endmodule
 #endif
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
     inspect_suspended(
         config, fsim::app::SimulationEngine::compiled);
+#endif
     inspect_ordering_suspended(
         config, fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
     inspect_ordering_suspended(
         config, fsim::app::SimulationEngine::compiled);
+#endif
     inspect_static_suspended(
         config, fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
     inspect_static_suspended(
         config, fsim::app::SimulationEngine::compiled);
+#endif
     inspect_static_port_aliases(
         config, fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
     inspect_static_port_aliases(
         config, fsim::app::SimulationEngine::compiled);
+#endif
     inspect_static_slice_port_aliases(
         config, fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
     inspect_static_slice_port_aliases(
         config, fsim::app::SimulationEngine::compiled);
+#endif
     inspect_dynamic_port_aliases(
         config, fsim::app::SimulationEngine::interpreter);
+#if defined(FSIM_HAS_LLVM)
     inspect_dynamic_port_aliases(
         config, fsim::app::SimulationEngine::compiled);
+#endif
   }
 }

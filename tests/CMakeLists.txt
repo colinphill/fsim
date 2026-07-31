@@ -594,9 +594,10 @@ set_tests_properties(
     fsim.application.sv_containers
     PROPERTIES
       LABELS "fast;containers;tasks;timing;systemverilog;cache"
-      # The full sanitizer differential can exceed 30 minutes on a
-      # two-worker hosted runner even though ordinary builds remain quick.
-      TIMEOUT 2400
+      # LLVM-disabled sanitizer builds retain one complete semantic/debugger
+      # pass and avoid redundant compiled/O2 aliases. Twenty minutes preserves
+      # hosted-runner headroom while keeping future stalls diagnostic.
+      TIMEOUT 1200
   )
 
   add_executable(
