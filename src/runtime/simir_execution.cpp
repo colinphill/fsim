@@ -44,18 +44,12 @@ struct Interpreter::Impl::ExecutionContext final
   }
   [[nodiscard]] ContainerValue read_container_object(
       const ContainerObjectId object) const override {
-    return owner.get_container_object(object).initial_value;
+    return owner.read_container_object_value(object);
   }
   void write_container_object(
       const ContainerObjectId object,
       const ContainerValue& value) override {
-    validate_container_value(value);
-    auto& target = owner.get_container_object(object).initial_value;
-    if (target.type != value.type) {
-      throw std::invalid_argument{
-          "container object write type mismatch"};
-    }
-    target = value;
+    owner.write_container_object_value(object, value);
   }
 
   [[nodiscard]] FileHandle open_file(

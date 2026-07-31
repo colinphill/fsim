@@ -1130,9 +1130,24 @@ struct StringObject {
   std::string initial_value;
 };
 
+/// One fixed-array object view backed by a selected range of an earlier
+/// object. The view's own ContainerValue type supplies the child/formal
+/// declared range; selected_left/right name the parent range. Reads and
+/// writes map equal-count elements ordinally.
+struct ContainerSliceAlias {
+  ContainerObjectId object{};
+  std::int32_t selected_left{};
+  std::int32_t selected_right{};
+
+  friend bool operator==(
+      const ContainerSliceAlias&,
+      const ContainerSliceAlias&) = default;
+};
+
 struct ContainerObject {
   std::string name;
   ContainerValue initial_value;
+  std::optional<ContainerSliceAlias> slice_alias;
 };
 
 struct Sensitivity {

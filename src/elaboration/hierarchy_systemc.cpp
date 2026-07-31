@@ -941,10 +941,18 @@ using namespace elaboration_detail;
                     path + "." + variable.name;
                 design_.container_object_info_.push_back(
                     ContainerObjectInfo{
-                        id, full_name, type, variable.span});
+                        id,
+                        full_name,
+                        type,
+                        variable.span,
+                        false,
+                        frontend::PortDirection::Unknown,
+                        std::nullopt});
                 design_.container_objects_.push_back(
                     ContainerObject{
-                        full_name, default_container_value(type)});
+                        full_name,
+                        default_container_value(type),
+                        std::nullopt});
                 local_container_objects.emplace(
                     variable.name, id);
                 local_container_objects.emplace(

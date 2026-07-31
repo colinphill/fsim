@@ -742,6 +742,99 @@ concurrency policy. Final replacement run `30613827882` passed all 12 jobs.
 Windows MSVC Debug completed in 18 minutes 45 seconds, Windows MSVC LLVM
 Debug in 28 minutes 45 seconds, and ASan/UBSan in 43 minutes 59 seconds.
 
+## Reboot checkpoint — Batch 91 in progress
+
+The newest pushed commit after the Batch 90 closure is an intentionally
+incomplete Batch 91 implementation checkpoint. It is based on `92a4f23` and
+contains the first runtime and hierarchy pieces for direct static-array slice
+module-port actuals. Do not treat the batch or any Batch 91 feature-matrix row
+as complete yet.
+
+The checkpoint makes these architectural choices:
+
+- `ContainerObject` and public elaboration metadata may carry a
+  `ContainerSliceAlias` consisting of an earlier target object plus the
+  selected target left/right bounds. The alias object itself retains the
+  child formal's fixed `ContainerType`, so child code sees only formal indices
+  and never exposes unselected parent elements.
+- Alias-aware runtime reads materialize the selected target range into formal
+  ordinal order. Alias-aware writes copy the complete parent value, merge the
+  complete formal value into the selected range, and commit one replacement.
+  Recursive alias traversal therefore supports a later whole-port alias below
+  a sliced connection while retaining atomic parent updates.
+- Interpreter container operations, native execution callbacks, public
+  inspection, and deposits use the same recursive alias-aware helpers. No
+  native ABI slot or new SimIR operation has been introduced.
+- Same-language hierarchy connection now accepts a whole object or a direct
+  colon slice. It validates fixed shape, locally constant signed bounds,
+  direction, range, equal element count, and exact element profile before
+  creating the alias. Output/inout connections still reject a parent input
+  port.
+- Boundary-driver tracking now carries an optional selected interval.
+  Disjoint slice writers may coexist; whole-object or overlapping writers
+  retain the existing deterministic `SVPORT-008` rejection.
+
+The following files contain that implementation:
+
+- `include/fsim/runtime/simir.hpp` and
+  `include/fsim/elaboration/elaborator.hpp`;
+- `src/runtime/simir_internal.hpp`, `simir_containers.cpp`,
+  `simir_interpreter.cpp`, and `simir_execution.cpp`;
+- `src/elaboration/elaborator_internal.hpp`,
+  `hierarchy_sv_ports.cpp`, `hierarchy_types.cpp`, and
+  `hierarchy_systemc.cpp`; and
+- aggregate-initializer compatibility adjustments in
+  `tests/runtime/runtime_container_tests.cpp`.
+
+At the checkpoint, this exact warnings-as-errors command is clean with no work
+remaining:
+
+```sh
+cmake --build build/llvm22-ninja-debug --parallel 8 \
+  --target fsim_runtime_tests fsim_elaboration_tests \
+  fsim_sv_container_elaboration_tests
+```
+
+The three existing Debug suites pass:
+
+```text
+fsim.elaboration                 0.41 s
+fsim.elaboration.sv-container    0.11 s
+fsim.runtime                     0.05 s
+```
+
+No new Batch 91 positive, negative, application, cache, debugger, or VCD
+evidence has been added yet, and neither full Debug nor Release has been run
+for this checkpoint. Resume by reviewing the locally constant-bound evaluation
+against parent specialization, then complete the following work:
+
+1. Add direct runtime tests for descending/ascending and nested slice aliases,
+   exact X/Z ordinal reads, atomic writes, preservation of surrounding
+   elements, deposits, and invalid alias metadata.
+2. Add a dedicated elaboration fixture and wire it into both elaboration test
+   executables. Cover named/positional connections, differing formal indices
+   and directions, input/output/inout, nested/generated whole aliases,
+   disjoint writers, overlap rejection, read-only parents, profile/count and
+   bound errors, and all bounded unsupported receiver forms.
+3. Extend frontend evidence to assert that named and positional actuals remain
+   source-spanned colon `Slice` HIR.
+4. Extend the split SystemVerilog container application fixture without
+   exceeding MSVC's string-literal limit. Compare interpreter, LLVM O0, and
+   LLVM O2; inspect formal and parent paths; retain exact X/Z and surrounding
+   elements; and add scalar VCD observation.
+5. Raise native-object schema 42 to 43 and container semantic revision 18 to
+   19, then add cache matrices for formal range/profile, selected actual range,
+   binding direction, specialization, and transitive source provenance.
+6. Run the focused expression below, then the complete exact-LLVM Debug and
+   Release builds with `--parallel 8` and all tests.
+7. Finish the four Batch 91 documents, commit, and push. Batch 91 is not a
+   ten-batch CI-inspection boundary.
+
+Before expanding the tests, review two implementation details: slice-bound
+folding currently uses an empty `ConstantEnvironment`, so a
+specialization-dependent actual must be proven or repaired; and nested aliases
+must preserve the invariant that every target object precedes its alias.
+
 ## Next ten-feature batch
 
 Resume with **feature batch 91: bounded static-array slice module-port
@@ -894,10 +987,11 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin Batch 91 at item 1 above. Do not rerun Batch 90's full regression
-   unless a change can affect slice assignment, consumers, callable or module
-   boundary copies/aliases, ordering, container objects/ports, runtime
-   helpers, debugger/VCD paths, cache identity, or execution.
+3. Continue from the Batch 91 reboot checkpoint above. Its implementation
+   compiles and the pre-existing runtime/elaboration tests pass, but it has no
+   new feature evidence and is not a completed batch. Do not rerun Batch 90's
+   full regression until the Batch 91 implementation and evidence are
+   complete unless an intervening repair needs it.
 4. Keep Batch 91 within direct locally constant direction-preserving slices of
    one-dimensional integral static-array objects connected to the existing
    same-language static-array module-port forms.

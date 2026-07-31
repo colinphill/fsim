@@ -1237,6 +1237,12 @@ private:
         ContainerMap containers;
     };
 
+    struct ContainerBoundaryDriver {
+        std::string path;
+        std::optional<std::pair<std::int32_t, std::int32_t>>
+            selected_interval;
+    };
+
     struct ConfiguredVhdlInstance {
         frontend::Instance instance;
         std::optional<DesignUnit> target;
@@ -1424,6 +1430,15 @@ private:
         ContainerMap& local,
         const ConstantEnvironment& environment);
 
+    std::optional<ContainerObjectId> connect_container_port(
+        const frontend::SignalDeclaration& port,
+        const frontend::PortConnection& connection,
+        const std::string& path,
+        const ContainerMap& parent_containers,
+        const std::unordered_set<std::string>&
+            parent_read_only_containers,
+        bool cross_language);
+
     const Binding* binding_for(const std::string& path);
 
     const DesignUnit* bound_target(
@@ -1546,7 +1561,9 @@ private:
     std::unordered_map<SignalId, std::size_t> boundary_driver_count_;
     std::unordered_set<SignalId> cross_language_boundary_signals_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
-    std::unordered_map<ContainerObjectId, std::vector<std::string>>
+    std::unordered_map<
+        ContainerObjectId,
+        std::vector<ContainerBoundaryDriver>>
         container_boundary_driver_paths_;
 };
 

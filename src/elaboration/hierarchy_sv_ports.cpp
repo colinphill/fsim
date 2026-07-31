@@ -175,10 +175,13 @@ HierarchyBuilder::add_owned_container_port(
           *type,
           declaration.span,
           true,
-          declaration.direction});
+          declaration.direction,
+          std::nullopt});
   design_.container_objects_.push_back(
       ContainerObject{
-          full_name, default_container_value(*type)});
+          full_name,
+          default_container_value(*type),
+          std::nullopt});
   local.emplace(declaration.name, id);
   local.emplace(full_name, id);
   design_.container_by_name_.emplace(full_name, id);
@@ -186,6 +189,282 @@ HierarchyBuilder::add_owned_container_port(
     design_.container_by_name_.emplace(declaration.name, id);
   }
   return id;
+}
+
+std::optional<ContainerObjectId>
+HierarchyBuilder::connect_container_port(
+    const frontend::SignalDeclaration& port,
+    const frontend::PortConnection& connection,
+    const std::string& path,
+    const ContainerMap& parent_containers,
+    const std::unordered_set<std::string>&
+        parent_read_only_containers,
+    const bool cross_language) {
+  if (cross_language) {
+    report(
+        "FSIM-ELAB-SVPORT-004",
+        "SystemVerilog container ports cannot cross a language "
+        "boundary at '" + path + "." + port.name + "'",
+        connection.span);
+    return std::nullopt;
+  }
+  const auto expected =
+      container_port_type(port.type, port.span, {});
+  if (!expected) {
+    return std::nullopt;
+  }
+
+  const auto& expression = connection.value;
+  const bool sliced =
+      expression.kind == frontend::ExpressionKind::Slice;
+  const frontend::Expression* base = &expression;
+  if (sliced) {
+    if (expression.text != ":"
+        || expression.operands.size() != 3
+        || expression.operands.front().kind
+            != frontend::ExpressionKind::Identifier) {
+      report(
+          "FSIM-ELAB-SVPORT-005",
+          "container port slice actuals must be direct left:right "
+          "selections of static-array objects",
+          expression.span);
+      return std::nullopt;
+    }
+    base = &expression.operands.front();
+  } else if (
+      expression.kind
+      != frontend::ExpressionKind::Identifier) {
+    report(
+        "FSIM-ELAB-SVPORT-005",
+        "container port actuals must be direct whole-container "
+        "objects or static-array slices",
+        expression.span);
+    return std::nullopt;
+  }
+
+  const auto actual = parent_containers.find(base->text);
+  if (actual == parent_containers.end()) {
+    report(
+        "FSIM-ELAB-SVPORT-006",
+        "unknown container connection object '" + base->text
+            + "' on instance '" + path + "'",
+        base->span);
+    return std::nullopt;
+  }
+  const auto& actual_info =
+      design_.container_object_info_.at(actual->second);
+  auto selected_type = actual_info.type;
+  std::optional<ContainerSliceAlias> slice_alias;
+  std::optional<std::pair<std::int32_t, std::int32_t>>
+      driver_interval;
+
+  const auto element_count =
+      [](const ContainerType& type) {
+        return static_cast<std::uint64_t>(
+                   type.index_left >= type.index_right
+                       ? static_cast<std::int64_t>(type.index_left)
+                             - type.index_right
+                       : static_cast<std::int64_t>(type.index_right)
+                             - type.index_left)
+            + 1U;
+      };
+  const auto same_element_profile =
+      [](const ContainerType& left,
+         const ContainerType& right) {
+        return left.element_width == right.element_width
+            && left.two_state == right.two_state
+            && left.signed_elements
+                == right.signed_elements;
+      };
+
+  if (sliced) {
+    if (!expected->fixed || !actual_info.type.fixed) {
+      report(
+          "FSIM-ELAB-SVPORT-005",
+          "container port slice actuals require a fixed "
+          "one-dimensional static-array port and object",
+          expression.span);
+      return std::nullopt;
+    }
+    const auto bound =
+        [&](const frontend::Expression& value)
+            -> std::optional<std::int32_t> {
+          std::string error;
+          const auto constant =
+              evaluate_systemverilog_constant_expression(
+                  value, {}, {}, error);
+          const auto integer =
+              constant && constant->known()
+                  ? constant->integer_value()
+                  : std::nullopt;
+          if (!integer
+              || *integer
+                  < std::numeric_limits<std::int32_t>::min()
+              || *integer
+                  > std::numeric_limits<std::int32_t>::max()) {
+            report(
+                "FSIM-ELAB-SVSLICE-002",
+                "static-array slice port bounds must be locally "
+                "constant known signed 32-bit values",
+                value.span);
+            return std::nullopt;
+          }
+          return static_cast<std::int32_t>(*integer);
+        };
+    const auto left = bound(expression.operands[1]);
+    const auto right = bound(expression.operands[2]);
+    if (!left || !right) {
+      return std::nullopt;
+    }
+    const bool actual_descending =
+        actual_info.type.index_left
+        >= actual_info.type.index_right;
+    const bool selected_descending = *left >= *right;
+    const auto actual_low =
+        std::min(
+            actual_info.type.index_left,
+            actual_info.type.index_right);
+    const auto actual_high =
+        std::max(
+            actual_info.type.index_left,
+            actual_info.type.index_right);
+    if ((*left != *right
+         && actual_descending != selected_descending)
+        || *left < actual_low || *left > actual_high
+        || *right < actual_low || *right > actual_high) {
+      report(
+          "FSIM-ELAB-SVSLICE-003",
+          "a static-array slice port actual must preserve its "
+          "declared direction and remain in range",
+          expression.span);
+      return std::nullopt;
+    }
+    selected_type.index_left = *left;
+    selected_type.index_right = *right;
+    if (element_count(selected_type)
+            != element_count(*expected)
+        || !same_element_profile(
+            selected_type, *expected)) {
+      report(
+          "FSIM-ELAB-SVPORT-007",
+          "static-array slice port actuals require equal element "
+          "counts and identical element width, signedness, and "
+          "state domain",
+          connection.span);
+      return std::nullopt;
+    }
+    slice_alias = ContainerSliceAlias{
+        actual->second, *left, *right};
+    driver_interval =
+        std::pair{
+            std::min(*left, *right),
+            std::max(*left, *right)};
+  } else {
+    if (actual_info.type != *expected) {
+      report(
+          "FSIM-ELAB-SVPORT-007",
+          "whole-container port actuals require an exact kind, "
+          "element, index, bound, and range match",
+          connection.span);
+      return std::nullopt;
+    }
+    if (actual_info.type.fixed) {
+      driver_interval =
+          std::pair{
+              std::min(
+                  actual_info.type.index_left,
+                  actual_info.type.index_right),
+              std::max(
+                  actual_info.type.index_left,
+                  actual_info.type.index_right)};
+    }
+  }
+
+  if ((port.direction
+           == frontend::PortDirection::Output
+       || port.direction
+           == frontend::PortDirection::Inout)
+      && parent_read_only_containers.contains(base->text)) {
+    report(
+        "FSIM-ELAB-SVPORT-009",
+        "an input container port cannot be connected to a "
+        "descendant output or inout port",
+        connection.span);
+    return std::nullopt;
+  }
+
+  auto connected_object = actual->second;
+  if (slice_alias) {
+    const auto index = design_.container_objects_.size();
+    connected_object =
+        static_cast<ContainerObjectId>(index);
+    if (static_cast<std::size_t>(connected_object)
+        != index) {
+      throw std::length_error{
+          "too many elaborated container objects"};
+    }
+    const auto full_name = path + "." + port.name;
+    design_.container_object_info_.push_back(
+        ContainerObjectInfo{
+            connected_object,
+            full_name,
+            *expected,
+            port.span,
+            true,
+            port.direction,
+            slice_alias});
+    design_.container_objects_.push_back(
+        ContainerObject{
+            full_name,
+            default_container_value(*expected),
+            slice_alias});
+  }
+
+  if (port.direction == frontend::PortDirection::Output
+      || port.direction
+          == frontend::PortDirection::Inout) {
+    auto& drivers =
+        container_boundary_driver_paths_[actual->second];
+    const auto nested_with =
+        [](const std::string_view left,
+           const std::string_view right) {
+          const auto left_prefix =
+              std::string{left} + ".";
+          const auto right_prefix =
+              std::string{right} + ".";
+          return left.starts_with(right_prefix)
+              || right.starts_with(left_prefix);
+        };
+    const auto overlaps =
+        [&](const ContainerBoundaryDriver& driver) {
+          if (!driver_interval
+              || !driver.selected_interval) {
+            return true;
+          }
+          return driver_interval->first
+                     <= driver.selected_interval->second
+              && driver.selected_interval->first
+                     <= driver_interval->second;
+        };
+    if (std::ranges::any_of(
+            drivers,
+            [&](const auto& driver) {
+              return overlaps(driver)
+                  && !nested_with(
+                      path, driver.path);
+            })) {
+      report(
+          "FSIM-ELAB-SVPORT-008",
+          "container object '" + actual_info.name
+              + "' has overlapping output/inout module "
+              "container-port drivers",
+          connection.span);
+    }
+    drivers.push_back(
+        ContainerBoundaryDriver{
+            path, driver_interval});
+  }
+  return connected_object;
 }
 
 void HierarchyBuilder::validate_boundary_type(

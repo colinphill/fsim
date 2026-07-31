@@ -362,6 +362,10 @@ struct Interpreter::Impl {
       ContainerObjectId id);
   [[nodiscard]] const ContainerObject& get_container_object(
       ContainerObjectId id) const;
+  [[nodiscard]] const ContainerValue&
+  read_container_object_value(ContainerObjectId id);
+  void write_container_object_value(
+      ContainerObjectId id, const ContainerValue& value);
 
   void set_file_root(std::filesystem::path root);
   [[nodiscard]] FileHandle open_file(

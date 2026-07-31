@@ -19,6 +19,15 @@ namespace {
   return static_cast<std::size_t>(distance + 1);
 }
 
+[[nodiscard]] std::size_t fixed_offset(
+    const ContainerType& type,
+    const std::int32_t index) {
+  return static_cast<std::size_t>(
+      type.index_left >= type.index_right
+          ? static_cast<std::int64_t>(type.index_left) - index
+          : static_cast<std::int64_t>(index) - type.index_left);
+}
+
 [[noreturn]] void container_error(
     const ProcessId process,
     const InstructionIndex instruction,
@@ -457,6 +466,72 @@ void validate_container_value(const ContainerValue& value) {
           "SimIR container element does not match its type"};
     }
   }
+}
+
+const ContainerValue&
+Interpreter::Impl::read_container_object_value(
+    const ContainerObjectId id) {
+  auto& object = get_container_object(id);
+  if (!object.slice_alias) {
+    return object.initial_value;
+  }
+  const auto& alias = *object.slice_alias;
+  const auto& source =
+      read_container_object_value(alias.object);
+  const auto count =
+      object.initial_value.elements.size();
+  const auto descending =
+      alias.selected_left >= alias.selected_right;
+  for (std::size_t ordinal = 0;
+       ordinal < count;
+       ++ordinal) {
+    const auto selected_index =
+        static_cast<std::int32_t>(
+            static_cast<std::int64_t>(alias.selected_left)
+            + (descending
+                   ? -static_cast<std::int64_t>(ordinal)
+                   : static_cast<std::int64_t>(ordinal)));
+    object.initial_value.elements[ordinal] =
+        source.elements[
+            fixed_offset(source.type, selected_index)];
+  }
+  return object.initial_value;
+}
+
+void Interpreter::Impl::write_container_object_value(
+    const ContainerObjectId id,
+    const ContainerValue& value) {
+  validate_container_value(value);
+  auto& object = get_container_object(id);
+  if (object.initial_value.type != value.type) {
+    throw std::invalid_argument{
+        "container object write type mismatch"};
+  }
+  if (!object.slice_alias) {
+    object.initial_value = value;
+    return;
+  }
+  const auto alias = *object.slice_alias;
+  auto replacement =
+      read_container_object_value(alias.object);
+  const auto descending =
+      alias.selected_left >= alias.selected_right;
+  for (std::size_t ordinal = 0;
+       ordinal < value.elements.size();
+       ++ordinal) {
+    const auto selected_index =
+        static_cast<std::int32_t>(
+            static_cast<std::int64_t>(alias.selected_left)
+            + (descending
+                   ? -static_cast<std::int64_t>(ordinal)
+                   : static_cast<std::int64_t>(ordinal)));
+    replacement.elements[
+        fixed_offset(replacement.type, selected_index)] =
+        value.elements[ordinal];
+  }
+  write_container_object_value(
+      alias.object, replacement);
+  object.initial_value = value;
 }
 
 PackedLogic4 default_container_element(
@@ -1073,8 +1148,8 @@ void Interpreter::Impl::execute_container(
     const ReadContainerObject& operation) {
   auto& destination =
       get_container_register(process, operation.destination);
-  const auto& source = get_container_object(
-      operation.object).initial_value;
+  const auto& source =
+      read_container_object_value(operation.object);
   require_same_type(
       process.program.id, process.pc,
       destination.type, source.type);
@@ -1086,15 +1161,15 @@ void Interpreter::Impl::execute_container(
 void Interpreter::Impl::execute_container(
     ProcessState& process,
     const WriteContainerObject& operation) {
-  auto& destination = get_container_object(
-      operation.object).initial_value;
   const auto& source =
       get_container_register(process, operation.source);
-  require_same_type(
-      process.program.id, process.pc,
-      destination.type, source.type);
-  destination.elements = source.elements;
-  destination.keys = source.keys;
+  try {
+    write_container_object_value(
+        operation.object, source);
+  } catch (const std::invalid_argument& error) {
+    container_error(
+        process.program.id, process.pc, error.what());
+  }
   ++process.pc;
 }
 

@@ -4988,6 +4988,38 @@ Windows MSVC Debug completed in 18 minutes 45 seconds, Windows MSVC LLVM
 Debug in 28 minutes 45 seconds, and ASan/UBSan in 43 minutes 59 seconds. The
 sanitizer result confirms the 45-minute CI budget remains necessary.
 
+### Batch 91 reboot checkpoint — static-array slice module-port actuals
+
+An intentionally incomplete reboot checkpoint begins the Batch 91 module-port
+boundary. Runtime objects can now retain a typed slice alias to an earlier
+container object. Common recursive helpers materialize alias reads in the
+child formal's ordinal order and merge complete alias writes into one copied
+parent value before committing it. Interpreter operations, native callbacks,
+public inspection, and deposits share these helpers, so the design adds no
+SimIR operation or public native ABI slot.
+
+Same-language hierarchy binding now routes whole and direct colon-slice
+static-array connections through one helper. The slice path validates a fixed
+receiver, constant signed bounds, direction and range, equal element count,
+exact element profile, and parent input-port writability before allocating the
+formal-typed alias. Boundary-driver ownership includes an optional selected
+interval, admitting disjoint slices while rejecting overlap or a simultaneous
+whole-object writer through `SVPORT-008`.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug build of the runtime and both
+elaboration executables is current with `--parallel 8`. Their three existing
+test suites pass in 0.57 seconds total. This is compile/regression evidence
+only: no new Batch 91 tests, schema change, application differential, VCD,
+debugger evidence, complete documentation, or full Debug/Release regression
+exists yet.
+
+Resume by checking specialization-dependent slice-bound folding and the
+earlier-target invariant, then add direct runtime alias coverage, a dedicated
+elaboration matrix, explicit frontend HIR assertions, the split application
+differential, debugger/VCD coverage, schema 43 plus container semantic
+revision 19, cache identity tests, negative diagnostics, and full exact-LLVM
+Debug/Release gates. Batch 91 remains a non-CI-inspection boundary.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

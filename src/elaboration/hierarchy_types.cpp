@@ -1455,102 +1455,21 @@ using namespace elaboration_detail;
                 continue;
             }
             if (port.type.systemverilog_container) {
-                if (cross_language) {
-                    report(
-                        "FSIM-ELAB-SVPORT-004",
-                        "SystemVerilog container ports cannot cross a "
-                        "language boundary at '" + path + "."
-                            + port.name + "'",
-                        connection.span);
-                    continue;
-                }
-                if (connection.value.kind
-                    != frontend::ExpressionKind::Identifier) {
-                    report(
-                        "FSIM-ELAB-SVPORT-005",
-                        "container port actuals must be direct "
-                        "whole-container objects",
-                        connection.value.span);
-                    continue;
-                }
-                const auto actual =
-                    parent_containers.find(connection.value.text);
-                if (actual == parent_containers.end()) {
-                    report(
-                        "FSIM-ELAB-SVPORT-006",
-                        "unknown container connection object '"
-                            + connection.value.text + "' on instance '"
-                            + path + "'",
-                        connection.value.span);
-                    continue;
-                }
-                const auto expected =
-                    container_port_type(port.type, port.span, {});
-                const auto& actual_info =
-                    design_.container_object_info_.at(actual->second);
-                if (!expected || actual_info.type != *expected) {
-                    if (expected) {
-                        report(
-                            "FSIM-ELAB-SVPORT-007",
-                            "container port '" + path + "."
-                                + port.name
-                                + "' requires an exact kind, element, "
-                                "index, bound, and range match",
-                            connection.span);
-                    }
-                    continue;
-                }
-                if ((port.direction
-                         == frontend::PortDirection::Output
-                     || port.direction
-                         == frontend::PortDirection::Inout)
-                    && parent_read_only_containers.contains(
-                        connection.value.text)) {
-                    report(
-                        "FSIM-ELAB-SVPORT-009",
-                        "an input container port cannot be connected "
-                        "to a descendant output or inout port",
-                        connection.span);
-                    continue;
-                }
-                container_aliases.emplace(
-                    port.name, actual->second);
-                container_aliases.emplace(
-                    path + "." + port.name, actual->second);
-                design_.container_by_name_.emplace(
-                    path + "." + port.name, actual->second);
-                if (port.direction
-                        == frontend::PortDirection::Output
-                    || port.direction
-                        == frontend::PortDirection::Inout) {
-                    auto& driver_paths =
-                        container_boundary_driver_paths_[
-                            actual->second];
-                    const auto nested_with =
-                        [](const std::string_view left,
-                           const std::string_view right) {
-                          const auto left_prefix =
-                              std::string{left} + ".";
-                          const auto right_prefix =
-                              std::string{right} + ".";
-                          return left.starts_with(right_prefix)
-                              || right.starts_with(left_prefix);
-                        };
-                    if (std::ranges::any_of(
-                            driver_paths,
-                            [&](const auto& driver_path) {
-                              return !nested_with(
-                                  path, driver_path);
-                            })) {
-                        report(
-                            "FSIM-ELAB-SVPORT-008",
-                            "container object '"
-                                + actual_info.name
-                                + "' has multiple output/inout module "
-                                "container-port drivers",
-                            connection.span);
-                    }
-                    driver_paths.push_back(path);
+                const auto object =
+                    connect_container_port(
+                        port,
+                        connection,
+                        path,
+                        parent_containers,
+                        parent_read_only_containers,
+                        cross_language);
+                if (object) {
+                    container_aliases.emplace(
+                        port.name, *object);
+                    container_aliases.emplace(
+                        path + "." + port.name, *object);
+                    design_.container_by_name_.emplace(
+                        path + "." + port.name, *object);
                 }
                 continue;
             }

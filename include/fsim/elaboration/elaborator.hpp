@@ -196,6 +196,7 @@ struct ContainerObjectInfo {
     bool is_port{};
     frontend::PortDirection direction{
         frontend::PortDirection::Unknown};
+    std::optional<runtime::simir::ContainerSliceAlias> slice_alias;
 };
 
 using SpecializationId = std::uint32_t;

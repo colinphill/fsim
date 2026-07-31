@@ -691,9 +691,9 @@ void test_simir_containers() {
       "predicate locator assignment safely supports an aliased queue");
   Interpreter interpreter;
   const auto array_object = interpreter.add_container_object(
-      {"array", ContainerValue{array_type, {}, {}}});
+      {"array", ContainerValue{array_type, {}, {}}, std::nullopt});
   const auto queue_object = interpreter.add_container_object(
-      {"queue", ContainerValue{queue_type, {}, {}}});
+      {"queue", ContainerValue{queue_type, {}, {}}, std::nullopt});
   Process process;
   process.id = 0;
   process.name = "containers";
@@ -772,7 +772,8 @@ void test_simir_containers() {
   const auto associative_object =
       associative.add_container_object(
           {"lookup",
-           ContainerValue{associative_type, {}, {}}});
+           ContainerValue{associative_type, {}, {}},
+           std::nullopt});
   Process associative_process;
   associative_process.id = 0;
   associative_process.name = "associative";
@@ -884,7 +885,7 @@ void test_simir_containers() {
   }
   Interpreter fixed;
   const auto fixed_object = fixed.add_container_object(
-      {"fixed", static_initial});
+      {"fixed", static_initial, std::nullopt});
   Process fixed_process;
   fixed_process.id = 0;
   fixed_process.name = "fixed";

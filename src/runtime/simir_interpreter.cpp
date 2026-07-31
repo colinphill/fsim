@@ -68,6 +68,50 @@ ContainerObjectId Interpreter::add_container_object(
       != impl_->container_objects.size()) {
     throw std::length_error{"too many SimIR container objects"};
   }
+  if (object.slice_alias) {
+    const auto& alias = *object.slice_alias;
+    if (alias.object >= id) {
+      throw std::invalid_argument{
+          "a SimIR container slice alias must reference an earlier object"};
+    }
+    const auto& source =
+        impl_->container_objects[alias.object].initial_value.type;
+    const auto& target = object.initial_value.type;
+    const auto element_count =
+        [](const std::int32_t left,
+           const std::int32_t right) {
+          return static_cast<std::uint64_t>(
+                     left >= right
+                         ? static_cast<std::int64_t>(left) - right
+                         : static_cast<std::int64_t>(right) - left)
+              + 1U;
+        };
+    const auto source_low =
+        std::min(source.index_left, source.index_right);
+    const auto source_high =
+        std::max(source.index_left, source.index_right);
+    const bool direction_matches =
+        alias.selected_left == alias.selected_right
+        || (alias.selected_left >= alias.selected_right)
+            == (source.index_left >= source.index_right);
+    if (!source.fixed || !target.fixed
+        || alias.selected_left < source_low
+        || alias.selected_left > source_high
+        || alias.selected_right < source_low
+        || alias.selected_right > source_high
+        || !direction_matches
+        || element_count(
+               alias.selected_left,
+               alias.selected_right)
+            != element_count(
+                target.index_left, target.index_right)
+        || source.element_width != target.element_width
+        || source.two_state != target.two_state
+        || source.signed_elements != target.signed_elements) {
+      throw std::invalid_argument{
+          "invalid SimIR static-array slice alias"};
+    }
+  }
   impl_->container_objects.push_back(std::move(object));
   return id;
 }
@@ -328,19 +372,13 @@ void Interpreter::deposit_string_object(
 
 const ContainerValue& Interpreter::container_object_value(
     const ContainerObjectId object) const {
-  return impl_->get_container_object(object).initial_value;
+  return impl_->read_container_object_value(object);
 }
 
 void Interpreter::deposit_container_object(
     const ContainerObjectId object,
     ContainerValue value) {
-  validate_container_value(value);
-  auto& target = impl_->get_container_object(object).initial_value;
-  if (target.type != value.type) {
-    throw std::invalid_argument{
-        "SimIR container deposit type does not match object type"};
-  }
-  target = std::move(value);
+  impl_->write_container_object_value(object, value);
 }
 
 const PackedLogic4& Interpreter::driver_value(
