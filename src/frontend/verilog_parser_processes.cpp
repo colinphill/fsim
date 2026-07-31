@@ -215,14 +215,43 @@ Statement VerilogParser::parse_case_statement(
   } else if (at(TokenKind::Identifier)
              && current().text == "matches") {
     advance();
-    error(previous(), "FSIM-SV-UNSUPPORTED-042",
-          "case matches pattern matching is not implemented");
-    skip_case_statement();
-    statement.span = span_from(start, previous());
-    return statement;
+    if (language_ != Language::SystemVerilog2017) {
+      error(previous(), "FSIM-SV-PARSE-187",
+            "case matches pattern matching requires SystemVerilog");
+    }
+    if (match_kind != CaseMatchKind::Exact) {
+      error(previous(), "FSIM-SV-PARSE-188",
+            "bounded case matches cannot be combined with casez or casex");
+    }
+    statement.case_match_kind = CaseMatchKind::Matches;
   }
 
   bool saw_default = false;
+  const auto skip_pattern_tail = [&]() {
+    std::size_t parentheses = 0;
+    std::size_t brackets = 0;
+    std::size_t braces = 0;
+    while (!at_end() && !keyword("endcase")) {
+      if (at(TokenKind::Colon) && parentheses == 0
+          && brackets == 0 && braces == 0) {
+        return;
+      }
+      if (at(TokenKind::LeftParen)) {
+        ++parentheses;
+      } else if (at(TokenKind::RightParen) && parentheses != 0) {
+        --parentheses;
+      } else if (at(TokenKind::LeftBracket)) {
+        ++brackets;
+      } else if (at(TokenKind::RightBracket) && brackets != 0) {
+        --brackets;
+      } else if (at(TokenKind::LeftBrace)) {
+        ++braces;
+      } else if (at(TokenKind::RightBrace) && braces != 0) {
+        --braces;
+      }
+      advance();
+    }
+  };
   while (!at_end() && !keyword("endcase")) {
     const auto item_start = current();
     CaseAlternative alternative;
@@ -235,6 +264,52 @@ Statement VerilogParser::parse_case_statement(
       saw_default = true;
     } else {
       const auto parse_choice = [&]() {
+        if (statement.case_match_kind == CaseMatchKind::Matches) {
+          if (match(TokenKind::Dot)) {
+            const auto pattern_start = previous();
+            if (match(TokenKind::Star)) {
+              alternative.choices.push_back(Expression{
+                  ExpressionKind::Call,
+                  "@match-wildcard",
+                  {},
+                  cover(pattern_start.span, previous().span)});
+              return;
+            }
+            if (at(TokenKind::Identifier)) {
+              const auto variable = advance();
+              error(pattern_start, "FSIM-SV-UNSUPPORTED-042",
+                    "case matches variable-binding patterns are not yet "
+                    "implemented");
+              alternative.choices.push_back(Expression{
+                  ExpressionKind::Call,
+                  "@match-unsupported",
+                  {},
+                  cover(pattern_start.span, variable.span)});
+              return;
+            }
+            error(pattern_start, "FSIM-SV-PARSE-190",
+                  "expected '*' or a pattern variable after '.'");
+            alternative.choices.push_back(Expression{
+                ExpressionKind::Call,
+                "@match-unsupported",
+                {},
+                pattern_start.span});
+            return;
+          }
+          if (keyword("tagged") || at(TokenKind::Apostrophe)) {
+            const auto unsupported = advance();
+            error(unsupported, "FSIM-SV-UNSUPPORTED-042",
+                  "tagged and structured case matches patterns are not yet "
+                  "implemented");
+            skip_pattern_tail();
+            alternative.choices.push_back(Expression{
+                ExpressionKind::Call,
+                "@match-unsupported",
+                {},
+                unsupported.span});
+            return;
+          }
+        }
         if (statement.case_match_kind == CaseMatchKind::Inside
             && match(TokenKind::LeftBracket)) {
           const auto range_start = previous();
@@ -259,6 +334,18 @@ Statement VerilogParser::parse_case_statement(
               "a case inside item requires at least one choice");
       } else {
         parse_choice();
+      }
+      if (statement.case_match_kind == CaseMatchKind::Matches
+          && match(TokenKind::AndAndAnd)) {
+        error(previous(), "FSIM-SV-UNSUPPORTED-043",
+              "guarded case matches patterns are not yet implemented");
+        skip_pattern_tail();
+      }
+      if (statement.case_match_kind == CaseMatchKind::Matches
+          && match(TokenKind::Comma)) {
+        error(previous(), "FSIM-SV-PARSE-189",
+              "a case matches item accepts exactly one pattern");
+        skip_pattern_tail();
       }
       while (match(TokenKind::Comma)) {
         if (statement.case_match_kind == CaseMatchKind::Inside

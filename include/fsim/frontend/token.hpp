@@ -60,6 +60,7 @@ enum class TokenKind {
   ArithmeticShiftLeftAssign,
   ArithmeticShiftRight,
   ArithmeticShiftRightAssign,
+  AndAndAnd,
   AndAnd,
   OrOr,
   Plus,

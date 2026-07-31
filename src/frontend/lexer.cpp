@@ -452,7 +452,11 @@ class Lexer {
         return;
       case '&':
         if (consume_if('&')) {
-          emit(TokenKind::AndAnd, begin);
+          emit(
+              !is_vhdl() && consume_if('&')
+                  ? TokenKind::AndAndAnd
+                  : TokenKind::AndAnd,
+              begin);
         } else if (!is_vhdl() && consume_if('=')) {
           emit(TokenKind::AmpersandAssign, begin);
         } else {
@@ -646,6 +650,8 @@ const char* to_string(TokenKind kind) noexcept {
       return "'>>>'";
     case TokenKind::ArithmeticShiftRightAssign:
       return "'>>>='";
+    case TokenKind::AndAndAnd:
+      return "'&&&'";
     case TokenKind::AndAnd:
       return "'&&'";
     case TokenKind::OrOr:

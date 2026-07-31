@@ -430,6 +430,36 @@ private:
                     continue;
                 }
                 if (statement.case_match_kind
+                    == frontend::CaseMatchKind::Matches) {
+                    if (alternative.choices.size() != 1) {
+                        error =
+                            "constant function case matches item requires "
+                            "exactly one pattern";
+                        return Flow::failed;
+                    }
+                    const auto& pattern = alternative.choices.front();
+                    if (pattern.kind == ExpressionKind::Call
+                        && pattern.text == "@match-wildcard") {
+                        selected = &alternative;
+                        break;
+                    }
+                    const auto value = evaluate_expression(
+                        pattern, environment, error);
+                    if (!value) {
+                        return Flow::failed;
+                    }
+                    if (value->width == selector->width
+                        && value->bits == selector->bits
+                        && value->unknown_bits
+                            == selector->unknown_bits
+                        && value->high_impedance_bits
+                            == selector->high_impedance_bits) {
+                        selected = &alternative;
+                        break;
+                    }
+                    continue;
+                }
+                if (statement.case_match_kind
                     == frontend::CaseMatchKind::Inside) {
                     Expression membership{
                         ExpressionKind::Call,

@@ -557,6 +557,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-184` | error | `inside` matching is combined with `casez` or `casex`. |
 | `FSIM-SV-PARSE-185` | error | A `unique`, `unique0`, or `priority` case qualifier is used outside SystemVerilog. |
 | `FSIM-SV-PARSE-186` | error | A case statement contains more than one qualifier. |
+| `FSIM-SV-PARSE-187` | error | A `case matches` statement is used outside SystemVerilog. |
+| `FSIM-SV-PARSE-188` | error | Bounded `matches` pattern matching is combined with `casez` or `casex`. |
+| `FSIM-SV-PARSE-189` | error | A bounded `case matches` item contains a comma-separated pattern list instead of exactly one pattern. |
+| `FSIM-SV-PARSE-190` | error | A `case matches` dot pattern is missing its wildcard or variable name. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -792,7 +796,8 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-038` | error | A bounded task formal uses unsupported `ref` direction. |
 | `FSIM-SV-UNSUPPORTED-040` | error | A bounded task uses an unpacked/default argument or a classic body argument declaration. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
-| `FSIM-SV-UNSUPPORTED-042` | error | A `case matches` statement requires unsupported pattern matching. |
+| `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
+| `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
 
 ## Elaboration and SimIR lowering
 
@@ -1120,6 +1125,11 @@ therefore excluded.
 | `FSIM-ELAB-SVCASEINSIDE-006` | error | Internal `case inside` range metadata does not contain exactly one low and high bound. |
 | `FSIM-ELAB-SVCASEQUAL-001` | error | Internal case-statement HIR contains an invalid qualifier. |
 | `FSIM-ELAB-SVCASEQUAL-002` | error | A qualified case statement is lowered outside SystemVerilog. |
+| `FSIM-ELAB-SVMATCH-001` | error | A `case matches` statement is lowered outside SystemVerilog. |
+| `FSIM-ELAB-SVMATCH-002` | error | A bounded `case matches` selector is not scalar integral or its width is not statically inferable. |
+| `FSIM-ELAB-SVMATCH-003` | error | A bounded `case matches` item is neither a scalar integral constant pattern nor the `.*` wildcard. |
+| `FSIM-ELAB-SVMATCH-004` | error | A bounded constant pattern does not exactly match the selector width and signedness. |
+| `FSIM-ELAB-SVMATCH-005` | error | Internal `case matches` HIR contains an item without exactly one pattern. |
 | `FSIM-ELAB-SVQUERY-001` | error | A bounded unpacked-container query has the wrong language or arity, an indirect expression, or no direct typed container object. |
 | `FSIM-ELAB-SVQUERY-002` | error | A bounded unpacked-container query dimension is not the locally constant dimension `1`. |
 | `FSIM-ELAB-SVQUERY-003` | error | A finite-bound query is applied to an associative array. |

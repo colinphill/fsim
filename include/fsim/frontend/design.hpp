@@ -746,6 +746,7 @@ enum class CaseMatchKind {
   WildcardZ,
   WildcardXZ,
   Inside,
+  Matches,
 };
 
 enum class CaseQualifier {

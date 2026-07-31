@@ -41,6 +41,7 @@ struct Capture {
   std::vector<ReportCapture> reports;
   fsim::runtime::Logic4Word marker{};
   fsim::runtime::Logic4Word qualifier_marker{};
+  fsim::runtime::Logic4Word pattern_marker{};
   std::string failure;
   fsim::runtime::simir::AssertionSeverity failure_severity{};
   bool failure_was_reported{};
@@ -132,6 +133,11 @@ Capture execute(
   assert(qualifier_marker);
   capture.qualifier_marker =
       simulation.read_signal(*qualifier_marker).low_word();
+  const auto pattern_marker =
+      simulation.find_signal("assertion_actions.pattern_marker");
+  assert(pattern_marker);
+  capture.pattern_marker =
+      simulation.read_signal(*pattern_marker).low_word();
   capture.native_cache = simulation.native_cache_statistics();
   return capture;
 }
@@ -180,6 +186,9 @@ void test_assertion_actions(
   assert(reference.qualifier_marker == compiled.qualifier_marker);
   assert(reference.qualifier_marker == warm.qualifier_marker);
   assert(reference.qualifier_marker == changed.qualifier_marker);
+  assert(reference.pattern_marker == compiled.pattern_marker);
+  assert(reference.pattern_marker == warm.pattern_marker);
+  assert(reference.pattern_marker == changed.pattern_marker);
   assert(reference.failure == compiled.failure);
   assert(reference.failure == warm.failure);
   assert(reference.failure == changed.failure);
@@ -195,7 +204,10 @@ void test_assertion_actions(
   assert(
       reference.qualifier_marker.bval == 0
       && reference.qualifier_marker.aval == 7);
-  assert(reference.reports.size() == 12);
+  assert(
+      reference.pattern_marker.bval == 0
+      && reference.pattern_marker.aval == 8);
+  assert(reference.reports.size() == 14);
   constexpr std::array expected_messages{
       std::string_view{"$info"},
       std::string_view{"standalone warning"},
@@ -205,6 +217,8 @@ void test_assertion_actions(
       std::string_view{"unique0 case has multiple matching items"},
       std::string_view{"priority case has no matching item"},
       std::string_view{"unique case has multiple matching items"},
+      std::string_view{"unique case has multiple matching items"},
+      std::string_view{"priority case has no matching item"},
       std::string_view{"pass block"},
       std::string_view{"failure block"},
       std::string_view{"assertion failed"},
@@ -214,6 +228,8 @@ void test_assertion_actions(
       fsim::runtime::simir::AssertionSeverity::note,
       fsim::runtime::simir::AssertionSeverity::warning,
       fsim::runtime::simir::AssertionSeverity::error,
+      fsim::runtime::simir::AssertionSeverity::warning,
+      fsim::runtime::simir::AssertionSeverity::warning,
       fsim::runtime::simir::AssertionSeverity::warning,
       fsim::runtime::simir::AssertionSeverity::warning,
       fsim::runtime::simir::AssertionSeverity::warning,
@@ -282,7 +298,7 @@ void test_cli_failure_reporting(
        position = report_text.find(marker, position + marker.size())) {
     ++report_count;
   }
-  assert(report_count == 12);
+  assert(report_count == 14);
   assert(
       report_text.find("note[FSIM-HDL-REPORT]: $info")
       != std::string::npos);
@@ -318,6 +334,7 @@ module assertion_actions;
   logic [5:0] marker;
   logic [1:0] selector;
   logic [3:0] qualifier_marker;
+  logic [3:0] pattern_marker;
   function automatic logic [3:0] qualified_seed(input logic [1:0] value);
     unique case (value)
       2'b01: return 4'h0;
@@ -325,10 +342,18 @@ module assertion_actions;
     endcase
   endfunction
   localparam logic [3:0] QUALIFIED_SEED = qualified_seed(2'b01);
+  function automatic logic [3:0] pattern_seed(input logic [1:0] value);
+    case (value) matches
+      2'b01: return 4'h1;
+      .*: return 4'hf;
+    endcase
+  endfunction
+  localparam logic [3:0] PATTERN_SEED = pattern_seed(2'b01);
   initial begin
     marker = 0;
     selector = 2'b01;
     qualifier_marker = QUALIFIED_SEED;
+    pattern_marker = PATTERN_SEED;
     $info;
     $warning("standalone warning");
     $error("standalone error");
@@ -349,6 +374,21 @@ module assertion_actions;
     unique case (selector) inside
       2'b01: qualifier_marker += 4;
       [2'b00:2'b10]: qualifier_marker += 8;
+    endcase
+    case (selector) matches
+      2'b01: pattern_marker += 1;
+      .*: pattern_marker = 15;
+    endcase
+    case (2'b10) matches
+      2'b01: pattern_marker = 15;
+      .*: pattern_marker += 2;
+    endcase
+    unique case (selector) matches
+      2'b01: pattern_marker += 4;
+      .*: pattern_marker = 15;
+    endcase
+    priority case (2'b11) matches
+      2'b00: pattern_marker = 15;
     endcase
     assert (1'b1) marker += 1; else marker = 63;
     assert (1'b0) marker = 63; else marker += 2;

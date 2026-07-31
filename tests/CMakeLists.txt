@@ -102,6 +102,7 @@ add_executable(
   elaboration/elaborator_function_test.cpp
   elaboration/elaborator_task_test.cpp
   elaboration/elaborator_case_qualifier_test.cpp
+  elaboration/elaborator_case_match_test.cpp
   elaboration/elaborator_expression_test.cpp
   elaboration/elaborator_numeric_test.cpp
   elaboration/elaborator_selection_test.cpp

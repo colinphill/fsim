@@ -31,7 +31,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 20> values;
+  std::array<std::string, 23> values;
   fsim::runtime::simir::ContainerValue returned;
   fsim::runtime::simir::ContainerValue qualified_returned;
   fsim::runtime::simir::ContainerValue selected;
@@ -135,7 +135,7 @@ Capture run_once(
         capture.points.push_back(point);
       });
 
-  constexpr std::array<std::string_view, 20> paths{
+  constexpr std::array<std::string_view, 23> paths{
       "function_top.imported_result",
       "function_top.qualified_result",
       "function_top.array_witness",
@@ -155,7 +155,10 @@ Capture run_once(
       "function_top.membership_unknown",
       "function_top.case_inside_value",
       "function_top.case_inside_package",
-      "function_top.case_inside_unknown"};
+      "function_top.case_inside_unknown",
+      "function_top.case_matches_value",
+      "function_top.case_matches_package",
+      "function_top.case_matches_unknown"};
   std::array<fsim::runtime::simir::SignalId, paths.size()>
       signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -175,6 +178,8 @@ Capture run_once(
       "function_top.membership_value", 1);
   const auto case_inside_trace = vcd.declare_signal(
       "function_top.case_inside_value", 4);
+  const auto case_matches_trace = vcd.declare_signal(
+      "function_top.case_matches_value", 4);
   vcd.begin(simulation.now());
   vcd.change(
       witness_trace, simulation.read_signal(signals[2]));
@@ -184,6 +189,7 @@ Capture run_once(
   vcd.change(consumer_trace, simulation.read_signal(signals[9]));
   vcd.change(membership_trace, simulation.read_signal(signals[13]));
   vcd.change(case_inside_trace, simulation.read_signal(signals[17]));
+  vcd.change(case_matches_trace, simulation.read_signal(signals[20]));
   simulation.set_signal_change_hook(
       [&](const fsim::runtime::simir::SignalId signal,
           const fsim::runtime::PackedLogic4& value,
@@ -204,6 +210,9 @@ Capture run_once(
         } else if (signal == signals[17]) {
           vcd.set_time(time);
           vcd.change(case_inside_trace, value);
+        } else if (signal == signals[20]) {
+          vcd.set_time(time);
+          vcd.change(case_matches_trace, value);
         }
       });
   capture.result = simulation.run();
@@ -268,7 +277,7 @@ Capture run_once(
 
 void verify(
     const Capture& capture,
-    const std::array<std::string, 20>& expected) {
+    const std::array<std::string, 23>& expected) {
   assert(capture.result.status == fsim::runtime::RunStatus::stopped);
   assert(capture.result.time == 1);
   if (capture.values != expected) {
@@ -374,7 +383,8 @@ void verify(
           != std::string::npos
       && capture.vcd.find("b01001011") != std::string::npos
       && capture.vcd.find("membership_value") != std::string::npos
-      && capture.vcd.find("case_inside_value") != std::string::npos);
+      && capture.vcd.find("case_inside_value") != std::string::npos
+      && capture.vcd.find("case_matches_value") != std::string::npos);
   const auto avals = [](const auto& value) {
     std::vector<std::uint64_t> result;
     for (const auto& element : value.elements) {
@@ -534,6 +544,9 @@ module function_top #(
   logic [3:0] case_inside_value;
   logic [3:0] case_inside_package;
   logic [3:0] case_inside_unknown;
+  logic [3:0] case_matches_value;
+  logic [3:0] case_matches_package;
+  logic [3:0] case_matches_unknown;
 
   function automatic logic [WIDTH-1:0] inner(
       input logic [WIDTH-1:0] value);
@@ -680,6 +693,18 @@ module function_top #(
       8'bxxxx_xxxx: case_inside_unknown = 4'h4;
       default: case_inside_unknown = 4'hf;
     endcase
+    case (imported_result) matches
+      8'd42: case_matches_value = 4'h1;
+      .*: case_matches_value = 4'hf;
+    endcase
+    case (qualified_result) matches
+      8'd3: case_matches_package = 4'h2;
+      .*: case_matches_package = 4'hf;
+    endcase
+    case (8'bx001_0001) matches
+      8'bx001_0001: case_matches_unknown = 4'h3;
+      .*: case_matches_unknown = 4'h4;
+    endcase
     #1;
     $finish;
   end
@@ -703,12 +728,13 @@ endmodule
         run_once(config, fsim::app::SimulationEngine::compiled);
     const auto warm =
         run_once(config, fsim::app::SimulationEngine::compiled);
-    const std::array<std::string, 20> expected{
+    const std::array<std::string, 23> expected{
         "00101010", "00000011", "00101100", "1",
         "01001011", "1", "00111110",
         "00000000000000000000000000011011",
         "00110100", "00100000", "1", "1", "1",
-        "1", "1", "1", "X", "0001", "0010", "0100"};
+        "1", "1", "1", "X", "0001", "0010", "0100",
+        "0001", "0010", "0011"};
     verify(reference, expected);
     verify(cold, expected);
     verify(warm, expected);
@@ -747,7 +773,8 @@ endmodule
        "01001011", "1", "00111110",
        "00000000000000000000000000011011",
        "00110100", "00100000", "1", "1", "1",
-       "1", "1", "1", "X", "0001", "0010", "0100"});
+       "1", "1", "1", "X", "0001", "0010", "0100",
+       "1111", "1111", "0011"});
   assert(baseline_o2_keys.size() == 1);
   assert(changed.keys.size() == 1);
   assert(changed.keys.front() != baseline_o2_keys.front());

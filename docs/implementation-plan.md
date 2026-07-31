@@ -5407,6 +5407,43 @@ in 10.50 seconds, containers in 86.11 seconds, qualified assertions in 5.89
 seconds, and the monolithic application in 13.47 seconds, on 2026-07-31. Batch
 99 is not a ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### One-hundredth feature batch — bounded SystemVerilog case-pattern matching
+
+SystemVerilog `case (selector) matches` now retains a distinct compact
+`CaseMatchKind::Matches` HIR mode. Each nondefault item contains exactly one
+bounded scalar-integral constant pattern or the unconditional `.*` wildcard.
+Constant patterns require the selector's exact width and signedness and lower
+to definite two-state case-equality results, preserving exact X/Z planes.
+
+The selector executes once, the first matching body or final default executes
+in source order, and `unique`, `unique0`, and `priority` reuse their established
+alternative-level warning rules. Constant-function selection and runtime
+interpreter/LLVM O0/O2 behavior share the same exact matching contract.
+Application evidence covers module/package values, exact unknown patterns,
+reports, debugger metadata, VCD, cold/warm reuse, and package-source edits.
+
+The parser recognizes `&&&` guards for targeted deferral and diagnoses
+non-SystemVerilog use, `casez`/`casex` combinations, comma pattern lists,
+malformed dot patterns, variable binding, tagged/structured patterns, and
+guards. Elaboration independently rejects nonconstant or nonintegral patterns,
+selector/profile mismatches, unsupported markers, wrong-language HIR, and
+zero-or-multiple-pattern malformed HIR.
+
+Native-object schema 52 distinguishes exact-pattern and unconditional-wildcard
+operation graphs in a 19-object cache matrix. Container semantic revision 24
+and the public ABI remain unchanged. The diagnostic catalog covers 1,269
+production codes and all 295 authored sources pass the 2,000-line gate.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 433.09 seconds, including scoped locals in 0.89 seconds, functions in 12.90
+seconds, containers in 345.04 seconds, qualified pattern assertions in 8.19
+seconds, and the monolithic application in 39.83 seconds. Release passed all
+59 tests in 131.62 seconds, including scoped locals in 0.77 seconds, functions
+in 10.63 seconds, containers in 84.72 seconds, qualified pattern assertions in
+7.75 seconds, and the monolithic application in 13.41 seconds, on 2026-07-31.
+The mandatory non-documentation Batch 100 CI inspection follows the pushed
+feature handoff and must be recorded here after its replacement run is green.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

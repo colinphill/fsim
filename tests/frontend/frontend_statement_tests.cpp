@@ -177,6 +177,11 @@ module case_statement;
   initial priority case (selector) inside
     [2'b00:2'b10]: result = 2'b10;
   endcase
+  initial unique case (selector) matches
+    2'b00: result = 2'b01;
+    .*: result = 2'b10;
+    default: result = 2'b11;
+  endcase
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -240,9 +245,29 @@ endmodule
           && result.design.units.front().processes[6]
                  .statements.front().case_match_kind
               == CaseMatchKind::Inside
+          && result.design.units.front().processes[7]
+                 .statements.front().case_qualifier
+              == CaseQualifier::Unique
+          && result.design.units.front().processes[7]
+                 .statements.front().case_match_kind
+              == CaseMatchKind::Matches
           && result.design.units.front().processes[4]
                  .statements.front().span.begin.column == 11,
       "case qualifier kind and source span remain distinct from matching mode");
+  const auto& matches = result.design.units.front().processes[7]
+                            .statements.front();
+  require(
+      matches.case_alternatives.size() == 3
+          && matches.case_alternatives[0].choices.size() == 1
+          && matches.case_alternatives[0].choices.front().text == "2'b00"
+          && matches.case_alternatives[1].choices.size() == 1
+          && matches.case_alternatives[1].choices.front().kind
+              == ExpressionKind::Call
+          && matches.case_alternatives[1].choices.front().text
+              == "@match-wildcard"
+          && matches.case_alternatives[2].is_default
+          && !matches.span.empty(),
+      "case matches retains one constant or wildcard pattern per item");
 
   const auto invalid = parse_text(
       "bad_case.sv",
@@ -340,9 +365,6 @@ module bad_case_inside;
   initial casez (selector) inside
     2'b0?: result = 1'b0;
   endcase
-  initial case (selector) matches
-    2'b00: result = 1'b0;
-  endcase
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -351,8 +373,7 @@ endmodule
            std::string_view{"FSIM-SV-PARSE-181"},
            std::string_view{"FSIM-SV-PARSE-182"},
            std::string_view{"FSIM-SV-PARSE-183"},
-           std::string_view{"FSIM-SV-PARSE-184"},
-           std::string_view{"FSIM-SV-UNSUPPORTED-042"}}) {
+           std::string_view{"FSIM-SV-PARSE-184"}}) {
     require(
         std::ranges::any_of(
             malformed_inside.diagnostics,
@@ -361,6 +382,59 @@ endmodule
             }),
         "case inside malformed and deferred-form diagnostics");
   }
+
+  const auto invalid_matches = parse_text(
+      "bad_case_matches.sv",
+      R"(
+module bad_case_matches;
+  logic [1:0] selector;
+  logic result;
+  initial casez (selector) matches
+    2'b00: result = 1'b0;
+  endcase
+  initial case (selector) matches
+    .captured: result = 1'b0;
+    tagged Some: result = 1'b0;
+    '{2'b00}: result = 1'b0;
+    2'b00 &&& selector: result = 1'b0;
+    2'b00, 2'b01: result = 1'b0;
+    .: result = 1'b0;
+  endcase
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid_matches.ok(), "deferred case patterns must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-PARSE-188"},
+           std::string_view{"FSIM-SV-PARSE-189"},
+           std::string_view{"FSIM-SV-PARSE-190"},
+           std::string_view{"FSIM-SV-UNSUPPORTED-042"},
+           std::string_view{"FSIM-SV-UNSUPPORTED-043"}}) {
+    require(
+        std::ranges::any_of(
+            invalid_matches.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "case matches deferred-pattern diagnostics");
+  }
+  require(
+      invalid_matches.design.units.front().processes.size() == 2,
+      "case matches diagnostics recover through following items");
+
+  const auto verilog_matches = parse_text(
+      "bad_case_matches.v",
+      "module bad_case_matches; reg a; initial case (a) matches "
+      "1'b0: a = 1'b1; endcase endmodule",
+      Language::Verilog2005);
+  require(
+      !verilog_matches.ok()
+          && std::ranges::any_of(
+              verilog_matches.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-187";
+              }),
+      "case matches requires SystemVerilog");
 
   const auto verilog_inside = parse_text(
       "bad_case_inside.v",

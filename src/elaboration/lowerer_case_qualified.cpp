@@ -34,6 +34,7 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
 
   BinaryOperator match_operation = BinaryOperator::case_equal;
   bool inside_matching = false;
+  bool pattern_matching = false;
   switch (statement.case_match_kind) {
   case frontend::CaseMatchKind::Exact:
     break;
@@ -47,6 +48,9 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
     inside_matching = true;
     match_operation = BinaryOperator::wildcard_equal;
     break;
+  case frontend::CaseMatchKind::Matches:
+    pattern_matching = true;
+    break;
   default:
     report(
         "FSIM-ELAB-081",
@@ -56,28 +60,40 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
   }
   if (language_ != frontend::Language::SystemVerilog2017) {
     report(
-        "FSIM-ELAB-SVCASEQUAL-002",
-        "case qualifiers require SystemVerilog",
+        pattern_matching
+            ? "FSIM-ELAB-SVMATCH-001"
+            : "FSIM-ELAB-SVCASEQUAL-002",
+        pattern_matching
+            ? "case matches pattern matching requires SystemVerilog"
+            : "case qualifiers require SystemVerilog",
         statement.span);
     return;
   }
-  if (inside_matching
+  if ((inside_matching || pattern_matching)
       && (is_container_expression(statement.condition)
           || is_string_expression(statement.condition)
           || statement.condition.kind == ExpressionKind::Aggregate
           || statement.condition.kind == ExpressionKind::Concatenation)) {
     report(
-        "FSIM-ELAB-SVCASEINSIDE-002",
-        "bounded case inside requires a scalar integral selector",
+        pattern_matching
+            ? "FSIM-ELAB-SVMATCH-002"
+            : "FSIM-ELAB-SVCASEINSIDE-002",
+        pattern_matching
+            ? "bounded case matches requires a scalar integral selector"
+            : "bounded case inside requires a scalar integral selector",
         statement.condition.span);
     return;
   }
   const auto inferred_selector_width = infer_width(statement.condition);
-  if (inside_matching
+  if ((inside_matching || pattern_matching)
       && (!inferred_selector_width || *inferred_selector_width == 0)) {
     report(
-        "FSIM-ELAB-SVCASEINSIDE-002",
-        "the case inside selector width is not statically inferable",
+        pattern_matching
+            ? "FSIM-ELAB-SVMATCH-002"
+            : "FSIM-ELAB-SVCASEINSIDE-002",
+        pattern_matching
+            ? "the case matches selector width is not statically inferable"
+            : "the case inside selector width is not statically inferable",
         statement.condition.span);
     return;
   }
@@ -137,6 +153,46 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
   };
   const auto lower_choice =
       [&](const Expression& choice) -> std::optional<RegisterId> {
+    if (pattern_matching && choice.kind == ExpressionKind::Call
+        && choice.text == "@match-wildcard") {
+      const auto matched = allocate_register(
+          1, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(
+          LoadConstant{matched, PackedLogic4(1, Logic4::one)});
+      return matched;
+    }
+    if (pattern_matching) {
+      if (!is_bounded_case_pattern_constant(choice)) {
+        report(
+            "FSIM-ELAB-SVMATCH-003",
+            "bounded case matches patterns must be scalar integral constants "
+            "or '.*'",
+            choice.span);
+        return std::nullopt;
+      }
+      const auto width = infer_width(choice);
+      if (!width || *width != selector_width
+          || is_signed_expression(choice) != selector_signed) {
+        report(
+            "FSIM-ELAB-SVMATCH-004",
+            "case matches constants must exactly match the selector width "
+            "and signedness",
+            choice.span);
+        return std::nullopt;
+      }
+      const auto pattern = lower_expression(choice, selector_width);
+      if (!pattern) {
+        return std::nullopt;
+      }
+      const auto matched = allocate_register(
+          1, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(Binary{
+          BinaryOperator::case_equal,
+          matched,
+          *selector,
+          *pattern});
+      return matched;
+    }
     if (inside_matching && choice.kind == ExpressionKind::Call
         && choice.text == "@inside-range") {
       if (choice.operands.size() != 2) {
@@ -228,6 +284,13 @@ void Lowerer::lower_qualified_case(const Statement& statement) {
           "FSIM-ELAB-SVCASEINSIDE-005",
           "a case inside alternative requires at least one choice",
           alternative.span);
+    }
+    if (pattern_matching && alternative.choices.size() != 1) {
+      report(
+          "FSIM-ELAB-SVMATCH-005",
+          "a case matches item requires exactly one pattern",
+          alternative.span);
+      continue;
     }
     auto alternative_match = make_false();
     for (const auto& choice : alternative.choices) {

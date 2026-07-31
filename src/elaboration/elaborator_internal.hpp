@@ -868,6 +868,8 @@ private:
 
     void lower_case(const Statement& statement);
     void lower_qualified_case(const Statement& statement);
+    [[nodiscard]] bool is_bounded_case_pattern_constant(
+        const Expression& expression) const;
 
     void lower_loop(const Statement& statement);
 
