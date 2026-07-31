@@ -126,8 +126,8 @@ validate_container_locator_metadata(
           > maximum_container_predicate_nodes) {
     return "LocateContainer has invalid predicate metadata";
   }
-  std::vector<bool> value_nodes;
-  value_nodes.reserve(operation.predicate.size());
+  std::vector<ContainerPredicateValueKind> value_kinds;
+  value_kinds.reserve(operation.predicate.size());
   for (std::size_t index = 0;
        index < operation.predicate.size(); ++index) {
     const auto& node = operation.predicate[index];
@@ -144,35 +144,61 @@ validate_container_locator_metadata(
       return "LocateContainer predicate has an invalid operator";
     }
     if (node.operation == ContainerPredicateOperator::item) {
-      value_nodes.push_back(true);
+      if (node.value_kind
+          != ContainerPredicateValueKind::element) {
+        return "LocateContainer predicate item has the wrong type";
+      }
+      value_kinds.push_back(node.value_kind);
+    } else if (
+        node.operation == ContainerPredicateOperator::index) {
+      if (node.value_kind
+          != ContainerPredicateValueKind::index) {
+        return "LocateContainer predicate index has the wrong type";
+      }
+      value_kinds.push_back(node.value_kind);
     } else if (
         node.operation == ContainerPredicateOperator::constant) {
-      if (node.constant.width() != source.element_width
+      if (node.value_kind == ContainerPredicateValueKind::logical
+          || node.constant.width()
+              != (node.value_kind
+                          == ContainerPredicateValueKind::index
+                      ? 32U
+                      : source.element_width)
           || node.constant.is_logic9()
-          || (source.two_state
+          || ((node.value_kind
+                       == ContainerPredicateValueKind::index
+                   || source.two_state)
               && node.constant.low_word().bval != 0)) {
         return "LocateContainer predicate constant has the wrong type";
       }
-      value_nodes.push_back(true);
+      value_kinds.push_back(node.value_kind);
     } else if (comparison) {
       if (!earlier(node.left) || !earlier(node.right)
-          || !value_nodes[node.left]
-          || !value_nodes[node.right]) {
+          || node.value_kind
+              != ContainerPredicateValueKind::logical
+          || value_kinds[node.left]
+              != value_kinds[node.right]
+          || value_kinds[node.left]
+              == ContainerPredicateValueKind::logical) {
         return "LocateContainer comparison operands are invalid";
       }
-      value_nodes.push_back(false);
+      value_kinds.push_back(node.value_kind);
     } else if (
         node.operation
             == ContainerPredicateOperator::logical_not) {
-      if (!earlier(node.left)) {
+      if (!earlier(node.left)
+          || node.value_kind
+              != ContainerPredicateValueKind::logical) {
         return "LocateContainer logical operand is invalid";
       }
-      value_nodes.push_back(false);
+      value_kinds.push_back(node.value_kind);
     } else {
-      if (!earlier(node.left) || !earlier(node.right)) {
+      if (!earlier(node.left) || !earlier(node.right)
+          || node.value_kind
+              != ContainerPredicateValueKind::logical) {
         return "LocateContainer logical operands are invalid";
       }
-      value_nodes.push_back(false);
+      value_kinds.push_back(node.value_kind);
     }
   }
   return std::nullopt;

@@ -582,8 +582,10 @@ Lowerer::lower_container_pattern(
 std::optional<std::vector<ContainerPredicateNode>>
 Lowerer::lower_container_predicate(
     const Expression& expression,
+    const std::string_view iterator_name,
     const frontend::Type& source_type,
     const ContainerType& runtime_type) {
+  using PredicateKind = ContainerPredicateValueKind;
   std::vector<ContainerPredicateNode> nodes;
   const auto append =
       [&](ContainerPredicateNode node)
@@ -598,19 +600,84 @@ Lowerer::lower_container_predicate(
         nodes.push_back(std::move(node));
         return static_cast<std::uint32_t>(nodes.size() - 1U);
       };
-  const auto contains_item =
+  const auto direct_kind =
+      [&](const Expression& candidate)
+          -> std::optional<PredicateKind> {
+        if (candidate.kind != ExpressionKind::Identifier) {
+          return std::nullopt;
+        }
+        if (candidate.text == iterator_name) {
+          return PredicateKind::element;
+        }
+        if (candidate.text
+            == std::string{iterator_name} + ".index") {
+          return PredicateKind::index;
+        }
+        return std::nullopt;
+      };
+  const auto contains_iterator =
       [&](const auto& self, const Expression& candidate) -> bool {
         return (candidate.kind == ExpressionKind::Identifier
-                && candidate.text == "item")
+                && (candidate.text == iterator_name
+                    || candidate.text.starts_with(
+                        std::string{iterator_name} + ".")))
             || std::ranges::any_of(
                 candidate.operands,
                 [&](const auto& operand) {
                   return self(self, operand);
                 });
       };
+  const auto contains_identifier =
+      [&](const auto& self, const Expression& candidate) -> bool {
+        return candidate.kind == ExpressionKind::Identifier
+            || std::ranges::any_of(
+                candidate.operands,
+                [&](const auto& operand) {
+                  return self(self, operand);
+                });
+      };
+  const auto contains_index_reference =
+      [&](const auto& self, const Expression& candidate) -> bool {
+        return (candidate.kind == ExpressionKind::Identifier
+                && (candidate.text
+                        == std::string{iterator_name} + ".index"
+                    || candidate.text.starts_with(
+                        std::string{iterator_name}
+                            + ".index.")))
+            || (candidate.kind == ExpressionKind::Call
+                && candidate.text == ".index"
+                && contains_iterator(
+                    contains_iterator, candidate))
+            || std::ranges::any_of(
+                candidate.operands,
+                [&](const auto& operand) {
+                  return self(self, operand);
+                });
+      };
+  const auto report_invalid_reference =
+      [&](const Expression& candidate,
+          const std::string_view reason) {
+        report(
+            "FSIM-ELAB-SVFIND-008",
+            "container locator iterator '" + std::string{iterator_name}
+                + "' " + std::string{reason},
+            candidate.span);
+      };
   const auto lower_constant =
-      [&](const Expression& candidate)
+      [&](const Expression& candidate,
+          const PredicateKind value_kind)
           -> std::optional<std::uint32_t> {
+        const frontend::Type index_type{
+            frontend::ValueDomain::Integer, "int",
+            std::nullopt, true};
+        const auto& conversion_type =
+            value_kind == PredicateKind::index
+                ? index_type
+                : source_type;
+        const auto width =
+            value_kind == PredicateKind::index
+                ? 32U
+                : runtime_type.element_width;
         std::string error;
         const auto value =
             evaluate_systemverilog_constant_expression(
@@ -618,24 +685,36 @@ Lowerer::lower_container_predicate(
         const auto converted =
             value
                 ? convert_systemverilog_parameter_value(
-                      *value, source_type, error)
+                      *value, conversion_type, error)
                 : std::nullopt;
         const auto literal =
             converted
                 ? literal_value(
                       converted->expression(candidate.span),
-                      runtime_type.element_width,
+                      width,
                       frontend::Language::SystemVerilog2017)
                 : std::nullopt;
         if (!literal
-            || literal->value.width()
-                != runtime_type.element_width
-            || (runtime_type.two_state
+            || literal->value.width() != width
+            || ((value_kind == PredicateKind::index
+                 || runtime_type.two_state)
                 && literal->value.low_word().bval != 0)) {
+          if (!value
+              && contains_identifier(
+                  contains_identifier, candidate)) {
+            report_invalid_reference(
+                candidate,
+                "predicate contains an unknown iterator reference");
+            return std::nullopt;
+          }
           report(
               "FSIM-ELAB-SVFIND-004",
-              "container locator predicate constants must be "
-              "locally constant and convertible to the element type"
+              "container locator predicate constants must be locally "
+              "constant and convertible to the selected "
+                  + std::string{
+                      value_kind == PredicateKind::index
+                          ? "signed 32-bit index"
+                          : "element type"}
                   + (error.empty() ? std::string{} : ": " + error),
               candidate.span);
           return std::nullopt;
@@ -643,36 +722,86 @@ Lowerer::lower_container_predicate(
         ContainerPredicateNode node;
         node.operation = ContainerPredicateOperator::constant;
         node.constant = literal->value;
+        node.value_kind = value_kind;
         return append(std::move(node));
       };
-  std::function<std::optional<std::uint32_t>(
-      const Expression&, bool)> lower;
-  lower =
+  const auto lower_value =
       [&](const Expression& candidate,
-          const bool value_operand)
+          const PredicateKind expected_kind)
           -> std::optional<std::uint32_t> {
-        if (candidate.kind == ExpressionKind::Identifier
-            && candidate.text == "item") {
+        if (const auto kind = direct_kind(candidate)) {
+          if (*kind != expected_kind) {
+            report_invalid_reference(
+                candidate,
+                "cannot mix element and index comparison operands");
+            return std::nullopt;
+          }
           ContainerPredicateNode node;
-          node.operation = ContainerPredicateOperator::item;
+          node.operation =
+              *kind == PredicateKind::index
+                  ? ContainerPredicateOperator::index
+                  : ContainerPredicateOperator::item;
+          node.value_kind = *kind;
           return append(std::move(node));
         }
-        if (!contains_item(contains_item, candidate)) {
-          return lower_constant(candidate);
-        }
-        if (value_operand) {
-          report(
-              "FSIM-ELAB-SVFIND-004",
-              "container locator comparisons accept only the scoped "
-              "'item' iterator or locally constant operands",
-              candidate.span);
+        if (contains_iterator(contains_iterator, candidate)) {
+          if (contains_index_reference(
+                  contains_index_reference, candidate)) {
+            report_invalid_reference(
+                candidate,
+                "supports only its direct value or direct .index leaf");
+          } else {
+            report(
+                "FSIM-ELAB-SVFIND-004",
+                "container locator comparisons accept only the scoped '"
+                    + std::string{iterator_name}
+                    + "' iterator or locally constant operands",
+                candidate.span);
+          }
           return std::nullopt;
+        }
+        if (candidate.kind == ExpressionKind::Identifier
+            && candidate.text.find(".index")
+                != std::string::npos) {
+          report_invalid_reference(
+              candidate,
+              "predicate contains an unknown iterator reference");
+          return std::nullopt;
+        }
+        return lower_constant(candidate, expected_kind);
+      };
+  std::function<std::optional<std::uint32_t>(
+      const Expression&)> lower;
+  lower =
+      [&](const Expression& candidate)
+          -> std::optional<std::uint32_t> {
+        if (const auto kind = direct_kind(candidate)) {
+          ContainerPredicateNode node;
+          node.operation =
+              *kind == PredicateKind::index
+                  ? ContainerPredicateOperator::index
+                  : ContainerPredicateOperator::item;
+          node.value_kind = *kind;
+          return append(std::move(node));
+        }
+        if (!contains_iterator(
+                contains_iterator, candidate)) {
+          if (candidate.kind == ExpressionKind::Identifier
+              && candidate.text.find(".index")
+                  != std::string::npos) {
+            report_invalid_reference(
+                candidate,
+                "predicate contains an unknown iterator reference");
+            return std::nullopt;
+          }
+          return lower_constant(
+              candidate, PredicateKind::element);
         }
         if (candidate.kind == ExpressionKind::Unary
             && candidate.text == "!"
             && candidate.operands.size() == 1) {
           const auto operand =
-              lower(candidate.operands.front(), false);
+              lower(candidate.operands.front());
           if (!operand) {
             return std::nullopt;
           }
@@ -680,6 +809,7 @@ Lowerer::lower_container_predicate(
           node.operation =
               ContainerPredicateOperator::logical_not;
           node.left = *operand;
+          node.value_kind = PredicateKind::logical;
           return append(std::move(node));
         }
         if (candidate.kind == ExpressionKind::Binary
@@ -695,16 +825,39 @@ Lowerer::lower_container_predicate(
               || candidate.text == ">"
               || candidate.text == ">=";
           if (logical || comparison) {
-            const auto left = lower(
-                candidate.operands[0], comparison);
-            const auto right = lower(
-                candidate.operands[1], comparison);
+            std::optional<std::uint32_t> left;
+            std::optional<std::uint32_t> right;
+            if (comparison) {
+              const auto left_kind =
+                  direct_kind(candidate.operands[0]);
+              const auto right_kind =
+                  direct_kind(candidate.operands[1]);
+              if (left_kind && right_kind
+                  && *left_kind != *right_kind) {
+                report_invalid_reference(
+                    candidate,
+                    "cannot mix element and index comparison operands");
+                return std::nullopt;
+              }
+              const auto comparison_kind =
+                  left_kind.value_or(
+                      right_kind.value_or(
+                          PredicateKind::element));
+              left = lower_value(
+                  candidate.operands[0], comparison_kind);
+              right = lower_value(
+                  candidate.operands[1], comparison_kind);
+            } else {
+              left = lower(candidate.operands[0]);
+              right = lower(candidate.operands[1]);
+            }
             if (!left || !right) {
               return std::nullopt;
             }
             ContainerPredicateNode node;
             node.left = *left;
             node.right = *right;
+            node.value_kind = PredicateKind::logical;
             if (candidate.text == "==") {
               node.operation = ContainerPredicateOperator::equal;
             } else if (candidate.text == "!=") {
@@ -732,13 +885,14 @@ Lowerer::lower_container_predicate(
         }
         report(
             "FSIM-ELAB-SVFIND-004",
-            "container locator predicates support the scoped 'item' "
-            "iterator, locally constant operands, comparisons, and "
-            "logical &&, ||, and !",
+            "container locator predicates support the scoped '"
+                + std::string{iterator_name}
+                + "' iterator, its direct .index leaf, locally constant "
+                  "operands, comparisons, and logical &&, ||, and !",
             candidate.span);
         return std::nullopt;
       };
-  if (!lower(expression, false)) {
+  if (!lower(expression)) {
     return std::nullopt;
   }
   return nodes;
@@ -769,8 +923,10 @@ bool Lowerer::lower_container_locator(
         expression.span);
     return false;
   }
-  if (expression.operands.size()
-      != (predicate_locator ? 2U : 1U)) {
+  if ((!predicate_locator && expression.operands.size() != 1U)
+      || (predicate_locator
+          && expression.operands.size() != 2U
+          && expression.operands.size() != 3U)) {
     report(
         predicate_locator
             ? "FSIM-ELAB-SVFIND-002"
@@ -782,6 +938,21 @@ bool Lowerer::lower_container_locator(
         expression.span);
     return false;
   }
+  const bool explicit_iterator =
+      predicate_locator && expression.operands.size() == 3U;
+  if (explicit_iterator
+      && expression.operands[1].kind
+          != ExpressionKind::Identifier) {
+    report(
+        "FSIM-ELAB-SVFIND-007",
+        "a named container locator iterator must be one identifier",
+        expression.operands[1].span);
+    return false;
+  }
+  const std::string_view iterator_name =
+      explicit_iterator
+          ? std::string_view{expression.operands[1].text}
+          : std::string_view{"item"};
   const auto& receiver = expression.operands.front();
   const auto source = lower_container_expression(receiver);
   const auto* source_frontend_type = object_type(receiver.text);
@@ -797,6 +968,24 @@ bool Lowerer::lower_container_locator(
         "bounded container locators do not support associative "
         "or unresolved receivers",
         expression.span);
+    return false;
+  }
+  const auto iterator_key = std::string{iterator_name};
+  const bool iterator_collision =
+      explicit_iterator
+      && (object_type(iterator_name) != nullptr
+          || locals_.contains(iterator_key)
+          || string_locals_.contains(iterator_key)
+          || container_locals_.contains(iterator_key)
+          || signals_.contains(iterator_key)
+          || string_objects_.contains(iterator_key)
+          || container_objects_.contains(iterator_key));
+  if (iterator_collision) {
+    report(
+        "FSIM-ELAB-SVFIND-007",
+        "named container locator iterator '" + std::string{iterator_name}
+            + "' collides with a visible object",
+        expression.operands[1].span);
     return false;
   }
   const bool index_result =
@@ -850,8 +1039,12 @@ bool Lowerer::lower_container_locator(
   }
   std::vector<ContainerPredicateNode> predicate;
   if (predicate_locator) {
+    const auto& predicate_expression =
+        expression.operands[
+            explicit_iterator ? 2U : 1U];
     const auto lowered = lower_container_predicate(
-        expression.operands[1], *source_frontend_type,
+        predicate_expression, iterator_name,
+        *source_frontend_type,
         *source_type);
     if (!lowered) {
       return false;

@@ -735,6 +735,7 @@ therefore excluded.
 | `FSIM-SV-SEM-087` | error | An unpacked-container locator method is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-088` | error | A predicate unpacked-container locator method is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-089` | error | A predicate unpacked-container locator omits its required nonempty `with` clause. |
+| `FSIM-SV-SEM-090` | error | A predicate unpacked-container locator has malformed or multiple iterator binders, or a locator iterator leaks outside its `with` predicate. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -1099,6 +1100,8 @@ therefore excluded.
 | `FSIM-ELAB-SVFIND-004` | error | A predicate container locator uses an unsupported, nonconstant, mistyped, or overlarge predicate expression. |
 | `FSIM-ELAB-SVFIND-005` | error | A result-producing predicate container locator is used as a standalone statement. |
 | `FSIM-ELAB-SVFIND-006` | error | A predicate container locator result is used outside a whole-queue assignment. |
+| `FSIM-ELAB-SVFIND-007` | error | A named predicate-container iterator is malformed or collides with a visible object. |
+| `FSIM-ELAB-SVFIND-008` | error | A predicate-container iterator has an unknown or unsupported index reference, selection, call, or mixed element/index comparison profile. |
 | `FSIM-ELAB-SVMEMORY-001` | error | `$readmemb` or `$readmemh` is lowered outside SystemVerilog-2017. |
 | `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
 | `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |

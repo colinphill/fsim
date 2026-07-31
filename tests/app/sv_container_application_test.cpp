@@ -538,7 +538,9 @@ module dynamic_port_leaf #(
     assert (located[0] == 12);
     locations = source.unique_index();
     assert (locations[0] == 0);
-    located = source.find() with (item > 11);
+    located =
+        source.find(source_item) with (
+            source_item.index == 1 && source_item > 11);
     assert (located.size() == 1);
     assert (located[0] == 12);
     locations = source.find_last_index() with (item >= LIMIT + 8);
@@ -683,6 +685,17 @@ module container_top;
         ordered.find_first_index() with (item == 3);
     assert (locations.size() == 1);
     assert (locations[0] == 2);
+    locations =
+        ordered.find_index(sorted_item) with (
+            sorted_item.index >= 3);
+    assert (locations.size() == 2);
+    assert (locations[0] == 3);
+    assert (locations[1] == 4);
+    locations =
+        target.find_index(target_item) with (
+            target_item.index == 1);
+    assert (locations.size() == 1);
+    assert (locations[0] == 1);
     target.push_back(4);
     target.rsort();
     assert (target[0] == 4);
@@ -759,6 +772,15 @@ module container_top;
     locations = binary.find_last_index() with (item != 8'h01);
     assert (locations.size() == 1);
     assert (locations[0] == 1);
+    locations =
+        binary.find_index(pixel) with (pixel.index < 0);
+    assert (locations.size() == 1);
+    assert (locations[0] == -1);
+    logic_located =
+        binary.find(pixel) with (
+            pixel.index > 0 && pixel == 8'h03);
+    assert (logic_located.size() == 1);
+    assert (logic_located[0] == 8'h03);
     values = '{};
     assert (values.sum() == 0);
     assert (values.product() == 1);
@@ -788,10 +810,20 @@ module container_top;
     assert (located.size() == 2);
     assert (located[0] == 7);
     assert (located[1] == 7);
+    located =
+        values.find(positioned) with (
+            positioned.index == 1 && positioned < 0);
+    assert (located.size() == 1);
+    assert (located[0] == -8);
     locations =
         values.find_index() with (item < 0 || item > 8);
     assert (locations.size() == 1);
     assert (locations[0] == 1);
+    locations =
+        values.find_index() with (item.index != 1);
+    assert (locations.size() == 2);
+    assert (locations[0] == 0);
+    assert (locations[1] == 2);
     located = values.find_first() with (!(item == 7));
     assert (located.size() == 1);
     assert (located[0] == -8);

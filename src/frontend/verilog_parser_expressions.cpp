@@ -487,6 +487,15 @@ Expression VerilogParser::parse_postfix(Expression expression) {
       }
       if (match(TokenKind::LeftParen)) {
         const auto receiver_span = expression.span;
+        const bool predicate_locator_method =
+            member.text == "find"
+            || member.text == "find_index"
+            || member.text == "find_first"
+            || member.text == "find_first_index"
+            || member.text == "find_last"
+            || member.text == "find_last_index";
+        const auto implicit_reference_count =
+            implicit_net_references_.size();
         std::vector<Expression> operands;
         operands.push_back(std::move(expression));
         if (!at(TokenKind::RightParen)) {
@@ -516,13 +525,17 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             || member.text == "max"
             || member.text == "unique"
             || member.text == "unique_index";
-        const bool predicate_locator_method =
-            member.text == "find"
-            || member.text == "find_index"
-            || member.text == "find_first"
-            || member.text == "find_first_index"
-            || member.text == "find_last"
-            || member.text == "find_last_index";
+        const bool valid_iterator_argument =
+            predicate_locator_method
+            && argument_count == 1
+            && operands[1].kind == ExpressionKind::Identifier
+            && operands[1].text.find('.') == std::string::npos;
+        if (valid_iterator_argument) {
+          implicit_net_references_.resize(
+              implicit_reference_count);
+          locator_iterator_names_.insert(
+              operands[1].text);
+        }
         const auto expected_arguments =
             member.text == "push_front"
                     || member.text == "push_back"
@@ -539,7 +552,6 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                     || ordering_method
                     || unsupported_shuffle
                     || locator_method
-                    || predicate_locator_method
                 ? std::optional<std::size_t>{0}
             : member.text == "delete"
                 ? (argument_count <= 1
@@ -554,6 +566,20 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "container method '" + member.text + "' requires "
                   + std::to_string(*expected_arguments)
                   + " argument(s)");
+        }
+        if (predicate_locator_method
+            && (argument_count > 1
+                || (argument_count == 1
+                    && operands[1].kind
+                        != ExpressionKind::Identifier)
+                || (argument_count == 1
+                    && operands[1].text.find('.')
+                        != std::string::npos))) {
+          error(
+              member,
+              "FSIM-SV-SEM-090",
+              "predicate container locator method '" + member.text
+                  + "' accepts at most one iterator identifier");
         }
         if (reduction_method
             && language_ != Language::SystemVerilog2017) {
@@ -605,6 +631,12 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               "SystemVerilog 2017");
         }
         if (predicate_locator_method) {
+          bool iterator_scope_inserted = false;
+          if (valid_iterator_argument) {
+            iterator_scope_inserted =
+                current_procedural_names_.insert(
+                    operands[1].text).second;
+          }
           if (current().text != "with") {
             error(
                 current(),
@@ -629,6 +661,10 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                 TokenKind::RightParen,
                 "')' after container locator predicate",
                 "FSIM-SV-PARSE-166");
+          }
+          if (iterator_scope_inserted) {
+            current_procedural_names_.erase(
+                operands[1].text);
           }
         }
         expression = Expression{

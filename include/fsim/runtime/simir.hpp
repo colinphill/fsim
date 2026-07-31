@@ -248,6 +248,7 @@ enum class ContainerLocatorOperator : std::uint8_t {
 
 enum class ContainerPredicateOperator : std::uint8_t {
   item,
+  index,
   constant,
   equal,
   not_equal,
@@ -260,6 +261,12 @@ enum class ContainerPredicateOperator : std::uint8_t {
   logical_not,
 };
 
+enum class ContainerPredicateValueKind : std::uint8_t {
+  element,
+  index,
+  logical,
+};
+
 /// One node in a validated, source-ordered container-locator predicate.
 /// Non-leaf operands refer only to earlier nodes. The final node is the root.
 struct ContainerPredicateNode {
@@ -268,6 +275,8 @@ struct ContainerPredicateNode {
   std::uint32_t left{};
   std::uint32_t right{};
   PackedLogic4 constant;
+  ContainerPredicateValueKind value_kind{
+      ContainerPredicateValueKind::element};
 };
 
 struct LocateContainer {

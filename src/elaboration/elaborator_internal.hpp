@@ -936,6 +936,7 @@ private:
     std::optional<std::vector<ContainerPredicateNode>>
     lower_container_predicate(
         const Expression& expression,
+        std::string_view iterator_name,
         const frontend::Type& source_type,
         const ContainerType& runtime_type);
     ContainerRegisterId allocate_container_register(

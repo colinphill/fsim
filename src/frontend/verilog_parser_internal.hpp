@@ -720,6 +720,7 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> declared_genvars_;
   std::vector<Token> external_genvar_uses_;
   std::vector<ImplicitNetReference> implicit_net_references_;
+  std::unordered_set<std::string> locator_iterator_names_;
   std::vector<SystemVerilogImport>
       compilation_unit_imports_;
   std::vector<SystemVerilogImport> active_package_imports_;

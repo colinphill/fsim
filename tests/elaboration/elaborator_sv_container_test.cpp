@@ -130,6 +130,20 @@ module container_lowering #(
         values.find_last_index() with (!(item == 8));
     assert (locations.size() == 1);
     assert (locations[0] == 2);
+    located =
+        values.find(entry) with (
+            entry == 7 && entry.index >= 0);
+    assert (located.size() == 2);
+    assert (located[0] == 7);
+    assert (located[1] == 7);
+    located =
+        values.find(alias_entry) with (
+            alias_entry == 7 && alias_entry.index >= 0);
+    assert (located.size() == 2);
+    locations =
+        values.find_index(entry) with (entry.index == 1);
+    assert (locations.size() == 1);
+    assert (locations[0] == 1);
     values.reverse();
     assert (values[0] == 7);
     values.sort();
@@ -138,6 +152,11 @@ module container_lowering #(
     assert (values[0] == 8);
     values.reverse();
     pending = '{1, 2};
+    locations =
+        pending.find_index(byte_entry) with (
+            byte_entry.index > 0);
+    assert (locations.size() == 1);
+    assert (locations[0] == 1);
     lookup = '{-1: 10, 3: 30};
     assert (pending.sum() == 3);
     assert (lookup.sum() == 40);
@@ -165,6 +184,11 @@ module container_lowering #(
     assert (locations.size() == 2);
     assert (locations[0] == -1);
     assert (locations[1] == 1);
+    locations =
+        fixed_up.find_index(bit_entry) with (
+            bit_entry.index < 0 && bit_entry != 0);
+    assert (locations.size() == 1);
+    assert (locations[0] == -1);
     assert (fixed_down[2] == 8'h21);
     fixed_down[3] = 8'h33;
     fixed_up[-1] = 4'ha;
@@ -271,6 +295,70 @@ endmodule
                 && !locator->predicate.empty();
           })
       >= 7);
+  assert(std::ranges::any_of(
+      process.operations,
+      [](const auto& operation) {
+        const auto* locator =
+            std::get_if<LocateContainer>(&operation);
+        return locator != nullptr
+            && std::ranges::any_of(
+                locator->predicate,
+                [](const auto& node) {
+                  return node.operation
+                          == ContainerPredicateOperator::index
+                      && node.value_kind
+                          == ContainerPredicateValueKind::index;
+                })
+            && std::ranges::all_of(
+                locator->predicate,
+                [](const auto& node) {
+                  const bool result_node =
+                      node.operation
+                          >= ContainerPredicateOperator::equal;
+                  return !result_node
+                      || node.value_kind
+                          == ContainerPredicateValueKind::logical;
+                });
+      }));
+  std::vector<const LocateContainer*> predicate_locators;
+  for (const auto& operation : process.operations) {
+    if (const auto* locator =
+            std::get_if<LocateContainer>(&operation);
+        locator && !locator->predicate.empty()) {
+      predicate_locators.push_back(locator);
+    }
+  }
+  const auto same_predicate =
+      [](const auto& left, const auto& right) {
+        return left.size() == right.size()
+            && std::ranges::equal(
+                left, right,
+                [](const auto& left_node,
+                   const auto& right_node) {
+                  return left_node.operation
+                          == right_node.operation
+                      && left_node.left == right_node.left
+                      && left_node.right == right_node.right
+                      && left_node.constant
+                          == right_node.constant
+                      && left_node.value_kind
+                          == right_node.value_kind;
+                });
+      };
+  bool spelling_independent = false;
+  for (std::size_t left = 0;
+       left < predicate_locators.size(); ++left) {
+    for (std::size_t right = left + 1U;
+         right < predicate_locators.size(); ++right) {
+      if (predicate_locators[left]->predicate.size() >= 7
+          && same_predicate(
+              predicate_locators[left]->predicate,
+              predicate_locators[right]->predicate)) {
+        spelling_independent = true;
+      }
+    }
+  }
+  assert(spelling_independent);
   const auto values =
       elaborated.design->container_objects()[0].id;
   const auto pending =
@@ -653,6 +741,7 @@ module container_invalid_lowering;
   byte locator_result[$];
   int locator_indices[$];
   int result;
+  int collision;
   initial begin
     lookup.push_back(1);
     result = lookup.sort();
@@ -674,6 +763,16 @@ module container_invalid_lowering;
     dynamic = fixed.find() with (item);
     locator_result = fixed.find_index() with (item);
     locator_result = fixed.find() with (item + 1 > 0);
+    locator_result =
+        fixed.find(collision) with (collision > 0);
+    locator_result =
+        fixed.find(entry) with (unknown.index == 0);
+    locator_result =
+        fixed.find(entry) with (entry.index.member == 0);
+    locator_result =
+        fixed.find(entry) with (entry.index() == 0);
+    locator_result =
+        fixed.find(entry) with (entry == entry.index);
     result = fixed.find() with (item);
     fixed.find() with (item);
     lookup[0] <= 1;
@@ -722,6 +821,10 @@ endmodule
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVFIND-006"));
   assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVFIND-007"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVFIND-008"));
+  assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-013"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-018"));
@@ -762,6 +865,23 @@ endmodule
       !oversized_rejected.ok()
       && has_diagnostic(
           oversized_rejected, "FSIM-ELAB-SVFIND-004"));
+
+  const auto leaked_iterator = fsim::frontend::parse_text(
+      "container-iterator-leak.sv",
+      "module container_iterator_leak; "
+      "int values[]; int located[$]; int result; "
+      "initial begin "
+      "located = values.find(entry) with (entry > 0); "
+      "result = entry; "
+      "end endmodule",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(
+      !leaked_iterator.ok()
+      && std::ranges::any_of(
+          leaked_iterator.diagnostics,
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-090";
+          }));
 
   const auto invalid_ports = fsim::frontend::parse_text(
       "container-port-invalid.sv",

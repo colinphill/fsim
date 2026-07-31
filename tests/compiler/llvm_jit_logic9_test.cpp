@@ -234,6 +234,48 @@ void test_rejections() {
       },
       "invalid predicate metadata");
 
+  auto invalid_index_type = invalid_container_predicate;
+  invalid_index_type.name = "invalid_index_type";
+  invalid_index_type.operations = {
+      LocateContainer{
+          ContainerLocatorOperator::find, 0, 1,
+          {{ContainerPredicateOperator::index, 0, 0,
+            PackedLogic4{},
+            ContainerPredicateValueKind::element}}},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_index_type", invalid_index_type,
+            no_signals);
+      },
+      "predicate index has the wrong type");
+
+  auto mixed_predicate_types = invalid_container_predicate;
+  mixed_predicate_types.name = "mixed_predicate_types";
+  mixed_predicate_types.operations = {
+      LocateContainer{
+          ContainerLocatorOperator::find, 0, 1,
+          {
+              {ContainerPredicateOperator::item, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::element},
+              {ContainerPredicateOperator::index, 0, 0,
+               PackedLogic4{},
+               ContainerPredicateValueKind::index},
+              {ContainerPredicateOperator::equal, 0, 1,
+               PackedLogic4{},
+               ContainerPredicateValueKind::logical},
+          }},
+      Halt{}};
+  expect_error(
+      [&] {
+        jit.add_process(
+            "mixed_predicate_types", mixed_predicate_types,
+            no_signals);
+      },
+      "comparison operands are invalid");
+
   const auto projected_process =
       [](const ProjectedDelayMode mode,
          const std::uint64_t delay,

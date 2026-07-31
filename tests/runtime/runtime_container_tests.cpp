@@ -239,13 +239,33 @@ void test_simir_containers() {
               value(32, 1)},
       "static unique_index preserves signed declared indices");
   const std::vector<ContainerPredicateNode> greater_than_five{
-      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{}},
-      {ContainerPredicateOperator::constant, 0, 0, value(8, 5)},
-      {ContainerPredicateOperator::greater, 0, 1, PackedLogic4{}}};
+      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{},
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 5),
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::greater, 0, 1, PackedLogic4{},
+       ContainerPredicateValueKind::logical}};
   const std::vector<ContainerPredicateNode> equal_five{
-      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{}},
-      {ContainerPredicateOperator::constant, 0, 0, value(8, 5)},
-      {ContainerPredicateOperator::equal, 0, 1, PackedLogic4{}}};
+      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{},
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 5),
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::equal, 0, 1, PackedLogic4{},
+       ContainerPredicateValueKind::logical}};
+  const std::vector<ContainerPredicateNode> negative_index{
+      {ContainerPredicateOperator::index, 0, 0, PackedLogic4{},
+       ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::constant, 0, 0, value(32, 0),
+       ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::less, 0, 1, PackedLogic4{},
+       ContainerPredicateValueKind::logical}};
+  const std::vector<ContainerPredicateNode> current_index_after_zero{
+      {ContainerPredicateOperator::index, 0, 0, PackedLogic4{},
+       ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::constant, 0, 0, value(32, 0),
+       ContainerPredicateValueKind::index},
+      {ContainerPredicateOperator::greater, 0, 1, PackedLogic4{},
+       ContainerPredicateValueKind::logical}};
   for (const auto operation :
        {ContainerLocatorOperator::find,
         ContainerLocatorOperator::find_index,
@@ -290,6 +310,26 @@ void test_simir_containers() {
       "find_index returns signed declared static indices");
   locate_container_values(
       locator_result, fixed_locator,
+      ContainerLocatorOperator::find,
+      negative_index);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{
+              value(8, 5), value(8, 7)},
+      "predicate index comparisons use signed declared static indices");
+  locate_container_values(
+      locator_result, signed_order,
+      ContainerLocatorOperator::find,
+      current_index_after_zero);
+  require(
+      locator_result.elements
+          == std::vector<PackedLogic4>{
+              signed_order.elements[1],
+              signed_order.elements[2],
+              signed_order.elements[3]},
+      "dynamic and queue predicate indices use current zero-based positions");
+  locate_container_values(
+      locator_result, fixed_locator,
       ContainerLocatorOperator::find_first,
       greater_than_five);
   require(
@@ -324,9 +364,12 @@ void test_simir_containers() {
   ContainerValue unknown_find_result{
       four_state_order_type, {}, {}};
   const std::vector<ContainerPredicateNode> equal_one{
-      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{}},
-      {ContainerPredicateOperator::constant, 0, 0, value(8, 1)},
-      {ContainerPredicateOperator::equal, 0, 1, PackedLogic4{}}};
+      {ContainerPredicateOperator::item, 0, 0, PackedLogic4{},
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::constant, 0, 0, value(8, 1),
+       ContainerPredicateValueKind::element},
+      {ContainerPredicateOperator::equal, 0, 1, PackedLogic4{},
+       ContainerPredicateValueKind::logical}};
   locate_container_values(
       unknown_find_result, four_state_order,
       ContainerLocatorOperator::find,

@@ -223,6 +223,7 @@ void require_associative(
 [[nodiscard]] PackedLogic4 evaluate_container_predicate(
     const ContainerType& type,
     const PackedLogic4& item,
+    const std::int32_t iterator_index,
     const std::span<const ContainerPredicateNode> predicate) {
   if (predicate.empty()
       || predicate.size() > maximum_container_predicate_nodes) {
@@ -230,7 +231,9 @@ void require_associative(
         "SimIR container predicate node count is invalid"};
   }
   std::vector<PackedLogic4> values;
+  std::vector<ContainerPredicateValueKind> value_kinds;
   values.reserve(predicate.size());
+  value_kinds.reserve(predicate.size());
   for (std::size_t index = 0; index < predicate.size(); ++index) {
     const auto& node = predicate[index];
     const auto operand =
@@ -243,17 +246,41 @@ void require_associative(
         };
     switch (node.operation) {
     case ContainerPredicateOperator::item:
+      if (node.value_kind
+          != ContainerPredicateValueKind::element) {
+        throw std::invalid_argument{
+            "SimIR container predicate item has the wrong type"};
+      }
       values.push_back(item);
+      value_kinds.push_back(node.value_kind);
+      break;
+    case ContainerPredicateOperator::index:
+      if (node.value_kind
+          != ContainerPredicateValueKind::index) {
+        throw std::invalid_argument{
+            "SimIR container predicate index has the wrong type"};
+      }
+      values.push_back(PackedLogic4::from_aval_bval(
+          32, static_cast<std::uint32_t>(iterator_index), 0));
+      value_kinds.push_back(node.value_kind);
       break;
     case ContainerPredicateOperator::constant:
-      if (node.constant.width() != type.element_width
+      if (node.value_kind == ContainerPredicateValueKind::logical
+          || node.constant.width()
+              != (node.value_kind
+                          == ContainerPredicateValueKind::index
+                      ? 32U
+                      : type.element_width)
           || node.constant.is_logic9()
-          || (type.two_state
+          || ((node.value_kind
+                       == ContainerPredicateValueKind::index
+                   || type.two_state)
               && node.constant.low_word().bval != 0)) {
         throw std::invalid_argument{
             "SimIR container predicate constant type mismatch"};
       }
       values.push_back(node.constant);
+      value_kinds.push_back(node.value_kind);
       break;
     case ContainerPredicateOperator::equal:
     case ContainerPredicateOperator::not_equal:
@@ -263,43 +290,71 @@ void require_associative(
     case ContainerPredicateOperator::greater_equal: {
       const auto& left = operand(node.left);
       const auto& right = operand(node.right);
+      if (node.value_kind
+              != ContainerPredicateValueKind::logical
+          || value_kinds[node.left]
+              != value_kinds[node.right]
+          || value_kinds[node.left]
+              == ContainerPredicateValueKind::logical) {
+        throw std::invalid_argument{
+            "SimIR container predicate comparison type mismatch"};
+      }
+      const bool signed_comparison =
+          value_kinds[node.left]
+              == ContainerPredicateValueKind::index
+          || type.signed_elements;
       auto operation = BinaryOperator::equal;
       if (node.operation == ContainerPredicateOperator::not_equal) {
         operation = BinaryOperator::not_equal;
       } else if (node.operation == ContainerPredicateOperator::less) {
-        operation = type.signed_elements
+        operation = signed_comparison
             ? BinaryOperator::less_signed
             : BinaryOperator::less_unsigned;
       } else if (
           node.operation == ContainerPredicateOperator::less_equal) {
-        operation = type.signed_elements
+        operation = signed_comparison
             ? BinaryOperator::less_equal_signed
             : BinaryOperator::less_equal_unsigned;
       } else if (
           node.operation == ContainerPredicateOperator::greater) {
-        operation = type.signed_elements
+        operation = signed_comparison
             ? BinaryOperator::greater_signed
             : BinaryOperator::greater_unsigned;
       } else if (
           node.operation == ContainerPredicateOperator::greater_equal) {
-        operation = type.signed_elements
+        operation = signed_comparison
             ? BinaryOperator::greater_equal_signed
             : BinaryOperator::greater_equal_unsigned;
       }
       values.push_back(binary_value(operation, left, right));
+      value_kinds.push_back(node.value_kind);
       break;
     }
     case ContainerPredicateOperator::logical_and:
     case ContainerPredicateOperator::logical_or:
+      if (node.value_kind
+              != ContainerPredicateValueKind::logical
+          || node.left >= index || node.right >= index) {
+        throw std::invalid_argument{
+            "SimIR container predicate logical type mismatch"};
+      }
       values.push_back(logical_binary(
           node.operation
                   == ContainerPredicateOperator::logical_and
               ? LogicalBinaryOperator::logical_and
               : LogicalBinaryOperator::logical_or,
           operand(node.left), operand(node.right)));
+      value_kinds.push_back(node.value_kind);
       break;
     case ContainerPredicateOperator::logical_not:
+      if (node.value_kind
+              != ContainerPredicateValueKind::logical
+          || node.left >= index) {
+        throw std::invalid_argument{
+            "SimIR container predicate logical type mismatch"};
+      }
       values.push_back(logical_not(operand(node.left)));
+      value_kinds.push_back(node.value_kind);
       break;
     default:
       throw std::invalid_argument{
@@ -583,7 +638,8 @@ void locate_container_values(
       const auto offset =
           select_last ? elements.size() - step - 1U : step;
       if (truth_value(evaluate_container_predicate(
-              source_type, elements[offset], predicate))
+              source_type, elements[offset],
+              declared_index(offset), predicate))
           != Logic4::one) {
         continue;
       }

@@ -4391,6 +4391,56 @@ passed all 12 Linux and Windows jobs; its two-worker ASan/UBSan job took 30
 minutes 58 seconds, so the 45-minute CI job budget remains necessary. Batch 80
 is closed, and Batch 81 is the next implementation batch.
 
+### Eighty-first feature batch — named locator iterators and predicate indices
+
+Predicate locators now accept either the existing implicit `item` or one
+explicit iterator identifier in the method argument list. The parser retains a
+named iterator as its own source-spanned Identifier operand between receiver
+and predicate, removes it from Verilog implicit-net discovery, exposes it only
+while parsing the associated `with` predicate, and rejects malformed,
+multiple, colliding, or leaking bindings. The recursive `Expression` layout is
+unchanged, preserving Batch 80's bounded MSVC Debug parser frames.
+
+Exact iterator value references retain the source element profile. A direct
+`.index` reference lowers to a distinct signed two-state 32-bit predicate leaf.
+Static arrays project storage offsets back to signed declared indices;
+dynamic arrays, unbounded queues, and bounded queues use current zero-based
+positions. Equality, inequality, signed relations, and logical `&&`, `||`, and
+`!` compose index comparisons with locally constant signed-32 operands.
+Unknown iterator references, indirect index selection or calls, and mixed
+element/index comparisons fail deterministically. Batch 80's element
+predicate conversion, four-state X/Z-false selection, result typing, stable
+first/last traversal, bounded capacity, and alias-safe replacement remain
+unchanged.
+
+`ContainerPredicateNode` now carries an explicit element, index, or logical
+value kind, and the bounded graph adds an index operator. Both the LLVM
+validator and common runtime evaluator check every leaf, constant,
+comparison, and logical result profile. The evaluator receives the already
+canonical declared/current index from the locator kernel; the application
+executor continues through the existing generic container callback, so the
+public native ABI is unchanged. Native-object schema 34 serializes every value
+kind and index-node structure while intentionally excluding iterator spelling.
+Elaboration proves two differently named iterators lower to identical graphs,
+and cold/warm cache tests distinguish element and index profiles.
+
+Positive evidence covers implicit and named binders, source spans, exact
+element typing, negative declared static indices, dynamic/current indices,
+unbounded and bounded queues, direct container ports, generated hierarchy,
+automatic task formals across suspension, equality/inequality/relations and
+logical composition, interpreter, LLVM O0/O2, and cache identity. Negative
+evidence covers non-Identifier and multiple binders, collision and leakage,
+unknown references, index selection/call misuse, associative receivers, mixed
+profiles, malformed SimIR value kinds, and the retained 64-node bound.
+
+The focused seven-test Debug and Release gates passed before the full
+regression. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed
+all 59 tests in 148.82 seconds, and Release passed all 59 tests in 45.36
+seconds on 2026-07-30. The diagnostic catalog covers 1,193 production codes,
+and the source gate still covers 286 authored files with an empty allowlist and
+a 2,000-line maximum. Batch 81 is not a ten-batch GitHub CI-inspection
+boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

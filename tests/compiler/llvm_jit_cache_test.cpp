@@ -1316,7 +1316,9 @@ void test_container_predicate_cache_identity(
     const std::filesystem::path& cache_directory) {
   const auto make_process =
       [](const std::uint8_t constant,
-         const ContainerPredicateOperator comparison) {
+         const ContainerPredicateOperator comparison,
+         const ContainerPredicateValueKind value_kind =
+             ContainerPredicateValueKind::element) {
         ContainerType queue;
         queue.element_width = 8;
         queue.queue = true;
@@ -1331,12 +1333,21 @@ void test_container_predicate_cache_identity(
                 0,
                 1,
                 {
-                    {ContainerPredicateOperator::item, 0, 0,
-                     PackedLogic4{}},
+                    {value_kind
+                             == ContainerPredicateValueKind::index
+                         ? ContainerPredicateOperator::index
+                         : ContainerPredicateOperator::item,
+                     0, 0, PackedLogic4{}, value_kind},
                     {ContainerPredicateOperator::constant, 0, 0,
                      PackedLogic4::from_aval_bval(
-                         8, constant, 0)},
-                    {comparison, 0, 1, PackedLogic4{}},
+                         value_kind
+                                 == ContainerPredicateValueKind::index
+                             ? 32
+                             : 8,
+                         constant, 0),
+                     value_kind},
+                    {comparison, 0, 1, PackedLogic4{},
+                     ContainerPredicateValueKind::logical},
                 }},
             Halt{},
         };
@@ -1369,7 +1380,17 @@ void test_container_predicate_cache_identity(
   materialize(
       make_process(5, ContainerPredicateOperator::less),
       0, 1);
-  assert(cached_object_paths(cache_directory).size() == 3);
+  materialize(
+      make_process(
+          5, ContainerPredicateOperator::greater,
+          ContainerPredicateValueKind::index),
+      0, 1);
+  materialize(
+      make_process(
+          5, ContainerPredicateOperator::greater,
+          ContainerPredicateValueKind::index),
+      1, 0);
+  assert(cached_object_paths(cache_directory).size() == 4);
 }
 
 void test_persistent_object_cache() {

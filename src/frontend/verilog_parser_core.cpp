@@ -729,6 +729,17 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
         || rejected.contains(reference.name)) {
       continue;
     }
+    if (locator_iterator_names_.contains(reference.name)) {
+      diagnostics_.push_back({
+          DiagnosticSeverity::Error,
+          "FSIM-SV-SEM-090",
+          "container locator iterator '" + reference.name
+              + "' is visible only inside its with-clause predicate",
+          reference.span,
+          reference.expansion_stack});
+      rejected.insert(reference.name);
+      continue;
+    }
     if (reference.net_type == "none") {
       diagnostics_.push_back({
           DiagnosticSeverity::Error,
@@ -760,6 +771,7 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
   body_port_declarations_.clear();
   port_type_refinements_.clear();
   implicit_net_references_.clear();
+  locator_iterator_names_.clear();
   current_procedural_names_.clear();
   current_generate_names_.clear();
   current_loop_names_.clear();

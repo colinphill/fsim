@@ -95,7 +95,8 @@ module containers;
     located = values.max();
     located = values.unique();
     located_indices = values.unique_index();
-    located = values.find() with (item > 0);
+    located =
+        values.find(cell) with (cell > 0 && cell.index >= 0);
     located_indices = values.find_index() with (item != 2);
     located = values.find_first() with (item >= 1 && item < 3);
     located_indices =
@@ -302,9 +303,28 @@ endmodule
                 && statement.value.text.starts_with(".find")
                 && statement.value.operands.size() == 2;
           })
-          == 6,
-      "predicate locator calls retain the receiver and one scoped "
-      "with-clause expression");
+          == 5,
+      "implicit predicate locator calls retain the receiver and one "
+      "scoped with-clause expression");
+  const auto named_locator =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.value.kind == ExpressionKind::Call
+                && statement.value.text == ".find"
+                && statement.value.operands.size() == 3;
+          });
+  require(
+      named_locator != query_statements.end()
+          && named_locator->value.operands[1].kind
+              == ExpressionKind::Identifier
+          && named_locator->value.operands[1].text == "cell"
+          && named_locator->value.operands[1].span.source_name
+              == "containers.sv"
+          && named_locator->value.operands[1].span.begin.line == 63
+          && !named_locator->value.operands[1].span.empty(),
+      "named predicate locator iterator remains explicit source-spanned "
+      "identifier HIR");
   const auto keyed_pattern =
       std::ranges::find_if(
           query_statements,
@@ -501,6 +521,19 @@ endmodule
           && has_code(
               malformed_predicate, "FSIM-SV-PARSE-165"),
       "predicate locator opening-parenthesis recovery is stable");
+  const auto malformed_iterator = parse_text(
+      "container-find-iterator-invalid.sv",
+      "module m; int values[]; int result[$]; "
+      "initial begin "
+      "result = values.find(1) with (item); "
+      "result = values.find(first, second) with (first); "
+      "end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !malformed_iterator.ok()
+          && has_code(
+              malformed_iterator, "FSIM-SV-SEM-090"),
+      "predicate locators reject malformed or multiple iterator arguments");
   require(
       has_code(invalid, "FSIM-SV-UNSUPPORTED-037")
           && has_code(invalid, "FSIM-SV-UNSUPPORTED-038"),
