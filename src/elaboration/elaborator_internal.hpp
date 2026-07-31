@@ -1166,6 +1166,8 @@ private:
         std::vector<RegisterId> arguments;
         std::vector<StringRegisterId> string_arguments;
         std::vector<ContainerRegisterId> container_arguments;
+        std::vector<std::optional<ContainerRegisterId>>
+            container_output_defaults;
         std::vector<bool> argument_is_string;
         std::vector<bool> argument_is_container;
         std::optional<InstructionIndex> target;

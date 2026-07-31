@@ -11,6 +11,13 @@ enum class SliceConsumer : std::uint8_t {
   find_index,
 };
 
+enum class SliceCallMode : std::uint8_t {
+  function_input,
+  task_input,
+  task_output,
+  task_inout,
+};
+
 void expect_slice_cache_statistics(
     const LlvmJit& jit,
     const std::uint64_t hits,
@@ -136,6 +143,85 @@ void expect_slice_cache_statistics(
   return process;
 }
 
+[[nodiscard]] Process make_slice_call_process(
+    const std::int32_t actual_left,
+    const std::int32_t formal_left,
+    const std::uint32_t element_width,
+    const SliceCallMode mode,
+    const std::string_view callable_source,
+    const std::uint32_t return_line) {
+  ContainerType actual;
+  actual.element_width = element_width;
+  actual.fixed = true;
+  actual.index_left = actual_left;
+  actual.index_right = actual_left - 1;
+  auto formal = actual;
+  formal.index_left = formal_left;
+  formal.index_right = formal_left - 1;
+
+  Process process;
+  process.id = 41;
+  process.name = "cached_static_slice_call";
+  process.register_count = 4;
+  process.container_register_count = 4;
+  process.container_register_types = {
+      actual, formal, formal, formal};
+  process.operations.push_back(
+      DebugPoint{
+          DebugPointKind::call,
+          SourceLocation{
+              "cached_static_slice_call.sv", 19, 7}});
+  process.operations.push_back(
+      LoadConstant{
+          0,
+          PackedLogic4::from_aval_bval(
+              32,
+              static_cast<std::uint32_t>(actual_left),
+              0)});
+  process.operations.push_back(
+      ContainerRead{1, 0, 0, true});
+  process.operations.push_back(
+      LoadConstant{
+          2,
+          PackedLogic4::from_aval_bval(
+              32,
+              static_cast<std::uint32_t>(formal_left),
+              0)});
+  process.operations.push_back(
+      ContainerWrite{1, 2, 1, true});
+  if (mode == SliceCallMode::task_output) {
+    process.operations.push_back(
+        CopyContainerRegister{2, 3});
+  } else {
+    process.operations.push_back(
+        CopyContainerRegister{2, 1});
+  }
+  process.operations.push_back(
+      DebugPoint{
+          DebugPointKind::statement,
+          SourceLocation{
+              std::string{callable_source},
+              return_line,
+              3}});
+  if (mode == SliceCallMode::task_output
+      || mode == SliceCallMode::task_inout) {
+    process.operations.push_back(
+        ContainerRead{3, 2, 2, true});
+    process.operations.push_back(
+        ContainerWrite{0, 0, 3, true});
+  } else if (mode == SliceCallMode::task_input) {
+    process.operations.push_back(
+        DebugPoint{
+            DebugPointKind::wait,
+            SourceLocation{
+                std::string{callable_source},
+                return_line + 1U,
+                3}});
+  }
+  process.operations.push_back(Halt{});
+  return process;
+}
+
 }  // namespace
 
 void test_static_slice_consumer_cache_identity(
@@ -212,6 +298,76 @@ void test_static_slice_consumer_cache_identity(
       0,
       1);
   assert(slice_cached_object_count(cache_directory) == 10);
+}
+
+void test_static_slice_call_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol =
+      "cached_static_slice_call";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_slice_cache_statistics(
+            jit, hits, misses);
+      };
+  const auto make =
+      [&](const std::int32_t actual_left = 3,
+          const std::int32_t formal_left = 7,
+          const std::uint32_t width = 8,
+          const SliceCallMode mode =
+              SliceCallMode::function_input,
+          const std::string_view source = "callable.sv",
+          const std::uint32_t line = 31) {
+        return make_slice_call_process(
+            actual_left, formal_left, width,
+            mode, source, line);
+      };
+
+  materialize(make(), 0, 1);
+  materialize(make(), 1, 0);
+  materialize(make(2), 0, 1);
+  materialize(make(3, 6), 0, 1);
+  materialize(make(3, 7, 4), 0, 1);
+  materialize(
+      make(
+          3, 7, 8,
+          SliceCallMode::task_input),
+      0,
+      1);
+  materialize(
+      make(
+          3, 7, 8,
+          SliceCallMode::task_output),
+      0,
+      1);
+  materialize(
+      make(
+          3, 7, 8,
+          SliceCallMode::task_inout),
+      0,
+      1);
+  materialize(
+      make(
+          3, 7, 8,
+          SliceCallMode::function_input,
+          "edited-callable.sv"),
+      0,
+      1);
+  materialize(
+      make(
+          3, 7, 8,
+          SliceCallMode::function_input,
+          "callable.sv", 32),
+      0,
+      1);
+  assert(slice_cached_object_count(cache_directory) == 9);
 }
 
 }  // namespace fsim::tests::compiler

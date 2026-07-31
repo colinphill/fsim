@@ -196,7 +196,7 @@ void inspect_suspended(
   const auto resumed = simulation.run();
   assert(
       resumed.status == fsim::runtime::RunStatus::completed
-      && resumed.time == 3);
+      && resumed.time == 4);
 }
 
 void inspect_ordering_suspended(
@@ -249,7 +249,7 @@ void inspect_ordering_suspended(
   const auto resumed = simulation.run();
   assert(
       resumed.status == fsim::runtime::RunStatus::completed
-      && resumed.time == 3);
+      && resumed.time == 4);
 }
 
 void inspect_static_suspended(
@@ -310,7 +310,7 @@ void inspect_static_suspended(
   const auto resumed = simulation.run();
   assert(
       resumed.status == fsim::runtime::RunStatus::completed
-      && resumed.time == 3);
+      && resumed.time == 4);
 }
 
 void inspect_static_port_aliases(
@@ -327,22 +327,28 @@ void inspect_static_port_aliases(
   const auto child =
       simulation.design().find_container(
           "container_top.port_child.result");
-  assert(parent && child && *parent == *child);
+  const auto leaf =
+      simulation.design().find_container(
+          "container_top.port_child.generated.child.result");
+  assert(
+      parent && child && leaf
+      && *parent == *child
+      && *child == *leaf);
   std::ostringstream debugger_output;
   std::ostringstream debugger_error;
   fsim::app::DebuggerControl debugger{
       simulation, debugger_output, debugger_error};
-  debugger.execute({"scope", "port_child"});
+  debugger.execute({"scope", "port_child.generated.child"});
   debugger.execute({"show", "source"});
   assert(
       debugger_error.str().empty()
       && debugger_output.str().find(
-             "container_top.port_child.source = [3:")
+             "container_top.port_child.generated.child.source = [3:")
           != std::string::npos);
   const auto result = simulation.run();
   assert(
       result.status == fsim::runtime::RunStatus::completed
-      && result.time == 3);
+      && result.time == 4);
   debugger.execute({"show", "result"});
   assert(
       debugger_output.str().find("3:00110010")
@@ -380,7 +386,7 @@ void inspect_dynamic_port_aliases(
   const auto result = simulation.run();
   assert(
       result.status == fsim::runtime::RunStatus::completed
-      && result.time == 3);
+      && result.time == 4);
   debugger.execute({"show", "result"});
   debugger.execute({"show", "scores"});
   debugger.execute({"show", "observed_bits"});
@@ -431,6 +437,16 @@ module static_port_leaf #(
     input logic [7:0] source[LEFT:RIGHT],
     output logic [7:0] result[LEFT:RIGHT],
     inout bit [3:0] shared[-1:1]);
+  function automatic logic [7:0] port_slice_sum(
+      input logic [7:0] value[1:0]);
+    return value.sum();
+  endfunction
+  task automatic preserve_port_slice(
+      inout logic [7:0] value[1:0]);
+    assert ($isunknown(value[1]));
+    assert (value[0] == 8'h04);
+    value[0] = value[0] + 8'h00;
+  endtask
   initial begin
     logic [7:0] located[$];
     int locations[$];
@@ -462,6 +478,10 @@ module static_port_leaf #(
             port_item.index == RIGHT);
     assert (locations.size() == 1);
     assert (locations[0] == RIGHT);
+    assert (
+        $isunknown(
+            port_slice_sum(
+                source[LEFT:LEFT - 1])));
     located = source.min();
     assert (located.size() == 1);
     assert (located[0] == 8'h04);
@@ -539,9 +559,30 @@ module static_port_leaf #(
     assert (locations.size() == 3);
     assert (locations[0] == LEFT);
     assert (locations[2] == RIGHT + 1);
+    preserve_port_slice(
+        result[LEFT - 1:RIGHT + 1]);
+    assert ($isunknown(result[LEFT - 1]));
+    assert (result[RIGHT + 1] == 8'h04);
     shared[-1] = 4'ha;
     shared[1] = 4'hc;
   end
+endmodule
+
+module static_port_mid #(
+    parameter int LEFT = 3,
+    parameter int RIGHT = 0) (
+    input logic [7:0] source[LEFT:RIGHT],
+    output logic [7:0] result[LEFT:RIGHT],
+    inout bit [3:0] shared[-1:1]);
+  generate
+    if (LEFT >= RIGHT) begin: generated
+      static_port_leaf #(
+          .LEFT(LEFT), .RIGHT(RIGHT)) child(
+          .source(source),
+          .result(result),
+          .shared(shared));
+    end
+  endgenerate
 endmodule
 
 module dynamic_port_leaf #(
@@ -712,7 +753,7 @@ module container_top;
   bit dynamic_bounded[$:3];
   logic [15:0] dynamic_scores[dynamic_key_t];
   int dynamic_work[];
-  static_port_leaf port_child(
+  static_port_mid port_child(
       .source(port_source),
       .result(port_result),
       .shared(port_shared));
@@ -768,6 +809,17 @@ module container_top;
     assert (locations.size() == 1);
     assert (locations[0] == 0);
     return copy[3];
+  endfunction
+  function automatic logic [7:0] slice_sum(
+      input logic [7:0] source[6:5]);
+    assert ($left(source) == 6);
+    assert (source[6] == 8'h03);
+    assert (source[5] == 8'ha5);
+    return source.sum();
+  endfunction
+  function automatic logic [7:0] nested_slice_sum(
+      input logic [7:0] source[3:0]);
+    return slice_sum(source[1:0]);
   endfunction
   task automatic mutate(inout byte target[$:2]);
     byte ordered[$];
@@ -873,6 +925,21 @@ module container_top;
         default: 8'bxxxxzzzz,
         0: 8'ha5};
   endtask
+  task automatic transfer_slices(
+      input logic [7:0] incoming[9:8],
+      output logic [7:0] outgoing[1:0],
+      inout logic [7:0] working[5:4],
+      input bit early);
+    assert ($isunknown(outgoing[1]));
+    assert ($isunknown(outgoing[0]));
+    outgoing[1] = incoming[9];
+    working[5] = 8'h11;
+    if (early)
+      return;
+    #1;
+    outgoing[0] = incoming[8];
+    working[4] = 8'hc4;
+  endtask
   initial begin
     key_t key;
     int located[$];
@@ -927,6 +994,8 @@ module container_top;
     assert (memory[1] == 8'h03);
     assert ($isunknown(memory[2]));
     assert (memory[3] == 8'h0f);
+    assert (slice_sum(memory[1:0]) == 8'ha8);
+    assert (nested_slice_sum(memory) == 8'ha8);
     assert (keyed_static_value(memory) == 8'h0f);
     assert (binary[-1] == 8'h01);
     assert ($isunknown(binary[0]));
@@ -1106,6 +1175,22 @@ module container_top;
             pending_item.index > 0
                 ? pending_item : 0) == pending[1]);
     mutate_memory(memory);
+    transfer_slices(
+        binary[-1:0], memory[3:2], memory[1:0], 1);
+    assert (memory[3] == 8'h01);
+    assert ($isunknown(memory[2]));
+    assert (memory[1] == 8'h11);
+    assert (memory[0] == 8'ha5);
+    transfer_slices(
+        binary[0:1], memory[3:2], memory[1:0], 0);
+    assert ($isunknown(memory[3]));
+    assert (memory[2] == 8'h03);
+    assert (memory[1] == 8'h11);
+    assert (memory[0] == 8'hc4);
+    memory = '{
+        3: 8'h22,
+        default: 8'bxxxxzzzz,
+        0: 8'ha5};
     assert (port_result[3] == 8'h32);
     assert (port_result[2] == 8'h00);
     assert (port_result[1] == 8'h04);
@@ -1154,7 +1239,7 @@ endmodule
     assert(
         reference.result.status
             == fsim::runtime::RunStatus::completed
-        && reference.result.time == 3
+        && reference.result.time == 4
         && reference.output
             == (std::vector<std::string>{
                 "7", ":2", ":2", ":2", ":6"}));

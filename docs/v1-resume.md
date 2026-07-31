@@ -12,6 +12,12 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 - Implementation baseline: completed feature-batch-88 bounded read-only
   SystemVerilog static-array slice consumers on top of the feature-batch-87
   one-dimensional static-array-slice handoff.
+- An intentionally incomplete Batch 89 reboot checkpoint follows that
+  baseline. It contains the callable-slice implementation and focused
+  frontend, elaboration, LLVM cache, and application evidence described under
+  "Batch 89 reboot checkpoint" below. Do not treat the checkpoint as the
+  completed batch or advance to Batch 90 until its remaining validation and
+  documentation work is complete.
 - The source-size refactor is complete: all 288 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
@@ -657,6 +663,41 @@ forms. Module-port slice actuals, slice returns, ref/default formals,
 variable/indexed slices, element conversion, recursion, multidimensional
 containers, and cross-language calls remain separate release-gate work.
 
+### Batch 89 reboot checkpoint
+
+The pushed reboot checkpoint contains the following in-progress work:
+
+- fixed-size function and task formals adapt a direct compatible slice actual
+  into a formal-typed staging container, preserving ordinal range mapping;
+- task input/inout copy-in and output/inout atomic slice copy-out use the
+  existing bounded assignment path, and output formals reset from an immutable
+  typed default container on every call;
+- the task frame stores those defaults in vector-backed container-register
+  metadata rather than recursive inline HIR, preserving the Windows MSVC Debug
+  stack-footprint constraint;
+- explicit frontend HIR, positive and negative elaboration, application, and
+  LLVM cache-identity fixtures cover nested function calls, suspended tasks,
+  early return, X reset/preservation, range/profile diagnostics, and schema
+  41/container-semantics 17;
+- the application fixture routes its existing writable static port through a
+  generated middle module so callable slice actuals can be checked through
+  nested/generated hierarchy.
+
+Before the final generated-middle-module edit, the focused warnings-as-errors
+Debug evidence passed: `fsim.frontend` in 0.06 seconds, monolithic/split
+elaboration in 0.40/0.10 seconds, `fsim.llvm` in 1.75 seconds, and
+`fsim.application.sv_containers` in 226.20 seconds. The generated hierarchy
+edit itself was inspected and `git diff --check` passed, but it was
+intentionally checkpointed before a rebuild so the host could reboot.
+
+Resume by building the application target with eight workers and rerunning the
+container application test. Then run the focused Batch 89 expression below,
+review the negative matrix and source-line budget, finish all ten Batch 89
+items, run the complete Debug and Release 59-test gates, update the
+implementation plan, feature matrix, language support, and this handoff, and
+commit and push the completed non-boundary batch. Batch 90, not Batch 89, is
+the next mandatory non-documentation GitHub Actions inspection boundary.
+
 ## Working cadence
 
 - Implement ten related features before the next full regression.
@@ -770,18 +811,17 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin batch 89 at item 1 above. Do not rerun batch 88's full regression
-   unless a later change can affect container query, construction, slicing,
-   callable argument/copy-out, reduction, ordering, or locator semantics,
-   object binding, runtime helpers, callable activation frames, debugger paths,
-   cache identity, or execution.
+3. Resume the pushed incomplete Batch 89 checkpoint above by rebuilding and
+   rerunning `fsim.application.sv_containers` after the final generated
+   hierarchy edit. Do not discard or reimplement the checkpointed lowering
+   and evidence.
 4. Keep batch-89 work within direct locally constant
    direction-preserving one-dimensional integral static-array slice actuals
    for the existing automatic same-language function/task container forms.
    Record intentional scope changes in this handoff before implementation.
-5. Use targeted tests during that batch, run the full Debug and Release gates
-   after all ten features, then update the four documents named above, commit,
-   and push.
+5. Use targeted tests during the remainder of that batch, run the full Debug
+   and Release gates after all ten features, then update the four documents
+   named above, commit, and push.
 
 The existing exact-LLVM build trees on the recorded development host are:
 

@@ -159,6 +159,8 @@ void Lowerer::lower_task_call(const Statement& statement) {
         frame.arguments.reserve(task.arguments.size());
         frame.string_arguments.reserve(task.arguments.size());
         frame.container_arguments.reserve(task.arguments.size());
+        frame.container_output_defaults.reserve(
+            task.arguments.size());
         frame.argument_is_string.reserve(task.arguments.size());
         frame.argument_is_container.reserve(task.arguments.size());
         for (const auto& argument : task.arguments) {
@@ -172,6 +174,13 @@ void Lowerer::lower_task_call(const Statement& statement) {
                 frame.string_arguments.push_back({});
                 frame.container_arguments.push_back(
                     allocate_container_register(*type));
+                frame.container_output_defaults.push_back(
+                    argument.direction
+                                == frontend::PortDirection::Output
+                            && type->fixed
+                        ? std::optional<ContainerRegisterId>{
+                              allocate_container_register(*type)}
+                        : std::nullopt);
                 frame.argument_is_string.push_back(false);
                 frame.argument_is_container.push_back(true);
                 continue;
@@ -182,6 +191,8 @@ void Lowerer::lower_task_call(const Statement& statement) {
                 frame.string_arguments.push_back(
                     allocate_string_register());
                 frame.container_arguments.push_back({});
+                frame.container_output_defaults.push_back(
+                    std::nullopt);
                 frame.argument_is_string.push_back(true);
                 frame.argument_is_container.push_back(false);
                 continue;
@@ -200,6 +211,8 @@ void Lowerer::lower_task_call(const Statement& statement) {
                 argument.type.domain));
             frame.string_arguments.push_back({});
             frame.container_arguments.push_back({});
+            frame.container_output_defaults.push_back(
+                std::nullopt);
             frame.argument_is_string.push_back(false);
             frame.argument_is_container.push_back(false);
         }
@@ -212,15 +225,32 @@ void Lowerer::lower_task_call(const Statement& statement) {
         if (frame.argument_is_container[index]) {
             if (formal.direction
                 == frontend::PortDirection::Output) {
-                process_.operations.emplace_back(
-                    DeleteContainer{
-                        frame.container_arguments[index],
-                        std::nullopt});
+                if (const auto reset =
+                        frame.container_output_defaults[index]) {
+                    process_.operations.emplace_back(
+                        CopyContainerRegister{
+                            frame.container_arguments[index],
+                            *reset});
+                } else {
+                    process_.operations.emplace_back(
+                        DeleteContainer{
+                            frame.container_arguments[index],
+                            std::nullopt});
+                }
                 continue;
             }
+            const auto formal_type =
+                container_type(formal.type, formal.span);
+            if (!formal_type) {
+                return;
+            }
             const auto actual =
-                lower_container_expression(
-                    statement.task_arguments[index]);
+                formal_type->fixed
+                    ? lower_static_container_assignment_value(
+                          statement.task_arguments[index],
+                          *formal_type)
+                    : lower_container_expression(
+                          statement.task_arguments[index]);
             if (!actual) {
                 return;
             }

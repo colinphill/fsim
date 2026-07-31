@@ -114,6 +114,7 @@ add_executable(
   elaboration/elaborator_vhdl_configuration_test.cpp
   elaboration/elaborator_sv_file_test.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_slice_call_test.cpp
 )
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
@@ -138,6 +139,7 @@ add_executable(
   fsim_sv_container_elaboration_tests
   elaboration/elaborator_sv_container_main.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_slice_call_test.cpp
 )
 fsim_configure_test(fsim_sv_container_elaboration_tests)
 target_link_libraries(

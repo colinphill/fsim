@@ -1116,6 +1116,8 @@ void test_logic9_at_level(
 void test_persistent_object_cache();
 void test_static_slice_consumer_cache_identity(
     const std::filesystem::path& cache_directory);
+void test_static_slice_call_cache_identity(
+    const std::filesystem::path& cache_directory);
 void test_rejections();
 void test_display_at_level(
     fsim::compiler::JitOptimizationLevel optimization,

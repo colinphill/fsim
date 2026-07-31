@@ -172,9 +172,18 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
          index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
         if (frame.argument_is_container[index]) {
+            const auto formal_type =
+                container_type(formal.type, formal.span);
+            if (!formal_type) {
+                return std::nullopt;
+            }
             const auto actual =
-                lower_container_expression(
-                    expression.operands[index]);
+                formal_type->fixed
+                    ? lower_static_container_assignment_value(
+                          expression.operands[index],
+                          *formal_type)
+                    : lower_container_expression(
+                          expression.operands[index]);
             if (!actual) {
                 return std::nullopt;
             }

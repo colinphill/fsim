@@ -759,6 +759,83 @@ endmodule
       "string and aggregate slice consumers diagnose before "
       "elaboration with stable recovery");
 
+  const auto slice_calls = parse_text(
+      "container-slice-calls.sv",
+      R"(
+module container_slice_calls;
+  logic [7:0] values[3:0];
+  logic [7:0] result[3:0];
+  logic [7:0] scalar;
+  function automatic logic [7:0] inspect(
+      input logic [7:0] value[1:0]);
+    return value.sum();
+  endfunction
+  task automatic transfer(
+      input logic [7:0] source[1:0],
+      output logic [7:0] destination[1:0],
+      inout logic [7:0] working[1:0]);
+    destination = source;
+    working = source;
+  endtask
+  initial begin
+    scalar = inspect(values[2:1]);
+    transfer(
+        values[3:2], result[1:0], values[1:0]);
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      slice_calls.ok(),
+      "direct static-array slice callable actuals parse");
+  const auto* slice_call_unit =
+      slice_calls.design.find(
+          UnitKind::VerilogModule,
+          "container_slice_calls");
+  require(
+      slice_call_unit != nullptr
+          && slice_call_unit->processes.size() == 1
+          && slice_call_unit->processes[0].statements.size() == 2,
+      "slice callable actual statements remain explicit HIR");
+  const auto& function_call =
+      slice_call_unit->processes[0].statements[0].value;
+  require(
+      function_call.kind == ExpressionKind::Call
+          && function_call.text == "inspect"
+          && function_call.operands.size() == 1
+          && function_call.operands[0].kind
+              == ExpressionKind::Slice
+          && function_call.operands[0].text == ":"
+          && function_call.operands[0].operands.size() == 3
+          && function_call.operands[0].operands[0].text
+              == "values"
+          && function_call.operands[0].operands[1].text == "2"
+          && function_call.operands[0].operands[2].text == "1"
+          && function_call.operands[0].span.source_name
+              == "container-slice-calls.sv"
+          && !function_call.operands[0].span.empty(),
+      "function slice actual retains direct source-spanned colon HIR");
+  const auto& task_call =
+      slice_call_unit->processes[0].statements[1];
+  require(
+      task_call.kind == StatementKind::TaskCall
+          && task_call.task_name == "transfer"
+          && task_call.task_arguments.size() == 3
+          && std::ranges::all_of(
+              task_call.task_arguments,
+              [](const auto& actual) {
+                return actual.kind == ExpressionKind::Slice
+                    && actual.text == ":"
+                    && actual.operands.size() == 3
+                    && actual.operands[0].kind
+                        == ExpressionKind::Identifier
+                    && actual.span.source_name
+                        == "container-slice-calls.sv"
+                    && !actual.span.empty();
+              }),
+      "task input, output, and inout slice actuals remain distinct "
+      "source-spanned colon HIR");
+
   const auto invalid = parse_text(
       "container-invalid.sv",
       R"(
