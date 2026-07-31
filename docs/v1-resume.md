@@ -4,6 +4,8 @@
 This is the short entry point for resuming v1 implementation. The
 [implementation plan](implementation-plan.md) remains the chronological record,
 and the [feature matrix](feature-matrix.md) remains the release authority.
+The temporary [reboot checkpoint](v1-resume-wip.md) records the exact active
+work boundary and must be read next while it exists.
 
 ## Snapshot
 
