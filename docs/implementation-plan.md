@@ -4917,6 +4917,76 @@ container differential in 230.95 seconds. Release passed all 59 tests in
 58.79 seconds, on 2026-07-31. Batch 89 is not a ten-batch GitHub
 CI-inspection boundary, so no Actions run was inspected.
 
+### Ninetieth feature batch — bounded static-array slice ordering mutation
+
+Direct direction-preserving one-dimensional integral static-array slices now
+serve as writable receivers for the existing bounded `reverse`, `sort`, and
+`rsort` method statements. The frontend retains each receiver as the same
+compact source-spanned colon `Slice` HIR used by assignment, consumers, and
+callable actuals. Optional implicit or named `with` key expressions remain
+ordinary source-spanned operands of the method call.
+
+Lowering validates the direct base and locally constant selected range, then
+materializes only that range into its exact selected `ContainerType`.
+`OrderContainer` mutates this process-local snapshot. `reverse` swaps selected
+ordinal positions only; unkeyed `sort` and `rsort` reuse the deterministic
+stable two-/four-state element order. Keyed ordering binds the selected
+element profile and exposes the selected signed declared index through
+`.index`; the existing runtime kernel computes every key once from the
+original selected snapshot and retains equal-key order.
+
+After ordering completes, lowering copies the caller's whole array into a
+replacement, merges all selected elements into that replacement by declared
+ordinal mapping, and commits one whole-container copy. Module-object or
+writable-port writeback occurs only after that final commit. Unselected
+elements therefore remain unchanged, no partial ordering is observable, and
+exact signed, two-/four-state, and X/Z bits survive without element conversion
+or packed reinterpretation.
+
+Positive evidence covers explicit receiver, iterator, and key HIR; descending
+and ascending selected ranges; `reverse`, stable ascending sort, stable
+descending sort, implicit and named index keys, equal-key stability, exact
+X/Z order and preservation, surrounding-element nonmutation, module objects,
+writable static ports through nested/generated hierarchy, and automatic tasks
+after suspension. The dedicated elaboration fixture verifies that every
+`OrderContainer` targets a selected-range register and is followed by a
+whole-copy/merge/whole-commit sequence. Interpreter, LLVM O0, and LLVM O2
+agree through the expanded cold/warm application differential.
+
+Negative evidence covers read-only input ports, runtime or unknown bounds,
+reversed/out-of-range and indexed selections, dynamic and indirect receivers,
+unsupported key graphs, iterator collisions, and the existing
+multidimensional, sliced module-port, and cross-language boundaries through
+stable slice, ordering, and port diagnostics.
+
+Native-object schema 42 and container semantic revision 18 carry selected
+range/profile, ordering mode, optional key graph, atomic merge/commit
+operations, and source provenance. A dedicated cache matrix varies selected
+range, element width, ordering direction, key constants, commit shape, and
+source line. No new SimIR operation, runtime callback, native ABI slot, or
+public API was required.
+
+The diagnostic catalog still covers 1,222 production codes and the source gate
+covers 290 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 329.46 seconds, including scoped locals in 0.90 seconds and the expanded
+container differential in 260.58 seconds. Release passed all 59 tests in
+98.66 seconds, including scoped locals in 0.80 seconds and containers in
+67.70 seconds, on 2026-07-31.
+
+The mandatory Batch 90 non-documentation CI inspection began with run
+`30611906784` for feature commit `d071d98`. Windows MSVC Debug exposed an
+oversized application-test string literal; commit `cb63805` split the
+generated SystemVerilog fixture into three compiler-safe writes. Replacement
+run `30612954452` passed that original build point, then Windows MSVC LLVM
+Debug rejected implicit `int` to `std::uint8_t` optional construction in the
+slice-cache matrix. Commit `eaf4842` made every affected byte constant
+explicitly typed, and the focused exact-LLVM test passed locally. Replacement
+run `30613588803` is the authoritative in-flight boundary run. At the reboot
+checkpoint all 12 jobs had initialized and reached their build phase without
+another failure; resume by inspecting or watching that run before declaring
+the boundary green.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

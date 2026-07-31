@@ -151,10 +151,18 @@ including after suspension, while every output formal begins each call with
 its exact typed default. Exact width, signedness, state domain, and X/Z bits
 remain unchanged through module objects, writable ports, and nested/generated
 hierarchy.
+Direct writable slices also accept `reverse()`, `sort()`, and `rsort()`, with
+the same optional implicit or named `with` keys as whole-container ordering.
+Only the selected ordinal range is reordered. Keys see the selected signed
+declared `.index`, are computed once from the selected snapshot, and retain
+equal-key order. The finished selected value is merged into one whole-array
+replacement, leaving surrounding elements unchanged and preserving exact X/Z
+state through module objects, writable ports, generated hierarchy, and tasks
+after suspension.
 Variable or unknown bounds, direction reversal, indexed `+:`/`-:` unpacked
-selections, indirect or mutating slice receivers, sliced module-port actuals,
-slice returns, multidimensional and nonstatic-container slices, element
-conversion, and cross-language slices remain unsupported.
+selections, indirect slice receivers, sliced module-port actuals, slice
+returns, multidimensional and nonstatic-container slices, element conversion,
+and cross-language slices remain unsupported.
 Direct writable static arrays, dynamic arrays, queues, and bounded queues also
 accept no-argument `reverse()` plus `sort()` and `rsort()` method statements
 with an optional parenthesized `with` key.
