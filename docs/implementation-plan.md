@@ -4732,6 +4732,69 @@ tests in 61.92 seconds, including scoped locals in 0.81 seconds and containers
 in 30.66 seconds, on 2026-07-30. Batch 86 is not a ten-batch GitHub
 CI-inspection boundary, so no Actions run was inspected.
 
+### Eighty-seventh feature batch — bounded one-dimensional static-array slices
+
+SystemVerilog assignment targets and values now contextually distinguish a
+direct static-array colon slice from an otherwise identical packed
+part-select. The existing parser HIR was already sufficient: both target and
+value retain source-spanned `Slice` nodes with explicit base, left, and right
+operands. Elaboration admits only direct one-dimensional integral static
+arrays, rejects indexed `+:`/`-:` unpacked selections, folds both bounds to
+known signed 32-bit indices, and requires an in-range subrange in the
+declaration's direction.
+
+Each accepted selection derives a process-local `ContainerType` with the
+selected declared left/right bounds and the base array's exact element width,
+signedness, and two-/four-state domain. It allocates no module object identity.
+Source and destination counts and profiles must match exactly. Elements map by
+ordinal left-to-right position, so ascending and descending arrays with
+different numeric indices interoperate without packed reinterpretation or
+element conversion.
+
+A direct RHS slice first materializes into its selected-range register through
+existing `ContainerRead` and `ContainerWrite` operations. An LHS slice then
+materializes a destination-selected staging value, copies the current whole
+array into a full replacement, merges the selected values, and commits that
+replacement with one whole-container copy. The complete RHS therefore
+precedes any replacement work, overlapping self-assignment is deterministic,
+and object or port writeback cannot expose a partial update. No new SimIR
+operation, runtime callback, public ABI slot, or recursively embedded frontend
+field was required; the implementation is isolated in
+`lowerer_sv_container_slices.cpp` to preserve source-size and MSVC Debug stack
+budgets.
+
+Positive evidence covers slice-to-whole, whole-to-slice, slice-to-slice,
+descending and ascending declarations, differing declared indices, overlap,
+exact X/Z state, signed two-state values, module objects, writable static port
+aliases through nested hierarchy, automatic function locals/formals, and
+inout tasks after suspension. A dedicated operation-order fixture proves all
+source and selected staging reads/writes precede the inverse whole-copy commit.
+The expanded application agrees across the interpreter and LLVM O0/O2,
+including cold/warm cache reuse and debugger inspection across suspension.
+
+Negative evidence covers runtime and unknown bounds, direction reversal,
+out-of-range selections, unequal counts, width/state/signedness mismatches,
+dynamic arrays, queues, associative arrays, assignment patterns as slice
+values, indexed unpacked selections, indirect targets, input-port writes, and
+sliced port actuals. Existing multidimensional, aggregate/string-element, and
+cross-language boundary diagnostics remain in force. Six new stable
+`FSIM-ELAB-SVSLICE-*` diagnostics identify the contextual failures.
+
+Native-object schema 39 and container semantic revision 15 carry both selected
+ranges/directions, exact profiles, canonical snapshot/commit operations, and
+statement source provenance. Dedicated cache cases independently vary source
+range, destination range, element width, state domain, signedness, overlap
+staging, and source line.
+
+The diagnostic catalog now covers 1,222 production codes and the source gate
+covers 287 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 220.82 seconds, including scoped locals in 0.89 seconds and the expanded
+container differential in 150.97 seconds. Release passed all 59 tests in
+63.49 seconds, including scoped locals in 0.80 seconds and containers in
+32.84 seconds, on 2026-07-30. Batch 87 is not a ten-batch GitHub
+CI-inspection boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

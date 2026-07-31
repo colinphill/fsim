@@ -69,6 +69,7 @@ module containers;
     lookup = '{-1: 16'h1234, 3: 16'h5678};
     image = '{default: 8'h55, 6: 8'h66};
     ascending = '{1: 4'hd, default: 4'ha, -2: 4'hc};
+    image[6:5] = image[5:4];
     values = new[3];
     pending.push_front(8'h11);
     bounded.delete();
@@ -246,6 +247,37 @@ endmodule
       "$readmemh/$readmemb retain target, radix, and optional bounds");
   const auto& query_statements =
       unit->processes[0].statements;
+  const auto slice_assignment =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.target.kind
+                    == ExpressionKind::Slice
+                && statement.value.kind
+                    == ExpressionKind::Slice;
+          });
+  require(
+      slice_assignment != query_statements.end()
+          && slice_assignment->target.text == ":"
+          && slice_assignment->value.text == ":"
+          && slice_assignment->target.operands.size() == 3
+          && slice_assignment->value.operands.size() == 3
+          && slice_assignment->target.operands[0].kind
+              == ExpressionKind::Identifier
+          && slice_assignment->target.operands[0].text == "image"
+          && slice_assignment->target.operands[1].text == "6"
+          && slice_assignment->target.operands[2].text == "5"
+          && slice_assignment->value.operands[0].text == "image"
+          && slice_assignment->value.operands[1].text == "5"
+          && slice_assignment->value.operands[2].text == "4"
+          && slice_assignment->target.span.source_name
+              == "containers.sv"
+          && slice_assignment->value.span.source_name
+              == "containers.sv"
+          && !slice_assignment->target.span.empty()
+          && !slice_assignment->value.span.empty(),
+      "static-array target and value slices remain distinct "
+      "source-spanned colon HIR with explicit bounds");
   const auto has_query =
       [&](const std::string_view name) {
         return std::ranges::any_of(

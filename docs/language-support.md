@@ -122,6 +122,23 @@ non-static kind and no destination is partially replaced. Positional mixing
 with keyed/default members, defaults outside this static subset, type-keyed or
 nested patterns, indirect targets, and nonintegral elements remain
 unsupported.
+Direct one-dimensional integral static arrays also support blocking
+`[left:right]` slice assignment when both locally constant known bounds form
+an in-range subrange in the array's declared direction. A slice retains its
+selected declared range and exact element profile in a process-local typed
+value. Slice-to-whole, whole-to-slice, and slice-to-slice assignment require
+equal element counts and identical width, signedness, and two-/four-state
+domains; they map elements by ordinal left-to-right position even when source
+and destination indices or directions differ. The complete RHS is
+snapshotted before a selected destination is merged into one whole-array
+replacement, so overlapping self-assignment and object/port writeback are
+atomic and preserve X/Z state. Module objects, writable same-language static
+ports through nested/generated hierarchy, automatic function values, and
+inout task values across suspension execute in interpreter and LLVM O0/O2.
+Variable or unknown bounds, direction reversal, indexed `+:`/`-:` unpacked
+selections, slice queries or method receivers, sliced port actuals,
+multidimensional and nonstatic-container slices, element conversion, and
+cross-language slices remain unsupported.
 Direct writable static arrays, dynamic arrays, queues, and bounded queues also
 accept no-argument `reverse()` plus `sort()` and `rsort()` method statements
 with an optional parenthesized `with` key.

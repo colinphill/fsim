@@ -918,6 +918,34 @@ private:
         const Expression& expression);
     std::optional<ContainerRegisterId> lower_container_expression(
         const Expression& expression);
+    struct StaticContainerSlice {
+        ContainerType base_type;
+        ContainerType selected_type;
+    };
+    struct LoweredStaticContainer {
+        ContainerRegisterId value{};
+        ContainerType type;
+    };
+    std::optional<StaticContainerSlice>
+    static_container_slice(
+        const Expression& expression);
+    std::optional<LoweredStaticContainer>
+    lower_static_container_value(
+        const Expression& expression);
+    std::optional<ContainerRegisterId>
+    lower_static_container_assignment_value(
+        const Expression& expression,
+        const ContainerType& destination_type);
+    bool lower_static_container_slice_assignment(
+        const Expression& target_expression,
+        const Expression& value_expression,
+        ContainerRegisterId target,
+        const ContainerType& target_type);
+    void copy_static_container_ordinals(
+        ContainerRegisterId destination,
+        const ContainerType& destination_range,
+        ContainerRegisterId source,
+        const ContainerType& source_range);
     [[nodiscard]] bool is_container_expression(
         const Expression& expression) const;
     [[nodiscard]] std::optional<ContainerType> container_type(

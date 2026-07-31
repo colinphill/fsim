@@ -561,6 +561,17 @@ using namespace elaboration_detail;
                     }
                     process_.operations.emplace_back(
                         CopyContainerRegister{target, *value});
+                } else if (
+                    statement.value.kind
+                    == ExpressionKind::Slice) {
+                    const auto value =
+                        lower_static_container_assignment_value(
+                            statement.value, *runtime_type);
+                    if (!value) {
+                        return;
+                    }
+                    process_.operations.emplace_back(
+                        CopyContainerRegister{target, *value});
                 } else {
                     const bool is_new =
                         statement.value.kind
@@ -664,6 +675,16 @@ using namespace elaboration_detail;
                             : runtime_type->fixed
                                   || is_signed_expression(
                                       statement.target.operands[1])});
+            } else if (
+                statement.target.kind == ExpressionKind::Slice
+                && statement.target.operands.size() == 3) {
+                if (!lower_static_container_slice_assignment(
+                        statement.target,
+                        statement.value,
+                        target,
+                        *runtime_type)) {
+                    return;
+                }
             } else {
                 report(
                     "FSIM-ELAB-SVCONTAINER-011",

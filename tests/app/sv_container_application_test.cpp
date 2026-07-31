@@ -509,6 +509,12 @@ module static_port_leaf #(
         RIGHT: source[RIGHT] + 8'h02,
         default: 8'h20,
         LEFT: source[LEFT] + 8'h01};
+    result[LEFT - 1:RIGHT + 1] =
+        source[LEFT - 2:RIGHT];
+    assert (result[LEFT] == 8'h32);
+    assert ($isunknown(result[LEFT - 1]));
+    assert (result[RIGHT + 1] == 8'h04);
+    assert (result[RIGHT] == 8'h06);
     shared[-1] = 4'ha;
     shared[1] = 4'hc;
   end
@@ -725,6 +731,9 @@ module container_top;
         0: source[0]};
     assert (copy[2] == 8'h55);
     assert (copy[1] == 8'h55);
+    copy[2:1] = source[1:0];
+    assert (copy[2] == source[1]);
+    assert (copy[1] == source[0]);
     return copy[3];
   endfunction
   task automatic mutate(inout byte target[$:2]);
@@ -809,6 +818,10 @@ module container_top;
       inout logic [7:0] target[3:0]);
     target[2] = 8'h11;
     #1;
+    target[3:1] = target[2:0];
+    assert (target[3] == 8'h11);
+    assert (target[2] == 8'h03);
+    assert (target[1] == 8'ha5);
     target = '{
         3: 8'h22,
         default: 8'bxxxxzzzz,
@@ -855,8 +868,9 @@ module container_top;
     binary = '{8'h01, 8'b10z1, 8'h03};
     $readmemh("image.hex", memory);
     $readmemb("image.bin", binary, -1, 1);
+    memory[2:1] = binary[0:1];
     assert (memory[0] == 8'ha5);
-    assert ($isunknown(memory[1]));
+    assert (memory[1] == 8'h03);
     assert ($isunknown(memory[2]));
     assert (memory[3] == 8'h0f);
     assert (keyed_static_value(memory) == 8'h0f);
@@ -1039,8 +1053,8 @@ module container_top;
                 ? pending_item : 0) == pending[1]);
     mutate_memory(memory);
     assert (port_result[3] == 8'h32);
-    assert (port_result[2] == 8'h20);
-    assert (port_result[1] == 8'h20);
+    assert (port_result[2] == 8'h00);
+    assert (port_result[1] == 8'h04);
     assert (port_result[0] == 8'h06);
     assert (port_shared[-1] == 4'ha);
     assert (port_shared[0] == 0);
@@ -1137,10 +1151,10 @@ endmodule
     assert(
         compiled.port_result.elements[0].low_word().aval
             == 0x32
-        && compiled.port_result.elements[1].low_word().aval
-            == 0x20
+        && compiled.port_result.elements[1].to_msb_string()
+            == "XXXXXXXX"
         && compiled.port_result.elements[2].low_word().aval
-            == 0x20
+            == 0x04
         && compiled.port_result.elements[3].low_word().aval
             == 0x06
         && compiled.port_shared.elements[0].low_word().aval

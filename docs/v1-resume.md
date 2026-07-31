@@ -9,18 +9,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-30.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-86 bounded SystemVerilog
-  static-array assignment-pattern defaults and signed index keys on top of the
-  feature-batch-85 named reduction-iterator handoff.
-- The source-size refactor is complete: all 286 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-87 bounded
+  one-dimensional SystemVerilog static-array slices on top of the
+  feature-batch-86 static default/index-key assignment-pattern handoff.
+- The source-size refactor is complete: all 287 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 212.40 seconds, and Release passed all 59 configured
-  tests in 61.92 seconds on 2026-07-30. Debug/Release scoped locals completed
-  in 0.89/0.81 seconds and the expanded container differential completed in
-  143.74/30.66 seconds.
-- The diagnostic catalog covers all 1,216 production codes.
+  configured tests in 220.82 seconds, and Release passed all 59 configured
+  tests in 63.49 seconds on 2026-07-30. Debug/Release scoped locals completed
+  in 0.89/0.80 seconds and the expanded container differential completed in
+  150.97/32.84 seconds.
+- The diagnostic catalog covers all 1,222 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -104,6 +104,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   interpreter/LLVM O0/O2, and schema-38 cache identity are covered without a
   public ABI change. Batch 86 is not a CI-inspection boundary, so no Actions
   run was inspected.
+- Batch 87 adds direct direction-preserving `[left:right]` selections of
+  one-dimensional integral static arrays as contextual selected-range values.
+  Slice-to-whole, whole-to-slice, and slice-to-slice assignment map exact
+  compatible elements ordinally across differing declared indices and
+  directions. Typed source snapshots plus selected staging and one whole-array
+  commit make overlap atomic while preserving signed bit and four-state X/Z
+  values through objects, ports, hierarchy, automatic functions, and tasks
+  after suspension. Schema 39 and container semantic revision 15 record both
+  ranges, profiles, operations, and provenance without a public ABI change.
+  Batch 87 is not a CI-inspection boundary, so no Actions run was inspected.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -115,7 +125,7 @@ elaboration, interpreter, and JIT evidence.
 | Milestone | Status | Current result |
 |---|---|---|
 | 1. Platform and semantic spine | In progress | Cross-platform C++20/CMake foundation, exact LLVM adapter, dependencies, diagnostics, manifest, native ABIs, Tcl, and CI definitions exist. Unicode/path and remaining console-interrupt validation are open. |
-| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, strings, text files, dynamic arrays/queues/integral-key associative arrays, one-dimensional static memories with `$readmem*`, direct same-language static and dynamic whole-container module ports, unpacked-container bound/size/bit/dimension queries, positional container patterns plus static default/index-key patterns, reductions with bounded pure implicit/named-iterator `with` transformations, deterministic ordering with optional bounded pure `with` keys, extrema/uniqueness locators with optional bounded pure `with` transformations, and predicate locators with named iterators and signed declared/current indices, automatic integral/string/container functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, sliced/multidimensional and cross-language container boundaries, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
+| 2. Internal vertical slice | In progress, near architecture gate | Interpreter, hybrid LLVM JIT, cache, deterministic scheduler, mixed hierarchy, VCD, debugger, and examples execute. Bounded typed 1–64-bit SystemVerilog constants, same-language type parameters, strings, text files, dynamic arrays/queues/integral-key associative arrays, one-dimensional static memories with `$readmem*`, direct same-language static and dynamic whole-container module ports, direct compatible static-array slice assignment, unpacked-container bound/size/bit/dimension queries, positional container patterns plus static default/index-key patterns, reductions with bounded pure implicit/named-iterator `with` transformations, deterministic ordering with optional bounded pure `with` keys, extrema/uniqueness locators with optional bounded pure `with` transformations, and predicate locators with named iterators and signed declared/current indices, automatic integral/string/container functions and suspending tasks, full unsigned-64 values, and entity-level VHDL-2008 unclassified interface type, bounded interface function/procedure/package generics, generic subprogram templates/instances, recursive block/generate configurations and references, and scoped/package-visible overloaded scalar/vector and composite component declarations with value/type/function/procedure/package generics, deterministic default binding, typed component input defaults, and disconnected open output-family ports now have interpreter/O0/O2/cache evidence; wider/complete typing, remaining slice consumers, multidimensional and cross-language container boundaries, remaining VHDL hierarchy/generic semantics, source metadata, and complete differential coverage still block the gate. |
 | 3. Near-full synthesizable frontends | Pending | Broad bounded VHDL and SV execution exists, but the explicit language-specific typed HIR/DesignIR layering and full promised language semantics are incomplete. |
 | 4. Procedural testbenches, SystemC, visibility | In progress | Extensive procedural, SystemC, C API, debugger, Tcl, and trace slices execute. Dynamic testbench data, fork/event completeness, richer SystemC behavior, and remaining API metadata are open. |
 | 5. Release hardening | In progress | Cache hardening, diagnostics, sanitizer/fuzz jobs, cross-platform workflows, install smoke tests, and normalized traces exist. Full platform closure, benchmarks, imported tests/packages, and all matrix rows remain open. |
@@ -363,7 +373,14 @@ callable/port/suspension behavior, and schema-29 native parity. Static patterns
 also accept exactly one default plus signed-32 locally constant index keys,
 with direction-aware fill/override, exact X/Z conversion, the same atomic
 temporary path, and schema-38 native identity across objects, ports,
-hierarchy, automatic callables, and suspension. Direct
+hierarchy, automatic callables, and suspension. Direct compatible
+one-dimensional static-array slices now retain selected declared ranges,
+ordinally map slice-to-whole, whole-to-slice, and slice-to-slice assignments
+across differing indices/directions, and preserve exact signed bit or
+four-state X/Z elements. Typed source snapshots, selected staging, and one
+whole-array replacement make overlap atomic across objects, writable ports,
+hierarchy, automatic functions, and tasks after suspension through schema-39
+interpreter/native/cache identity. Direct
 no-argument `sum`, `product`, `and`, `or`, and `xor` methods now preserve
 the exact element type, use explicit empty identities and shared four-state
 semantics, reduce canonical storage order across every supported container
@@ -395,7 +412,7 @@ element alternatives, logical/comparison composition, and one four-state
 conditional mask. Named and implicit spellings lower to identical semantic
 graphs. Each graph is evaluated once in declared/current order, preserves
 empty identities and nonmutation, and uses validated schema-35 graph semantics
-within the current schema-38 interpreter/native/cache identity.
+within the current schema-39 interpreter/native/cache identity.
 `sort` and `rsort` now accept one optional bounded pure key graph with
 implicit `item` or one named iterator and direct signed-32 `.index`. Every key
 is evaluated once against the original declared/current index before stable
@@ -411,17 +428,16 @@ first original extremal element; uniqueness returns the first original element
 or signed original index for each exact four-state key. No-`with`, empty,
 capacity, alias, object/port/callable, hierarchy, and suspension behavior
 remain intact through schema-37 locator semantics carried forward by the
-current schema-38 interpreter/native/cache identity.
+current schema-39 interpreter/native/cache identity.
 Unicode
 code-point semantics, multidimensional or
 aggregate/string-element containers, sliced/expression port actuals,
 cross-language container boundaries, and unrestricted allocation remain
 separate release-gate work.
 
-## Next ten-feature batch
+## Completed feature batch 87
 
-Resume with **feature batch 87: bounded one-dimensional static-array
-slices**:
+Feature batch 87 completed **bounded one-dimensional static-array slices**:
 
 1. Contextually retain a direct static-container `[left:right]` selection as
    source-spanned unpacked-slice HIR distinct from a packed part-select.
@@ -455,12 +471,11 @@ indexed `+:`/`-:` unpacked slices, slice queries or methods, sliced module-port
 actuals, multidimensional nesting, dynamic/queue/associative slices, element
 conversion, and cross-language slices remain separate release-gate work.
 
-### Batch 87 preimplementation checkpoint
+### Archived Batch 87 implementation design
 
-No batch-87 implementation edits had been made when this checkpoint was
-recorded. The branch and its upstream were both at
-`a42fa1a760f5a111b835445ccf68c28994a18c91`; begin from that clean Batch 86
-baseline unless a newer pushed commit supersedes it.
+This design checkpoint was recorded against the clean Batch 86 baseline at
+`a42fa1a760f5a111b835445ccf68c28994a18c91` and guided the completed Batch 87
+implementation. The current pushed commit supersedes that baseline.
 
 The initial code-path audit established the following:
 
@@ -474,8 +489,8 @@ The initial code-path audit established the following:
   in `src/elaboration/lowerer_expression.cpp`;
 - the unpacked-container assignment dispatch is also in
   `src/elaboration/lowerer_assignment.cpp`: it resolves the base identifier
-  before container lookup, handles whole and indexed targets, but currently
-  rejects a slice target with `FSIM-ELAB-SVCONTAINER-011`;
+  before container lookup and, at the checkpoint, handled whole and indexed
+  targets but rejected a slice target with `FSIM-ELAB-SVCONTAINER-011`;
 - `lower_container_expression` in
   `src/elaboration/lowerer_sv_containers.cpp` accepts only a direct identifier
   and returns either its container register or an object snapshot;
@@ -540,10 +555,45 @@ Evidence should include:
   cold/warm schema-39 cache identity, diagnostics-catalog coverage, and the
   2,000-line source budget.
 
-Batch 87 is not a CI-inspection boundary. Run focused tests with build
-parallelism 8 while implementing it, then both full exact-LLVM Debug and
-Release gates after all ten features. Commit and push the completed batch, but
-do not monitor its documentation-only workflow.
+Batch 87 is not a CI-inspection boundary. Its focused evidence and both full
+exact-LLVM Debug and Release gates passed with eight-worker builds. No Actions
+run was inspected.
+
+## Next ten-feature batch
+
+Resume with **feature batch 88: bounded read-only static-array slice
+consumers**:
+
+1. Reuse the Batch 87 contextual selected-range value for direct static-array
+   slice expressions outside assignment without adding recursive HIR storage.
+2. Support `$left`, `$right`, `$low`, `$high`, and `$increment` on a direct
+   slice using its selected declared range and direction.
+3. Support `$size`, `$bits`, `$dimensions`, and `$unpacked_dimensions` on a
+   direct slice with the same optional constant-dimension policy as whole
+   containers.
+4. Reduce a direct slice through `sum`, `product`, `and`, `or`, and `xor`,
+   preserving exact empty, width, signedness, and four-state behavior.
+5. Apply implicit or named reduction transformations to a slice, exposing the
+   slice's signed declared indices through `.index`.
+6. Produce compatible queue results from slice `min`, `max`, `unique`, and
+   `unique_index`, retaining original selected elements or indices.
+7. Run all six `find*` predicate locators on a slice with X/Z-false selection
+   and selected declared-index results.
+8. Carry these read-only consumers through module objects, direct input and
+   writable ports, nested/generated hierarchy, automatic functions, and tasks
+   across suspension in interpreter, LLVM O0, and LLVM O2.
+9. Diagnose unsupported indirect, variable/indexed, multidimensional,
+   nonstatic, aggregate/string, mutating ordering, sliced port-actual, and
+   cross-language slice consumers with stable frontend/elaboration coverage.
+10. Version selected receiver range/profile, query or method operation,
+    transformation/predicate graph, and source provenance in schema 40; add
+    full positive/negative/cache evidence and push the non-boundary batch.
+
+Keep Batch 88 read-only after materializing the direct slice snapshot.
+Assignment remains the Batch 87 path. Mutating `reverse`/`sort`/`rsort` slice
+receivers, slice arguments or returns at callable/port boundaries, variable or
+indexed unpacked slices, multidimensional/nonstatic containers, element
+conversion, and cross-language slices remain separate release-gate work.
 
 ## Working cadence
 
@@ -604,10 +654,11 @@ locator-method handoff, Batch 80 predicate-locator handoff, and Batch 81
 named-iterator/index-predicate handoff, followed by the Batch 82 bounded
 reduction-transformation handoff and the Batch 83 bounded ordering-key
 handoff, followed by the Batch 84 bounded locator-transformation handoff.
-The Batch 85 named-reduction-iterator handoff and Batch 86 bounded static
-default/index-key assignment-pattern handoff follow it. Treat the newest pushed
-commit on the same branch as the authoritative continuation and read this file
-from that checkout before doing work.
+The Batch 85 named-reduction-iterator handoff, Batch 86 bounded static
+default/index-key assignment-pattern handoff, and Batch 87 bounded
+static-array-slice handoff follow it. Treat the newest pushed commit on the
+same branch as the authoritative continuation and read this file from that
+checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -638,7 +689,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 87 below and return to focused tests until its tenth feature.
+resume Batch 88 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -656,14 +707,13 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin batch 87 at item 1 above. Do not rerun batch 86's full regression
+3. Begin batch 88 at item 1 above. Do not rerun batch 87's full regression
    unless a later change can affect container query, construction, slicing,
    reduction, ordering, or locator semantics,
    object binding, runtime helpers, callable activation frames, debugger paths,
    cache identity, or execution.
-4. Keep batch-87 work within direct direction-preserving slices of
-   one-dimensional integral static arrays with exact compatible element
-   profiles.
+4. Keep batch-88 work within read-only consumers of direct
+   direction-preserving one-dimensional integral static-array slices.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -676,8 +726,8 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while batch 87 is in progress, extending the
-container tests as static-array slice coverage appears:
+Use a narrow test expression while batch 88 is in progress, extending the
+container tests as read-only static-array slice consumers appear:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
@@ -685,7 +735,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 86.
+recorded 59-test inventories are clean after feature batch 87.
 
 Before declaring any row complete, consult:
 

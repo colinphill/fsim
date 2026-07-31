@@ -1451,6 +1451,105 @@ void test_static_pattern_cache_identity(
   assert(cached_object_paths(cache_directory).size() == 8);
 }
 
+void test_static_slice_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  const auto make_process =
+      [](const std::int32_t source_left,
+         const std::int32_t destination_left,
+         const std::uint32_t element_width,
+         const bool two_state,
+         const bool signed_elements,
+         const bool overlap_snapshot,
+         const std::uint32_t source_line) {
+        ContainerType source;
+        source.element_width = element_width;
+        source.two_state = two_state;
+        source.signed_elements = signed_elements;
+        source.fixed = true;
+        source.index_left = source_left;
+        source.index_right = source_left - 1;
+        auto destination = source;
+        destination.index_left = destination_left;
+        destination.index_right = destination_left - 1;
+        Process process;
+        process.id = 32;
+        process.name = "cached_static_slice";
+        process.container_register_count = 3;
+        process.container_register_types = {
+            source, destination, destination};
+        process.operations.push_back(
+            DebugPoint{
+                DebugPointKind::statement,
+                SourceLocation{
+                    "cached_static_slice.sv",
+                    source_line,
+                    5}});
+        process.operations.push_back(
+            LoadConstant{
+                0,
+                PackedLogic4::from_aval_bval(
+                    32,
+                    static_cast<std::uint32_t>(
+                        source_left),
+                    0)});
+        process.operations.push_back(
+            ContainerRead{1, 0, 0, true});
+        process.operations.push_back(
+            LoadConstant{
+                2,
+                PackedLogic4::from_aval_bval(
+                    32,
+                    static_cast<std::uint32_t>(
+                        destination_left),
+                    0)});
+        process.operations.push_back(
+            ContainerWrite{1, 2, 1, true});
+        if (overlap_snapshot) {
+          process.operations.push_back(
+              CopyContainerRegister{2, 1});
+          process.operations.push_back(
+              CopyContainerRegister{1, 2});
+        }
+        process.register_count = 3;
+        process.operations.push_back(Halt{});
+        return process;
+      };
+  constexpr std::string_view symbol =
+      "cached_static_slice";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_cache_statistics(
+            jit, hits, misses, misses);
+      };
+  materialize(
+      make_process(4, 2, 8, false, false, true, 17), 0, 1);
+  materialize(
+      make_process(4, 2, 8, false, false, true, 17), 1, 0);
+  materialize(
+      make_process(3, 2, 8, false, false, true, 17), 0, 1);
+  materialize(
+      make_process(4, 1, 8, false, false, true, 17), 0, 1);
+  materialize(
+      make_process(4, 2, 4, false, false, true, 17), 0, 1);
+  materialize(
+      make_process(4, 2, 8, true, false, true, 17), 0, 1);
+  materialize(
+      make_process(4, 2, 8, false, true, true, 17), 0, 1);
+  materialize(
+      make_process(4, 2, 8, false, false, false, 17), 0, 1);
+  materialize(
+      make_process(4, 2, 8, false, false, true, 18), 0, 1);
+  assert(cached_object_paths(cache_directory).size() == 8);
+}
+
 void test_container_predicate_cache_identity(
     const std::filesystem::path& cache_directory) {
   const auto make_process =
@@ -1866,6 +1965,8 @@ void test_persistent_object_cache() {
   test_signal_kind_cache_identity(root / "signal-kind");
   test_static_pattern_cache_identity(
       root / "static-pattern");
+  test_static_slice_cache_identity(
+      root / "static-slice");
   test_container_predicate_cache_identity(
       root / "container-predicate");
   test_container_reduction_cache_identity(

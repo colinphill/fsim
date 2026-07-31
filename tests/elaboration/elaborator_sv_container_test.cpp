@@ -671,6 +671,227 @@ endmodule
       && atomic_type.index_left == 2
       && atomic_type.index_right == 0);
 
+  const auto slice_parsed = fsim::frontend::parse_text(
+      "static-slices.sv",
+      R"(
+module static_slices;
+  logic [7:0] down[5:0];
+  logic [7:0] pair[1:0];
+  logic [7:0] up[-2:3];
+  bit signed [7:0] signed_down[1:0];
+  bit signed [7:0] signed_up[-1:0];
+  initial begin
+    down = '{8'h55, 8'h44, 8'h33, 8'h22, 8'h11, 8'h00};
+    pair = down[4:3];
+    assert (pair[1] == 8'h44);
+    assert (pair[0] == 8'h33);
+    down[2:1] = pair;
+    assert (down[2] == 8'h44);
+    assert (down[1] == 8'h33);
+    down = '{
+        8'h55, 8'h44, 8'b10xz0011,
+        8'h22, 8'h11, 8'h00};
+    down[4:2] = down[3:1];
+    assert ($isunknown(down[4]));
+    assert (down[3] == 8'h22);
+    assert (down[2] == 8'h11);
+    up = '{default: 8'h00};
+    up[-1:1] = down[4:2];
+    assert ($isunknown(up[-1]));
+    assert (up[0] == 8'h22);
+    assert (up[1] == 8'h11);
+    signed_down = '{8'hfe, 8'h01};
+    signed_up = signed_down[1:0];
+    assert (signed_up[-1] == 8'hfe);
+    assert (signed_up[0] == 8'h01);
+    signed_down[1:0] = signed_up;
+    assert (signed_down[1] == 8'hfe);
+    assert (signed_down[0] == 8'h01);
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(slice_parsed.ok());
+  const auto slice_elaborated =
+      fsim::elaboration::elaborate(
+          slice_parsed.design, "static_slices");
+  if (!slice_elaborated.ok()) {
+    for (const auto& diagnostic :
+         slice_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(slice_elaborated.ok());
+  assert(
+      slice_elaborated.design->container_objects().size()
+      == 5);
+  const auto& slice_process =
+      slice_elaborated.design->processes().front();
+  const auto has_selected_type =
+      [&](const std::int32_t left,
+          const std::int32_t right) {
+        return std::ranges::any_of(
+            slice_process.container_register_types,
+            [&](const auto& type) {
+              return type.fixed
+                  && type.element_width == 8
+                  && !type.two_state
+                  && !type.signed_elements
+                  && type.index_left == left
+                  && type.index_right == right;
+            });
+      };
+  assert(
+      has_selected_type(4, 3)
+      && has_selected_type(2, 1)
+      && has_selected_type(4, 2)
+      && has_selected_type(3, 1)
+      && has_selected_type(-1, 1));
+  assert(std::ranges::any_of(
+      slice_process.container_register_types,
+      [](const auto& type) {
+        return type.fixed
+            && type.element_width == 8
+            && type.two_state
+            && type.signed_elements
+            && type.index_left == 1
+            && type.index_right == 0;
+      }));
+  assert(
+      std::ranges::count_if(
+          slice_process.operations,
+          [](const auto& operation) {
+            return std::holds_alternative<
+                ContainerRead>(operation);
+          })
+      >= 13);
+  assert(
+      std::ranges::count_if(
+          slice_process.operations,
+          [](const auto& operation) {
+            return std::holds_alternative<
+                ContainerWrite>(operation);
+          })
+      >= 13);
+  auto slice_interpreter =
+      slice_elaborated.design->create_interpreter();
+  const auto slice_result = slice_interpreter->run();
+  assert(
+      slice_result.status
+          == fsim::runtime::RunStatus::completed
+      && slice_result.time == 0);
+  const auto& down_result =
+      slice_interpreter->container_object_value(
+          slice_elaborated.design->container_objects()[0].id);
+  const auto& pair_result =
+      slice_interpreter->container_object_value(
+          slice_elaborated.design->container_objects()[1].id);
+  const auto& up_result =
+      slice_interpreter->container_object_value(
+          slice_elaborated.design->container_objects()[2].id);
+  assert(
+      down_result.elements.size() == 6
+      && down_result.elements[0].low_word().aval == 0x55
+      && down_result.elements[1].low_word().aval == 0xa3
+      && down_result.elements[1].low_word().bval == 0x30
+      && down_result.elements[2].low_word().aval == 0x22
+      && down_result.elements[3].low_word().aval == 0x11
+      && down_result.elements[4].low_word().aval == 0x11
+      && down_result.elements[5].low_word().aval == 0x00
+      && pair_result.elements.size() == 2
+      && pair_result.elements[0].low_word().aval == 0x44
+      && pair_result.elements[1].low_word().aval == 0x33
+      && up_result.type.index_left == -2
+      && up_result.type.index_right == 3
+      && up_result.elements.size() == 6
+      && up_result.elements[1].low_word().aval == 0xa3
+      && up_result.elements[1].low_word().bval == 0x30
+      && up_result.elements[2].low_word().aval == 0x22
+      && up_result.elements[3].low_word().aval == 0x11);
+
+  const auto atomic_slice_parsed =
+      fsim::frontend::parse_text(
+          "static-slice-atomic.sv",
+          R"(
+module static_slice_atomic;
+  logic [7:0] target[3:0];
+  initial target[3:1] = target[2:0];
+endmodule
+)",
+          fsim::frontend::Language::SystemVerilog2017);
+  assert(atomic_slice_parsed.ok());
+  const auto atomic_slice_elaborated =
+      fsim::elaboration::elaborate(
+          atomic_slice_parsed.design,
+          "static_slice_atomic");
+  assert(atomic_slice_elaborated.ok());
+  const auto& atomic_slice_process =
+      atomic_slice_elaborated.design->processes().front();
+  std::vector<std::size_t> atomic_slice_reads;
+  std::vector<std::size_t> atomic_slice_writes;
+  std::vector<std::pair<
+      std::size_t, const CopyContainerRegister*>>
+      atomic_slice_copies;
+  std::size_t atomic_slice_object_write{};
+  for (std::size_t position = 0;
+       position
+           < atomic_slice_process.operations.size();
+       ++position) {
+    const auto& operation =
+        atomic_slice_process.operations[position];
+    if (std::holds_alternative<ContainerRead>(operation)) {
+      atomic_slice_reads.push_back(position);
+    } else if (
+        std::holds_alternative<ContainerWrite>(operation)) {
+      atomic_slice_writes.push_back(position);
+    } else if (
+        const auto* copy =
+            std::get_if<CopyContainerRegister>(&operation)) {
+      atomic_slice_copies.emplace_back(position, copy);
+    } else if (
+        std::holds_alternative<WriteContainerObject>(
+            operation)) {
+      atomic_slice_object_write = position;
+    }
+  }
+  assert(
+      atomic_slice_reads.size() == 9
+      && atomic_slice_writes.size() == 9
+      && atomic_slice_copies.size() == 2);
+  const auto [replacement_position, replacement_copy] =
+      atomic_slice_copies[0];
+  const auto [commit_position, commit_copy] =
+      atomic_slice_copies[1];
+  assert(
+      replacement_copy->destination
+          == commit_copy->source
+      && replacement_copy->source
+          == commit_copy->destination
+      && std::ranges::all_of(
+          atomic_slice_reads,
+          [&](const auto position) {
+            return position < replacement_position
+                || (position > replacement_position
+                    && position < commit_position);
+          })
+      && std::ranges::all_of(
+          atomic_slice_writes,
+          [&](const auto position) {
+            return position < commit_position;
+          })
+      && std::ranges::none_of(
+          atomic_slice_process.operations,
+          [&](const auto& operation) {
+            const auto* write =
+                std::get_if<ContainerWrite>(&operation);
+            return write != nullptr
+                && write->target
+                    == commit_copy->destination;
+          })
+      && replacement_position < commit_position
+      && commit_position < atomic_slice_object_write);
+
   const auto port_parsed = fsim::frontend::parse_text(
       "container-ports.sv",
       R"(
@@ -1209,6 +1430,64 @@ endmodule
       && has_diagnostic(
           oversized_rejected, "FSIM-ELAB-SVFIND-004"));
 
+  const auto invalid_slices =
+      fsim::frontend::parse_text(
+          "static-slice-invalid.sv",
+          R"(
+module static_slice_invalid(
+    input logic [7:0] input_fixed[3:0]);
+  logic [7:0] down[3:0];
+  logic [7:0] pair[1:0];
+  logic [3:0] narrow[1:0];
+  bit [7:0] bits[1:0];
+  logic signed [7:0] signed_values[1:0];
+  logic [7:0] dynamic[];
+  logic [7:0] queued[$];
+  logic [7:0] associative[int];
+  int runtime_bound;
+  initial begin
+    down[runtime_bound:0] = down;
+    down[32'hxxxxxxxx:0] = down;
+    down[2:0] = down[0:2];
+    down[4:3] = pair;
+    down[2:0] = pair;
+    down[1:0] = narrow;
+    down[1:0] = bits;
+    down[1:0] = signed_values;
+    down[1:0] = dynamic;
+    down[1:0] = queued;
+    down[1:0] = associative;
+    down[1 +: 2] = pair;
+    pair = down[1 +: 2];
+    down[1:0] = '{8'h01, 8'h02};
+    down[3:2][0] = 8'h00;
+    input_fixed[2:1] = pair;
+  end
+endmodule
+)",
+          fsim::frontend::Language::SystemVerilog2017);
+  assert(invalid_slices.ok());
+  const auto rejected_slices =
+      fsim::elaboration::elaborate(
+          invalid_slices.design, "static_slice_invalid");
+  assert(!rejected_slices.ok());
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVSLICE-001"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVSLICE-002"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVSLICE-003"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVSLICE-004"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVSLICE-005"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVSLICE-006"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-031"));
+  assert(has_diagnostic(
+      rejected_slices, "FSIM-ELAB-SVPORT-009"));
+
   const auto leaked_iterator = fsim::frontend::parse_text(
       "container-iterator-leak.sv",
       "module container_iterator_leak; "
@@ -1256,6 +1535,7 @@ module bad_port_top;
   bad_input input_child(.memory(memory));
   incompatible wrong_range(.memory(memory));
   incompatible expression_actual(.memory(memory[3]));
+  incompatible slice_actual(.memory(memory[3:0]));
   incompatible unknown_actual(.memory(missing));
   output_driver first(.memory(memory));
   output_driver second(.memory(memory));

@@ -1094,6 +1094,12 @@ therefore excluded.
 | `FSIM-ELAB-SVPATTERN-005` | error | A keyed/default static-array assignment pattern is missing its one required default member or contains duplicate defaults. |
 | `FSIM-ELAB-SVPATTERN-006` | error | A static-array assignment-pattern index key is not a locally constant known integral value. |
 | `FSIM-ELAB-SVPATTERN-007` | error | A static-array assignment-pattern index key is duplicate after signed conversion or outside the declared range. |
+| `FSIM-ELAB-SVSLICE-001` | error | An unpacked slice is not a direct colon selection of a one-dimensional static array. |
+| `FSIM-ELAB-SVSLICE-002` | error | A static-array slice bound is not a locally constant known integral value. |
+| `FSIM-ELAB-SVSLICE-003` | error | A static-array slice reverses its declared direction or selects an out-of-range index. |
+| `FSIM-ELAB-SVSLICE-004` | error | A static-array slice assignment source or destination is not a supported whole fixed array or direct fixed-array slice. |
+| `FSIM-ELAB-SVSLICE-005` | error | Static-array slice assignment source and destination element counts differ. |
+| `FSIM-ELAB-SVSLICE-006` | error | Static-array slice assignment source and destination element width, signedness, or state domains differ. |
 | `FSIM-ELAB-SVREDUCE-001` | error | A container reduction is outside SystemVerilog-2017 or lacks a direct supported unpacked-container receiver. |
 | `FSIM-ELAB-SVREDUCE-002` | error | A container reduction method has an argument or more than one retained `with` transformation. |
 | `FSIM-ELAB-SVREDUCE-003` | error | A result-producing container reduction is used as a standalone statement. |
