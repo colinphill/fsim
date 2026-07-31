@@ -334,13 +334,15 @@ void collect_qualified_identifiers(
                 *type.systemverilog_container->queue_maximum,
                 identifiers);
         }
-        if (const auto& range =
+        if (const auto& ranges =
                 type.systemverilog_container
-                    ->static_range_expression) {
+                    ->static_range_expressions;
+            !ranges.empty()) {
+            const auto& range = ranges.front();
             collect_qualified_identifiers(
-                range->left, identifiers);
+                range.left, identifiers);
             collect_qualified_identifiers(
-                range->right, identifiers);
+                range.right, identifiers);
         }
         if (type.systemverilog_container
                 ->associative_index_type) {

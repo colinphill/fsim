@@ -192,7 +192,7 @@ endmodule
           && image.static_range->left == 7
           && image.static_range->right == 4
           && image.static_range->descending
-          && image.static_range_expression,
+          && image.static_range_expressions.size() == 1,
       "descending static-array bounds retain concrete and expression "
       "metadata");
   require(
@@ -361,7 +361,7 @@ endmodule
               == SystemVerilogContainerKind::StaticArray
           && static_port_child->ports[0]
                  .type.systemverilog_container
-                 ->static_range_expression
+                 ->static_range_expressions.size() == 1
           && static_port_child->ports[1].direction
               == PortDirection::Output
           && static_port_child->ports[2].direction

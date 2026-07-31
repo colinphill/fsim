@@ -1137,9 +1137,15 @@ void substitute_sv_type(
                 *type.systemverilog_container->queue_maximum,
                 environment);
         }
-        substitute_range(
-            type.systemverilog_container
-                ->static_range_expression);
+        if (auto& ranges =
+                type.systemverilog_container
+                    ->static_range_expressions;
+            !ranges.empty()) {
+            substitute_systemverilog_parameters(
+                ranges.front().left, environment);
+            substitute_systemverilog_parameters(
+                ranges.front().right, environment);
+        }
         if (type.systemverilog_container
                 ->associative_index_type) {
             substitute_sv_type(

@@ -859,9 +859,11 @@ using namespace elaboration_detail;
                             *maximum_index + 1);
                 }
                 if (type.fixed) {
-                    const auto& range =
+                    const auto& ranges =
                         variable.type.systemverilog_container
-                            ->static_range_expression;
+                            ->static_range_expressions;
+                    const auto* range =
+                        ranges.empty() ? nullptr : &ranges.front();
                     std::string left_error;
                     std::string right_error;
                     const auto left_value =

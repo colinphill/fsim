@@ -99,11 +99,12 @@ std::optional<ContainerType> Lowerer::container_type(
               ? value->integer_value()
               : std::optional<std::int64_t>{};
         };
-    if (const auto& range =
+    if (const auto& ranges =
             type.systemverilog_container
-                ->static_range_expression) {
-      left = bound_value(range->left);
-      right = bound_value(range->right);
+                ->static_range_expressions;
+        !ranges.empty()) {
+      left = bound_value(ranges.front().left);
+      right = bound_value(ranges.front().right);
     } else if (
         const auto& concrete_range =
             type.systemverilog_container->static_range) {

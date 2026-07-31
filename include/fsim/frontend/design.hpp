@@ -239,7 +239,9 @@ struct SystemVerilogContainerInfo {
   // Present for a static unpacked `[left:right]` dimension. Expressions remain
   // specialization-aware until elaboration produces a bounded dense layout.
   std::optional<PackedRange> static_range;
-  std::optional<PackedRangeExpression> static_range_expression;
+  // Empty or exactly one element. Vector-backed storage preserves value-copy
+  // isolation without embedding two full Expression trees in every Type.
+  std::vector<PackedRangeExpression> static_range_expressions;
   SourceSpan span;
 };
 

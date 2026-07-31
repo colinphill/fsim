@@ -740,12 +740,12 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
               *right_value,
               *left_value >= *right_value};
         }
-        container.static_range_expression =
+        container.static_range_expressions.push_back(
             PackedRangeExpression{
                 std::move(left),
                 std::move(right),
                 cover(start.span, previous().span),
-                std::nullopt};
+                std::nullopt});
       } else {
         expect(
             TokenKind::RightBracket,

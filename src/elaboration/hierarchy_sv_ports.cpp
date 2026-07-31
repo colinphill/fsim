@@ -84,8 +84,10 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
         static_cast<std::uint32_t>(*maximum_index + 1);
   }
   if (result.fixed) {
-    const auto& range =
-        type.systemverilog_container->static_range_expression;
+    const auto& ranges =
+        type.systemverilog_container->static_range_expressions;
+    const auto* range =
+        ranges.empty() ? nullptr : &ranges.front();
     std::string left_error;
     std::string right_error;
     const auto left_value =
