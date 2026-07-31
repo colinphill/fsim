@@ -240,6 +240,33 @@ void Lowerer::copy_static_container_ordinals(
 std::optional<Lowerer::LoweredStaticContainer>
 Lowerer::lower_static_container_value(
     const Expression& expression) {
+  if (expression.kind == ExpressionKind::Call) {
+    const auto* function = visible_function(expression.text);
+    if (function == nullptr
+        || !function->return_type.systemverilog_container) {
+      report(
+          "FSIM-ELAB-SVSLICE-004",
+          "a static-array value requires a whole static array, direct "
+          "slice, or fixed-array function call",
+          expression.span);
+      return std::nullopt;
+    }
+    const auto type =
+        container_type(function->return_type, expression.span);
+    if (!type) {
+      return std::nullopt;
+    }
+    const auto value =
+        lower_user_container_function_expression(expression);
+    if (!value) {
+      return std::nullopt;
+    }
+    if (!type->fixed) {
+      return std::nullopt;
+    }
+    return LoweredStaticContainer{*value, *type};
+  }
+
   if (expression.kind == ExpressionKind::Identifier) {
     const auto* frontend_type = object_type(expression.text);
     if (frontend_type == nullptr

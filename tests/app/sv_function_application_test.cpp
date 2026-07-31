@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,10 +9,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -27,10 +30,15 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 2> values;
+  std::array<std::string, 4> values;
+  fsim::runtime::simir::ContainerValue returned;
+  fsim::runtime::simir::ContainerValue qualified_returned;
+  fsim::runtime::simir::ContainerValue selected;
   std::vector<std::string> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   std::vector<std::string> locals;
+  std::string vcd;
+  std::size_t call_operations{};
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
   fsim::app::NativeCacheStatistics cache;
@@ -90,8 +98,18 @@ Capture run_once(
   Capture capture;
   capture.keys = project->specialization_cache_keys;
   assert(project->design.processes().size() == 1);
+  capture.call_operations = std::ranges::count_if(
+      project->design.processes().front().operations,
+      [](const auto& operation) {
+        return std::holds_alternative<
+            fsim::runtime::simir::Call>(operation);
+      });
   for (const auto& local :
        project->design.processes().front().debug_locals) {
+    capture.locals.push_back(local.name);
+  }
+  for (const auto& local :
+       project->design.processes().front().debug_container_locals) {
     capture.locals.push_back(local.name);
   }
 
@@ -109,9 +127,11 @@ Capture run_once(
         capture.points.push_back(point);
       });
 
-  constexpr std::array<std::string_view, 2> paths{
+  constexpr std::array<std::string_view, 4> paths{
       "function_top.imported_result",
-      "function_top.qualified_result"};
+      "function_top.qualified_result",
+      "function_top.array_witness",
+      "function_top.reset_witness"};
   std::array<fsim::runtime::simir::SignalId, paths.size()>
       signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -119,17 +139,49 @@ Capture run_once(
     assert(signal);
     signals[index] = *signal;
   }
+  std::ostringstream vcd_output;
+  fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 32};
+  const auto witness_trace = vcd.declare_signal(
+      "function_top.array_witness", 8);
+  vcd.begin(simulation.now());
+  vcd.change(
+      witness_trace, simulation.read_signal(signals[2]));
+  simulation.set_signal_change_hook(
+      [&](const fsim::runtime::simir::SignalId signal,
+          const fsim::runtime::PackedLogic4& value,
+          const fsim::runtime::SimulationTick time,
+          const std::uint64_t) {
+        if (signal != signals[2]) {
+          return;
+        }
+        vcd.set_time(time);
+        vcd.change(witness_trace, value);
+      });
   capture.result = simulation.run();
+  vcd.flush();
+  capture.vcd = vcd_output.str();
   for (std::size_t index = 0; index < signals.size(); ++index) {
     capture.values[index] =
         simulation.read_signal(signals[index]).to_msb_string();
   }
+  const auto returned = simulation.design().find_container(
+      "function_top.returned");
+  const auto selected = simulation.design().find_container(
+      "function_top.selected");
+  const auto qualified_returned =
+      simulation.design().find_container(
+          "function_top.qualified_returned");
+  assert(returned && qualified_returned && selected);
+  capture.returned = simulation.read_container_object(*returned);
+  capture.qualified_returned =
+      simulation.read_container_object(*qualified_returned);
+  capture.selected = simulation.read_container_object(*selected);
   return capture;
 }
 
 void verify(
     const Capture& capture,
-    const std::array<std::string, 2>& expected) {
+    const std::array<std::string, 4>& expected) {
   assert(capture.result.status == fsim::runtime::RunStatus::stopped);
   assert(capture.result.time == 1);
   assert(capture.values == expected);
@@ -139,10 +191,75 @@ void verify(
         return point.kind
             == fsim::runtime::simir::ExecutionPointKind::call;
       });
-  assert(calls == 6);
+  if (calls != 9) {
+    std::cerr << "unexpected function call point count: "
+              << calls << '\n';
+  }
+  assert(calls == 9);
+  if (capture.call_operations != 12) {
+    std::cerr << "unexpected lowered Call operation count: "
+              << capture.call_operations << '\n';
+  }
+  assert(capture.call_operations == 12);
   assert(std::ranges::find(
              capture.locals, "inner.temporary")
          != capture.locals.end());
+  assert(std::ranges::find(
+             capture.locals, "relay.relay")
+         != capture.locals.end());
+  assert(
+      capture.returned.type.fixed
+      && capture.returned.type.index_left == 10
+      && capture.returned.type.index_right == 7
+      && capture.returned.elements.size() == 4
+      && capture.qualified_returned.type.fixed
+      && capture.qualified_returned.type.index_left == 3
+      && capture.qualified_returned.type.index_right == 0
+      && capture.qualified_returned.elements.size() == 4
+      && capture.selected.type.fixed
+      && capture.selected.type.index_left == 5
+      && capture.selected.type.index_right == 0
+      && capture.selected.elements.size() == 6);
+  for (std::size_t ordinal = 0; ordinal < 4; ++ordinal) {
+    const auto expected_element =
+        UINT64_C(41) + ordinal
+        + (expected[0] == "00101011" ? UINT64_C(1) : UINT64_C(0));
+    assert(
+        capture.returned.elements[ordinal].low_word().aval
+        == expected_element);
+    const auto shifted_expected =
+        ordinal < 3
+            ? expected_element + 1U
+            : UINT64_C(0xee);
+    assert(
+        capture.selected.elements[ordinal + 1]
+            .low_word().aval == shifted_expected);
+    const auto qualified_expected =
+        UINT64_C(2) + ordinal
+        + (expected[0] == "00101011"
+               ? UINT64_C(1)
+               : UINT64_C(0));
+    if (capture.qualified_returned.elements[ordinal]
+            .low_word().aval != qualified_expected) {
+      std::cerr << "qualified return ordinal " << ordinal
+                << " expected " << qualified_expected
+                << " observed "
+                << capture.qualified_returned.elements[ordinal]
+                       .low_word().aval
+                << '\n';
+    }
+    assert(
+        capture.qualified_returned.elements[ordinal]
+            .low_word().aval == qualified_expected);
+  }
+  assert(
+      capture.selected.elements.front().low_word().aval == 0xee
+      && capture.selected.elements.back().low_word().aval == 0xee
+      && capture.vcd.find(
+             expected[2] == "00101100"
+                 ? "b00101100"
+                 : "b00101101")
+          != std::string::npos);
 }
 
 bool same_points(
@@ -183,6 +300,13 @@ int main() {
             << "      input logic [7:0] value);\n"
             << "    return value + " << increment << ";\n"
             << "  endfunction\n"
+            << "  function automatic logic [7:0] package_words[3:0](\n"
+            << "      input logic [7:0] value);\n"
+            << "    package_words[3] = value + " << increment << ";\n"
+            << "    package_words[2] = value + " << increment + 1 << ";\n"
+            << "    package_words[1] = value + " << increment + 2 << ";\n"
+            << "    package_words[0] = value + " << increment + 3 << ";\n"
+            << "  endfunction\n"
             << "endpackage\n";
         assert(output.good());
       };
@@ -190,7 +314,8 @@ int main() {
   {
     std::ofstream output(top_source, std::ios::binary);
     output << R"(
-module function_top;
+module function_top #(
+    parameter int RETURN_LEFT = 10);
   import function_pkg::*;
 
   function automatic int width_for(input int value);
@@ -207,6 +332,13 @@ module function_top;
   localparam int WIDTH = width_for(5);
   logic [WIDTH-1:0] imported_result;
   logic [WIDTH-1:0] qualified_result;
+  logic [7:0] returned[RETURN_LEFT:RETURN_LEFT-3];
+  logic [7:0] qualified_returned[3:0];
+  logic [7:0] selected[5:0];
+  logic [7:0] partial_first[3:0];
+  logic [7:0] partial_second[3:0];
+  logic [7:0] array_witness;
+  logic reset_witness;
 
   function automatic logic [WIDTH-1:0] inner(
       input logic [WIDTH-1:0] value);
@@ -230,10 +362,46 @@ module function_top;
     outer = inner(value);
   endfunction
 
+  function automatic logic [7:0] relay[
+      RETURN_LEFT:RETURN_LEFT-3](
+      input logic [7:0] value);
+    return package_words(value);
+  endfunction
+
+  function automatic logic [7:0] slice_return[3:0](
+      input logic [7:0] value[
+          RETURN_LEFT:RETURN_LEFT-3]);
+    return value[RETURN_LEFT -: 4];
+  endfunction
+
+  function automatic logic [7:0] partial[3:0](
+      input logic complete);
+    partial[3] = 8'h91;
+    if (complete) begin
+      partial[2] = 8'h82;
+      partial[1] = 8'h73;
+      partial[0] = 8'h64;
+    end
+  endfunction
+
   initial begin
     imported_result = package_step(outer(8'd40));
     qualified_result =
         function_pkg::package_step(outer(8'd1));
+    returned = relay(8'd40);
+    qualified_returned =
+        function_pkg::package_words(8'd1);
+    selected = '{default: 8'hee};
+    selected[4 -: 4] = slice_return(returned);
+    selected[4 -: 4] =
+        slice_return(selected[3 -: 4]);
+    partial_first = partial(1'b1);
+    partial_second = partial(1'b0);
+    array_witness = selected[2];
+    reset_witness =
+        $isunknown(partial_second[2])
+        && $isunknown(partial_second[1])
+        && $isunknown(partial_second[0]);
     #1;
     $finish;
   end
@@ -257,8 +425,8 @@ endmodule
         run_once(config, fsim::app::SimulationEngine::compiled);
     const auto warm =
         run_once(config, fsim::app::SimulationEngine::compiled);
-    const std::array<std::string, 2> expected{
-        "00101010", "00000011"};
+    const std::array<std::string, 4> expected{
+        "00101010", "00000011", "00101100", "1"};
     verify(reference, expected);
     verify(cold, expected);
     verify(warm, expected);
@@ -291,7 +459,9 @@ endmodule
           top_source,
           fsim::project::Optimization::o2),
       fsim::app::SimulationEngine::compiled);
-  verify(changed, {"00101011", "00000100"});
+  verify(
+      changed,
+      {"00101011", "00000100", "00101101", "1"});
   assert(baseline_o2_keys.size() == 1);
   assert(changed.keys.size() == 1);
   assert(changed.keys.front() != baseline_o2_keys.front());

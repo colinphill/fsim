@@ -174,15 +174,15 @@ value into one copied parent value and commit only the selected range.
 Equal-count ranges may use different indices and directions, while width,
 signedness, state domain, and X/Z bits remain exact. Recursive aliasing carries
 the view through nested/generated hierarchy, and disjoint selected writers
-coexist while overlaps retain deterministic rejection. Schema 44 and
-container semantic revision 20 cover normalized selected ranges, formal
-profiles, operations, specialization, and source provenance; equivalent plus
-and minus spellings of one interval share native cache identity without a
-public ABI change.
+coexist while overlaps retain deterministic rejection. Schema 45 and
+container semantic revision 21 additionally cover fixed-array function result
+ranges/profiles, result operations, specialization, and transitive source
+provenance; normalized equivalent selections share native cache identity
+without a public ABI change.
 Variable or unknown bounds or indexed widths, nonpositive widths, indirect
-slice receivers, general expression port actuals, slice returns,
-multidimensional and nonstatic-container slices, element conversion, and
-cross-language slices remain unsupported.
+slice receivers, general expression port actuals, general container-valued
+expressions, multidimensional and nonstatic-container slices, element
+conversion, and cross-language slices remain unsupported.
 Direct writable static arrays, dynamic arrays, queues, and bounded queues also
 accept no-argument `reverse()` plus `sort()` and `rsort()` method statements
 with an optional parenthesized `with` key.
@@ -456,18 +456,24 @@ SystemVerilog function status update: module and package functions with an
 explicit `automatic` lifetime, bounded integral, byte-string, supported
 container, or one-dimensional locally constant static-array value types,
 ANSI value-input arguments, or a classic no-argument header now execute.
-Function-name assignment and explicit value `return` are supported together
-with nonsuspending blocks, blocking local assignments, conditionals, exact
-case, canonical bounded loops, break/continue, expressions, package imports,
-and directly selected package calls. Eligible functions also fold in
-parameters/localparams, packed ranges, and generate conditions. Runtime calls
-use checked persistent SimIR call/return state and produce identical
-interpreter/LLVM O0/O2 safe points and values. Compatible direct static-array
-slices copy ordinally into fixed input formals without exposing the caller's
-whole array. Static or implicit lifetimes, classic body argument declarations,
-output/inout/ref/default formals, other unpacked forms, widths above 64 bits,
-recursion, timing/event/task statements, non-byte-string types, slice returns,
-DPI, and generated functions remain deferred.
+Functions may also declare one fixed one-dimensional integral unpacked-array
+result. Whole function-name assignment and explicit value `return` accept a
+compatible whole array or direct locally constant colon/indexed slice, adapt
+equal-count ranges ordinally, reset the exact typed default on every
+activation, and isolate returned copies across nested nonrecursive calls.
+Function bodies support nonsuspending blocks, blocking local assignments,
+conditionals, exact case, canonical bounded loops, break/continue,
+expressions, package imports, and directly selected package calls. Eligible
+functions also fold in parameters/localparams, packed ranges, result bounds,
+and generate conditions. Runtime calls use checked persistent SimIR
+call/return state and produce identical interpreter/LLVM O0/O2 values,
+debugger metadata, VCD witnesses, and cache behavior. Compatible direct
+static-array slices copy ordinally into fixed input formals without exposing
+the caller's whole array. Static or implicit lifetimes, classic body argument
+declarations, output/inout/ref/default formals, other unpacked or nonstatic
+results, widths above 64 bits, recursion, timing/event/task statements,
+non-byte-string types, general container-valued return expressions, DPI, and
+generated functions remain deferred.
 
 SystemVerilog task status update: module and package tasks with an explicit
 `automatic` lifetime, bounded integral, byte-string, supported container, or

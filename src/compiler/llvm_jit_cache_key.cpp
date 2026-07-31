@@ -115,7 +115,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v44";
+    "fsim-llvm-native-object-v45";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -225,7 +225,7 @@ void add_dynamic_index_key(
   }
   builder.add(
       "container-semantics",
-      "bounded-static-associative-v20-static-indexed-slice");
+      "bounded-static-associative-v21-fixed-array-function-return");
   add_key_u64(
       builder,
       "container-entry-limit",

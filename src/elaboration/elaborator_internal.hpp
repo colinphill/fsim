@@ -918,6 +918,9 @@ private:
         const Expression& expression);
     std::optional<ContainerRegisterId> lower_container_expression(
         const Expression& expression);
+    std::optional<ContainerRegisterId>
+    lower_user_container_function_expression(
+        const Expression& expression);
     [[nodiscard]] bool
     is_static_container_slice_candidate(
         const Expression& expression) const;
@@ -1139,7 +1142,10 @@ private:
         const frontend::FunctionDeclaration* source{};
         RegisterId result{};
         StringRegisterId string_result{};
+        ContainerRegisterId container_result{};
+        ContainerRegisterId container_result_default{};
         bool result_is_string{};
+        bool result_is_container{};
         std::vector<RegisterId> arguments;
         std::vector<StringRegisterId> string_arguments;
         std::vector<ContainerRegisterId> container_arguments;

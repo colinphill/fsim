@@ -562,8 +562,11 @@ using namespace elaboration_detail;
                     process_.operations.emplace_back(
                         CopyContainerRegister{target, *value});
                 } else if (
-                    statement.value.kind
-                    == ExpressionKind::Slice) {
+                    runtime_type->fixed
+                    && (statement.value.kind
+                            == ExpressionKind::Slice
+                        || statement.value.kind
+                            == ExpressionKind::Call)) {
                     const auto value =
                         lower_static_container_assignment_value(
                             statement.value, *runtime_type);
@@ -652,10 +655,16 @@ using namespace elaboration_detail;
                     statement.target.operands[1],
                     index_width,
                     index_type);
-                const auto value = lower_expression(
+                auto value = lower_expression(
                     statement.value, *element_width, source_type);
                 if (!index || !value) {
                     return;
+                }
+                if (register_width(*value) != *element_width) {
+                    *value = resize_register(
+                        *value,
+                        *element_width,
+                        is_signed_expression(statement.value));
                 }
                 if (runtime_type->associative
                     && register_width(*index)

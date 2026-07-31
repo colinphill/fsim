@@ -170,6 +170,9 @@ Lowerer::lower_container_expression(
         ? std::optional<ContainerRegisterId>{value->value}
         : std::nullopt;
   }
+  if (expression.kind == ExpressionKind::Call) {
+    return lower_user_container_function_expression(expression);
+  }
   if (expression.kind != ExpressionKind::Identifier) {
     report(
         "FSIM-ELAB-SVCONTAINER-005",

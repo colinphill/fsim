@@ -563,7 +563,8 @@ void fold_expression(
         || std::ranges::none_of(
             functions,
             [&](const auto& function) {
-                return function.name == expression.text;
+                return function.name == expression.text
+                    && !function.return_type.systemverilog_container;
             })) {
         return;
     }

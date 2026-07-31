@@ -899,6 +899,98 @@ endmodule
       "task input, output, and inout slice actuals remain distinct "
       "source-spanned colon HIR");
 
+  const auto fixed_return = parse_text(
+      "container-function-return.sv",
+      R"(
+module container_function_return;
+  logic [7:0] source[7:2];
+  logic [7:0] result[10:7];
+  function automatic logic [7:0] copy_slice[3:0](
+      input logic [7:0] value[7:2]);
+    return value[6 -: 4];
+  endfunction
+  function automatic bit signed [3:0] named_result[-1:1](
+      input bit signed [3:0] seed);
+    named_result[-1] = seed;
+    named_result[0] = seed + 1;
+    named_result[1] = seed + 2;
+  endfunction
+  initial result = copy_slice(source);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      fixed_return.ok(),
+      "fixed unpacked-array function result syntax parses");
+  const auto* fixed_return_unit = fixed_return.design.find(
+      UnitKind::VerilogModule,
+      "container_function_return");
+  require(
+      fixed_return_unit != nullptr
+          && fixed_return_unit->functions.size() == 2,
+      "fixed-array functions remain separate declarations");
+  const auto& slice_function = fixed_return_unit->functions[0];
+  const auto& named_function = fixed_return_unit->functions[1];
+  require(
+      slice_function.return_type.systemverilog_container
+              .has_value()
+          && slice_function.return_type.systemverilog_container
+                 ->kind
+              == SystemVerilogContainerKind::StaticArray
+          && slice_function.return_type.systemverilog_container
+                 ->static_range.has_value()
+          && slice_function.return_type.systemverilog_container
+                 ->static_range->left == 3
+          && slice_function.return_type.systemverilog_container
+                 ->static_range->right == 0
+          && slice_function.return_type.systemverilog_container
+                 ->static_range->descending
+          && slice_function.statements.size() == 1
+          && slice_function.statements[0].kind
+              == StatementKind::Return
+          && slice_function.statements[0].value.kind
+              == ExpressionKind::Slice
+          && slice_function.statements[0].value.text == "-:"
+          && slice_function.statements[0].value.span.source_name
+              == "container-function-return.sv",
+      "fixed return profile and direct indexed-slice return retain HIR");
+  require(
+      named_function.return_type.systemverilog_container
+              .has_value()
+          && named_function.return_type.systemverilog_container
+                 ->static_range.has_value()
+          && named_function.return_type.systemverilog_container
+                 ->static_range->left == -1
+          && named_function.return_type.systemverilog_container
+                 ->static_range->right == 1
+          && !named_function.return_type.systemverilog_container
+                  ->static_range->descending
+          && named_function.return_type.domain
+              == ValueDomain::Bit2
+          && named_function.return_type.is_signed
+          && named_function.statements.size() == 3
+          && std::ranges::all_of(
+              named_function.statements,
+              [](const auto& statement) {
+                return statement.kind
+                        == StatementKind::Assignment
+                    && statement.target.kind
+                        == ExpressionKind::Index
+                    && statement.target.operands.front().text
+                        == "named_result";
+              }),
+      "function-name element assignments retain the typed result object");
+
+  const auto multidimensional_return = parse_text(
+      "multidimensional-function-return.sv",
+      "module m; function automatic byte bad[1:0][1:0](); "
+      "bad = bad; endfunction endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !multidimensional_return.ok(),
+      "multidimensional function results are rejected at the bounded "
+      "frontend boundary");
+
   const auto slice_ordering = parse_text(
       "container-slice-ordering.sv",
       R"(

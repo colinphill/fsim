@@ -5106,6 +5106,54 @@ including scoped locals in 0.85 seconds, containers in 92.19 seconds, and the
 monolithic application in 14.87 seconds, on 2026-07-31. Batch 92 is not a
 ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### Ninety-third feature batch — fixed-array function returns
+
+Bounded automatic SystemVerilog functions may now return one-dimensional
+integral fixed unpacked arrays. The parser retains the unpacked result
+dimension after the function name, and specialization resolves its exact
+declared bounds, element width, signedness, and state domain into a fixed
+`ContainerType`. Dynamic, queue, associative, multidimensional, and
+runtime-bound result kinds remain diagnosed rather than flattened into packed
+values.
+
+Each call owns typed argument, default-result, and destination storage. The
+result resets to its exact X default for every activation, then accepts either
+whole function-name assignment or explicit value `return`. Nested
+nonrecursive calls copy their completed values into isolated destinations, so
+later invocations cannot mutate earlier results. Module, package, imported,
+directly qualified, and specialization-dependent functions share this path;
+qualified result names also bind their lexical short alias for element writes.
+
+Whole arrays and directly compatible colon or locally constant indexed slices
+may supply returned values. Equal-count ranges adapt ordinally into the
+declared result range while preserving element width, signedness, state
+domain, and exact X/Z planes. Returned values assign to compatible whole
+arrays or direct slices through the existing snapshot and selected-merge
+architecture. Consequently an overlapping returned slice observes one source
+snapshot and commits one atomic whole-parent replacement. Element assignments
+also resize arithmetic results to their declared element width, closing a
+pre-existing container-assignment width hole exposed by this batch.
+
+Positive evidence spans exact HIR, colon and indexed returns, ascending and
+descending ranges, X/Z values, per-call defaults, whole and selected targets,
+overlap, nested/module/package/imported/qualified calls, parameterized result
+bounds, debugger container locals, VCD witnesses, interpreter, LLVM O0/O2,
+cold/warm reuse, and package-edit invalidation. Native-object schema 45 and
+container semantic revision 21 record result and source profiles, operation
+mode, specialization, and transitive provenance; the cache matrix proves that
+every code-relevant difference misses without changing the public native ABI.
+
+The diagnostic catalog now covers all 1,223 production codes, and the source
+gate covers 291 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 421.42 seconds, including scoped locals in 0.96 seconds, fixed
+array functions in 7.90 seconds, the container differential in 339.70 seconds,
+and the monolithic application in 39.86 seconds. Release passed all 59 tests in
+124.07 seconds, including scoped locals in 0.81 seconds, fixed-array functions
+in 7.01 seconds, containers in 87.24 seconds, and the monolithic application
+in 13.76 seconds, on 2026-07-31. Batch 93 is not a ten-batch CI-inspection
+boundary, so no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

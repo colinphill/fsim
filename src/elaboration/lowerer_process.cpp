@@ -592,8 +592,11 @@ Lowerer::Lowerer(
                                 variable.span.begin.column)}});
                 if (variable.initializer) {
                     const auto value =
-                        lower_container_expression(
-                            *variable.initializer);
+                        type->fixed
+                            ? lower_static_container_assignment_value(
+                                  *variable.initializer, *type)
+                            : lower_container_expression(
+                                  *variable.initializer);
                     if (value) {
                         process_.operations.emplace_back(
                             CopyContainerRegister{

@@ -285,6 +285,9 @@ using namespace elaboration_detail;
         if (expression.kind == ExpressionKind::Call) {
             if (const auto* function =
                     visible_function(expression.text)) {
+                if (function->return_type.systemverilog_container) {
+                    return std::nullopt;
+                }
                 const auto width = function->return_type.width();
                 if (width
                     && *width

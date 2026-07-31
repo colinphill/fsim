@@ -409,6 +409,85 @@ void expect_slice_cache_statistics(
   return process;
 }
 
+[[nodiscard]] Process make_fixed_array_return_process(
+    const std::int32_t result_left,
+    const std::int32_t result_right,
+    const std::int32_t source_left,
+    const std::uint32_t element_width,
+    const bool two_state,
+    const bool signed_elements,
+    const bool selected_return,
+    const std::string_view function_source,
+    const std::uint32_t function_line) {
+  ContainerType result_type;
+  result_type.element_width = element_width;
+  result_type.two_state = two_state;
+  result_type.signed_elements = signed_elements;
+  result_type.fixed = true;
+  result_type.index_left = result_left;
+  result_type.index_right = result_right;
+  auto source_type = result_type;
+  source_type.index_left = source_left;
+  const auto count =
+      result_left >= result_right
+          ? result_left - result_right
+          : result_right - result_left;
+  source_type.index_right =
+      source_left
+      + (result_left >= result_right ? -count : count);
+  if (!selected_return) {
+    source_type = result_type;
+  }
+
+  Process process;
+  process.id = 45;
+  process.name = "cached_fixed_array_function_return";
+  process.register_count = 5;
+  process.container_register_count = 4;
+  process.container_register_types = {
+      result_type, result_type, result_type, source_type};
+  process.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{
+          1, PackedLogic4::from_aval_bval(32, 0, 0)},
+      CopyContainerRegister{0, 1},
+      Call{6, 4, CallStack{0, 1, 1}},
+      CopyContainerRegister{2, 0},
+      Halt{},
+      DebugPoint{
+          DebugPointKind::statement,
+          SourceLocation{
+              std::string{function_source},
+              function_line,
+              5}}};
+  if (selected_return) {
+    process.operations.push_back(
+        LoadConstant{
+            2,
+            PackedLogic4::from_aval_bval(
+                32,
+                static_cast<std::uint32_t>(source_left),
+                0)});
+    process.operations.push_back(
+        ContainerRead{4, 3, 2, true});
+    process.operations.push_back(
+        LoadConstant{
+            3,
+            PackedLogic4::from_aval_bval(
+                32,
+                static_cast<std::uint32_t>(result_left),
+                0)});
+    process.operations.push_back(
+        ContainerWrite{0, 3, 4, true});
+  } else {
+    process.operations.push_back(
+        CopyContainerRegister{0, 3});
+  }
+  process.operations.push_back(Return{CallStack{0, 1, 1}});
+  return process;
+}
+
 }  // namespace
 
 void test_static_slice_consumer_cache_identity(
@@ -771,6 +850,72 @@ void test_static_indexed_slice_cache_identity(
       0,
       1);
   assert(slice_cached_object_count(cache_directory) == 8);
+}
+
+void test_fixed_array_function_return_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol =
+      "cached_fixed_array_function_return";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_slice_cache_statistics(jit, hits, misses);
+      };
+  const auto make =
+      [&](const std::int32_t result_left = 3,
+          const std::int32_t result_right = 0,
+          const std::int32_t source_left = 7,
+          const std::uint32_t element_width = 8,
+          const bool two_state = false,
+          const bool signed_elements = false,
+          const bool selected_return = true,
+          const std::string_view source =
+              "fixed-array-function-return.sv",
+          const std::uint32_t line = 18) {
+        return make_fixed_array_return_process(
+            result_left,
+            result_right,
+            source_left,
+            element_width,
+            two_state,
+            signed_elements,
+            selected_return,
+            source,
+            line);
+      };
+
+  materialize(make(), 0, 1);
+  // A second source spelling which normalized to the same return and source
+  // ranges has no spelling-only cache dimension.
+  materialize(make(), 1, 0);
+  materialize(make(4, 1), 0, 1);
+  materialize(make(0, 3), 0, 1);
+  materialize(make(3, 0, 8), 0, 1);
+  materialize(make(3, 0, 7, 4), 0, 1);
+  materialize(make(3, 0, 7, 8, true), 0, 1);
+  materialize(make(3, 0, 7, 8, false, true), 0, 1);
+  materialize(
+      make(3, 0, 7, 8, false, false, false), 0, 1);
+  materialize(
+      make(
+          3, 0, 7, 8, false, false, true,
+          "edited-fixed-array-function-return.sv"),
+      0,
+      1);
+  materialize(
+      make(
+          3, 0, 7, 8, false, false, true,
+          "fixed-array-function-return.sv", 19),
+      0,
+      1);
+  assert(slice_cached_object_count(cache_directory) == 10);
 }
 
 }  // namespace fsim::tests::compiler

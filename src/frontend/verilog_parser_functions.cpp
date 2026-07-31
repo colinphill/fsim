@@ -27,6 +27,8 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
   function.return_type = parse_parameter_type();
   const auto name = expect_identifier("function name");
   function.name = name.text;
+  (void)parse_optional_container_dimension(
+      function.return_type);
 
   auto saved_names = std::move(current_procedural_names_);
   auto saved_arguments = std::move(current_function_arguments_);

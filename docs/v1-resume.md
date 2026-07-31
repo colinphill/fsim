@@ -9,18 +9,19 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-92 locally constant indexed
-  static-array slices on top of the feature-batch-91 slice-module-port
-  handoff.
+- Implementation baseline: completed feature-batch-93 fixed-array function
+  returns on top of the feature-batch-92 locally constant indexed static-array
+  slice handoff.
 - The source-size refactor is complete: all 291 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 439.73 seconds, and Release passed all 59 configured
-  tests in 128.24 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 1.02/0.85 seconds, the expanded indexed-container differential in
-  363.49/92.19 seconds, and the monolithic application in 43.07/14.87 seconds.
-- The diagnostic catalog covers all 1,222 production codes.
+  configured tests in 421.42 seconds, and Release passed all 59 configured
+  tests in 124.07 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.96/0.81 seconds, fixed-array functions in 7.90/7.01 seconds, the
+  container differential in 339.70/87.24 seconds, and the monolithic
+  application in 39.86/13.76 seconds.
+- The diagnostic catalog covers all 1,223 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -871,41 +872,70 @@ in 14.87 seconds. The diagnostic catalog covers 1,222 production codes and
 the source gate covers 291 authored files. Batch 92 is not a CI-inspection
 boundary, so no Actions run was inspected.
 
+## Completed feature batch 93
+
+Batch 93 completes bounded fixed-array function result values and direct slice
+returns:
+
+- One-dimensional integral fixed unpacked result dimensions remain explicit
+  in HIR and specialize to exact bounds, width, signedness, and state domain.
+- Function-name assignment and explicit value `return` share one typed result
+  frame whose exact X default is restored on every activation.
+- Whole, colon-slice, and locally constant indexed-slice returned values adapt
+  ordinally while preserving exact X/Z planes.
+- Nested nonrecursive calls copy results into isolated destinations; returned
+  values assign to whole arrays or direct slices through snapshot/atomic merge
+  semantics, including overlap.
+- Module, package, imported, directly qualified, and parameter-specialized
+  calls retain debugger result metadata, VCD witnesses, interpreter/LLVM
+  O0/O2 parity, cold/warm reuse, and transitive invalidation.
+- Native-object schema 45 and container semantic revision 21 serialize fixed
+  result/source profile, operation, specialization, and provenance without a
+  public ABI change.
+
+The complete exact-LLVM Debug regression passed all 59 tests in 421.42
+seconds, including scoped locals in 0.96 seconds, fixed-array functions in
+7.90 seconds, containers in 339.70 seconds, and the monolithic application in
+39.86 seconds. Release passed all 59 tests in 124.07 seconds, including scoped
+locals in 0.81 seconds, fixed-array functions in 7.01 seconds, containers in
+87.24 seconds, and the monolithic application in 13.76 seconds. The diagnostic
+catalog covers 1,223 production codes and the source gate covers 291 authored
+files. Batch 93 is not a CI-inspection boundary, so no Actions run was
+inspected.
+
 ## Next ten-feature batch
 
-Resume with **feature batch 93: bounded fixed-array function return values and
-direct slice returns**:
+Resume with **feature batch 94: bounded dynamic, queue, and associative
+function return values**:
 
-1. Parse and retain one-dimensional fixed unpacked-array return types on
-   bounded automatic SystemVerilog functions.
-2. Resolve the exact declared range, element width, signedness, and state
-   profile after package/import/parameter specialization.
-3. Support whole fixed-array function-name assignment and explicit value
-   `return`, with exact typed defaults on every activation.
-4. Accept directly compatible colon or locally constant indexed static-array
-   slices as return values and adapt equal-count ranges ordinally into the
-   declared result profile.
-5. Preserve activation lifetime and return-value copy isolation across nested
-   nonrecursive function calls.
-6. Assign returned values to compatible whole arrays or direct slices, using
-   the existing typed snapshot and atomic selected merge for overlap.
-7. Cover module, package, imported, nested, and specialization-dependent
-   functions while retaining transitive source provenance.
+1. Retain dynamic-array, queue/bounded-queue, and integral-key associative
+   unpacked result kinds on bounded automatic SystemVerilog functions.
+2. Resolve exact element width, signedness, state domain, queue bound, and
+   associative index profile after package/import/parameter specialization.
+3. Allocate exact empty per-activation defaults and support whole
+   function-name assignment plus explicit value `return` for each kind.
+4. Copy returned dynamic arrays, queues, and associative arrays into isolated
+   destination values so nested and repeated calls cannot alias storage.
+5. Assign compatible returned values to whole module objects and automatic
+   container locals while preserving queue order/bounds and associative keys.
+6. Accept compatible returned containers as bounded function input and task
+   input/output/inout actuals with existing copy-in/copy-out semantics.
+7. Cover module, package, wildcard-imported, directly qualified, nested, and
+   specialization-dependent functions with transitive provenance.
 8. Cover interpreter, LLVM O0/O2, debugger result inspection, VCD-visible
-   witnesses, and cold/warm native reuse without a public ABI change.
-9. Diagnose implicit/static lifetime, runtime-variable slice returns,
-   dynamic/queue/associative/multidimensional results, element/profile
-   mismatch, recursion, unsupported expression receivers, and cross-language
-   returns.
-10. Raise native-object schema 44 to 45 and container semantic revision 20 to
-    21; complete frontend, elaboration, runtime, application, cache, and full
+   scalar witnesses, cold/warm reuse, and edited-source invalidation.
+9. Diagnose incompatible kinds/profiles/bounds/index types, unsupported
+   slices/elements/expressions, recursion, multidimensional results, DPI, and
+   cross-language returns through stable bounded codes.
+10. Raise native-object schema 45 to 46 and container semantic revision 21 to
+    22; complete frontend, elaboration, runtime, application, cache, and full
     Debug/Release evidence, then push the non-boundary batch.
 
-Keep Batch 93 to one-dimensional integral fixed-array results from bounded
-automatic SystemVerilog functions and direct compatible whole/slice return
-values. Task returns, general container expressions, runtime-variable slices,
-element conversion, multidimensional/nonstatic results, recursion, DPI, and
-cross-language returns remain separate release-gate work.
+Keep Batch 94 to whole bounded dynamic, queue, bounded-queue, and integral-key
+associative result values. General container-valued expressions, container
+element conversion, multidimensional arrays, static/implicit function
+lifetimes, recursion, DPI, and cross-language returns remain separate
+release-gate work.
 
 ## Working cadence
 
@@ -973,9 +1003,10 @@ read-only static-array-slice-consumer handoff and Batch 89 bounded
 static-array-slice-callable-actual handoff, followed by Batch 90 bounded
 static-array-slice-ordering-mutation handoff and Batch 91 bounded
 static-array-slice-module-port handoff, followed by the Batch 92 bounded
-indexed-static-array-slice handoff. Treat the newest pushed commit on the same
-branch as the authoritative continuation and read this file from that checkout
-before doing work.
+indexed-static-array-slice handoff and the Batch 93 bounded fixed-array-function
+return handoff. Treat the newest pushed commit on the same branch as the
+authoritative continuation and read this file from that checkout before doing
+work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -1006,7 +1037,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 93 below and return to focused tests until its tenth feature.
+resume Batch 94 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1024,12 +1055,12 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin Batch 93 at item 1 above. Do not rerun Batch 92's full regression
-   until the fixed-array-return implementation and evidence are complete
+3. Begin Batch 94 at item 1 above. Do not rerun Batch 93's full regression
+   until the nonstatic-container-return implementation and evidence are complete
    unless an intervening repair needs it.
-4. Keep Batch 93 within one-dimensional integral fixed-array results from
-   bounded automatic SystemVerilog functions and direct compatible whole or
-   locally constant slice return values.
+4. Keep Batch 94 within whole bounded dynamic-array, queue/bounded-queue, and
+   integral-key associative results from bounded automatic SystemVerilog
+   functions.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, then update the four documents named above, commit,
@@ -1042,17 +1073,17 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 93 is in progress, extending the
-frontend, callable elaboration, native cache, and container application tests
-as fixed-array return values appear:
+Use a narrow test expression while Batch 94 is in progress, extending the
+frontend, callable elaboration, native cache, function application, and
+container application tests as nonstatic container return values appear:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
-  -R 'fsim\.(frontend|runtime|elaboration|llvm|application\.sv_containers|diagnostics-catalog|source-line-budget)'
+  -R 'fsim\.(frontend|runtime|elaboration|llvm|application\.sv_functions|application\.sv_containers|diagnostics-catalog|source-line-budget)'
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 92.
+recorded 59-test inventories are clean after feature batch 93.
 
 Before declaring any row complete, consult:
 
