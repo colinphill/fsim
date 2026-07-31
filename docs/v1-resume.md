@@ -455,6 +455,96 @@ indexed `+:`/`-:` unpacked slices, slice queries or methods, sliced module-port
 actuals, multidimensional nesting, dynamic/queue/associative slices, element
 conversion, and cross-language slices remain separate release-gate work.
 
+### Batch 87 preimplementation checkpoint
+
+No batch-87 implementation edits had been made when this checkpoint was
+recorded. The branch and its upstream were both at
+`a42fa1a760f5a111b835445ccf68c28994a18c91`; begin from that clean Batch 86
+baseline unless a newer pushed commit supersedes it.
+
+The initial code-path audit established the following:
+
+- the SystemVerilog parser already emits source-spanned
+  `ExpressionKind::Slice` nodes for `[left:right]`, `[base +: width]`, and
+  `[base -: width]`, with the base, left, and right expressions retained as
+  operands;
+- packed selection is already handled by
+  `Lowerer::constant_slice_selection` in
+  `src/elaboration/lowerer_assignment.cpp` and by packed-expression lowering
+  in `src/elaboration/lowerer_expression.cpp`;
+- the unpacked-container assignment dispatch is also in
+  `src/elaboration/lowerer_assignment.cpp`: it resolves the base identifier
+  before container lookup, handles whole and indexed targets, but currently
+  rejects a slice target with `FSIM-ELAB-SVCONTAINER-011`;
+- `lower_container_expression` in
+  `src/elaboration/lowerer_sv_containers.cpp` accepts only a direct identifier
+  and returns either its container register or an object snapshot;
+- existing `ContainerRead`, `ContainerWrite`, `CopyContainerRegister`,
+  `ReadContainerObject`, and `WriteContainerObject` operations already cover
+  interpreter, native, validation, and cache paths. A new public or SimIR ABI
+  operation is not expected; and
+- `lowerer_sv_containers.cpp` is already large. Put the executable slice
+  implementation in a new
+  `src/elaboration/lowerer_sv_container_slices.cpp`, add it to `CMakeLists.txt`,
+  and keep only declarations and compact data structures in
+  `src/elaboration/elaborator_internal.hpp`.
+
+Implement the slice using existing container operations:
+
+1. Recognize only a direct identifier base and `Slice::text == ":"`; require a
+   fixed, one-dimensional integral container.
+2. Constant-fold both bounds, require known values, convert the low 32 bits to
+   signed indices using the Batch 86 policy, and validate inclusion plus
+   declared direction. A one-element range is valid in either syntactic
+   direction.
+3. Derive a temporary `ContainerType` by retaining the source element profile
+   and replacing only its declared left/right range. Do not allocate a new
+   object identity.
+4. Materialize every RHS slice into that selected-range temporary with
+   `ContainerRead`/`ContainerWrite` before modifying a destination. This is the
+   overlap snapshot.
+5. Copy by ordinal left-to-right position, not numeric index equality. Require
+   identical element count, width, signedness, and two-/four-state domain.
+6. For a whole destination, build or copy the complete compatible source value
+   and finish through the existing whole-container copy/writeback path.
+7. For an LHS slice, snapshot the RHS first, copy the current whole destination
+   into a replacement register, overwrite only selected elements in the
+   replacement, and perform one final whole-container copy. Preserve the
+   existing outer object writeback so object, port, hierarchy, callable, and
+   suspended-task behavior remains coherent.
+
+Expected integration points are a whole-target/slice-source branch in the
+identifier-target portion of the container assignment dispatcher and a new
+slice-target branch before its current generic rejection. Useful private
+helpers include validated slice metadata, lowering an identifier-or-slice
+static-container value, and ordinal register-to-register copying. Bump the
+native cache schema from 38 to 39 and the container semantic version from 14
+to 15 once the new semantic metadata is present.
+
+Evidence should include:
+
+- a frontend assertion that both sides of a static-array slice assignment are
+  retained as colon `Slice` HIR with explicit operands and spans;
+- elaboration fixtures covering descending-to-descending,
+  ascending-to-descending, whole-to-slice, slice-to-whole, slice-to-slice, and
+  overlapping snapshot assignment, including exact X/Z values;
+- diagnostics for unknown/nonconstant, wrong-direction, out-of-range, count,
+  width, signedness, and state-domain mismatch; indexed `+:`/`-:` selections;
+  dynamic/queue/associative containers; indirect or read-only targets; and
+  already excluded sliced port actuals and mixed-language boundaries;
+- application coverage using the existing static arrays rather than adding
+  object-order churn: ordinal `memory`/`binary` copying, automatic-function
+  local slices, an overlapping task slice after suspension, and the existing
+  writable static port leaf; and
+- emitted operation/type checks, interpreter/LLVM O0/O2 state equivalence,
+  cold/warm schema-39 cache identity, diagnostics-catalog coverage, and the
+  2,000-line source budget.
+
+Batch 87 is not a CI-inspection boundary. Run focused tests with build
+parallelism 8 while implementing it, then both full exact-LLVM Debug and
+Release gates after all ten features. Commit and push the completed batch, but
+do not monitor its documentation-only workflow.
+
 ## Working cadence
 
 - Implement ten related features before the next full regression.
