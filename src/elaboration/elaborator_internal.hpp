@@ -918,6 +918,9 @@ private:
         const Expression& expression);
     std::optional<ContainerRegisterId> lower_container_expression(
         const Expression& expression);
+    [[nodiscard]] bool
+    is_static_container_slice_candidate(
+        const Expression& expression) const;
     struct StaticContainerSlice {
         ContainerType base_type;
         ContainerType selected_type;

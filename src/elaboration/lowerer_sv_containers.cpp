@@ -163,6 +163,13 @@ bool Lowerer::is_container_expression(
 std::optional<ContainerRegisterId>
 Lowerer::lower_container_expression(
     const Expression& expression) {
+  if (expression.kind == ExpressionKind::Slice) {
+    const auto value =
+        lower_static_container_value(expression);
+    return value
+        ? std::optional<ContainerRegisterId>{value->value}
+        : std::nullopt;
+  }
   if (expression.kind != ExpressionKind::Identifier) {
     report(
         "FSIM-ELAB-SVCONTAINER-005",
@@ -220,6 +227,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
     return {};
   }
   if (!is_container_expression(
+          expression.operands.front())
+      && !is_static_container_slice_candidate(
           expression.operands.front())) {
     const auto& operand = expression.operands.front();
     if (operand.kind == ExpressionKind::Identifier
@@ -271,11 +280,22 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
   const auto* source_type =
       operand.kind == ExpressionKind::Identifier
           ? object_type(operand.text)
+          : is_static_container_slice_candidate(operand)
+              ? object_type(
+                    operand.operands.front().text)
           : nullptr;
-  const auto runtime_type =
-      source_type
-          ? container_type(*source_type, operand.span)
-          : std::nullopt;
+  std::optional<ContainerType> runtime_type;
+  if (source_type
+      && operand.kind == ExpressionKind::Slice) {
+    const auto selection =
+        static_container_slice(operand);
+    if (selection) {
+      runtime_type = selection->selected_type;
+    }
+  } else if (source_type) {
+    runtime_type =
+        container_type(*source_type, operand.span);
+  }
   if (!source_type || !runtime_type) {
     report(
         "FSIM-ELAB-SVQUERY-001",
@@ -1169,9 +1189,10 @@ bool Lowerer::lower_container_locator(
       && expression.operands.size() >= 2U;
   if (language_ != frontend::Language::SystemVerilog2017
       || expression.operands.empty()
-      || expression.operands.front().kind
-          != ExpressionKind::Identifier
-      || !is_container_expression(expression.operands.front())) {
+      || (!is_container_expression(
+              expression.operands.front())
+          && !is_static_container_slice_candidate(
+              expression.operands.front()))) {
     report(
         predicate_locator
             ? "FSIM-ELAB-SVFIND-001"
@@ -1219,11 +1240,22 @@ bool Lowerer::lower_container_locator(
           : std::string_view{"item"};
   const auto& receiver = expression.operands.front();
   const auto source = lower_container_expression(receiver);
-  const auto* source_frontend_type = object_type(receiver.text);
-  const auto source_type =
-      source_frontend_type
-          ? container_type(*source_frontend_type, receiver.span)
-          : std::nullopt;
+  const auto* source_frontend_type =
+      receiver.kind == ExpressionKind::Identifier
+          ? object_type(receiver.text)
+          : object_type(receiver.operands.front().text);
+  std::optional<ContainerType> source_type;
+  if (source_frontend_type
+      && receiver.kind == ExpressionKind::Slice) {
+    const auto selection =
+        static_container_slice(receiver);
+    if (selection) {
+      source_type = selection->selected_type;
+    }
+  } else if (source_frontend_type) {
+    source_type =
+        container_type(*source_frontend_type, receiver.span);
+  }
   if (!source || !source_type) {
     report(
         predicate_locator

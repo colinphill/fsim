@@ -1967,6 +1967,8 @@ void test_persistent_object_cache() {
       root / "static-pattern");
   test_static_slice_cache_identity(
       root / "static-slice");
+  test_static_slice_consumer_cache_identity(
+      root / "static-slice-consumer");
   test_container_predicate_cache_identity(
       root / "container-predicate");
   test_container_reduction_cache_identity(

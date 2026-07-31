@@ -39,6 +39,19 @@ namespace {
 
 }  // namespace
 
+bool Lowerer::is_static_container_slice_candidate(
+    const Expression& expression) const {
+  if (expression.kind != ExpressionKind::Slice
+      || expression.operands.size() != 3
+      || expression.operands.front().kind
+          != ExpressionKind::Identifier) {
+    return false;
+  }
+  const auto& base = expression.operands.front().text;
+  return container_locals_.contains(base)
+      || container_objects_.contains(base);
+}
+
 std::optional<Lowerer::StaticContainerSlice>
 Lowerer::static_container_slice(
     const Expression& expression) {

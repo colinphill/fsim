@@ -595,6 +595,46 @@ receivers, slice arguments or returns at callable/port boundaries, variable or
 indexed unpacked slices, multidimensional/nonstatic containers, element
 conversion, and cross-language slices remain separate release-gate work.
 
+### Reboot checkpoint: Batch 88 in progress
+
+The newest pushed checkpoint commit on `codex/resumable-jit` intentionally
+contains an incomplete Batch 88 and is safe to resume. Do not describe the
+batch as complete or update the release matrix from this checkpoint alone.
+
+Implemented at the checkpoint:
+
+- direct, direction-preserving static-array slice receivers are recognized by
+  container value, query, reduction, and locator lowering without enabling
+  slice indexing or mutating receivers;
+- the selected slice profile drives system queries, `.size()`, all five
+  reductions and their named/implicit transformations, extrema/uniqueness
+  locators, and all six predicate locators, including selected declared
+  `.index` values;
+- elaboration coverage exercises those consumers, reduction X/Z behavior, and
+  queue-valued locator results;
+- application coverage exercises module objects, input and writable static
+  ports, hierarchy, automatic callable locals, and suspended-task locals; and
+- the native object-cache key is provisionally schema 40/container semantics
+  16, with a split cache-identity test for receiver range, element width,
+  operation, graph constants, locator mode, predicate constants, and source
+  provenance.
+
+Checkpoint validation on the recorded host:
+
+- `fsim.elaboration.sv-container` passed in 0.09 seconds;
+- `fsim.application.sv_containers` passed in 183.10 seconds;
+- the Debug `fsim_llvm_tests` target built with `--parallel 8`; and
+- `fsim.llvm` passed in 1.69 seconds after the schema-40 cache test was added.
+
+Resume by completing the missing frontend assertions and negative diagnostics
+from item 9, then review the cache fixture and source-line budget. Build every
+local target with at least eight workers. Run the focused Debug expression
+below, then the complete exact-LLVM Debug and Release gates only after all ten
+items are covered. Update the implementation plan, feature matrix, language
+support, and this handoff with final evidence before making the Batch 88
+completion commit. Batch 88 is not a CI-inspection boundary; the next required
+GitHub Actions inspection is Batch 90.
+
 ## Working cadence
 
 - Implement ten related features before the next full regression.

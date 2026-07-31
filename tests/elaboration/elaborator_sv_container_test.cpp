@@ -681,7 +681,60 @@ module static_slices;
   bit signed [7:0] signed_down[1:0];
   bit signed [7:0] signed_up[-1:0];
   initial begin
+    logic [7:0] located[$];
+    int locations[$];
     down = '{8'h55, 8'h44, 8'h33, 8'h22, 8'h11, 8'h00};
+    assert ($left(down[4:2]) == 4);
+    assert ($right(down[4:2]) == 2);
+    assert ($low(down[4:2]) == 2);
+    assert ($high(down[4:2]) == 4);
+    assert ($increment(down[4:2]) == 1);
+    assert ($size(down[4:2], 1) == 3);
+    assert ($bits(down[4:2]) == 24);
+    assert ($dimensions(down[4:2]) == 2);
+    assert ($unpacked_dimensions(down[4:2]) == 1);
+    assert (down[4:2].size() == 3);
+    assert (down[4:2].sum() == 8'h99);
+    assert (down[4:2].product() == 8'h98);
+    assert (down[4:2].and() == 8'h00);
+    assert (down[4:2].or() == 8'h77);
+    assert (down[4:2].xor() == 8'h55);
+    assert (
+        down[4:2].sum(entry) with (
+            entry.index == 3 ? entry : 8'h00)
+        == 8'h33);
+    located = down[4:2].min();
+    assert (located.size() == 1);
+    assert (located[0] == 8'h22);
+    located = down[4:2].max();
+    assert (located[0] == 8'h44);
+    located = down[4:2].unique();
+    assert (located.size() == 3);
+    locations = down[4:2].unique_index();
+    assert (locations.size() == 3);
+    assert (locations[0] == 4);
+    assert (locations[2] == 2);
+    located = down[4:2].find() with (item >= 8'h33);
+    assert (located.size() == 2);
+    locations =
+        down[4:2].find_index(entry) with (
+            entry.index == 2 && entry == 8'h22);
+    assert (locations.size() == 1);
+    assert (locations[0] == 2);
+    located =
+        down[4:2].find_first() with (item < 8'h44);
+    assert (located[0] == 8'h33);
+    locations =
+        down[4:2].find_first_index() with (
+            item < 8'h44);
+    assert (locations[0] == 3);
+    located =
+        down[4:2].find_last() with (item >= 8'h33);
+    assert (located[0] == 8'h33);
+    locations =
+        down[4:2].find_last_index() with (
+            item >= 8'h33);
+    assert (locations[0] == 3);
     pair = down[4:3];
     assert (pair[1] == 8'h44);
     assert (pair[0] == 8'h33);
@@ -693,6 +746,7 @@ module static_slices;
         8'h22, 8'h11, 8'h00};
     down[4:2] = down[3:1];
     assert ($isunknown(down[4]));
+    assert ($isunknown(down[4:2].sum()));
     assert (down[3] == 8'h22);
     assert (down[2] == 8'h11);
     up = '{default: 8'h00};

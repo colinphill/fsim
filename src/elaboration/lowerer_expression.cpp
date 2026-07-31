@@ -103,8 +103,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     != frontend::Language::SystemVerilog2017
                 || expression.operands.empty()
                 || expression.operands.size() > 3
-                || !is_container_expression(
-                    expression.operands.front()))) {
+                || (!is_container_expression(
+                        expression.operands.front())
+                    && !is_static_container_slice_candidate(
+                        expression.operands.front())))) {
             report(
                 expression.operands.empty()
                         || expression.operands.size() > 3
@@ -121,6 +123,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             return std::nullopt;
         }
 
+        const bool static_slice_receiver =
+            !expression.operands.empty()
+            && is_static_container_slice_candidate(
+                expression.operands.front());
         if ((expression.kind == ExpressionKind::Call
              && (expression.text == ".size"
                  || expression.text == ".exists"
@@ -132,8 +138,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                  || expression.text == ".pop_back"
                  || container_reduction)
              && !expression.operands.empty()
-             && is_container_expression(
-                 expression.operands.front()))
+             && (is_container_expression(
+                     expression.operands.front())
+                 || (static_slice_receiver
+                     && (expression.text == ".size"
+                         || container_reduction))))
             || (expression.kind == ExpressionKind::Index
                 && expression.operands.size() == 2
                 && is_container_expression(
@@ -172,6 +181,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 source_expression.kind
                         == ExpressionKind::Identifier
                     ? object_type(source_expression.text)
+                    : static_slice_receiver
+                        ? object_type(
+                              source_expression
+                                  .operands.front().text)
                     : nullptr;
             if (type == nullptr) {
                 report(
@@ -184,8 +197,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             if (!width) {
                 return std::nullopt;
             }
-            const auto runtime_type =
-                container_type(*type, expression.span);
+            std::optional<ContainerType> runtime_type;
+            if (source_expression.kind
+                    == ExpressionKind::Slice) {
+                const auto selection =
+                    static_container_slice(
+                        source_expression);
+                if (selection) {
+                    runtime_type =
+                        selection->selected_type;
+                }
+            } else {
+                runtime_type =
+                    container_type(*type, expression.span);
+            }
             if (!runtime_type) {
                 return std::nullopt;
             }
@@ -427,8 +452,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (expression.kind == ExpressionKind::Call
             && expression.text.starts_with('.')
             && !expression.operands.empty()
-            && is_container_expression(
-                expression.operands.front())) {
+            && (is_container_expression(
+                    expression.operands.front())
+                || is_static_container_slice_candidate(
+                    expression.operands.front()))) {
             report(
                 "FSIM-ELAB-SVCONTAINER-008",
                 "unsupported container method '"

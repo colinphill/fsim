@@ -444,6 +444,24 @@ module static_port_leaf #(
     assert ($bits(source) == 32);
     assert ($dimensions(source) == 2);
     assert ($unpacked_dimensions(source) == 1);
+    assert ($left(source[LEFT - 1:RIGHT]) == LEFT - 1);
+    assert ($right(source[LEFT - 1:RIGHT]) == RIGHT);
+    assert ($size(source[LEFT - 1:RIGHT], 1) == 3);
+    assert ($bits(source[LEFT - 1:RIGHT]) == 24);
+    assert (
+        source[LEFT:RIGHT].sum(slice_item) with (
+            slice_item.index == LEFT
+                ? slice_item : 8'h00) == 8'h31);
+    located =
+        source[LEFT - 1:RIGHT].find() with (
+            item < 8'h30);
+    assert (located.size() == 1);
+    assert (located[0] == 8'h04);
+    locations =
+        source[LEFT - 1:RIGHT].find_index(port_item) with (
+            port_item.index == RIGHT);
+    assert (locations.size() == 1);
+    assert (locations[0] == RIGHT);
     located = source.min();
     assert (located.size() == 1);
     assert (located[0] == 8'h04);
@@ -515,6 +533,12 @@ module static_port_leaf #(
     assert ($isunknown(result[LEFT - 1]));
     assert (result[RIGHT + 1] == 8'h04);
     assert (result[RIGHT] == 8'h06);
+    located = result[LEFT:RIGHT + 1].unique();
+    assert (located.size() == 3);
+    locations = result[LEFT:RIGHT + 1].unique_index();
+    assert (locations.size() == 3);
+    assert (locations[0] == LEFT);
+    assert (locations[2] == RIGHT + 1);
     shared[-1] = 4'ha;
     shared[1] = 4'hc;
   end
@@ -725,6 +749,7 @@ module container_top;
   function automatic byte keyed_static_value(
       input logic [7:0] source[3:0]);
     logic [7:0] copy[3:0];
+    int locations[$];
     copy = '{
         3: source[3],
         default: 8'h55,
@@ -734,6 +759,14 @@ module container_top;
     copy[2:1] = source[1:0];
     assert (copy[2] == source[1]);
     assert (copy[1] == source[0]);
+    assert ($left(source[1:0]) == 1);
+    assert ($size(source[1:0]) == 2);
+    assert (source[1:0].sum() == 8'ha8);
+    locations =
+        source[1:0].find_index() with (
+            item.index == 0);
+    assert (locations.size() == 1);
+    assert (locations[0] == 0);
     return copy[3];
   endfunction
   task automatic mutate(inout byte target[$:2]);
@@ -816,12 +849,25 @@ module container_top;
   endtask
   task automatic mutate_memory(
       inout logic [7:0] target[3:0]);
+    logic [7:0] located[$];
+    int locations[$];
     target[2] = 8'h11;
     #1;
     target[3:1] = target[2:0];
     assert (target[3] == 8'h11);
     assert (target[2] == 8'h03);
     assert (target[1] == 8'ha5);
+    assert ($right(target[3:1]) == 1);
+    locations =
+        target[3:1].find_index() with (
+            item.index == 2);
+    assert (locations.size() == 1);
+    assert (locations[0] == 2);
+    located =
+        target[3:1].find_first() with (
+            item == 8'ha5);
+    assert (located.size() == 1);
+    assert (located[0] == 8'ha5);
     target = '{
         3: 8'h22,
         default: 8'bxxxxzzzz,
@@ -868,6 +914,14 @@ module container_top;
     binary = '{8'h01, 8'b10z1, 8'h03};
     $readmemh("image.hex", memory);
     $readmemb("image.bin", binary, -1, 1);
+    assert ($size(binary[0:1]) == 2);
+    assert ($bits(binary[0:1]) == 16);
+    assert (binary[-1:-1].sum() == 8'h01);
+    locations =
+        binary[0:1].find_index() with (
+            item.index == 1);
+    assert (locations.size() == 1);
+    assert (locations[0] == 1);
     memory[2:1] = binary[0:1];
     assert (memory[0] == 8'ha5);
     assert (memory[1] == 8'h03);

@@ -228,6 +228,7 @@ if(FSIM_WITH_LLVM)
       compiler/llvm_jit_scheduling_test.cpp
       compiler/llvm_jit_value_test.cpp
       compiler/llvm_jit_cache_test.cpp
+      compiler/llvm_jit_slice_cache_test.cpp
       compiler/llvm_jit_logic9_test.cpp
       compiler/llvm_jit_display_test.cpp
       compiler/llvm_jit_string_test.cpp
