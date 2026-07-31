@@ -359,6 +359,56 @@ void expect_slice_cache_statistics(
   return process;
 }
 
+[[nodiscard]] Process make_indexed_slice_process(
+    const std::int32_t base,
+    const std::int32_t width,
+    const bool plus,
+    const bool declared_descending,
+    const std::uint32_t element_width,
+    const bool two_state,
+    const bool signed_elements,
+    const std::uint32_t source_line) {
+  assert(width > 0);
+  const auto distance =
+      static_cast<std::int64_t>(width) - 1;
+  const auto lower =
+      plus
+          ? static_cast<std::int64_t>(base)
+          : static_cast<std::int64_t>(base) - distance;
+  const auto upper =
+      plus
+          ? static_cast<std::int64_t>(base) + distance
+          : static_cast<std::int64_t>(base);
+  ContainerType selected;
+  selected.element_width = element_width;
+  selected.two_state = two_state;
+  selected.signed_elements = signed_elements;
+  selected.fixed = true;
+  selected.index_left =
+      static_cast<std::int32_t>(
+          declared_descending ? upper : lower);
+  selected.index_right =
+      static_cast<std::int32_t>(
+          declared_descending ? lower : upper);
+
+  Process process;
+  process.id = 44;
+  process.name = "cached_static_indexed_slice";
+  process.register_count = 1;
+  process.container_register_count = 1;
+  process.container_register_types = {selected};
+  process.operations = {
+      DebugPoint{
+          DebugPointKind::statement,
+          SourceLocation{
+              "cached-static-indexed-slice.sv",
+              source_line,
+              7}},
+      ContainerSize{0, 0},
+      Halt{}};
+  return process;
+}
+
 }  // namespace
 
 void test_static_slice_consumer_cache_identity(
@@ -666,6 +716,61 @@ void test_static_slice_port_cache_identity(
       0,
       1);
   assert(slice_cached_object_count(cache_directory) == 12);
+}
+
+void test_static_indexed_slice_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol =
+      "cached_static_indexed_slice";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_slice_cache_statistics(
+            jit, hits, misses);
+      };
+  const auto make =
+      [&](const std::int32_t base = 2,
+          const std::int32_t width = 3,
+          const bool plus = true,
+          const bool descending = true,
+          const std::uint32_t element_width = 8,
+          const bool two_state = false,
+          const bool signed_elements = false,
+          const std::uint32_t line = 31) {
+        return make_indexed_slice_process(
+            base,
+            width,
+            plus,
+            descending,
+            element_width,
+            two_state,
+            signed_elements,
+            line);
+      };
+
+  materialize(make(), 0, 1);
+  materialize(make(4, 3, false), 1, 0);
+  materialize(make(1), 0, 1);
+  materialize(make(2, 2), 0, 1);
+  materialize(make(4, 3, false, false), 0, 1);
+  materialize(make(2, 3, true, true, 4), 0, 1);
+  materialize(make(2, 3, true, true, 8, true), 0, 1);
+  materialize(
+      make(2, 3, true, true, 8, false, true),
+      0,
+      1);
+  materialize(
+      make(2, 3, true, true, 8, false, false, 32),
+      0,
+      1);
+  assert(slice_cached_object_count(cache_directory) == 8);
 }
 
 }  // namespace fsim::tests::compiler

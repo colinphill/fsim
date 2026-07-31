@@ -56,14 +56,16 @@ std::optional<Lowerer::StaticContainerSlice>
 Lowerer::static_container_slice(
     const Expression& expression) {
   if (expression.kind != ExpressionKind::Slice
-      || expression.text != ":"
+      || (expression.text != ":"
+          && expression.text != "+:"
+          && expression.text != "-:")
       || expression.operands.size() != 3
       || expression.operands.front().kind
           != ExpressionKind::Identifier) {
     report(
         "FSIM-ELAB-SVSLICE-001",
         "an unpacked-array slice requires a direct static-array "
-        "identifier and a left:right selection",
+        "identifier and a left:right or indexed selection",
         expression.span);
     return std::nullopt;
   }
@@ -90,42 +92,83 @@ Lowerer::static_container_slice(
     return std::nullopt;
   }
 
-  const auto converted_bound =
-      [&](const Expression& bound)
+  const auto converted_constant =
+      [&](const Expression& value,
+          const std::string_view role)
           -> std::optional<std::int32_t> {
         std::string error;
         const auto constant =
             evaluate_systemverilog_constant_expression(
-                bound, {}, {}, error);
-        if (!constant || !constant->known()) {
+                value, {}, {}, error);
+        const auto integer =
+            constant && constant->known()
+                ? constant->integer_value()
+                : std::nullopt;
+        if (!integer
+            || *integer
+                < std::numeric_limits<std::int32_t>::min()
+            || *integer
+                > std::numeric_limits<std::int32_t>::max()) {
           report(
               "FSIM-ELAB-SVSLICE-002",
-              "static-array slice bounds must be locally constant "
-              "known integral values",
-              bound.span);
+              "static-array slice " + std::string{role}
+                  + " must be a locally constant known signed "
+                    "32-bit integral value",
+              value.span);
           return std::nullopt;
         }
-        const auto bits =
-            static_cast<std::uint32_t>(constant->bits);
-        const auto converted =
-            bits <= static_cast<std::uint32_t>(
-                        std::numeric_limits<std::int32_t>::max())
-                ? static_cast<std::int64_t>(bits)
-                : static_cast<std::int64_t>(bits)
-                      - (INT64_C(1) << 32U);
-        return static_cast<std::int32_t>(converted);
+        return static_cast<std::int32_t>(*integer);
       };
 
-  const auto left = converted_bound(expression.operands[1]);
-  const auto right = converted_bound(expression.operands[2]);
-  if (!left || !right) {
+  const auto first =
+      converted_constant(
+          expression.operands[1],
+          expression.text == ":"
+              ? "left bound"
+              : "base");
+  const auto second =
+      converted_constant(
+          expression.operands[2],
+          expression.text == ":"
+              ? "right bound"
+              : "width");
+  if (!first || !second) {
     return std::nullopt;
+  }
+
+  auto left = static_cast<std::int64_t>(*first);
+  auto right = static_cast<std::int64_t>(*second);
+  if (expression.text != ":") {
+    if (*second <= 0) {
+      report(
+          "FSIM-ELAB-SVSLICE-002",
+          "a static-array indexed slice width must be positive",
+          expression.operands[2].span);
+      return std::nullopt;
+    }
+    const auto distance =
+        static_cast<std::int64_t>(*second) - 1;
+    const auto lower =
+        expression.text == "+:"
+            ? static_cast<std::int64_t>(*first)
+            : static_cast<std::int64_t>(*first) - distance;
+    const auto upper =
+        expression.text == "+:"
+            ? static_cast<std::int64_t>(*first) + distance
+            : static_cast<std::int64_t>(*first);
+    if (base_type->index_left >= base_type->index_right) {
+      left = upper;
+      right = lower;
+    } else {
+      left = lower;
+      right = upper;
+    }
   }
 
   const bool base_descending =
       base_type->index_left >= base_type->index_right;
-  const bool selected_descending = *left >= *right;
-  if (*left != *right
+  const bool selected_descending = left >= right;
+  if (left != right
       && base_descending != selected_descending) {
     report(
         "FSIM-ELAB-SVSLICE-003",
@@ -138,8 +181,8 @@ Lowerer::static_container_slice(
       std::min(base_type->index_left, base_type->index_right);
   const auto base_high =
       std::max(base_type->index_left, base_type->index_right);
-  if (*left < base_low || *left > base_high
-      || *right < base_low || *right > base_high) {
+  if (left < base_low || left > base_high
+      || right < base_low || right > base_high) {
     report(
         "FSIM-ELAB-SVSLICE-003",
         "a static-array slice is outside the declared index range",
@@ -148,8 +191,10 @@ Lowerer::static_container_slice(
   }
 
   auto selected_type = *base_type;
-  selected_type.index_left = *left;
-  selected_type.index_right = *right;
+  selected_type.index_left =
+      static_cast<std::int32_t>(left);
+  selected_type.index_right =
+      static_cast<std::int32_t>(right);
   return StaticContainerSlice{
       *base_type, std::move(selected_type)};
 }

@@ -1975,6 +1975,8 @@ void test_persistent_object_cache() {
       root / "static-slice-ordering");
   test_static_slice_port_cache_identity(
       root / "static-slice-port");
+  test_static_indexed_slice_cache_identity(
+      root / "static-indexed-slice");
   test_container_predicate_cache_identity(
       root / "container-predicate");
   test_container_reduction_cache_identity(

@@ -17,6 +17,7 @@ module static_slice_ordering;
   logic [7:0] descending[0:5];
   logic [7:0] keyed[5:0];
   logic [7:0] named[5:0];
+  logic [7:0] indexed[5:0];
   logic [3:0] four_state[5:0];
 
   task automatic suspended_order(
@@ -76,6 +77,17 @@ module static_slice_ordering;
     assert (named[1] == 8'h20);
     assert (named[0] == 8'hf0);
 
+    indexed = '{
+        8'hf5, 8'h40, 8'h10, 8'h30, 8'h20, 8'hf0};
+    indexed[1 +: 4].sort();
+    assert (indexed[5] == 8'hf5);
+    assert (indexed[4] == 8'h10);
+    assert (indexed[1] == 8'h40);
+    assert (indexed[0] == 8'hf0);
+    indexed[4 -: 4].reverse();
+    assert (indexed[4] == 8'h40);
+    assert (indexed[1] == 8'h10);
+
     four_state = '{
         4'h5, 4'b0x00, 4'b0001, 4'b0z00, 4'b0000, 4'ha};
     four_state[4:1].sort();
@@ -107,7 +119,7 @@ endmodule
     }
   }
   assert(elaborated.ok());
-  assert(elaborated.design->container_objects().size() == 6);
+  assert(elaborated.design->container_objects().size() == 7);
   const auto& process = elaborated.design->processes().front();
   std::size_t ordering_count = 0;
   std::size_t keyed_count = 0;
@@ -150,7 +162,7 @@ endmodule
           }));
     }
   }
-  assert(ordering_count == 7);
+  assert(ordering_count == 9);
   assert(keyed_count == 2);
   auto interpreter = elaborated.design->create_interpreter();
   const auto result = interpreter->run();
@@ -168,12 +180,13 @@ module static_slice_ordering_invalid(
   int runtime_bound;
   int collision;
   initial begin
-    read_only[4:1].reverse();
+    read_only[1 +: 4].reverse();
     down[runtime_bound:1].sort();
     down[32'hxxxxxxxx:1].sort();
     down[1:4].rsort();
     down[6:5].reverse();
-    down[4 +: 2].sort();
+    down[5 +: 2].sort();
+    down[2 +: 0].sort();
     dynamic[1:0].sort();
     down[4:3][1:0].sort();
     down[4:1].sort() with (item + 1);

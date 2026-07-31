@@ -578,28 +578,28 @@ module static_port_leaf #(
     assert ($bits(source) == 32);
     assert ($dimensions(source) == 2);
     assert ($unpacked_dimensions(source) == 1);
-    assert ($left(source[LEFT - 1:RIGHT]) == LEFT - 1);
-    assert ($right(source[LEFT - 1:RIGHT]) == RIGHT);
-    assert ($size(source[LEFT - 1:RIGHT], 1) == 3);
-    assert ($bits(source[LEFT - 1:RIGHT]) == 24);
+    assert ($left(source[RIGHT +: 3]) == LEFT - 1);
+    assert ($right(source[RIGHT +: 3]) == RIGHT);
+    assert ($size(source[RIGHT +: 3], 1) == 3);
+    assert ($bits(source[RIGHT +: 3]) == 24);
     assert (
         source[LEFT:RIGHT].sum(slice_item) with (
             slice_item.index == LEFT
                 ? slice_item : 8'h00) == 8'h31);
     located =
-        source[LEFT - 1:RIGHT].find() with (
+        source[RIGHT +: 3].find() with (
             item < 8'h30);
     assert (located.size() == 1);
     assert (located[0] == 8'h04);
     locations =
-        source[LEFT - 1:RIGHT].find_index(port_item) with (
+        source[RIGHT +: 3].find_index(port_item) with (
             port_item.index == RIGHT);
     assert (locations.size() == 1);
     assert (locations[0] == RIGHT);
     assert (
         $isunknown(
             port_slice_sum(
-                source[LEFT:LEFT - 1])));
+                source[LEFT - 1 +: 2])));
     located = source.min();
     assert (located.size() == 1);
     assert (located[0] == 8'h04);
@@ -649,23 +649,23 @@ module static_port_leaf #(
     assert (result[RIGHT + 1] == 8'h10);
     assert (result[RIGHT] == 8'h20);
     result = '{8'h10, 8'h20, 8'h30, 8'h40};
-    result[LEFT - 1:RIGHT + 1].reverse();
+    result[RIGHT + 1 +: 2].reverse();
     assert (result[LEFT] == 8'h10);
     assert (result[LEFT - 1] == 8'h30);
     assert (result[RIGHT + 1] == 8'h20);
     assert (result[RIGHT] == 8'h40);
-    result[LEFT - 1:RIGHT + 1].sort();
+    result[LEFT - 1 -: 2].sort();
     assert (result[LEFT] == 8'h10);
     assert (result[LEFT - 1] == 8'h20);
     assert (result[RIGHT + 1] == 8'h30);
     assert (result[RIGHT] == 8'h40);
-    result[LEFT - 1:RIGHT + 1].rsort(port_order) with (
+    result[RIGHT + 1 +: 2].rsort(port_order) with (
         port_order.index == LEFT - 1 ? 8'h00 : 8'h01);
     assert (result[LEFT] == 8'h10);
     assert (result[LEFT - 1] == 8'h30);
     assert (result[RIGHT + 1] == 8'h20);
     assert (result[RIGHT] == 8'h40);
-    result[LEFT - 1:RIGHT + 1].sort();
+    result[LEFT - 1 -: 2].sort();
     result.reverse();
     assert (result[LEFT] == 8'h40);
     result.reverse();
@@ -682,8 +682,8 @@ module static_port_leaf #(
         RIGHT: source[RIGHT] + 8'h02,
         default: 8'h20,
         LEFT: source[LEFT] + 8'h01};
-    result[LEFT - 1:RIGHT + 1] =
-        source[LEFT - 2:RIGHT];
+    result[RIGHT + 1 +: 2] =
+        source[RIGHT +: 2];
     assert (result[LEFT] == 8'h32);
     assert ($isunknown(result[LEFT - 1]));
     assert (result[RIGHT + 1] == 8'h04);
@@ -695,7 +695,7 @@ module static_port_leaf #(
     assert (locations[0] == LEFT);
     assert (locations[2] == RIGHT + 1);
     preserve_port_slice(
-        result[LEFT - 1:RIGHT + 1]);
+        result[RIGHT + 1 +: 2]);
     assert ($isunknown(result[LEFT - 1]));
     assert (result[RIGHT + 1] == 8'h04);
     shared[-1] = 4'ha;
@@ -941,9 +941,9 @@ module container_top;
       .scores(dynamic_scores),
       .work(dynamic_work));
   slice_port_mid slice_mid(
-      .source(slice_source[4:2]),
-      .result(slice_result[3:1]),
-      .shared(slice_shared[-1:1]));
+      .source(slice_source[2 +: 3]),
+      .result(slice_result[1 +: 3]),
+      .shared(slice_shared[-1 +: 3]));
   function automatic int count(input byte source[$:2]);
     byte copy[$:2];
     copy = '{5, 6};
@@ -999,7 +999,7 @@ module container_top;
   endfunction
   function automatic logic [7:0] nested_slice_sum(
       input logic [7:0] source[3:0]);
-    return slice_sum(source[1:0]);
+    return slice_sum(source[0 +: 2]);
   endfunction
   task automatic mutate(inout byte target[$:2]);
     byte ordered[$];
@@ -1176,26 +1176,26 @@ module container_top;
     binary = '{8'h01, 8'b10z1, 8'h03};
     $readmemh("image.hex", memory);
     $readmemb("image.bin", binary, -1, 1);
-    binary[0:1].reverse();
+    binary[1 -: 2].reverse();
     assert (binary[0] == 8'h03);
     assert ($isunknown(binary[1]));
-    binary[0:1].reverse();
+    binary[0 +: 2].reverse();
     assert ($isunknown(binary[0]));
     assert (binary[1] == 8'h03);
-    assert ($size(binary[0:1]) == 2);
-    assert ($bits(binary[0:1]) == 16);
-    assert (binary[-1:-1].sum() == 8'h01);
+    assert ($size(binary[1 -: 2]) == 2);
+    assert ($bits(binary[0 +: 2]) == 16);
+    assert (binary[-1 +: 1].sum() == 8'h01);
     locations =
-        binary[0:1].find_index() with (
+        binary[1 -: 2].find_index() with (
             item.index == 1);
     assert (locations.size() == 1);
     assert (locations[0] == 1);
-    memory[2:1] = binary[0:1];
+    memory[1 +: 2] = binary[1 -: 2];
     assert (memory[0] == 8'ha5);
     assert (memory[1] == 8'h03);
     assert ($isunknown(memory[2]));
     assert (memory[3] == 8'h0f);
-    assert (slice_sum(memory[1:0]) == 8'ha8);
+    assert (slice_sum(memory[0 +: 2]) == 8'ha8);
     assert (nested_slice_sum(memory) == 8'ha8);
     assert (keyed_static_value(memory) == 8'h0f);
     assert (binary[-1] == 8'h01);
@@ -1377,13 +1377,19 @@ module container_top;
                 ? pending_item : 0) == pending[1]);
     mutate_memory(memory);
     transfer_slices(
-        binary[-1:0], memory[3:2], memory[1:0], 1);
+        binary[-1 +: 2],
+        memory[2 +: 2],
+        memory[1 -: 2],
+        1);
     assert (memory[3] == 8'h01);
     assert ($isunknown(memory[2]));
     assert (memory[1] == 8'h11);
     assert (memory[0] == 8'ha5);
     transfer_slices(
-        binary[0:1], memory[3:2], memory[1:0], 0);
+        binary[1 -: 2],
+        memory[3 -: 2],
+        memory[0 +: 2],
+        0);
     assert ($isunknown(memory[3]));
     assert (memory[2] == 8'h03);
     assert (memory[1] == 8'h11);

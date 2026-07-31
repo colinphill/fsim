@@ -219,14 +219,16 @@ HierarchyBuilder::connect_container_port(
       expression.kind == frontend::ExpressionKind::Slice;
   const frontend::Expression* base = &expression;
   if (sliced) {
-    if (expression.text != ":"
+    if ((expression.text != ":"
+         && expression.text != "+:"
+         && expression.text != "-:")
         || expression.operands.size() != 3
         || expression.operands.front().kind
             != frontend::ExpressionKind::Identifier) {
       report(
           "FSIM-ELAB-SVPORT-005",
           "container port slice actuals must be direct left:right "
-          "selections of static-array objects",
+          "or indexed selections of static-array objects",
           expression.span);
       return std::nullopt;
     }
@@ -311,15 +313,44 @@ HierarchyBuilder::connect_container_port(
           }
           return static_cast<std::int32_t>(*integer);
         };
-    const auto left = bound(expression.operands[1]);
-    const auto right = bound(expression.operands[2]);
-    if (!left || !right) {
+    const auto first = bound(expression.operands[1]);
+    const auto second = bound(expression.operands[2]);
+    if (!first || !second) {
       return std::nullopt;
     }
+    auto left = static_cast<std::int64_t>(*first);
+    auto right = static_cast<std::int64_t>(*second);
     const bool actual_descending =
         actual_info.type.index_left
         >= actual_info.type.index_right;
-    const bool selected_descending = *left >= *right;
+    if (expression.text != ":") {
+      if (*second <= 0) {
+        report(
+            "FSIM-ELAB-SVSLICE-002",
+            "a static-array indexed slice port width must be "
+            "positive",
+            expression.operands[2].span);
+        return std::nullopt;
+      }
+      const auto distance =
+          static_cast<std::int64_t>(*second) - 1;
+      const auto lower =
+          expression.text == "+:"
+              ? static_cast<std::int64_t>(*first)
+              : static_cast<std::int64_t>(*first) - distance;
+      const auto upper =
+          expression.text == "+:"
+              ? static_cast<std::int64_t>(*first) + distance
+              : static_cast<std::int64_t>(*first);
+      if (actual_descending) {
+        left = upper;
+        right = lower;
+      } else {
+        left = lower;
+        right = upper;
+      }
+    }
+    const bool selected_descending = left >= right;
     const auto actual_low =
         std::min(
             actual_info.type.index_left,
@@ -328,10 +359,10 @@ HierarchyBuilder::connect_container_port(
         std::max(
             actual_info.type.index_left,
             actual_info.type.index_right);
-    if ((*left != *right
+    if ((left != right
          && actual_descending != selected_descending)
-        || *left < actual_low || *left > actual_high
-        || *right < actual_low || *right > actual_high) {
+        || left < actual_low || left > actual_high
+        || right < actual_low || right > actual_high) {
       report(
           "FSIM-ELAB-SVSLICE-003",
           "a static-array slice port actual must preserve its "
@@ -339,8 +370,10 @@ HierarchyBuilder::connect_container_port(
           expression.span);
       return std::nullopt;
     }
-    selected_type.index_left = *left;
-    selected_type.index_right = *right;
+    selected_type.index_left =
+        static_cast<std::int32_t>(left);
+    selected_type.index_right =
+        static_cast<std::int32_t>(right);
     if (element_count(selected_type)
             != element_count(*expected)
         || !same_element_profile(
@@ -354,11 +387,17 @@ HierarchyBuilder::connect_container_port(
       return std::nullopt;
     }
     slice_alias = ContainerSliceAlias{
-        actual->second, *left, *right};
+        actual->second,
+        selected_type.index_left,
+        selected_type.index_right};
     driver_interval =
         std::pair{
-            std::min(*left, *right),
-            std::max(*left, *right)};
+            std::min(
+                selected_type.index_left,
+                selected_type.index_right),
+            std::max(
+                selected_type.index_left,
+                selected_type.index_right)};
   } else {
     if (actual_info.type != *expected) {
       report(

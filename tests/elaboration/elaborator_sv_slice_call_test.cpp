@@ -50,18 +50,24 @@ module static_slice_calls;
     source = '{8'h10, 8'h20, 8'h30, 8'h40};
     produced = '{default: 8'h00};
     changed = '{8'h01, 8'h02, 8'h03, 8'h04};
-    result = inspect(source[2:1]);
+    result = inspect(source[1 +: 2]);
     assert (result == 8'h50);
     result = nested(source);
     assert (result == 8'h50);
     transfer(
-        source[3:2], produced[3:2], changed[3:2], 1);
+        source[2 +: 2],
+        produced[2 +: 2],
+        changed[2 +: 2],
+        1);
     assert (produced[3] == 8'h10);
     assert ($isunknown(produced[2]));
     assert (changed[3] == 8'h11);
     assert (changed[2] == 8'h02);
     transfer(
-        source[1:0], produced[1:0], changed[1:0], 0);
+        source[1 -: 2],
+        produced[1 -: 2],
+        changed[1 -: 2],
+        0);
     assert (produced[1] == 8'h30);
     assert (produced[0] == 8'h40);
     assert (changed[1] == 8'h13);
@@ -148,16 +154,17 @@ module static_slice_call_invalid(
     result = accept(down[runtime_bound:0]);
     result = accept(down[32'hxxxxxxxx:0]);
     result = accept(down[0:1]);
-    result = accept(down[1 +: 2]);
+    result = accept(down[3 +: 2]);
+    result = accept(down[1 +: 0]);
     result = accept(down[3:1]);
     result = accept(narrow[1:0]);
     result = accept(bits[1:0]);
     result = accept(signed_values[1:0]);
     result = accept(dynamic[1:0]);
     result = accept(down[3:2][1:0]);
-    produce(read_only[1:0]);
+    produce(read_only[0 +: 2]);
     produce(down[3:1]);
-    edit(read_only[1:0]);
+    edit(read_only[1 -: 2]);
   end
 endmodule
 )",

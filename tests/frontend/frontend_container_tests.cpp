@@ -70,6 +70,7 @@ module containers;
     image = '{default: 8'h55, 6: 8'h66};
     ascending = '{1: 4'hd, default: 4'ha, -2: 4'hc};
     image[6:5] = image[5:4];
+    image[4 +: 2] = image[7 -: 2];
     values = new[3];
     pending.push_front(8'h11);
     bounded.delete();
@@ -278,6 +279,37 @@ endmodule
           && !slice_assignment->value.span.empty(),
       "static-array target and value slices remain distinct "
       "source-spanned colon HIR with explicit bounds");
+  const auto indexed_slice_assignment =
+      std::ranges::find_if(
+          query_statements,
+          [](const auto& statement) {
+            return statement.target.kind
+                       == ExpressionKind::Slice
+                && statement.target.text == "+:"
+                && statement.value.kind
+                       == ExpressionKind::Slice
+                && statement.value.text == "-:";
+          });
+  require(
+      indexed_slice_assignment != query_statements.end()
+          && indexed_slice_assignment->target.operands.size() == 3
+          && indexed_slice_assignment->value.operands.size() == 3
+          && indexed_slice_assignment->target.operands[0].text
+              == "image"
+          && indexed_slice_assignment->target.operands[1].text == "4"
+          && indexed_slice_assignment->target.operands[2].text == "2"
+          && indexed_slice_assignment->value.operands[0].text
+              == "image"
+          && indexed_slice_assignment->value.operands[1].text == "7"
+          && indexed_slice_assignment->value.operands[2].text == "2"
+          && indexed_slice_assignment->target.span.source_name
+              == "containers.sv"
+          && indexed_slice_assignment->value.span.source_name
+              == "containers.sv"
+          && !indexed_slice_assignment->target.span.empty()
+          && !indexed_slice_assignment->value.span.empty(),
+      "static-array indexed assignment retains distinct source-spanned "
+      "plus/minus-colon HIR with explicit base and width");
   const auto has_query =
       [&](const std::string_view name) {
         return std::ranges::any_of(
@@ -672,6 +704,10 @@ module container_slice_consumers;
     indices =
         image[6:5].find_index(entry) with (
             entry.index == 5);
+    result = $left(image[5 +: 2]);
+    indices =
+        image[6 -: 2].find_index(entry) with (
+            entry.index == 5);
   end
 endmodule
 )",
@@ -686,7 +722,7 @@ endmodule
   require(
       slice_unit != nullptr
           && slice_unit->processes.size() == 1
-          && slice_unit->processes[0].statements.size() == 3,
+          && slice_unit->processes[0].statements.size() == 5,
       "static-array slice consumer statements remain explicit HIR");
   const auto& slice_statements =
       slice_unit->processes[0].statements;
@@ -739,6 +775,33 @@ endmodule
           && slice_statements[2].value.operands[2].kind
               == ExpressionKind::Binary,
       "a predicate locator retains its slice, iterator, and predicate HIR");
+  const auto has_indexed_slice_receiver =
+      [](const Expression& call,
+         const std::string_view operation,
+         const std::string_view base) {
+        return call.kind == ExpressionKind::Call
+            && !call.operands.empty()
+            && call.operands[0].kind
+                == ExpressionKind::Slice
+            && call.operands[0].text == operation
+            && call.operands[0].operands.size() == 3
+            && call.operands[0].operands[0].text == "image"
+            && call.operands[0].operands[1].text == base
+            && call.operands[0].operands[2].text == "2"
+            && call.operands[0].span.source_name
+                == "container-slice-consumers.sv"
+            && !call.operands[0].span.empty();
+      };
+  require(
+      slice_statements[3].value.text == "$left"
+          && has_indexed_slice_receiver(
+              slice_statements[3].value, "+:", "5")
+          && slice_statements[4].value.text
+              == ".find_index"
+          && has_indexed_slice_receiver(
+              slice_statements[4].value, "-:", "6"),
+      "indexed query and locator receivers retain source-spanned "
+      "plus/minus-colon Slice HIR");
 
   const auto unsupported_slice_consumers = parse_text(
       "unsupported-slice-consumers.sv",
@@ -919,6 +982,11 @@ module container_slice_ports;
       .result(result[3:1]));
   slice_port_child positional(
       source[4:2], result[3:1]);
+  slice_port_child indexed_plus(
+      .source(source[2 +: 3]),
+      .result(result[1 +: 3]));
+  slice_port_child indexed_minus(
+      source[4 -: 3], result[3 -: 3]);
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -931,9 +999,11 @@ endmodule
           "container_slice_ports");
   require(
       slice_port_unit != nullptr
-          && slice_port_unit->instances.size() == 2
+          && slice_port_unit->instances.size() == 4
           && slice_port_unit->instances[0].connections.size() == 2
-          && slice_port_unit->instances[1].connections.size() == 2,
+          && slice_port_unit->instances[1].connections.size() == 2
+          && slice_port_unit->instances[2].connections.size() == 2
+          && slice_port_unit->instances[3].connections.size() == 2,
       "slice port connections remain distinct instance associations");
   const auto direct_port_slice =
       [](const PortConnection& connection,
@@ -979,6 +1049,44 @@ endmodule
               "result",
               "container-slice-ports.sv"),
       "positional port actuals retain source-spanned colon Slice HIR");
+  const auto indexed_port_slice =
+      [](const PortConnection& connection,
+         const std::string_view operation,
+         const std::string_view base) {
+        const auto& actual = connection.value;
+        return actual.kind == ExpressionKind::Slice
+            && actual.text == operation
+            && actual.operands.size() == 3
+            && actual.operands[0].kind
+                == ExpressionKind::Identifier
+            && actual.operands[0].text == base
+            && actual.operands[1].kind
+                == ExpressionKind::IntegerLiteral
+            && actual.operands[2].kind
+                == ExpressionKind::IntegerLiteral
+            && actual.span.source_name
+                == "container-slice-ports.sv"
+            && !actual.span.empty();
+      };
+  require(
+      indexed_port_slice(
+          slice_port_unit->instances[2].connections[0],
+          "+:",
+          "source")
+          && indexed_port_slice(
+              slice_port_unit->instances[2].connections[1],
+              "+:",
+              "result")
+          && indexed_port_slice(
+              slice_port_unit->instances[3].connections[0],
+              "-:",
+              "source")
+          && indexed_port_slice(
+              slice_port_unit->instances[3].connections[1],
+              "-:",
+              "result"),
+      "named and positional indexed port actuals retain source-spanned "
+      "plus/minus-colon Slice HIR");
 
   const auto invalid = parse_text(
       "container-invalid.sv",

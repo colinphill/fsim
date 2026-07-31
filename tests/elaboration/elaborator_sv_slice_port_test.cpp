@@ -69,9 +69,9 @@ module static_slice_port_top #(
   logic [7:0] partition[5:0];
 
   slice_port_mid mid(
-      .source(source[HIGH:LOW]),
-      .result(result[3:1]),
-      .shared(shared[-1:1]));
+      .source(source[LOW +: HIGH - LOW + 1]),
+      .result(result[1 +: 3]),
+      .shared(shared[-1 +: 3]));
   slice_probe positional(source[1:0]);
   slice_writer high(.result(partition[5:3]));
   slice_writer low(.result(partition[2:0]));
@@ -198,6 +198,9 @@ module static_slice_port_invalid;
   slice_input reversed(.value(down[2:4]));
   slice_input out_of_range(.value(down[6:4]));
   slice_input indexed(.value(down[4 +: 3]));
+  slice_input zero_width(.value(down[2 +: 0]));
+  slice_input negative_width(.value(down[2 -: -1]));
+  slice_input runtime_width(.value(down[2 +: runtime_bound]));
   slice_input indirect(.value(down[4:2][2:0]));
   slice_input nonstatic(.value(dynamic[2:0]));
   slice_input element(.value(down[2]));
@@ -206,8 +209,8 @@ module static_slice_port_invalid;
   slice_input wrong_width(.value(narrow[2:0]));
   slice_input wrong_state(.value(two_state[2:0]));
   slice_input wrong_sign(.value(signed_value[2:0]));
-  slice_output overlap_a(.value(down[5:3]));
-  slice_output overlap_b(.value(down[4:2]));
+  slice_output overlap_a(.value(down[3 +: 3]));
+  slice_output overlap_b(.value(down[2 +: 3]));
 endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);

@@ -699,6 +699,12 @@ module static_slices;
     assert (down[4:2].and() == 8'h00);
     assert (down[4:2].or() == 8'h77);
     assert (down[4:2].xor() == 8'h55);
+    assert ($left(down[2 +: 3]) == 4);
+    assert ($right(down[2 +: 3]) == 2);
+    assert ($size(down[2 +: 3]) == 3);
+    assert ($bits(down[2 +: 3]) == 24);
+    assert (down[2 +: 3].sum() == 8'h99);
+    assert (down[4 -: 3].sum() == 8'h99);
     assert (
         down[4:2].sum(entry) with (
             entry.index == 3 ? entry : 8'h00)
@@ -735,6 +741,18 @@ module static_slices;
         down[4:2].find_last_index() with (
             item >= 8'h33);
     assert (locations[0] == 3);
+    locations =
+        down[2 +: 3].find_index() with (
+            item.index == 3);
+    assert (locations.size() == 1);
+    assert (locations[0] == 3);
+    pair = down[3 -: 2];
+    assert (pair[1] == 8'h33);
+    assert (pair[0] == 8'h22);
+    down[1 +: 2] = pair;
+    assert (down[2] == 8'h33);
+    assert (down[1] == 8'h22);
+    down = '{8'h55, 8'h44, 8'h33, 8'h22, 8'h11, 8'h00};
     pair = down[4:3];
     assert (pair[1] == 8'h44);
     assert (pair[0] == 8'h33);
@@ -873,7 +891,7 @@ endmodule
           R"(
 module static_slice_atomic;
   logic [7:0] target[3:0];
-  initial target[3:1] = target[2:0];
+  initial target[1 +: 3] = target[2 -: 3];
 endmodule
 )",
           fsim::frontend::Language::SystemVerilog2017);
