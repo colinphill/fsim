@@ -9,6 +9,20 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
+- Reboot checkpoint: Batch 99 is intentionally in progress, not complete. The
+  checkpoint commit contains compact `CaseQualifier` HIR metadata; parsing for
+  `unique`, `unique0`, and `priority` before `case`, `casez`, `casex`, and
+  bounded `case inside`; qualified-case lowering with alternative-level
+  definite-match counting and source-aware warning reports; frontend,
+  elaboration, and assertion-application evidence; native-object schema 51;
+  and an 18-shape LLVM cache-key matrix. The warnings-as-errors Debug tree was
+  rebuilt with eight workers after all checkpoint edits; the focused Debug
+  frontend, elaboration, assertion-application, and LLVM tests pass (the LLVM
+  cache test completed in 2.48 seconds). Diagnostics and release documents
+  have not yet been updated, and the full Debug/Release regressions have not
+  yet run. Resume with the focused expression below, then complete diagnostics,
+  documentation, full gates, and the final Batch 99 commit. Do not treat the
+  checkpoint commit as Batch 99 completion.
 - Implementation baseline: completed feature-batch-98 bounded SystemVerilog
   case-inside statements on top of the feature-batch-97 bounded membership
   expression handoff.
@@ -1192,9 +1206,11 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin Batch 99 at item 1 above. Do not rerun Batch 98's full regression
-   until the case-qualifier implementation and evidence are complete
-   unless an intervening repair needs it.
+3. Continue the in-progress Batch 99 checkpoint described in the Snapshot.
+   Inspect the live diff first, rerun focused evidence if the host changed,
+   then add diagnostics and release-document evidence. Do not rerun Batch 98's
+   full regression until the case-qualifier implementation and evidence are
+   complete unless an intervening repair needs it.
 4. Keep Batch 99 within procedural SystemVerilog `unique`, `unique0`, and
    `priority` case qualifiers and their deterministic diagnostics.
    Record intentional scope changes in this handoff before implementation.
@@ -1215,7 +1231,7 @@ case qualifiers appear:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
-  -R 'fsim\.(frontend|runtime|elaboration|llvm|application\.expressions|application\.sv_functions|diagnostics-catalog|source-line-budget)'
+  -R 'fsim\.(frontend|runtime|elaboration|llvm|application\.assertions|application\.expressions|application\.sv_functions|diagnostics-catalog|source-line-budget)'
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their

@@ -495,6 +495,7 @@ void expect_slice_cache_statistics(
     const bool case_equality,
     const bool reverse_membership,
     const bool reverse_case_inside,
+    const bool priority_qualifier,
     const std::string_view function_source,
     const std::uint32_t function_line) {
   Process process;
@@ -511,7 +512,7 @@ void expect_slice_cache_statistics(
       LoadConstant{
           2, PackedLogic4::from_aval_bval(1, 1, 1)},
       CopyContainerRegister{0, 1},
-      Call{14, 5, CallStack{0, 1, 1}},
+      Call{15, 5, CallStack{0, 1, 1}},
       CopyContainerRegister{2, 0},
       ConditionalContainerSelect{
           3, 2,
@@ -533,6 +534,12 @@ void expect_slice_cache_statistics(
           UnknownBranchPolicy::when_false},
       Jump{13},
       Jump{13},
+      Report{
+          priority_qualifier
+              ? "priority case has no matching item"
+              : "unique case has multiple matching items",
+          AssertionSeverity::warning,
+          SourceLocation{"qualified-case.sv", 21, 7}},
       Halt{},
       DebugPoint{
           DebugPointKind::statement,
@@ -1002,13 +1009,14 @@ void test_nonstatic_function_return_cache_identity(
           const bool case_equality = false,
           const bool reverse_membership = false,
           const bool reverse_case_inside = false,
+          const bool priority_qualifier = false,
           const std::string_view source =
               "nonstatic-function-return.sv",
           const std::uint32_t line = 18) {
         return make_nonstatic_return_process(
             type, clear_before_return, reverse_conditional,
             case_equality, reverse_membership, reverse_case_inside,
-            source, line);
+            priority_qualifier, source, line);
       };
   const auto dynamic_type = [] {
     ContainerType type;
@@ -1054,15 +1062,18 @@ void test_nonstatic_function_return_cache_identity(
       make(dynamic_type(), false, false, false, false, true),
       0, 1);
   materialize(
+      make(dynamic_type(), false, false, false, false, false, true),
+      0, 1);
+  materialize(
       make(
-          dynamic_type(), false, false, false, false, false,
+          dynamic_type(), false, false, false, false, false, false,
           "edited-nonstatic-function-return.sv"),
       0,
       1);
-  materialize(make(dynamic_type(), false, false, false, false, false,
+  materialize(make(dynamic_type(), false, false, false, false, false, false,
                    "nonstatic-function-return.sv", 19),
               0, 1);
-  assert(slice_cached_object_count(cache_directory) == 17);
+  assert(slice_cached_object_count(cache_directory) == 18);
 }
 
 }  // namespace fsim::tests::compiler

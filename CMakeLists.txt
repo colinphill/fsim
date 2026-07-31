@@ -361,6 +361,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/hierarchy_systemc.cpp
       src/elaboration/hierarchy_types.cpp
       src/elaboration/lowerer_assignment.cpp
+      src/elaboration/lowerer_case_qualified.cpp
       src/elaboration/lowerer_control.cpp
       src/elaboration/lowerer_expression.cpp
       src/elaboration/lowerer_expression_binary.cpp

@@ -641,7 +641,9 @@ class VerilogParser final : private detail::ParserBase {
   void skip_case_statement();
 
   Statement parse_case_statement(
-      const Token& start, const CaseMatchKind match_kind);
+      const Token& start,
+      const CaseMatchKind match_kind,
+      const CaseQualifier qualifier = CaseQualifier::None);
 
   void parse_procedural_loop_body(
       const Token& start, Statement& statement);

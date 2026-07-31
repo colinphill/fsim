@@ -20,6 +20,7 @@ int main() {
   test_systemverilog_static_slice_ordering();
   test_systemverilog_static_slice_ports();
   test_case_and_expression_lowering();
+  test_systemverilog_case_qualifiers();
   test_systemverilog_case_inside_lowering();
   test_systemverilog_membership_lowering();
   test_numeric_and_system_function_lowering();

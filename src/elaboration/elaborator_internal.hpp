@@ -867,6 +867,7 @@ private:
     void lower_if(const Statement& statement);
 
     void lower_case(const Statement& statement);
+    void lower_qualified_case(const Statement& statement);
 
     void lower_loop(const Statement& statement);
 

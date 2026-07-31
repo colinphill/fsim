@@ -748,6 +748,13 @@ enum class CaseMatchKind {
   Inside,
 };
 
+enum class CaseQualifier {
+  None,
+  Unique,
+  Unique0,
+  Priority,
+};
+
 enum class AssertionSeverity {
   Note,
   Warning,
@@ -893,6 +900,7 @@ struct Statement {
   // Ordered alternatives and matching policy of a Verilog/SystemVerilog case
   // statement. VHDL sequential case retains the exact default.
   CaseMatchKind case_match_kind{CaseMatchKind::Exact};
+  CaseQualifier case_qualifier{CaseQualifier::None};
   std::vector<CaseAlternative> case_alternatives;
   // Declarations directly owned by a procedural block.
   std::vector<VariableDeclaration> declarations;

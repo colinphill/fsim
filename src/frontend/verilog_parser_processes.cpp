@@ -190,10 +190,13 @@ void VerilogParser::skip_case_statement() {
 }
 
 Statement VerilogParser::parse_case_statement(
-  const Token& start, const CaseMatchKind match_kind) {
+  const Token& start,
+  const CaseMatchKind match_kind,
+  const CaseQualifier qualifier) {
   Statement statement;
   statement.kind = StatementKind::Case;
   statement.case_match_kind = match_kind;
+  statement.case_qualifier = qualifier;
   expect(TokenKind::LeftParen, "'(' after case", "FSIM-SV-PARSE-046");
   statement.condition = parse_expression();
   expect(TokenKind::RightParen, "')' after case expression",
@@ -635,14 +638,44 @@ std::optional<Statement> VerilogParser::parse_statement() {
     statement.span = span_from(start, previous());
     return statement;
   }
-  if (language_ == Language::SystemVerilog2017
-      && (keyword("unique") || keyword("unique0")
-          || keyword("priority"))
-      && (keyword("case", 1) || keyword("casez", 1)
-          || keyword("casex", 1))) {
-    const auto qualifier = advance();
-    error(qualifier, "FSIM-SV-UNSUPPORTED-017",
-          "unique and priority case qualifiers are not implemented");
+  const auto is_case_qualifier = [&]() {
+    return at(TokenKind::Identifier)
+        && (current().text == "unique"
+            || current().text == "unique0"
+            || current().text == "priority");
+  };
+  if (is_case_qualifier()) {
+    const auto qualifier_start = advance();
+    CaseQualifier qualifier = CaseQualifier::Unique;
+    if (qualifier_start.text == "unique0") {
+      qualifier = CaseQualifier::Unique0;
+    } else if (qualifier_start.text == "priority") {
+      qualifier = CaseQualifier::Priority;
+    }
+    if (language_ != Language::SystemVerilog2017) {
+      error(qualifier_start, "FSIM-SV-PARSE-185",
+            "case qualifiers require SystemVerilog");
+    }
+    while (is_case_qualifier()) {
+      error(current(), "FSIM-SV-PARSE-186",
+            "a case statement accepts only one qualifier");
+      advance();
+    }
+    if (match_keyword("case")) {
+      return parse_case_statement(
+          qualifier_start, CaseMatchKind::Exact, qualifier);
+    }
+    if (match_keyword("casez")) {
+      return parse_case_statement(
+          qualifier_start, CaseMatchKind::WildcardZ, qualifier);
+    }
+    if (match_keyword("casex")) {
+      return parse_case_statement(
+          qualifier_start, CaseMatchKind::WildcardXZ, qualifier);
+    }
+    error(qualifier_start, "FSIM-SV-UNSUPPORTED-017",
+          "bounded unique and priority qualifiers require a case statement");
+    return parse_statement();
   }
   if (match_keyword("case")) {
     return parse_case_statement(previous(), CaseMatchKind::Exact);

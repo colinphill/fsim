@@ -1527,6 +1527,11 @@ using namespace elaboration_detail;
 
 
     void Lowerer::lower_case(const Statement& statement) {
+        if (statement.case_qualifier
+            != frontend::CaseQualifier::None) {
+            lower_qualified_case(statement);
+            return;
+        }
         BinaryOperator match_operation = BinaryOperator::case_equal;
         bool inside_matching = false;
         switch (statement.case_match_kind) {

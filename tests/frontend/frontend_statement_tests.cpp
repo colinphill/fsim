@@ -167,6 +167,16 @@ module case_statement;
     2'b1x: result = 2'b10;
     default: result = 2'b11;
   endcase
+  initial unique case (selector)
+    2'b00: result = 2'b01;
+    default: result = 2'b11;
+  endcase
+  initial unique0 casez (selector)
+    2'b0?: result = 2'b01;
+  endcase
+  initial priority case (selector) inside
+    [2'b00:2'b10]: result = 2'b10;
+  endcase
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -217,6 +227,22 @@ endmodule
           && inside.case_alternatives[2].is_default
           && !inside.span.empty(),
       "case inside retains ordered values, explicit ranges, and source span");
+  require(
+      result.design.units.front().processes[4]
+                 .statements.front().case_qualifier
+              == CaseQualifier::Unique
+          && result.design.units.front().processes[5]
+                 .statements.front().case_qualifier
+              == CaseQualifier::Unique0
+          && result.design.units.front().processes[6]
+                 .statements.front().case_qualifier
+              == CaseQualifier::Priority
+          && result.design.units.front().processes[6]
+                 .statements.front().case_match_kind
+              == CaseMatchKind::Inside
+          && result.design.units.front().processes[4]
+                 .statements.front().span.begin.column == 11,
+      "case qualifier kind and source span remain distinct from matching mode");
 
   const auto invalid = parse_text(
       "bad_case.sv",
@@ -242,8 +268,7 @@ endmodule
       Language::SystemVerilog2017);
   require(!invalid.ok(), "unsupported and duplicate case forms must fail");
   for (const auto code : {
-           std::string_view{"FSIM-SV-SEM-014"},
-           std::string_view{"FSIM-SV-UNSUPPORTED-017"}}) {
+           std::string_view{"FSIM-SV-SEM-014"}}) {
     require(
         std::any_of(
             invalid.diagnostics.begin(),
@@ -256,6 +281,46 @@ endmodule
   require(
       invalid.design.units.front().processes.size() == 4,
       "case diagnostics must recover to following processes");
+
+  const auto invalid_qualifiers = parse_text(
+      "bad_case_qualifiers.sv",
+      R"(
+module bad_case_qualifiers;
+  logic selector;
+  logic result;
+  initial unique priority case (selector)
+    1'b0: result = 1'b0;
+  endcase
+  initial unique if (selector) result = 1'b1;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid_qualifiers.ok(), "invalid case qualifiers must fail");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-PARSE-186"},
+           std::string_view{"FSIM-SV-UNSUPPORTED-017"}}) {
+    require(
+        std::ranges::any_of(
+            invalid_qualifiers.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "duplicate and misplaced case qualifier diagnostics");
+  }
+
+  const auto verilog_qualifier = parse_text(
+      "bad_case_qualifier.v",
+      "module bad_case_qualifier; reg a; initial unique case (a) "
+      "1'b0: a = 1'b1; endcase endmodule",
+      Language::Verilog2005);
+  require(
+      !verilog_qualifier.ok()
+          && std::ranges::any_of(
+              verilog_qualifier.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-185";
+              }),
+      "case qualifiers require SystemVerilog");
 
   const auto malformed_inside = parse_text(
       "bad_case_inside.sv",

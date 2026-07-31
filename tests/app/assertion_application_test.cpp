@@ -40,6 +40,7 @@ struct ReportCapture {
 struct Capture {
   std::vector<ReportCapture> reports;
   fsim::runtime::Logic4Word marker{};
+  fsim::runtime::Logic4Word qualifier_marker{};
   std::string failure;
   fsim::runtime::simir::AssertionSeverity failure_severity{};
   bool failure_was_reported{};
@@ -125,6 +126,11 @@ Capture execute(
       simulation.find_signal("assertion_actions.marker");
   assert(marker);
   capture.marker = simulation.read_signal(*marker).low_word();
+  const auto qualifier_marker =
+      simulation.find_signal("assertion_actions.qualifier_marker");
+  assert(qualifier_marker);
+  capture.qualifier_marker =
+      simulation.read_signal(*qualifier_marker).low_word();
   return capture;
 }
 
@@ -155,6 +161,7 @@ void test_assertion_actions(
 
   assert(reference.reports == compiled.reports);
   assert(reference.marker == compiled.marker);
+  assert(reference.qualifier_marker == compiled.qualifier_marker);
   assert(reference.failure == compiled.failure);
   assert(reference.failure_severity == compiled.failure_severity);
   assert(
@@ -163,11 +170,19 @@ void test_assertion_actions(
   assert(
       reference.marker.bval == 0
       && reference.marker.aval == 31);
-  assert(reference.reports.size() == 7);
+  assert(
+      reference.qualifier_marker.bval == 0
+      && reference.qualifier_marker.aval == 7);
+  assert(reference.reports.size() == 12);
   constexpr std::array expected_messages{
       std::string_view{"$info"},
       std::string_view{"standalone warning"},
       std::string_view{"standalone error"},
+      std::string_view{"unique case has multiple matching items"},
+      std::string_view{"unique case has no matching item"},
+      std::string_view{"unique0 case has multiple matching items"},
+      std::string_view{"priority case has no matching item"},
+      std::string_view{"unique case has multiple matching items"},
       std::string_view{"pass block"},
       std::string_view{"failure block"},
       std::string_view{"assertion failed"},
@@ -177,6 +192,11 @@ void test_assertion_actions(
       fsim::runtime::simir::AssertionSeverity::note,
       fsim::runtime::simir::AssertionSeverity::warning,
       fsim::runtime::simir::AssertionSeverity::error,
+      fsim::runtime::simir::AssertionSeverity::warning,
+      fsim::runtime::simir::AssertionSeverity::warning,
+      fsim::runtime::simir::AssertionSeverity::warning,
+      fsim::runtime::simir::AssertionSeverity::warning,
+      fsim::runtime::simir::AssertionSeverity::warning,
       fsim::runtime::simir::AssertionSeverity::note,
       fsim::runtime::simir::AssertionSeverity::warning,
       fsim::runtime::simir::AssertionSeverity::error,
@@ -228,12 +248,16 @@ void test_cli_failure_reporting(
        position = report_text.find(marker, position + marker.size())) {
     ++report_count;
   }
-  assert(report_count == 7);
+  assert(report_count == 12);
   assert(
       report_text.find("note[FSIM-HDL-REPORT]: $info")
       != std::string::npos);
   assert(
       report_text.find("warning[FSIM-HDL-REPORT]: failure block")
+      != std::string::npos);
+  assert(
+      report_text.find(
+          "warning[FSIM-HDL-REPORT]: unique case has multiple matching items")
       != std::string::npos);
   assert(
       report_text.find("failure[FSIM-HDL-REPORT]: terminal")
@@ -258,11 +282,33 @@ int main() {
     output << R"(
 module assertion_actions;
   logic [5:0] marker;
+  logic [1:0] selector;
+  logic [3:0] qualifier_marker;
   initial begin
     marker = 0;
+    selector = 2'b01;
+    qualifier_marker = 0;
     $info;
     $warning("standalone warning");
     $error("standalone error");
+    unique case (selector)
+      2'b01: qualifier_marker += 1;
+      2'b01: qualifier_marker += 8;
+    endcase
+    unique case (selector)
+      2'b11: qualifier_marker = 15;
+    endcase
+    unique0 casex (2'bx1)
+      2'b01: qualifier_marker += 2;
+      2'b11: qualifier_marker += 8;
+    endcase
+    priority casez (2'b11)
+      2'b00: qualifier_marker = 15;
+    endcase
+    unique case (selector) inside
+      2'b01: qualifier_marker += 4;
+      [2'b00:2'b10]: qualifier_marker += 8;
+    endcase
     assert (1'b1) marker += 1; else marker = 63;
     assert (1'b0) marker = 63; else marker += 2;
     assert (1'b1) begin
