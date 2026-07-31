@@ -188,6 +188,15 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             if (!actual) {
                 return std::nullopt;
             }
+            if (process_.container_register_types.at(*actual)
+                != *formal_type) {
+                report(
+                    "FSIM-ELAB-SVFUNC-009",
+                    "function container arguments require an exactly "
+                    "compatible kind and profile",
+                    expression.operands[index].span);
+                return std::nullopt;
+            }
             process_.operations.emplace_back(
                 CopyContainerRegister{
                     frame.container_arguments[index], *actual});
@@ -293,15 +302,6 @@ Lowerer::lower_user_container_function_expression(
     if (!result_type) {
         return std::nullopt;
     }
-    if (!result_type->fixed) {
-        report(
-            "FSIM-ELAB-SVFUNC-008",
-            "function container results are limited to locally constant "
-            "one-dimensional static arrays",
-            function.span);
-        return std::nullopt;
-    }
-
     if (!frame.allocated) {
         frame.result_is_container = true;
         frame.container_result =
@@ -375,6 +375,15 @@ Lowerer::lower_user_container_function_expression(
                     : lower_container_expression(
                           expression.operands[index]);
             if (!actual) {
+                return std::nullopt;
+            }
+            if (process_.container_register_types.at(*actual)
+                != *formal_type) {
+                report(
+                    "FSIM-ELAB-SVFUNC-009",
+                    "function container arguments require an exactly "
+                    "compatible kind and profile",
+                    expression.operands[index].span);
                 return std::nullopt;
             }
             process_.operations.emplace_back(
@@ -464,12 +473,25 @@ void Lowerer::lower_function_return(const Statement& statement) {
                 function.return_type, function.span);
             if (result_type) {
                 const auto value =
-                    lower_static_container_assignment_value(
-                        statement.value, *result_type);
+                    result_type->fixed
+                        ? lower_static_container_assignment_value(
+                              statement.value, *result_type)
+                        : lower_container_expression(
+                              statement.value);
                 if (value) {
-                    process_.operations.emplace_back(
-                        CopyContainerRegister{
-                            frame.container_result, *value});
+                    if (!result_type->fixed
+                        && process_.container_register_types.at(*value)
+                            != *result_type) {
+                        report(
+                            "FSIM-ELAB-SVFUNC-008",
+                            "function return container kind and profile "
+                            "must exactly match the declared result",
+                            statement.value.span);
+                    } else {
+                        process_.operations.emplace_back(
+                            CopyContainerRegister{
+                                frame.container_result, *value});
+                    }
                 }
             }
         }

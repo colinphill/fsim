@@ -488,6 +488,41 @@ void expect_slice_cache_statistics(
   return process;
 }
 
+[[nodiscard]] Process make_nonstatic_return_process(
+    const ContainerType& type,
+    const bool clear_before_return,
+    const std::string_view function_source,
+    const std::uint32_t function_line) {
+  Process process;
+  process.id = 46;
+  process.name = "cached_nonstatic_function_return";
+  process.register_count = 2;
+  process.container_register_count = 4;
+  process.container_register_types = {type, type, type, type};
+  process.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_aval_bval(32, 0, 0)},
+      LoadConstant{
+          1, PackedLogic4::from_aval_bval(32, 0, 0)},
+      CopyContainerRegister{0, 1},
+      Call{6, 4, CallStack{0, 1, 1}},
+      CopyContainerRegister{2, 0},
+      Halt{},
+      DebugPoint{
+          DebugPointKind::statement,
+          SourceLocation{
+              std::string{function_source},
+              function_line,
+              5}}};
+  if (clear_before_return) {
+    process.operations.push_back(
+        DeleteContainer{0, std::nullopt});
+  }
+  process.operations.push_back(CopyContainerRegister{0, 3});
+  process.operations.push_back(Return{CallStack{0, 1, 1}});
+  return process;
+}
+
 }  // namespace
 
 void test_static_slice_consumer_cache_identity(
@@ -916,6 +951,80 @@ void test_fixed_array_function_return_cache_identity(
       0,
       1);
   assert(slice_cached_object_count(cache_directory) == 10);
+}
+
+void test_nonstatic_function_return_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol =
+      "cached_nonstatic_function_return";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_slice_cache_statistics(jit, hits, misses);
+      };
+  const auto make =
+      [&](const ContainerType& type,
+          const bool clear_before_return = false,
+          const std::string_view source =
+              "nonstatic-function-return.sv",
+          const std::uint32_t line = 18) {
+        return make_nonstatic_return_process(
+            type, clear_before_return, source, line);
+      };
+  const auto dynamic_type = [] {
+    ContainerType type;
+    type.element_width = 8;
+    return type;
+  };
+
+  materialize(make(dynamic_type()), 0, 1);
+  materialize(make(dynamic_type()), 1, 0);
+  auto queue = dynamic_type();
+  queue.queue = true;
+  materialize(make(queue), 0, 1);
+  queue.maximum_elements = 4;
+  materialize(make(queue), 0, 1);
+  auto associative = dynamic_type();
+  associative.associative = true;
+  associative.two_state_indices = true;
+  associative.signed_indices = true;
+  materialize(make(associative), 0, 1);
+  auto changed = associative;
+  changed.index_width = 8;
+  materialize(make(changed), 0, 1);
+  changed = associative;
+  changed.two_state_indices = false;
+  materialize(make(changed), 0, 1);
+  changed = associative;
+  changed.signed_indices = false;
+  materialize(make(changed), 0, 1);
+  changed = dynamic_type();
+  changed.element_width = 4;
+  materialize(make(changed), 0, 1);
+  changed = dynamic_type();
+  changed.two_state = true;
+  materialize(make(changed), 0, 1);
+  changed = dynamic_type();
+  changed.signed_elements = true;
+  materialize(make(changed), 0, 1);
+  materialize(make(dynamic_type(), true), 0, 1);
+  materialize(
+      make(
+          dynamic_type(), false,
+          "edited-nonstatic-function-return.sv"),
+      0,
+      1);
+  materialize(make(dynamic_type(), false,
+                   "nonstatic-function-return.sv", 19),
+              0, 1);
+  assert(slice_cached_object_count(cache_directory) == 13);
 }
 
 }  // namespace fsim::tests::compiler

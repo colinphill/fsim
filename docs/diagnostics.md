@@ -914,7 +914,8 @@ therefore excluded.
 | `FSIM-ELAB-SVFUNC-005` | error | A return statement is outside an executable function or lacks a value during lowering. |
 | `FSIM-ELAB-SVFUNC-006` | error | Bounded runtime functions contain a direct or indirect recursive call cycle. |
 | `FSIM-ELAB-SVFUNC-007` | error | The same bare function name is directly visible from multiple imported SystemVerilog packages. |
-| `FSIM-ELAB-SVFUNC-008` | error | A bounded SystemVerilog function result uses a dynamic, queue, associative, or otherwise unsupported unpacked-container kind instead of one fixed one-dimensional array. |
+| `FSIM-ELAB-SVFUNC-008` | error | A bounded SystemVerilog function result or its whole-container destination has an incompatible container kind, element profile, queue bound, or associative index profile. |
+| `FSIM-ELAB-SVFUNC-009` | error | A bounded SystemVerilog function container argument has an incompatible kind, element profile, queue bound, or associative index profile. |
 | `FSIM-ELAB-VHFUNC-001` | error | An interface-function generic has no retained profile in HIR. |
 | `FSIM-ELAB-VHFUNC-002` | error | An interface-function association or selected actual is not same-language VHDL. |
 | `FSIM-ELAB-VHFUNC-003` | error | An interface-function actual is not a simple visible function name. |
@@ -1009,6 +1010,7 @@ therefore excluded.
 | `FSIM-ELAB-SVTASK-008` | error | Bounded runtime tasks contain a direct or indirect recursive call cycle. |
 | `FSIM-ELAB-SVTASK-009` | error | The same bare task name is directly visible from multiple imported SystemVerilog packages. |
 | `FSIM-ELAB-SVTASK-010` | error | A suspending bounded task is called from `final`, `always_comb`, or `always_latch`. |
+| `FSIM-ELAB-SVTASK-011` | error | A bounded SystemVerilog task container input or inout actual has an incompatible kind, element profile, queue bound, or associative index profile. |
 | `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the design unit where it is used. |
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |

@@ -598,9 +598,21 @@ Lowerer::Lowerer(
                             : lower_container_expression(
                                   *variable.initializer);
                     if (value) {
-                        process_.operations.emplace_back(
-                            CopyContainerRegister{
-                                register_id, *value});
+                        if (process_.container_register_types.at(*value)
+                            != *type) {
+                            report(
+                                variable.initializer->kind
+                                        == ExpressionKind::Call
+                                    ? "FSIM-ELAB-SVFUNC-008"
+                                    : "FSIM-ELAB-SVCONTAINER-010",
+                                "container initializer requires an "
+                                "exactly compatible kind and profile",
+                                variable.initializer->span);
+                        } else {
+                            process_.operations.emplace_back(
+                                CopyContainerRegister{
+                                    register_id, *value});
+                        }
                     }
                 }
                 continue;

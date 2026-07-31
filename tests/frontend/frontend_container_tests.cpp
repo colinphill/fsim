@@ -915,6 +915,15 @@ module container_function_return;
     named_result[0] = seed + 1;
     named_result[1] = seed + 2;
   endfunction
+  function automatic byte dynamic_result[]();
+    dynamic_result = dynamic_result;
+  endfunction
+  function automatic byte queue_result[$:2]();
+    queue_result = queue_result;
+  endfunction
+  function automatic byte associative_result[int]();
+    associative_result = associative_result;
+  endfunction
   initial result = copy_slice(source);
 endmodule
 )",
@@ -927,7 +936,7 @@ endmodule
       "container_function_return");
   require(
       fixed_return_unit != nullptr
-          && fixed_return_unit->functions.size() == 2,
+          && fixed_return_unit->functions.size() == 5,
       "fixed-array functions remain separate declarations");
   const auto& slice_function = fixed_return_unit->functions[0];
   const auto& named_function = fixed_return_unit->functions[1];
@@ -980,6 +989,25 @@ endmodule
                         == "named_result";
               }),
       "function-name element assignments retain the typed result object");
+  require(
+      fixed_return_unit->functions[2].return_type
+                  .systemverilog_container->kind
+              == SystemVerilogContainerKind::DynamicArray
+          && fixed_return_unit->functions[3].return_type
+                     .systemverilog_container->kind
+              == SystemVerilogContainerKind::Queue
+          && fixed_return_unit->functions[3].return_type
+                 .systemverilog_container->queue_maximum.has_value()
+          && fixed_return_unit->functions[4].return_type
+                     .systemverilog_container->kind
+              == SystemVerilogContainerKind::AssociativeArray
+          && fixed_return_unit->functions[4].return_type
+                 .systemverilog_container
+                 ->associative_index_type
+                 ->width()
+              == 32,
+      "dynamic, bounded-queue, and integral-key associative function "
+      "result kinds retain exact HIR profiles");
 
   const auto multidimensional_return = parse_text(
       "multidimensional-function-return.sv",

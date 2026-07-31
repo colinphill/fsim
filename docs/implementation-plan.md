@@ -5154,6 +5154,50 @@ in 7.01 seconds, containers in 87.24 seconds, and the monolithic application
 in 13.76 seconds, on 2026-07-31. Batch 93 is not a ten-batch CI-inspection
 boundary, so no Actions run was inspected.
 
+### Ninety-fourth feature batch — nonstatic container function returns
+
+Bounded automatic SystemVerilog functions may now return dynamic arrays,
+queues or bounded queues, and integral-key associative arrays. The existing
+result-dimension HIR retains each kind, and specialization resolves exact
+element width, signedness, state domain, queue bound, and associative index
+width, signedness, and state. Parameter-dependent queue bounds and imported
+package typedef index marks therefore reach one exact runtime `ContainerType`.
+
+The kind-generic function frame allocates an exact empty default result for
+every activation. Whole function-name assignment and explicit value `return`
+copy elements and associative keys into an isolated destination after the
+call. Nested calls, repeated calls, and automatic container locals cannot
+alias the shared result frame, while a partially assigned first invocation
+cannot leak into the exact empty second invocation.
+
+Returned values assign to compatible whole module objects or automatic locals
+and flow directly into compatible function and task input actuals. Every
+transfer validates container kind, element profile, queue bound, and
+associative index profile before emitting a copy. Fixed/nonstatic,
+dynamic/queue/associative, element/index-profile, runtime-slice,
+multidimensional, and recursive mismatches retain bounded diagnostics rather
+than becoming runtime callback failures.
+
+Positive evidence spans exact frontend HIR, dynamic/queue/associative result
+metadata, function-name and explicit returns, nested copy isolation, empty
+defaults, module/package/imported/qualified calls, parameter-bound queues,
+typedef-indexed associative values, automatic locals, returned function/task
+inputs, debugger metadata, VCD witnesses, interpreter, LLVM O0/O2, cold/warm
+reuse, and package-edit invalidation. Native-object schema 46 and container
+semantic revision 22 record kind, bound, element/index profiles, operation
+graph, specialization, and transitive provenance without a public ABI change.
+
+The diagnostic catalog now covers all 1,225 production codes, and the source
+gate covers 291 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 430.23 seconds, including scoped locals in 0.96 seconds, the
+expanded function differential in 9.48 seconds, containers in 351.17 seconds,
+and the monolithic application in 40.34 seconds. Release passed all 59 tests in
+128.98 seconds, including scoped locals in 0.81 seconds, functions in 8.48
+seconds, containers in 89.85 seconds, and the monolithic application in 13.91
+seconds, on 2026-07-31. Batch 94 is not a ten-batch CI-inspection boundary, so
+no Actions run was inspected.
+
 ## v1 release condition
 
 fsim v1 may be declared only when:

@@ -620,6 +620,18 @@ using namespace elaboration_detail;
                                 statement.value.span);
                             return;
                         }
+                        if (process_.container_register_types.at(*value)
+                            != *runtime_type) {
+                            report(
+                                statement.value.kind
+                                        == ExpressionKind::Call
+                                    ? "FSIM-ELAB-SVFUNC-008"
+                                    : "FSIM-ELAB-SVCONTAINER-010",
+                                "whole-container assignment requires "
+                                "an exactly compatible kind and profile",
+                                statement.value.span);
+                            return;
+                        }
                         process_.operations.emplace_back(
                             CopyContainerRegister{target, *value});
                     }

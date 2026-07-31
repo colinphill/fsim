@@ -329,6 +329,124 @@ endmodule
       && reset.elements[2].low_word().bval == 0xff
       && reset.elements[3].low_word().bval == 0xff);
 
+  const auto nonstatic_returns = fsim::frontend::parse_text(
+      "nonstatic_function_returns.sv",
+      R"(
+module nonstatic_function_returns;
+  byte dynamic_source[];
+  byte dynamic_result[];
+  byte queue_source[$:3];
+  byte queue_result[$:3];
+  byte associative_source[int];
+  byte associative_result[int];
+
+  function automatic byte copy_dynamic[](
+      input byte value[]);
+    return value;
+  endfunction
+
+  function automatic byte copy_queue[$:3](
+      input byte value[$:3]);
+    copy_queue = value;
+  endfunction
+
+  function automatic byte copy_associative[int](
+      input byte value[int]);
+    return value;
+  endfunction
+
+  initial begin
+    dynamic_source = '{11, 12, 13};
+    queue_source = '{21, 22, 23};
+    associative_source = '{-1: 31, 4: 44};
+    dynamic_result = copy_dynamic(
+        copy_dynamic(dynamic_source));
+    queue_result = copy_queue(queue_source);
+    associative_result = copy_associative(
+        associative_source);
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(nonstatic_returns.ok());
+  const auto nonstatic_elaborated = fsim::elaboration::elaborate(
+      nonstatic_returns.design,
+      "sv:work.nonstatic_function_returns");
+  if (!nonstatic_elaborated.ok()) {
+    for (const auto& diagnostic : nonstatic_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(nonstatic_elaborated.ok());
+  const auto& nonstatic_process =
+      nonstatic_elaborated.design->processes().front();
+  assert(std::ranges::count_if(
+             nonstatic_process.operations,
+             [](const auto& operation) {
+               return std::holds_alternative<
+                   fsim::runtime::simir::Call>(operation);
+             })
+         == 4);
+  assert(std::ranges::any_of(
+      nonstatic_process.debug_container_locals,
+      [](const auto& local) {
+        return local.name == "copy_dynamic.copy_dynamic"
+            && !local.type.fixed
+            && !local.type.queue
+            && !local.type.associative;
+      }));
+  assert(std::ranges::any_of(
+      nonstatic_process.debug_container_locals,
+      [](const auto& local) {
+        return local.type.queue
+            && local.type.maximum_elements
+                == std::optional<std::uint32_t>{4};
+      }));
+  assert(std::ranges::any_of(
+      nonstatic_process.debug_container_locals,
+      [](const auto& local) {
+        return local.type.associative
+            && local.type.index_width == 32
+            && local.type.signed_indices;
+      }));
+  auto nonstatic_interpreter =
+      nonstatic_elaborated.design->create_interpreter();
+  assert(
+      nonstatic_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  const auto nonstatic_value =
+      [&](const std::string_view name) -> const auto& {
+        const auto id =
+            nonstatic_elaborated.design->find_container(name);
+        assert(id);
+        return nonstatic_interpreter->container_object_value(*id);
+      };
+  const auto& dynamic_value = nonstatic_value("dynamic_result");
+  const auto& queue_value = nonstatic_value("queue_result");
+  const auto& associative_value =
+      nonstatic_value("associative_result");
+  assert(
+      bytes(dynamic_value)
+          == std::vector<std::uint64_t>({11, 12, 13})
+      && !dynamic_value.type.fixed
+      && !dynamic_value.type.queue
+      && !dynamic_value.type.associative);
+  assert(
+      bytes(queue_value)
+          == std::vector<std::uint64_t>({21, 22, 23})
+      && queue_value.type.queue
+      && queue_value.type.maximum_elements
+          == std::optional<std::uint32_t>{4});
+  assert(
+      bytes(associative_value)
+          == std::vector<std::uint64_t>({31, 44})
+      && associative_value.type.associative
+      && associative_value.keys.size() == 2
+      && associative_value.keys[0].low_word().aval
+          == UINT64_C(0xffffffff)
+      && associative_value.keys[1].low_word().aval == 4);
+
   const auto reject_fixed_return =
       [](const std::string_view path,
          const std::string_view source,
@@ -366,7 +484,7 @@ module dynamic_function_return;
 endmodule
 )",
       "sv:work.dynamic_function_return",
-      "FSIM-ELAB-SVFUNC-008");
+      "FSIM-ELAB-SVSLICE-006");
   reject_fixed_return(
       "queue_function_return.sv",
       R"(
@@ -379,7 +497,7 @@ module queue_function_return;
 endmodule
 )",
       "sv:work.queue_function_return",
-      "FSIM-ELAB-SVFUNC-008");
+      "FSIM-ELAB-SVSLICE-006");
   reject_fixed_return(
       "associative_function_return.sv",
       R"(
@@ -392,7 +510,118 @@ module associative_function_return;
 endmodule
 )",
       "sv:work.associative_function_return",
+      "FSIM-ELAB-SVSLICE-006");
+  reject_fixed_return(
+      "nonstatic_kind_mismatch_function_return.sv",
+      R"(
+module nonstatic_kind_mismatch_function_return;
+  byte dynamic_result[];
+  byte queue_source[$];
+  function automatic byte queue_result[$]();
+    return queue_source;
+  endfunction
+  initial dynamic_result = queue_result();
+endmodule
+)",
+      "sv:work.nonstatic_kind_mismatch_function_return",
       "FSIM-ELAB-SVFUNC-008");
+  reject_fixed_return(
+      "queue_bound_mismatch_function_return.sv",
+      R"(
+module queue_bound_mismatch_function_return;
+  byte target[$:2];
+  byte source[$:3];
+  function automatic byte result[$:3]();
+    return source;
+  endfunction
+  initial target = result();
+endmodule
+)",
+      "sv:work.queue_bound_mismatch_function_return",
+      "FSIM-ELAB-SVFUNC-008");
+  reject_fixed_return(
+      "element_profile_mismatch_function_return.sv",
+      R"(
+module element_profile_mismatch_function_return;
+  bit [7:0] target[];
+  logic [7:0] source[];
+  function automatic logic [7:0] result[]();
+    return source;
+  endfunction
+  initial target = result();
+endmodule
+)",
+      "sv:work.element_profile_mismatch_function_return",
+      "FSIM-ELAB-SVFUNC-008");
+  reject_fixed_return(
+      "index_profile_mismatch_function_return.sv",
+      R"(
+module index_profile_mismatch_function_return;
+  byte target[byte];
+  byte source[int];
+  function automatic byte result[int]();
+    return source;
+  endfunction
+  initial target = result();
+endmodule
+)",
+      "sv:work.index_profile_mismatch_function_return",
+      "FSIM-ELAB-SVFUNC-008");
+  reject_fixed_return(
+      "function_container_argument_mismatch.sv",
+      R"(
+module function_container_argument_mismatch;
+  byte queue_source[$];
+  byte dynamic_target[];
+  function automatic byte copy_dynamic[](
+      input byte value[]);
+    return value;
+  endfunction
+  initial dynamic_target = copy_dynamic(queue_source);
+endmodule
+)",
+      "sv:work.function_container_argument_mismatch",
+      "FSIM-ELAB-SVFUNC-009");
+  reject_fixed_return(
+      "task_container_argument_mismatch.sv",
+      R"(
+module task_container_argument_mismatch;
+  byte queue_source[$];
+  task automatic take_dynamic(input byte value[]);
+  endtask
+  initial take_dynamic(queue_source);
+endmodule
+)",
+      "sv:work.task_container_argument_mismatch",
+      "FSIM-ELAB-SVTASK-011");
+  reject_fixed_return(
+      "recursive_dynamic_function_return.sv",
+      R"(
+module recursive_dynamic_function_return;
+  byte source[];
+  byte target[];
+  function automatic byte recurse[](input byte value[]);
+    return recurse(value);
+  endfunction
+  initial target = recurse(source);
+endmodule
+)",
+      "sv:work.recursive_dynamic_function_return",
+      "FSIM-ELAB-SVFUNC-006");
+  reject_fixed_return(
+      "dynamic_slice_function_return.sv",
+      R"(
+module dynamic_slice_function_return;
+  byte source[];
+  byte target[$];
+  function automatic byte sliced[$]();
+    return source[1:0];
+  endfunction
+  initial target = sliced();
+endmodule
+)",
+      "sv:work.dynamic_slice_function_return",
+      "FSIM-ELAB-SVSLICE-001");
   reject_fixed_return(
       "runtime_bound_function_return.sv",
       R"(

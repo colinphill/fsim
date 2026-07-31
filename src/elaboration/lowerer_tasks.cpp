@@ -254,6 +254,15 @@ void Lowerer::lower_task_call(const Statement& statement) {
             if (!actual) {
                 return;
             }
+            if (process_.container_register_types.at(*actual)
+                != *formal_type) {
+                report(
+                    "FSIM-ELAB-SVTASK-011",
+                    "task container input/inout arguments require an "
+                    "exactly compatible kind and profile",
+                    statement.task_arguments[index].span);
+                return;
+            }
             process_.operations.emplace_back(
                 CopyContainerRegister{
                     frame.container_arguments[index], *actual});

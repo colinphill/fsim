@@ -256,12 +256,17 @@ Lowerer::lower_static_container_value(
     if (!type) {
       return std::nullopt;
     }
+    if (!type->fixed) {
+      report(
+          "FSIM-ELAB-SVSLICE-006",
+          "a static-array assignment requires a fixed-array function "
+          "result with a compatible element profile",
+          expression.span);
+      return std::nullopt;
+    }
     const auto value =
         lower_user_container_function_expression(expression);
     if (!value) {
-      return std::nullopt;
-    }
-    if (!type->fixed) {
       return std::nullopt;
     }
     return LoweredStaticContainer{*value, *type};

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -30,10 +31,15 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 4> values;
+  std::array<std::string, 7> values;
   fsim::runtime::simir::ContainerValue returned;
   fsim::runtime::simir::ContainerValue qualified_returned;
   fsim::runtime::simir::ContainerValue selected;
+  fsim::runtime::simir::ContainerValue dynamic_returned;
+  fsim::runtime::simir::ContainerValue queue_returned;
+  fsim::runtime::simir::ContainerValue associative_returned;
+  fsim::runtime::simir::ContainerValue partial_queue_first;
+  fsim::runtime::simir::ContainerValue partial_queue_second;
   std::vector<std::string> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   std::vector<std::string> locals;
@@ -127,11 +133,14 @@ Capture run_once(
         capture.points.push_back(point);
       });
 
-  constexpr std::array<std::string_view, 4> paths{
+  constexpr std::array<std::string_view, 7> paths{
       "function_top.imported_result",
       "function_top.qualified_result",
       "function_top.array_witness",
-      "function_top.reset_witness"};
+      "function_top.reset_witness",
+      "function_top.nonstatic_witness",
+      "function_top.nonstatic_reset_witness",
+      "function_top.task_witness"};
   std::array<fsim::runtime::simir::SignalId, paths.size()>
       signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -143,19 +152,26 @@ Capture run_once(
   fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 32};
   const auto witness_trace = vcd.declare_signal(
       "function_top.array_witness", 8);
+  const auto nonstatic_witness_trace = vcd.declare_signal(
+      "function_top.nonstatic_witness", 8);
   vcd.begin(simulation.now());
   vcd.change(
       witness_trace, simulation.read_signal(signals[2]));
+  vcd.change(
+      nonstatic_witness_trace,
+      simulation.read_signal(signals[4]));
   simulation.set_signal_change_hook(
       [&](const fsim::runtime::simir::SignalId signal,
           const fsim::runtime::PackedLogic4& value,
           const fsim::runtime::SimulationTick time,
           const std::uint64_t) {
-        if (signal != signals[2]) {
-          return;
+        if (signal == signals[2]) {
+          vcd.set_time(time);
+          vcd.change(witness_trace, value);
+        } else if (signal == signals[4]) {
+          vcd.set_time(time);
+          vcd.change(nonstatic_witness_trace, value);
         }
-        vcd.set_time(time);
-        vcd.change(witness_trace, value);
       });
   capture.result = simulation.run();
   vcd.flush();
@@ -171,19 +187,65 @@ Capture run_once(
   const auto qualified_returned =
       simulation.design().find_container(
           "function_top.qualified_returned");
-  assert(returned && qualified_returned && selected);
+  const auto dynamic_returned = simulation.design().find_container(
+      "function_top.dynamic_returned");
+  const auto queue_returned = simulation.design().find_container(
+      "function_top.queue_returned");
+  const auto associative_returned =
+      simulation.design().find_container(
+          "function_top.associative_returned");
+  const auto partial_queue_first =
+      simulation.design().find_container(
+          "function_top.partial_queue_first");
+  const auto partial_queue_second =
+      simulation.design().find_container(
+          "function_top.partial_queue_second");
+  assert(
+      returned && qualified_returned && selected
+      && dynamic_returned && queue_returned
+      && associative_returned && partial_queue_first
+      && partial_queue_second);
   capture.returned = simulation.read_container_object(*returned);
   capture.qualified_returned =
       simulation.read_container_object(*qualified_returned);
   capture.selected = simulation.read_container_object(*selected);
+  capture.dynamic_returned =
+      simulation.read_container_object(*dynamic_returned);
+  capture.queue_returned =
+      simulation.read_container_object(*queue_returned);
+  capture.associative_returned =
+      simulation.read_container_object(*associative_returned);
+  capture.partial_queue_first =
+      simulation.read_container_object(*partial_queue_first);
+  capture.partial_queue_second =
+      simulation.read_container_object(*partial_queue_second);
   return capture;
 }
 
 void verify(
     const Capture& capture,
-    const std::array<std::string, 4>& expected) {
+    const std::array<std::string, 7>& expected) {
   assert(capture.result.status == fsim::runtime::RunStatus::stopped);
   assert(capture.result.time == 1);
+  if (capture.values != expected) {
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+      std::cerr << "function value " << index << " expected "
+                << expected[index] << " observed "
+                << capture.values[index] << '\n';
+    }
+    const auto print_container = [](const std::string_view name,
+                                    const auto& value) {
+      std::cerr << name << " size " << value.elements.size()
+                << " values";
+      for (const auto& element : value.elements) {
+        std::cerr << ' ' << element.low_word().aval;
+      }
+      std::cerr << '\n';
+    };
+    print_container("dynamic", capture.dynamic_returned);
+    print_container("queue", capture.queue_returned);
+    print_container("associative", capture.associative_returned);
+  }
   assert(capture.values == expected);
   const auto calls = std::ranges::count_if(
       capture.points,
@@ -191,21 +253,27 @@ void verify(
         return point.kind
             == fsim::runtime::simir::ExecutionPointKind::call;
       });
-  if (calls != 9) {
+  if (calls != 10) {
     std::cerr << "unexpected function call point count: "
               << calls << '\n';
   }
-  assert(calls == 9);
-  if (capture.call_operations != 12) {
+  assert(calls == 10);
+  if (capture.call_operations != 21) {
     std::cerr << "unexpected lowered Call operation count: "
               << capture.call_operations << '\n';
   }
-  assert(capture.call_operations == 12);
+  assert(capture.call_operations == 21);
   assert(std::ranges::find(
              capture.locals, "inner.temporary")
          != capture.locals.end());
   assert(std::ranges::find(
              capture.locals, "relay.relay")
+         != capture.locals.end());
+  assert(std::ranges::find(
+             capture.locals, "nested_dynamic.nested_dynamic")
+         != capture.locals.end());
+  assert(std::ranges::find(
+             capture.locals, "nested_dynamic.scratch")
          != capture.locals.end());
   assert(
       capture.returned.type.fixed
@@ -259,7 +327,37 @@ void verify(
              expected[2] == "00101100"
                  ? "b00101100"
                  : "b00101101")
-          != std::string::npos);
+          != std::string::npos
+      && capture.vcd.find("b01001011") != std::string::npos);
+  const auto avals = [](const auto& value) {
+    std::vector<std::uint64_t> result;
+    for (const auto& element : value.elements) {
+      result.push_back(element.low_word().aval);
+    }
+    return result;
+  };
+  assert(
+      !capture.dynamic_returned.type.fixed
+      && !capture.dynamic_returned.type.queue
+      && !capture.dynamic_returned.type.associative
+      && avals(capture.dynamic_returned)
+          == std::vector<std::uint64_t>({51, 52, 53}));
+  assert(
+      capture.queue_returned.type.queue
+      && capture.queue_returned.type.maximum_elements
+          == std::optional<std::uint32_t>{4}
+      && avals(capture.queue_returned)
+          == std::vector<std::uint64_t>({61, 62, 63})
+      && capture.partial_queue_first == capture.queue_returned
+      && capture.partial_queue_second.elements.empty());
+  assert(
+      capture.associative_returned.type.associative
+      && capture.associative_returned.keys.size() == 2
+      && capture.associative_returned.keys[0].low_word().aval
+          == UINT64_C(0xfffffffe)
+      && capture.associative_returned.keys[1].low_word().aval == 5
+      && avals(capture.associative_returned)
+          == std::vector<std::uint64_t>({71, 75}));
 }
 
 bool same_points(
@@ -296,6 +394,7 @@ int main() {
             std::ios::binary | std::ios::trunc);
         output
             << "package function_pkg;\n"
+            << "  typedef int key_t;\n"
             << "  function automatic logic [7:0] package_step(\n"
             << "      input logic [7:0] value);\n"
             << "    return value + " << increment << ";\n"
@@ -307,6 +406,18 @@ int main() {
             << "    package_words[1] = value + " << increment + 2 << ";\n"
             << "    package_words[0] = value + " << increment + 3 << ";\n"
             << "  endfunction\n"
+            << "  function automatic byte package_dynamic[](\n"
+            << "      input byte value[]);\n"
+            << "    return value;\n"
+            << "  endfunction\n"
+            << "  function automatic byte package_queue[$:3](\n"
+            << "      input byte value[$:3]);\n"
+            << "    package_queue = value;\n"
+            << "  endfunction\n"
+            << "  function automatic byte package_associative[key_t](\n"
+            << "      input byte value[key_t]);\n"
+            << "    return value;\n"
+            << "  endfunction\n"
             << "endpackage\n";
         assert(output.good());
       };
@@ -315,7 +426,8 @@ int main() {
     std::ofstream output(top_source, std::ios::binary);
     output << R"(
 module function_top #(
-    parameter int RETURN_LEFT = 10);
+    parameter int RETURN_LEFT = 10,
+    parameter int QUEUE_MAXIMUM = 3);
   import function_pkg::*;
 
   function automatic int width_for(input int value);
@@ -339,6 +451,17 @@ module function_top #(
   logic [7:0] partial_second[3:0];
   logic [7:0] array_witness;
   logic reset_witness;
+  byte dynamic_source[];
+  byte dynamic_returned[];
+  byte queue_source[$:QUEUE_MAXIMUM];
+  byte queue_returned[$:QUEUE_MAXIMUM];
+  byte associative_source[key_t];
+  byte associative_returned[key_t];
+  byte partial_queue_first[$:QUEUE_MAXIMUM];
+  byte partial_queue_second[$:QUEUE_MAXIMUM];
+  logic [7:0] nonstatic_witness;
+  logic nonstatic_reset_witness;
+  logic [7:0] task_witness;
 
   function automatic logic [WIDTH-1:0] inner(
       input logic [WIDTH-1:0] value);
@@ -384,6 +507,26 @@ module function_top #(
     end
   endfunction
 
+  function automatic byte nested_dynamic[](
+      input byte value[]);
+    byte scratch[];
+    scratch = package_dynamic(value);
+    return package_dynamic(scratch);
+  endfunction
+
+  function automatic byte partial_queue[$:QUEUE_MAXIMUM](
+      input logic complete,
+      input byte value[$:QUEUE_MAXIMUM]);
+    if (complete)
+      partial_queue = value;
+  endfunction
+
+  task automatic consume_queue(
+      input byte value[$:QUEUE_MAXIMUM],
+      output logic [7:0] observed);
+    observed = value[1];
+  endtask
+
   initial begin
     imported_result = package_step(outer(8'd40));
     qualified_result =
@@ -397,11 +540,26 @@ module function_top #(
         slice_return(selected[3 -: 4]);
     partial_first = partial(1'b1);
     partial_second = partial(1'b0);
+    dynamic_source = '{51, 52, 53};
+    queue_source = '{61, 62, 63};
+    associative_source = '{-2: 71, 5: 75};
+    dynamic_returned = nested_dynamic(dynamic_source);
+    queue_returned =
+        function_pkg::package_queue(queue_source);
+    associative_returned =
+        package_associative(associative_source);
+    partial_queue_first = partial_queue(1'b1, queue_source);
+    partial_queue_second = partial_queue(1'b0, queue_source);
     array_witness = selected[2];
     reset_witness =
         $isunknown(partial_second[2])
         && $isunknown(partial_second[1])
         && $isunknown(partial_second[0]);
+    nonstatic_witness = associative_returned[5];
+    nonstatic_reset_witness =
+        partial_queue_first.size() == 3
+        && partial_queue_second.size() == 0;
+    consume_queue(package_queue(queue_source), task_witness);
     #1;
     $finish;
   end
@@ -425,8 +583,9 @@ endmodule
         run_once(config, fsim::app::SimulationEngine::compiled);
     const auto warm =
         run_once(config, fsim::app::SimulationEngine::compiled);
-    const std::array<std::string, 4> expected{
-        "00101010", "00000011", "00101100", "1"};
+    const std::array<std::string, 7> expected{
+        "00101010", "00000011", "00101100", "1",
+        "01001011", "1", "00111110"};
     verify(reference, expected);
     verify(cold, expected);
     verify(warm, expected);
@@ -461,7 +620,8 @@ endmodule
       fsim::app::SimulationEngine::compiled);
   verify(
       changed,
-      {"00101011", "00000100", "00101101", "1"});
+      {"00101011", "00000100", "00101101", "1",
+       "01001011", "1", "00111110"});
   assert(baseline_o2_keys.size() == 1);
   assert(changed.keys.size() == 1);
   assert(changed.keys.front() != baseline_o2_keys.front());
