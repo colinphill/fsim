@@ -138,15 +138,16 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   Module objects, writable ports, generated hierarchy, suspended tasks,
   schema 42, and container semantic revision 18 have frontend, elaboration,
   interpreter/LLVM O0/O2, and cache evidence without a public ABI change.
-- The Batch 90 CI boundary is not yet terminal. Initial run `30611906784`
-  exposed an oversized MSVC application-test string literal; repair
-  `cb63805` split the fixture into three writes. Replacement run
-  `30612954452` passed that point and exposed implicit optional-byte
-  construction under MSVC LLVM Debug; repair `eaf4842` made the constants
-  explicitly `std::uint8_t`. Authoritative replacement run `30613588803` was
-  still building all 12 jobs at this checkpoint with no failure reported.
-  Inspect that run first after reboot; if it fails, diagnose its job log,
-  repair and push another replacement before beginning Batch 91.
+- The Batch 90 CI boundary is green. Initial run `30611906784` exposed an
+  oversized MSVC application-test string literal; repair `cb63805` split the
+  fixture into three writes. Replacement run `30612954452` passed that point
+  and exposed implicit optional-byte construction under MSVC LLVM Debug;
+  repair `eaf4842` made the constants explicitly `std::uint8_t`. Run
+  `30613588803` was cancelled by the documentation checkpoint under the
+  branch concurrency policy. Final replacement run `30613827882` passed all
+  12 jobs. Windows MSVC Debug completed in 18 minutes 45 seconds, Windows
+  MSVC LLVM Debug in 28 minutes 45 seconds, and ASan/UBSan in 43 minutes 59
+  seconds, confirming the 45-minute job budget remains necessary.
 
 The repository is a substantial pre-alpha executable simulator, not fsim v1.
 Many language families have strong bounded evidence, but every broad v1
@@ -736,9 +737,10 @@ rejected an oversized generated-fixture string literal, repaired by
 `cb63805`. Replacement run `30612954452` passed that build point, then
 Windows MSVC LLVM Debug rejected implicit optional-byte construction in the
 slice-cache matrix, repaired by `eaf4842`. Authoritative replacement run
-`30613588803` is still in flight; all 12 jobs had reached build without a
-failure at this checkpoint. Do not treat Batch 90's CI boundary as complete
-until that run or a later repair run passes all jobs.
+`30613588803` was cancelled by the documentation checkpoint under the branch
+concurrency policy. Final replacement run `30613827882` passed all 12 jobs.
+Windows MSVC Debug completed in 18 minutes 45 seconds, Windows MSVC LLVM
+Debug in 28 minutes 45 seconds, and ASan/UBSan in 43 minutes 59 seconds.
 
 ## Next ten-feature batch
 
@@ -882,8 +884,7 @@ Start by confirming that no newer implementation supersedes this handoff:
 ```sh
 git status --short --branch
 git log -5 --oneline --decorate
-gh run view 30613588803 --json status,conclusion,url,headSha,jobs
-gh run watch 30613588803 --interval 30 --exit-status
+gh run view 30613827882 --json status,conclusion,url,headSha,jobs
 ```
 
 For a clean-context restart:

@@ -4981,11 +4981,12 @@ generated SystemVerilog fixture into three compiler-safe writes. Replacement
 run `30612954452` passed that original build point, then Windows MSVC LLVM
 Debug rejected implicit `int` to `std::uint8_t` optional construction in the
 slice-cache matrix. Commit `eaf4842` made every affected byte constant
-explicitly typed, and the focused exact-LLVM test passed locally. Replacement
-run `30613588803` is the authoritative in-flight boundary run. At the reboot
-checkpoint all 12 jobs had initialized and reached their build phase without
-another failure; resume by inspecting or watching that run before declaring
-the boundary green.
+explicitly typed, and the focused exact-LLVM test passed locally. That run was
+cancelled by the subsequent documentation checkpoint under the branch
+concurrency policy. Final replacement run `30613827882` passed all 12 jobs:
+Windows MSVC Debug completed in 18 minutes 45 seconds, Windows MSVC LLVM
+Debug in 28 minutes 45 seconds, and ASan/UBSan in 43 minutes 59 seconds. The
+sanitizer result confirms the 45-minute CI budget remains necessary.
 
 ## v1 release condition
 
