@@ -111,11 +111,25 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                 }
             }
             const auto source_width =
-                infer_width(expression.operands[0])
-                    .value_or(expected_width);
-            const auto source =
+                language_ == frontend::Language::SystemVerilog2017
+                    ? std::max(
+                          expected_width,
+                          infer_width(expression.operands[0])
+                              .value_or(expected_width))
+                    : infer_width(expression.operands[0])
+                          .value_or(expected_width);
+            auto source =
                 lower_expression(
                     expression.operands[0], source_width);
+            if (source
+                && language_
+                    == frontend::Language::SystemVerilog2017
+                && register_width(*source) != source_width) {
+                *source = resize_register(
+                    *source,
+                    source_width,
+                    is_signed_expression(expression.operands[0]));
+            }
             if (!source || expression.text == "+") {
                 return source;
             }

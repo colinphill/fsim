@@ -104,6 +104,27 @@ std::optional<LoweredLiteral> literal_value(
         if (digits.empty()) {
             return std::nullopt;
         }
+        if (language == frontend::Language::SystemVerilog2017
+            && width_text.empty() && digits.size() == 1U) {
+            const auto fill = static_cast<char>(
+                std::tolower(
+                    static_cast<unsigned char>(digits.front())));
+            const auto value =
+                fill == '0' ? Logic4::zero
+                : fill == '1' ? Logic4::one
+                : fill == 'x' ? Logic4::x
+                : fill == 'z' || fill == '?' ? Logic4::z
+                                                 : Logic4::zero;
+            if (fill != '0' && fill != '1' && fill != 'x'
+                && fill != 'z' && fill != '?') {
+                return std::nullopt;
+            }
+            return LoweredLiteral{
+                PackedLogic4(expected_width, value),
+                fill == '0' || fill == '1'
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4};
+        }
         const auto base = static_cast<char>(
             std::tolower(static_cast<unsigned char>(digits.front())));
         digits.remove_prefix(1);

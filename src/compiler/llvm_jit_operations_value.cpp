@@ -5,6 +5,7 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/Support/ErrorHandling.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -13,6 +14,7 @@ namespace fsim::compiler::llvm_detail {
 
 using runtime::Logic9;
 using runtime::simir::DynamicExtract;
+using runtime::simir::DynamicPartSelect;
 using runtime::simir::Insert;
 using runtime::simir::DynamicInsert;
 using runtime::simir::Concatenate;
@@ -57,6 +59,103 @@ void ValueOperationLowerer::lower(
                       source.kind});
               branch_to_next();
             
+}
+
+void ValueOperationLowerer::lower(
+    const DynamicPartSelect& operation) {
+  const auto source = load_register(
+      builder, registers, operation.source);
+  const auto base = coerce_value_kind(
+      builder,
+      load_register(builder, registers, operation.base),
+      ValueKind::logic4);
+  auto* base_unknown = builder.CreateICmpNE(
+      builder.CreateAnd(
+          base.bval,
+          constant_i64(
+              context,
+              std::numeric_limits<std::uint32_t>::max())),
+      constant_i64(context, 0));
+  auto* signed_base = builder.CreateSExt(
+      builder.CreateTrunc(base.aval, i32), i64);
+  auto* lower = llvm::ConstantInt::getSigned(
+      i64, std::min(operation.left, operation.right));
+  auto* upper = llvm::ConstantInt::getSigned(
+      i64, std::max(operation.left, operation.right));
+
+  llvm::Value* aval = constant_i64(context, 0);
+  llvm::Value* bval = constant_i64(context, 0);
+  llvm::Value* plane2 = constant_i64(context, 0);
+  llvm::Value* plane3 = constant_i64(context, 0);
+  const auto edge_distance =
+      static_cast<std::int64_t>(operation.width - 1U);
+  const auto right_delta = operation.increasing
+      ? (operation.source_descending ? 0 : edge_distance)
+      : (operation.source_descending ? -edge_distance : 0);
+  auto* selected_right = builder.CreateAdd(
+      signed_base,
+      llvm::ConstantInt::getSigned(i64, right_delta));
+  for (std::uint32_t bit = 0; bit < operation.width; ++bit) {
+    const auto delta = operation.source_descending
+        ? static_cast<std::int64_t>(bit)
+        : -static_cast<std::int64_t>(bit);
+    auto* selected = builder.CreateAdd(
+        selected_right,
+        llvm::ConstantInt::getSigned(i64, delta));
+    auto* in_range = builder.CreateAnd(
+        builder.CreateICmpSGE(selected, lower),
+        builder.CreateICmpSLE(selected, upper));
+    auto* valid = builder.CreateAnd(
+        builder.CreateNot(base_unknown), in_range);
+    auto* right = llvm::ConstantInt::getSigned(
+        i64, operation.right);
+    auto* offset = builder.CreateSelect(
+        builder.CreateICmpSGE(selected, right),
+        builder.CreateSub(selected, right),
+        builder.CreateSub(right, selected));
+    auto* safe_offset = builder.CreateSelect(
+        valid, offset, constant_i64(context, 0));
+    const auto select_bit = [&](llvm::Value* plane,
+                                const bool unknown_one) {
+      auto* extracted = builder.CreateAnd(
+          builder.CreateLShr(plane, safe_offset),
+          constant_i64(context, 1));
+      return builder.CreateSelect(
+          valid,
+          extracted,
+          constant_i64(
+              context,
+              !operation.two_state && unknown_one ? 1U : 0U));
+    };
+    const auto append = [&](llvm::Value* result, llvm::Value* value) {
+      return builder.CreateOr(
+          result,
+          builder.CreateShl(
+              value, constant_i64(context, bit)));
+    };
+    aval = append(aval, select_bit(source.aval, true));
+    bval = append(
+        bval,
+        select_bit(
+            source.bval,
+            source.kind != ValueKind::logic9));
+    plane2 = append(
+        plane2, select_bit(source.logic9_plane2, false));
+    plane3 = append(
+        plane3, select_bit(source.logic9_plane3, false));
+  }
+  store_register(
+      builder,
+      registers,
+      operation.destination,
+      EncodedValue{
+          aval,
+          bval,
+          operation.width,
+          plane2,
+          plane3,
+          source.kind});
+  branch_to_next();
 }
 
 void ValueOperationLowerer::lower(

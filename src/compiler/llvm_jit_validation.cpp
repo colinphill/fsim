@@ -78,6 +78,10 @@ validate_process(const Process &process,
         "SimIR signal value-domain metadata count does not match "
         "signal_widths");
   }
+  if (const auto error = validate_expression_profile_metadata(
+          process.expression_profiles)) {
+    throw LlvmJitError(*error);
+  }
 
   ValidatedProcess result;
   result.uses_logic9 = std::ranges::any_of(
@@ -237,55 +241,16 @@ validate_process(const Process &process,
     defined[id] = true;
   };
 
-  const auto dynamic_range_width =
-      [&](const DynamicIndex& selection,
-          const std::size_t instruction) -> std::uint64_t {
-        if (selection.left
-                < std::numeric_limits<std::int32_t>::min()
-            || selection.left
-                > std::numeric_limits<std::int32_t>::max()
-            || selection.right
-                < std::numeric_limits<std::int32_t>::min()
-            || selection.right
-                > std::numeric_limits<std::int32_t>::max()) {
-          reject(
-              process,
-              instruction,
-              "dynamic index bounds must fit signed 32-bit integers");
-        }
-        const auto left =
-            static_cast<std::int64_t>(selection.left);
-        const auto right =
-            static_cast<std::int64_t>(selection.right);
-        return static_cast<std::uint64_t>(
-                   left >= right ? left - right : right - left)
-            + 1U;
-      };
-
-  const auto validate_dynamic_bounds =
-      [&](const DynamicIndex& selection,
-          const std::uint64_t target_width,
-          const std::size_t instruction) {
-        const auto range_width =
-            dynamic_range_width(selection, instruction);
-        if (selection.base_offset > target_width
-            || range_width
-                > target_width - selection.base_offset) {
-          reject(
-              process,
-              instruction,
-              "dynamic index range is outside its packed target");
-        }
-      };
-
   const auto validate_dynamic_selection =
       [&](const DynamicIndex& selection,
           const std::uint64_t target_width,
           const std::size_t instruction) {
         record_use(selection.index, instruction);
         constrain_width(selection.index, 32U, instruction);
-        validate_dynamic_bounds(
-            selection, target_width, instruction);
+        if (const auto error =
+                validate_dynamic_index_bounds(selection, target_width)) {
+          reject(process, instruction, *error);
+        }
       };
 
   const auto validate_target = [&](const InstructionIndex target,
@@ -953,14 +918,28 @@ validate_process(const Process &process,
                   operation.destination, operation.width, index);
             },
             [&](const DynamicExtract& operation) {
-              (void)dynamic_range_width(
-                  operation.selection, index);
+              if (const auto error =
+                      validate_dynamic_index_metadata(operation.selection)) {
+                reject(process, index, *error);
+              }
               record_definition(operation.destination, index);
               record_use(operation.source, index);
               record_use(operation.selection.index, index);
               constrain_width(operation.destination, 1U, index);
               constrain_width(
                   operation.selection.index, 32U, index);
+            },
+            [&](const DynamicPartSelect& operation) {
+              if (const auto error =
+                      validate_dynamic_part_select_metadata(operation)) {
+                reject(process, index, *error);
+              }
+              record_definition(operation.destination, index);
+              record_use(operation.source, index);
+              record_use(operation.base, index);
+              constrain_width(
+                  operation.destination, operation.width, index);
+              constrain_width(operation.base, 32U, index);
             },
             [&](const Insert& operation) {
               record_definition(operation.destination, index);
@@ -970,8 +949,10 @@ validate_process(const Process &process,
                   operation.destination, operation.target, index);
             },
             [&](const DynamicInsert& operation) {
-              (void)dynamic_range_width(
-                  operation.selection, index);
+              if (const auto error =
+                      validate_dynamic_index_metadata(operation.selection)) {
+                reject(process, index, *error);
+              }
               record_definition(operation.destination, index);
               record_use(operation.target, index);
               record_use(operation.source, index);
@@ -1699,45 +1680,44 @@ validate_process(const Process &process,
     }
     if (const auto* extract =
             std::get_if<Extract>(&process.operations[index])) {
-      const auto source_width =
-          result.register_widths[extract->source];
-      if (extract->offset > source_width
-          || extract->width
-              > source_width - extract->offset) {
-        reject(
-            process, index,
-            "Extract range is outside its source register");
+      if (const auto error = validate_extract_bounds(
+              *extract, result.register_widths[extract->source])) {
+        reject(process, index, *error);
       }
     }
     if (const auto* extract =
             std::get_if<DynamicExtract>(
                 &process.operations[index])) {
-      validate_dynamic_bounds(
-          extract->selection,
-          result.register_widths[extract->source],
-          index);
+      if (const auto error = validate_dynamic_index_bounds(
+              extract->selection,
+              result.register_widths[extract->source])) {
+        reject(process, index, *error);
+      }
+    }
+    if (const auto* extract =
+            std::get_if<DynamicPartSelect>(
+                &process.operations[index])) {
+      if (const auto error = validate_dynamic_part_select_source_width(
+              *extract, result.register_widths[extract->source])) {
+        reject(process, index, *error);
+      }
     }
     if (const auto* insert =
             std::get_if<Insert>(&process.operations[index])) {
-      const auto target_width =
-          result.register_widths[insert->target];
-      const auto source_width =
-          result.register_widths[insert->source];
-      if (insert->offset > target_width
-          || source_width
-              > target_width - insert->offset) {
-        reject(
-            process, index,
-            "Insert range is outside its target register");
+      if (const auto error = validate_insert_bounds(
+              *insert, result.register_widths[insert->target],
+              result.register_widths[insert->source])) {
+        reject(process, index, *error);
       }
     }
     if (const auto* insert =
             std::get_if<DynamicInsert>(
                 &process.operations[index])) {
-      validate_dynamic_bounds(
-          insert->selection,
-          result.register_widths[insert->target],
-          index);
+      if (const auto error = validate_dynamic_index_bounds(
+              insert->selection,
+              result.register_widths[insert->target])) {
+        reject(process, index, *error);
+      }
     }
     if (const auto* concatenate =
             std::get_if<Concatenate>(&process.operations[index])) {

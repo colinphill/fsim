@@ -1354,12 +1354,18 @@ module select_concat;
   logic selected;
   logic [3:0] part;
   logic [8:0] combined;
+  logic [7:0] stream_left;
+  logic [7:0] stream_right;
+  logic [7:0] stream_nested;
   always_comb begin
     selected = descending[10];
     part = ascending[2:5];
     combined = {
       descending[15:12], descending[10], ascending[4:7]
     };
+    stream_left = {<<2{descending}};
+    stream_right = {>>{ascending}};
+    stream_nested = {<<4{{descending[15:12], ascending[4:7]}}};
     descending[9] = selected;
     ascending[4:5] = part;
   end
@@ -1385,7 +1391,7 @@ endmodule
   const auto& statements =
       result.design.units.front().processes.front().statements;
   require(
-      statements.size() == 5
+      statements.size() == 8
           && statements[0].value.kind == ExpressionKind::Index
           && statements[0].value.operands.size() == 2
           && statements[0].value.operands[1].text == "10",
@@ -1407,12 +1413,93 @@ endmodule
               == ExpressionKind::Slice,
       "concatenation expression node and operand order");
   require(
-      statements[3].target.kind == ExpressionKind::Index
-          && statements[3].target.operands.size() == 2
-          && statements[3].target.operands[1].text == "9"
-          && statements[4].target.kind == ExpressionKind::Slice
-          && statements[4].target.operands.size() == 3,
+      statements[3].value.kind == ExpressionKind::Call
+          && statements[3].value.text == "@stream-left"
+          && statements[3].value.operands.size() == 2
+          && statements[3].value.operands[0].text == "2"
+          && statements[4].value.kind == ExpressionKind::Call
+          && statements[4].value.text == "@stream-right"
+          && statements[4].value.operands[0].text == "1"
+          && statements[5].value.kind == ExpressionKind::Call
+          && statements[5].value.text == "@stream-left"
+          && statements[5].value.operands[1].kind
+              == ExpressionKind::Concatenation,
+      "stream direction, slice size, and nested concatenation HIR");
+  require(
+      statements[6].target.kind == ExpressionKind::Index
+          && statements[6].target.operands.size() == 2
+          && statements[6].target.operands[1].text == "9"
+          && statements[7].target.kind == ExpressionKind::Slice
+          && statements[7].target.operands.size() == 3,
       "SystemVerilog selected assignment target nodes");
+
+  const auto invalid_stream = parse_text(
+      "invalid_stream.sv",
+      R"(
+module invalid_stream;
+  logic [7:0] result;
+  initial result = {<<{}};
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_stream.ok()
+          && std::ranges::any_of(
+              invalid_stream.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-192";
+              }),
+      "empty streaming concatenation diagnostic");
+  const auto require_stream_diagnostic =
+      [&](const std::string_view source,
+          const std::string_view code) {
+        const auto parsed = parse_text(
+            "malformed_stream.sv",
+            source,
+            Language::SystemVerilog2017);
+        return !parsed.ok()
+            && std::ranges::any_of(
+                parsed.diagnostics,
+                [&](const Diagnostic& diagnostic) {
+                  return diagnostic.code == code;
+                });
+      };
+  require(
+      require_stream_diagnostic(
+          "module m; logic [7:0] r; initial r = {<<2 8'ha5}; "
+          "endmodule",
+          "FSIM-SV-PARSE-191"),
+      "missing streaming operand-open delimiter diagnostic");
+  require(
+      require_stream_diagnostic(
+          "module m; logic [7:0] r; initial r = {<<2{8'ha5; "
+          "endmodule",
+          "FSIM-SV-PARSE-193"),
+      "missing streaming operand-close delimiter diagnostic");
+  require(
+      require_stream_diagnostic(
+          "module m; logic [7:0] r; initial r = {<<2{8'ha5}; "
+          "endmodule",
+          "FSIM-SV-PARSE-194"),
+      "missing streaming outer-close delimiter diagnostic");
+
+  const auto verilog_stream = parse_text(
+      "verilog_stream.v",
+      R"(
+module verilog_stream;
+  reg [7:0] value;
+  initial value = {>>{8'ha5}};
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      !verilog_stream.ok()
+          && std::ranges::any_of(
+              verilog_stream.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-100";
+              }),
+      "streaming concatenation language-version diagnostic");
 }
 
 void test_conditional_statement_trees() {

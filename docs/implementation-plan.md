@@ -5441,8 +5441,89 @@ seconds, and the monolithic application in 39.83 seconds. Release passed all
 59 tests in 131.62 seconds, including scoped locals in 0.77 seconds, functions
 in 10.63 seconds, containers in 84.72 seconds, qualified pattern assertions in
 7.75 seconds, and the monolithic application in 13.41 seconds, on 2026-07-31.
-The mandatory non-documentation Batch 100 CI inspection follows the pushed
-feature handoff and must be recorded here after its replacement run is green.
+
+The mandatory non-documentation Batch 100 inspection began from feature commit
+`4730516`. Initial run
+[`30640792808`](https://github.com/colinphill/fsim/actions/runs/30640792808)
+passed all 11 ordinary jobs but exposed a 1,500.27-second sanitizer container
+timeout before the 45-minute job cap. Repairs `7400061` and `c669187` expanded
+the sanitizer job/test budgets to 70/40 minutes; replacement runs `30647570353`
+and `30651503050` then reproduced exact 1,800.14- and 2,400.12-second container
+timeouts without sanitizer findings while every ordinary job remained green.
+The root repair `d2f216e` removes redundant compiled-engine and O2 aliases only
+when LLVM is disabled, retaining one complete semantic, suspension, debugger,
+cache, and VCD pass under ASan/UBSan and the full interpreter/JIT O0/O2 matrix
+in LLVM builds. It restores a diagnostic 1,200-second container limit; every
+GitHub build remains at parallelism two.
+
+Final replacement run
+[`30656887493`](https://github.com/colinphill/fsim/actions/runs/30656887493)
+passed all 12 jobs. ASan/UBSan passed all 58 tests in 876.53 seconds, including
+scoped locals in 1.44 seconds, containers in 588.70 seconds, and the monolithic
+application in 154.76 seconds; its complete job took 35 minutes 46 seconds.
+Windows MSVC Debug passed all 58 tests in 336.76 seconds, including scoped
+locals in 0.33 seconds, containers in 219.86 seconds, and the monolithic
+application in 78.62 seconds; its complete job took 17 minutes 16 seconds.
+Batch 100 and its CI boundary are closed.
+
+### One-hundred-first feature batch — SystemVerilog expression sizing and selection closure
+
+Supported SystemVerilog scalar expression lowering now retains immutable
+source-spanned `ExpressionProfile` metadata with resolved width, signedness,
+self- or context-determined sizing, and two-/four-state domain. Assignment,
+argument, return, condition, and read-selection contexts propagate their
+bounded 1–64-bit width through sized, unsized, unbased-unsized, unary,
+arithmetic, bitwise, comparison, shift, power, conditional, concatenation, and
+replication expressions. Exact zero/sign extension and truncation are applied
+after the language's common signedness decision, while concatenation operands,
+shift amounts, and the power exponent retain their self-determined widths.
+
+Logical `&&` and `||` now branch past the complete right-hand graph when the
+left operand is definitely controlling. SystemVerilog `?:` has separate true,
+false, and X/Z paths: a known condition evaluates one alternative, while the
+unknown path evaluates both alternatives exactly once and performs the common
+four-state bit merge. Time-free bounded functions may write nonlocal variables
+so application counters prove skipped and reached call execution; writes to
+input formals, nonblocking assignments, and timing controls remain rejected.
+
+Runtime-base packed `base +: width` and `base -: width` reads lower through a
+new fixed-width `DynamicPartSelect` operation shared by the interpreter and
+LLVM. The operation retains signed base, exact declared direction, selection
+direction, result width, and state policy. It maps ascending and descending
+sources identically by declared index, fills only unavailable bits with X or
+two-state zero, and returns all X/zero for an unknown base. Dynamic procedural
+targets remain explicitly diagnosed for Batch 102.
+
+Bounded integral streaming concatenation accepts left/right directions,
+default or positive locally constant slice sizes, nested ordinary
+concatenation operands, and a final partial chunk. Runtime lowering composes
+existing extract/concatenate operations; the typed constant evaluator uses the
+same chunk order and a 64-bit-safe concatenation helper. Parser, elaboration,
+and native validation reject wrong-language or malformed forms, dynamic or
+invalid slice sizes, aggregate/container operands, widths beyond the bounded
+runtime contract, malformed selection metadata, and zero/invalid expression
+profiles through stable diagnostics.
+
+Native-object schema 53 records all expression profiles and every
+`DynamicPartSelect` field in a 12-object profile/selection cache matrix.
+Container semantic revision 24 and the public ABI remain unchanged. The first
+full Debug gate exposed that a deliberate 65-bit reference-only partial-group
+process must retain its exact expression profile and enter the established JIT
+fallback rather than fail profile validation; the validator now rejects only
+zero widths and invalid sizing/domain enums, and the corrected partial-group
+application again compiles its eligible sibling process.
+
+The diagnostic catalog covers all 1,279 production codes, and the source gate
+covers 296 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59 tests
+in 430.48 seconds, including scoped locals in 0.86 seconds, parameter sizing
+in 2.79 seconds, functions in 12.79 seconds, containers in 340.50 seconds,
+assertions in 8.06 seconds, and the monolithic application in 39.44 seconds.
+Release passed all 59 tests in 132.39 seconds, including scoped locals in 0.80
+seconds, parameter sizing in 1.89 seconds, functions in 10.62 seconds,
+containers in 84.09 seconds, assertions in 7.71 seconds, and the monolithic
+application in 13.12 seconds, on 2026-07-31. Batch 101 is not a CI-inspection
+boundary, so no Actions run is inspected for its eventual feature commit.
 
 ## Forward language-closure feature batches
 

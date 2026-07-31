@@ -98,6 +98,16 @@ namespace fsim::runtime::simir {
     const PackedLogic4& index,
     const DynamicIndex& selection);
 
+[[nodiscard]] PackedLogic4 dynamic_part_select_value(
+    const PackedLogic4& source,
+    const PackedLogic4& base,
+    std::int64_t left,
+    std::int64_t right,
+    std::uint32_t width,
+    bool increasing,
+    bool source_descending,
+    bool two_state);
+
 [[nodiscard]] PackedLogic4 concatenate_values(
     const std::vector<PackedLogic4>& operands,
     const std::size_t expected_width);

@@ -24,26 +24,74 @@ std::optional<RegisterId> Lowerer::lower_expression(
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
     auto attempt = lower_membership_expression(expression);
-    if (attempt.handled) {
+    if (!attempt.handled) {
+        attempt = lower_primary_expression(
+            expression, expected_width, expected_type);
+    }
+    if (!attempt.handled) {
+        attempt = lower_unary_attribute_expression(
+            expression, expected_width, expected_type);
+    }
+    if (!attempt.handled) {
+        attempt = lower_system_function_expression(
+            expression, expected_width, expected_type);
+    }
+    if (!attempt.handled) {
+        attempt = lower_binary_expression(
+            expression, expected_width, expected_type);
+    }
+    if (!attempt.value) {
         return attempt.value;
     }
-    attempt = lower_primary_expression(
-        expression, expected_width, expected_type);
-    if (attempt.handled) {
-        return attempt.value;
+
+    const bool scalar_result =
+        expression.kind == ExpressionKind::Binary
+        && (expression.text == "=="
+            || expression.text == "!="
+            || expression.text == "==="
+            || expression.text == "!=="
+            || expression.text == "==?"
+            || expression.text == "!=?"
+            || expression.text == "<"
+            || expression.text == "<="
+            || expression.text == ">"
+            || expression.text == ">="
+            || expression.text == "&&"
+            || expression.text == "||");
+    const bool context_determined =
+        language_ == frontend::Language::SystemVerilog2017
+        && ((expression.kind == ExpressionKind::Binary
+             && !scalar_result)
+            || (expression.kind == ExpressionKind::Unary
+                && (expression.text == "+"
+                    || expression.text == "-"
+                    || expression.text == "~"))
+            || (expression.kind == ExpressionKind::Call
+                && expression.text == "?:"));
+    const auto domain = register_domain(*attempt.value);
+    auto profile_domain = ExpressionValueDomain::four_state;
+    if (domain == frontend::ValueDomain::Bit2) {
+        profile_domain = ExpressionValueDomain::two_state;
+    } else if (domain == frontend::ValueDomain::Logic9) {
+        profile_domain = ExpressionValueDomain::nine_state;
+    } else if (domain == frontend::ValueDomain::Integer) {
+        profile_domain = ExpressionValueDomain::integer;
+    } else if (domain == frontend::ValueDomain::Boolean) {
+        profile_domain = ExpressionValueDomain::boolean;
     }
-    attempt = lower_unary_attribute_expression(
-        expression, expected_width, expected_type);
-    if (attempt.handled) {
-        return attempt.value;
-    }
-    attempt = lower_system_function_expression(
-        expression, expected_width, expected_type);
-    if (attempt.handled) {
-        return attempt.value;
-    }
-    return lower_binary_expression(
-        expression, expected_width, expected_type).value;
+    process_.expression_profiles.push_back(ExpressionProfile{
+        SourceLocation{
+            expression.span.source_name,
+            static_cast<std::uint32_t>(expression.span.begin.line),
+            static_cast<std::uint32_t>(expression.span.begin.column)},
+        static_cast<std::uint32_t>(
+            register_width(*attempt.value)),
+        is_signed_expression(expression),
+        context_determined
+            ? ExpressionSizingKind::context_determined
+            : ExpressionSizingKind::self_determined,
+        profile_domain});
+    return attempt.value;
 }
 
 Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
@@ -1104,6 +1152,60 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     ? constant_slice_selection(
                           expression, *source_width)
                     : std::nullopt;
+            if (source_width && !selection
+                && language_
+                    == frontend::Language::SystemVerilog2017
+                && (expression.text == "+:"
+                    || expression.text == "-:")
+                && !static_integer_value(
+                    expression.operands[1])) {
+                const auto selected_width = static_integer_value(
+                    expression.operands[2]);
+                if (!selected_width || *selected_width <= 0
+                    || *selected_width > 64) {
+                    report(
+                        "FSIM-ELAB-SVEXPR-004",
+                        "a runtime-base packed part-select requires a "
+                        "positive locally constant result width from 1 "
+                        "through 64",
+                        expression.operands[2].span);
+                    return std::nullopt;
+                }
+                {
+                    const auto dynamic_selection = lower_dynamic_index(
+                        expression.operands[0],
+                        expression.operands[1],
+                        *source_width,
+                        0,
+                        expression.span);
+                    if (!dynamic_selection) {
+                        return std::nullopt;
+                    }
+                    const auto source = lower_expression(
+                        expression.operands[0], *source_width);
+                    if (!source) {
+                        return std::nullopt;
+                    }
+                    const auto width = static_cast<std::uint32_t>(
+                        *selected_width);
+                    const auto destination = allocate_register(
+                        width, register_domain(*source));
+                    process_.operations.emplace_back(
+                        DynamicPartSelect{
+                            destination,
+                            *source,
+                            dynamic_selection->index,
+                            dynamic_selection->left,
+                            dynamic_selection->right,
+                            width,
+                            expression.text == "+:",
+                            dynamic_selection->left
+                                >= dynamic_selection->right,
+                            is_two_state_domain(
+                                register_domain(*source))});
+                    return destination;
+                }
+            }
             if (!source_width || !selection
                 || selection->offset
                     > std::numeric_limits<std::uint32_t>::max()

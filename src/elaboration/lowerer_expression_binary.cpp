@@ -124,9 +124,38 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     .value_or(expected_width);
             const auto lhs =
                 lower_expression(expression.operands[0], lhs_width);
+            if (!lhs) {
+                return std::nullopt;
+            }
+
+            // A definite controlling value bypasses the complete right-hand
+            // graph. An ambiguous X/Z truth value follows the right-hand path
+            // so LogicalBinary can retain the language's four-state merge.
+            const auto truth_domain =
+                is_two_state_domain(register_domain(*lhs))
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+            auto controlling = allocate_register(1, truth_domain);
+            process_.operations.emplace_back(
+                LogicalNot{controlling, *lhs});
+            if (expression.text == "||") {
+                const auto normalized =
+                    allocate_register(1, truth_domain);
+                process_.operations.emplace_back(
+                    LogicalNot{normalized, controlling});
+                controlling = normalized;
+            }
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch{
+                controlling,
+                0,
+                branch + 1,
+                UnknownBranchPolicy::when_false});
+
             const auto rhs =
                 lower_expression(expression.operands[1], rhs_width);
-            if (!lhs || !rhs) {
+            if (!rhs) {
                 return std::nullopt;
             }
             const auto result_domain =
@@ -143,6 +172,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 destination,
                 *lhs,
                 *rhs});
+            const auto exit = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump{0});
+            const auto controlled = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(LoadConstant{
+                destination,
+                unsigned_value(
+                    expression.text == "||" ? 1U : 0U, 1)});
+            const auto end = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations[branch] = Branch{
+                controlling,
+                controlled,
+                branch + 1,
+                UnknownBranchPolicy::when_false};
+            process_.operations[exit] = Jump{end};
             return destination;
         }
         if (expression.kind == ExpressionKind::Binary
@@ -182,8 +228,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 }
             }
             const auto value_width =
-                infer_width(expression.operands[0])
-                    .value_or(expected_width);
+                language_ == frontend::Language::SystemVerilog2017
+                    ? std::max(
+                          expected_width,
+                          infer_width(expression.operands[0])
+                              .value_or(expected_width))
+                    : infer_width(expression.operands[0])
+                          .value_or(expected_width);
             auto amount_width =
                 infer_width(expression.operands[1])
                     .value_or(expected_width);
@@ -197,7 +248,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 amount_width =
                     std::max(amount_width, required_width);
             }
-            const auto value =
+            auto value =
                 lower_expression(
                     expression.operands[0], value_width);
             std::optional<RegisterId> amount;
@@ -213,6 +264,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             }
             if (!value || !amount) {
                 return std::nullopt;
+            }
+            if (language_
+                    == frontend::Language::SystemVerilog2017
+                && register_width(*value) != value_width) {
+                *value = resize_register(
+                    *value,
+                    value_width,
+                    is_signed_expression(expression.operands[0]));
             }
             const bool signed_amount =
                 language_ == frontend::Language::Vhdl2008
@@ -389,6 +448,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             const auto inferred_rhs_width =
                 infer_width(expression.operands[1])
                     .value_or(expected_width);
+            const bool scalar_result_operator =
+                expression.text == "="
+                || expression.text == "/="
+                || expression.text == "=="
+                || expression.text == "!="
+                || expression.text == "==="
+                || expression.text == "!=="
+                || expression.text == "==?"
+                || expression.text == "!=?"
+                || expression.text == "<"
+                || expression.text == "<="
+                || expression.text == ">"
+                || expression.text == ">=";
+            const bool systemverilog_power =
+                language_
+                    == frontend::Language::SystemVerilog2017
+                && expression.text == "**";
             const auto width =
                 contextual_width
                     ? static_cast<std::size_t>(*contextual_width)
@@ -396,9 +472,21 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                             == frontend::Language::Vhdl2008
                         ? infer_width(expression)
                               .value_or(expected_width)
-                        : std::max(
-                              inferred_lhs_width,
-                              inferred_rhs_width);
+                        : systemverilog_power
+                            ? std::max(
+                                  expected_width,
+                                  inferred_lhs_width)
+                            : std::max(
+                                  scalar_result_operator
+                                      ? std::size_t{0}
+                                      : expected_width,
+                                  std::max(
+                                      inferred_lhs_width,
+                                      inferred_rhs_width));
+            const auto operation_width =
+                systemverilog_power
+                    ? std::max(width, inferred_rhs_width)
+                    : width;
             if (language_ == frontend::Language::Vhdl2008
                 && expression.text == "**") {
                 const auto exponent =
@@ -414,17 +502,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             }
             auto lhs = lower_expression(
                 expression.operands[0],
-                language_
-                        == frontend::Language::Vhdl2008
-                    ? width
-                    : inferred_lhs_width,
+                width,
                 binary_context_type);
             auto rhs = lower_expression(
                 expression.operands[1],
-                language_
-                        == frontend::Language::Vhdl2008
-                    ? width
-                    : inferred_rhs_width,
+                systemverilog_power
+                    ? inferred_rhs_width
+                    : width,
                 binary_context_type);
             if (!lhs || !rhs) {
                 return std::nullopt;
@@ -434,9 +518,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     is_signed_expression(expression.operands[0])
                     && is_signed_expression(expression.operands[1]);
                 *lhs = resize_register(
-                    *lhs, width, common_signed);
+                    *lhs, operation_width, common_signed);
                 *rhs = resize_register(
-                    *rhs, width, common_signed);
+                    *rhs, operation_width, common_signed);
             }
             if (register_width(*lhs) != register_width(*rhs)) {
                 report(
@@ -730,6 +814,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 process_.operations.emplace_back(
                     UnaryNot{inverted, destination});
                 return inverted;
+            }
+            if (systemverilog_power
+                && result_width != width) {
+                return resize_register(
+                    destination, width, signed_operation);
             }
             return destination;
         }

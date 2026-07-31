@@ -101,11 +101,25 @@ SystemVerilog constant indexed part-selects normalize `base +: width` and
 and descending declarations therefore reach the same contiguous SimIR
 extract/insert operations, while nonpositive widths and out-of-range endpoints
 are rejected before lowering.
+Runtime-base reads use a distinct fixed-width `DynamicPartSelect` operation.
+It retains the signed 32-bit base, declared bounds/direction, selection
+direction, result width, and two-/four-state policy. The interpreter and LLVM
+map each result bit independently, so partially out-of-range reads produce X
+or zero only for the unavailable bits and an unknown base produces an all-X
+or all-zero result. Dynamic procedural part-select targets are intentionally
+not admitted by this read operation.
 SystemVerilog replication concatenations require a positive specialized
 constant count and a statically sized nonempty operand group. The lowerer
 builds the repeated value with binary doubling, requiring logarithmically many
 two-operand `Concatenate` operations rather than materializing one operand per
 copy. Expanded widths are checked against the SimIR limit before allocation.
+Bounded integral streaming concatenations first lower their operand list to
+one ordinary packed concatenation. Right streams retain that order; left
+streams extract constant-sized chunks from the least-significant edge and
+concatenate them in extraction order, including a narrower final chunk. The
+same algorithm is implemented in the typed constant evaluator without shifting
+by 64, while dynamic slice sizes and aggregate/container operands fail before
+runtime lowering.
 SystemVerilog `<<<` uses the logical-left kernel. For `>>>`, elaboration
 selects arithmetic-right only when the left operand is signed; unsigned
 operands retain logical-right behavior. Arithmetic right shifts replicate the
@@ -485,8 +499,10 @@ Exact `case` treats `X` and `Z` as values. `casez` treats `Z` (including the
 binary `?` spelling) in either the selector or choice as a wildcard, while
 `casex` treats both `X` and `Z` on either side as wildcards. Every comparison
 produces a two-state condition, so interpreter and LLVM branch behavior is
-identical. `case inside` and `unique`/`unique0`/`priority` qualifiers remain
-targeted unsupported forms.
+identical. Bounded `case inside` adds right-choice wildcard values and closed
+ranges; bounded `case matches` adds exact constant patterns and `.*`.
+`unique`/`unique0`/`priority` compute alternative-level match counts before
+retaining the ordinary first-body/default selection.
 
 Sequential conditional statements lower recursively to explicit SimIR
 branches and exit jumps, preserving source order and the nearest-`else`
@@ -500,15 +516,24 @@ SystemVerilog assertions use the same normalization but retain the
 indeterminate scalar so the assertion fails. Both interpreter and LLVM paths
 execute the resulting common logical and branch operations.
 
-Bounded SystemVerilog conditional expressions and VHDL-2008 conditional
-assignments lower to a typed SimIR select. A scalar `0` or `1` chooses its
-corresponding equal-width alternative. An `X` or `Z` SystemVerilog condition
-compares the alternatives bit by bit, preserves identical four-state bits, and
-produces `X` where they differ; VHDL conditions must instead have type
-`boolean`. Chained VHDL `when`/`else` alternatives nest from left to right so
-the first true condition wins. This operation has the same interpreter and
-allocation-free LLVM single-word implementation. Vector truth conversion and
-the standards' complete expression sizing rules remain pending.
+Bounded SystemVerilog conditional expressions use three explicit control-flow
+paths after packed vector truth conversion. A definitely true or false
+condition evaluates only its selected, context-sized alternative; an X/Z
+condition evaluates each alternative once and feeds their converted values to
+the common typed SimIR select, which preserves identical four-state bits and
+produces `X` where they differ. VHDL-2008 conditional assignments retain their
+Boolean-only typed-select path. Chained VHDL `when`/`else` alternatives nest
+from left to right so the first true condition wins. Both interpreters and LLVM
+execute the same branch and select graph.
+
+Every successfully lowered scalar expression appends a source location,
+resolved width, signedness, self/context sizing kind, and value-domain profile
+to immutable SimIR. These profiles make the supported SystemVerilog conversion
+decisions reviewable after elaboration and participate in schema-53 native
+cache identity. JIT validation rejects zero widths and unknown sizing/domain
+enum values before code generation; a wider reference-only process retains its
+exact profile while the existing register-width check selects fallback rather
+than converting the profile into a hard error.
 
 VHDL selected concurrent assignments normalize to one exact-case process.
 Each source alternative owns a normal continuous assignment, so whole and
@@ -557,13 +582,13 @@ otherwise the remaining known bits determine equality. Wildcard inequality
 The interpreter supports arbitrary packed widths while LLVM uses the common
 single-word fast path and falls back for wider value-bearing processes.
 
-Logical conjunction and disjunction reduce each operand independently, so
-packed operands need not have the same width. The resulting scalar uses the
-standard four-state controlling-value rules: a known false controls `&&`, a
-known true controls `||`, and `X` is produced only when neither controlling
-value determines the result. Supported operand expressions are currently
-side-effect free; observable function/task short-circuit behavior remains
-pending with executable calls.
+Logical conjunction and disjunction reduce the left operand first, so packed
+operands need not have the same width. A known false controls `&&` and a known
+true controls `||`, branching past the complete right-hand graph. Otherwise
+the right operand executes once and the common four-state logical operation
+produces `X` only when neither value controls the result. Time-free bounded
+function writes to nonlocal variables provide executable side-effect evidence
+that skipped calls are not evaluated.
 
 Unary reduction `&`, `|`, and `^` fold every packed source bit into one
 four-state result. The complemented SystemVerilog forms `~&`, `~|`, `~^`, and

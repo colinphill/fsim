@@ -1086,4 +1086,111 @@ void test_nonstatic_function_return_cache_identity(
   assert(slice_cached_object_count(cache_directory) == 19);
 }
 
+void test_expression_selection_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  constexpr std::string_view symbol =
+      "cached_expression_selection";
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto options = LlvmJitOptions{
+      JitOptimizationLevel::o2, cache_directory};
+  const auto make =
+      [](const std::uint32_t selection_width = 4,
+         const bool increasing = true,
+         const bool source_descending = true,
+         const bool two_state = false,
+         const std::string_view source_path =
+             "expression-selection.sv",
+         const std::uint32_t source_line = 17,
+         const std::uint32_t source_column = 9,
+         const std::uint32_t expression_width = 4,
+         const bool expression_signed = false,
+         const ExpressionSizingKind sizing =
+             ExpressionSizingKind::context_determined,
+         const ExpressionValueDomain domain =
+             ExpressionValueDomain::four_state) {
+        Process process;
+        process.id = 101;
+        process.name = "cached_expression_selection";
+        process.register_count = 3;
+        process.operations = {
+            LoadConstant{
+                0, PackedLogic4::from_msb_string("1010101111001101")},
+            LoadConstant{
+                1,
+                PackedLogic4::from_aval_bval(32, 4, 0)},
+            DynamicPartSelect{
+                2,
+                0,
+                1,
+                source_descending ? 15 : 0,
+                source_descending ? 0 : 15,
+                selection_width,
+                increasing,
+                source_descending,
+                two_state},
+            Halt{},
+        };
+        process.expression_profiles = {
+            ExpressionProfile{
+                SourceLocation{
+                    std::string{source_path},
+                    source_line,
+                    source_column},
+                expression_width,
+                expression_signed,
+                sizing,
+                domain}};
+        return process;
+      };
+  const auto materialize =
+      [&](const Process& process,
+          const std::uint64_t hits,
+          const std::uint64_t misses) {
+        LlvmJit jit{options};
+        jit.add_process(symbol, process, no_signals);
+        assert(jit.lookup(symbol));
+        expect_slice_cache_statistics(jit, hits, misses);
+      };
+
+  materialize(make(), 0, 1);
+  materialize(make(), 1, 0);
+  materialize(make(3), 0, 1);
+  materialize(make(4, false), 0, 1);
+  materialize(make(4, true, false), 0, 1);
+  materialize(make(4, true, true, true), 0, 1);
+  materialize(
+      make(4, true, true, false, "edited-expression-selection.sv"),
+      0,
+      1);
+  materialize(
+      make(4, true, true, false, "expression-selection.sv", 18),
+      0,
+      1);
+  materialize(
+      make(4, true, true, false, "expression-selection.sv", 17, 10),
+      0,
+      1);
+  materialize(
+      make(4, true, true, false, "expression-selection.sv", 17, 9, 5),
+      0,
+      1);
+  materialize(
+      make(4, true, true, false, "expression-selection.sv", 17, 9, 4,
+           true),
+      0,
+      1);
+  materialize(
+      make(4, true, true, false, "expression-selection.sv", 17, 9, 4,
+           false, ExpressionSizingKind::self_determined),
+      0,
+      1);
+  materialize(
+      make(4, true, true, false, "expression-selection.sv", 17, 9, 4,
+           false, ExpressionSizingKind::context_determined,
+           ExpressionValueDomain::two_state),
+      0,
+      1);
+  assert(slice_cached_object_count(cache_directory) == 12);
+}
+
 }  // namespace fsim::tests::compiler

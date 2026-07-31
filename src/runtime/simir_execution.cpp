@@ -1231,6 +1231,23 @@ void Interpreter::Impl::execute(ProcessId id) {
               }
               ++process.pc;
             },
+            [&](const DynamicPartSelect& op) {
+              try {
+                get_register(process, op.destination) =
+                    dynamic_part_select_value(
+                        get_register(process, op.source),
+                        get_register(process, op.base),
+                        op.left,
+                        op.right,
+                        op.width,
+                        op.increasing,
+                        op.source_descending,
+                        op.two_state);
+              } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
+              }
+              ++process.pc;
+            },
             [&](const Insert& op) {
               try {
                 get_register(process, op.destination) =

@@ -36,7 +36,8 @@ void test_strings_at_level(
       },
       .register_value_kinds = {},
       .initialize = true,
-      .final = false};
+      .final = false,
+      .expression_profiles = {}};
 
   LlvmJitOptions options;
   options.optimization = optimization;

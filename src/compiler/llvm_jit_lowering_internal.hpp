@@ -134,6 +134,7 @@ struct ValueOperationLowerer {
   void lower(const runtime::simir::Shift& operation);
   void lower(const runtime::simir::Extract& operation);
   void lower(const runtime::simir::DynamicExtract& operation);
+  void lower(const runtime::simir::DynamicPartSelect& operation);
   void lower(const runtime::simir::Insert& operation);
   void lower(const runtime::simir::DynamicInsert& operation);
   void lower(const runtime::simir::Concatenate& operation);

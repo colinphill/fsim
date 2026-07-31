@@ -212,6 +212,121 @@ void test_rejections() {
       },
       "width constraints are inconsistent");
 
+  const auto dynamic_part_process =
+      [](const DynamicPartSelect selection) {
+        Process process;
+        process.name = "invalid_dynamic_part_select";
+        process.register_count = 3;
+        process.operations = {
+            LoadConstant{
+                0,
+                PackedLogic4::from_msb_string("1010101111001101")},
+            LoadConstant{
+                1,
+                PackedLogic4::from_aval_bval(32, 4, 0)},
+            selection,
+            Halt{}};
+        return process;
+      };
+  expect_error(
+      [&] {
+        jit.add_process(
+            "zero_width_dynamic_part",
+            dynamic_part_process(
+                DynamicPartSelect{
+                    2, 0, 1, 15, 0, 0, true, true, false}),
+            no_signals);
+      },
+      "DynamicPartSelect width must be from 1 through 64");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "wide_dynamic_part",
+            dynamic_part_process(
+                DynamicPartSelect{
+                    2, 0, 1, 15, 0, 65, true, true, false}),
+            no_signals);
+      },
+      "DynamicPartSelect width must be from 1 through 64");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "unrepresentable_dynamic_part",
+            dynamic_part_process(
+                DynamicPartSelect{
+                    2,
+                    0,
+                    1,
+                    std::int64_t{1} << 32,
+                    0,
+                    4,
+                    true,
+                    true,
+                    false}),
+            no_signals);
+      },
+      "DynamicPartSelect bounds must fit signed 32-bit integers");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "mismatched_dynamic_part_range",
+            dynamic_part_process(
+                DynamicPartSelect{
+                    2, 0, 1, 7, 0, 4, true, true, false}),
+            no_signals);
+      },
+      "DynamicPartSelect declared range does not match its source register "
+      "width");
+  const auto invalid_profile_process =
+      [&](const std::uint32_t width,
+          const ExpressionSizingKind sizing,
+          const ExpressionValueDomain domain) {
+        auto process = dynamic_part_process(
+            DynamicPartSelect{
+                2, 0, 1, 15, 0, 4, true, true, false});
+        process.expression_profiles = {
+            ExpressionProfile{
+                SourceLocation{"invalid-profile.sv", 3, 7},
+                width,
+                false,
+                sizing,
+                domain}};
+        return process;
+      };
+  expect_error(
+      [&] {
+        jit.add_process(
+            "zero_width_expression_profile",
+            invalid_profile_process(
+                0,
+                ExpressionSizingKind::self_determined,
+                ExpressionValueDomain::four_state),
+            no_signals);
+      },
+      "expression profile width must be greater than zero");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_expression_sizing",
+            invalid_profile_process(
+                4,
+                static_cast<ExpressionSizingKind>(99),
+                ExpressionValueDomain::four_state),
+            no_signals);
+      },
+      "expression profile has an invalid sizing kind");
+  expect_error(
+      [&] {
+        jit.add_process(
+            "invalid_expression_domain",
+            invalid_profile_process(
+                4,
+                ExpressionSizingKind::context_determined,
+                static_cast<ExpressionValueDomain>(99)),
+            no_signals);
+      },
+      "expression profile has an invalid value domain");
+
   ContainerType locator_queue;
   locator_queue.element_width = 8;
   locator_queue.queue = true;

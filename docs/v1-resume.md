@@ -9,20 +9,29 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: locally completed feature-batch-100 bounded
-  SystemVerilog case-pattern matching on top of the pushed feature-batch-99
-  case-qualifier handoff; the mandatory boundary CI inspection remains until
-  the feature commit is pushed.
-- The source-size refactor is complete: all 295 authored C/C++ source, header,
+- Implementation baseline: locally completed feature-batch-101 SystemVerilog
+  expression-sizing and read-selection closure on top of the pushed and fully
+  green Batch 100 case-pattern/CI boundary; Batch 101 still requires its final
+  commit/push.
+- The source-size refactor is complete: all 296 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 433.09 seconds, and Release passed all 59 configured
-  tests in 131.62 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 0.89/0.77 seconds, the expanded function differential in 12.90/10.63
-  seconds, containers in 345.04/84.72 seconds, qualified pattern assertions in
-  8.19/7.75 seconds, and the monolithic application in 39.83/13.41 seconds.
-- The diagnostic catalog covers all 1,269 production codes.
+  configured tests in 430.48 seconds, and Release passed all 59 configured
+  tests in 132.39 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.86/0.80 seconds, parameter sizing in 2.79/1.89 seconds, functions in
+  12.79/10.62 seconds, containers in 340.50/84.09 seconds, assertions in
+  8.06/7.71 seconds, and the monolithic application in 39.44/13.12 seconds.
+- The diagnostic catalog covers all 1,279 production codes.
+- The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
+  `30640792808` and replacements `30647570353`/`30651503050` passed every
+  ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
+  container timeouts. LLVM-disabled builds now retain one complete container
+  semantic/debugger pass without redundant compiled/O2 aliases, while LLVM
+  builds retain the full interpreter/JIT O0/O2 matrix. Final run `30656887493`
+  passed all 12 jobs. ASan/UBSan passed 58/58 in 876.53 seconds with containers
+  in 588.70 seconds; Windows MSVC Debug passed 58/58 in 336.76 seconds with
+  scoped locals in 0.33 seconds. GitHub builds remain at parallelism two.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -48,8 +57,9 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   monolithic application fixture. The scoped regression retains a 60-second
   bound, the MSVC Debug application regression retains a 600-second bound and
   phase checkpoints, and its accumulated fixture receives an 8 MiB Debug
-  stack. CI jobs retain a 45-minute budget because two-worker ASan and Windows
-  builds legitimately exceed 25 minutes.
+  stack. Ordinary CI jobs retain a 45-minute budget because two-worker Windows
+  builds legitimately exceed 25 minutes; the Batch 100 sanitizer investigation
+  raised only its job budget to 70 minutes.
 - Final non-documentation run `30594329846` passed all 12 Linux and Windows
   jobs. Windows MSVC Debug passed scoped locals in 0.36 seconds, SV containers
   in 196.86 seconds, the monolithic application test in 80.55 seconds, and all
@@ -1108,12 +1118,22 @@ interpreter, LLVM O0/O2, debugger/VCD, cold/warm, package-edit, and 19-object
 schema-52 cache evidence pass. The catalog covers 1,269 codes and all 295
 authored files satisfy the source gate. Debug/Release passed 59/59 in
 433.09/131.62 seconds; scoped locals remained quick at 0.89/0.77 seconds.
-The feature commit and mandatory CI run are the remaining handoff actions.
+Feature commit `4730516` began the mandatory CI boundary. Runs `30640792808`,
+`30647570353`, and `30651503050` passed every ordinary job but exposed exact
+1,500.27-, 1,800.14-, and 2,400.12-second sanitizer container timeouts. Budget
+repairs `7400061`/`c669187` made each bottleneck observable; root repair
+`d2f216e` removes redundant compiled/O2 aliases only in LLVM-disabled builds
+and restores a diagnostic 1,200-second test limit. Final run `30656887493`
+passed all 12 jobs. ASan/UBSan passed 58/58 in 876.53 seconds, including scoped
+locals in 1.44 seconds, containers in 588.70 seconds, and the monolithic
+application in 154.76 seconds. Windows MSVC Debug passed 58/58 in 336.76
+seconds, including scoped locals in 0.33 seconds, containers in 219.86 seconds,
+and the monolithic application in 78.62 seconds. Batch 100 is closed.
 
-## Next ten-feature batch
+## Completed feature batch 101
 
-After Batch 100 is pushed and its non-documentation CI is green, resume with
-**feature batch 101: SystemVerilog expression sizing and selection closure**:
+Feature batch 101 completes **SystemVerilog expression sizing and selection
+closure**:
 
 1. Retain explicit self-determined and context-determined width, signedness,
    and two-/four-state conversion metadata for the supported expression HIR.
@@ -1144,6 +1164,65 @@ After Batch 100 is pushed and its non-documentation CI is green, resume with
 Keep Batch 101 to expression values and read selections. Procedural lvalue
 closure, timed compound assignments, expression-form increments/decrements,
 and force/release remain Batch 102.
+
+The completed implementation retains source-spanned resolved expression
+profiles, applies the bounded scalar context-sizing rules, branches around
+skipped `&&`, `||`, and `?:` function calls, and permits time-free nonlocal
+function writes so side effects are executable evidence. Runtime-base packed
+read part-selects share one interpreter/LLVM operation with exact declared-
+direction and partial/unknown fill semantics. Left/right integral streaming
+concatenations share exact constant/runtime chunk order, including a partial
+final chunk. Parser, elaboration, and JIT validation cover excluded forms.
+
+Native-object schema 53 records every profile and dynamic-part-select field in
+a 12-object cache matrix. Container semantic revision 24 and the public ABI
+remain unchanged. A full-gate validation repair preserves exact wider profiles
+for reference-only processes so the established partial JIT fallback still
+compiles eligible sibling processes. The catalog covers 1,279 codes, and all
+296 authored files pass the source gate with an empty allowlist and a 2,000-
+line maximum. Debug/Release passed 59/59 in 430.48/132.39 seconds; scoped
+locals completed in 0.86/0.80 seconds, parameter sizing in 2.79/1.89 seconds,
+functions in 12.79/10.62 seconds, containers in 340.50/84.09 seconds,
+assertions in 8.06/7.71 seconds, and the monolithic application in 39.44/13.12
+seconds. Batch 101 is not a CI-inspection boundary, so its eventual feature
+commit is pushed without monitoring that run.
+
+## Next ten-feature batch
+
+After Batch 101 is committed and pushed, resume with **feature batch 102:
+SystemVerilog procedural-lvalue and force/release closure**:
+
+1. Retain one checked procedural-lvalue descriptor for supported whole,
+   member, bit, part, indexed-part, and chained selections without reevaluating
+   source expressions during read-modify-write.
+2. Complete bounded chained packed member/index/part selections for reads and
+   blocking/nonblocking procedural targets with exact composed offsets and
+   source spans.
+3. Add runtime-base packed `base +: width` and `base -: width` procedural
+   targets with execution-time base capture, declared-direction mapping, and
+   atomic in-range updates.
+4. Make an unknown dynamic base perform no write, ignore wholly out-of-range
+   targets, and update only the representable bits of a partially in-range
+   target without disturbing surrounding bits.
+5. Extend every supported arithmetic, bitwise, and shift compound assignment
+   through the common lvalue read/convert/write path.
+6. Apply assignment delay/event controls to compound assignments with exact
+   immediate versus deferred evaluation, base capture, NBA, and delta ordering.
+7. Add prefix/postfix `++` and `--` as expression values with distinct old/new
+   results, single lvalue evaluation, and supported context conversion.
+8. Add bounded procedural `force` and `release` for supported scalar/packed
+   whole and selected objects, preserving driver updates beneath the force and
+   revealing the latest resolved value on release.
+9. Diagnose unsupported nets/variables, chained shapes, dynamic widths,
+   timing controls, side effects, and malformed HIR through stable frontend,
+   elaboration, runtime, and native-validation paths.
+10. Version every new lvalue/control graph in native-cache identity; add
+    positive/negative/interpreter/O0/O2/cache/debug/VCD/scheduler evidence;
+    run full Debug/Release gates and push the non-boundary batch.
+
+Keep Batch 102 to procedural lvalues and force/release. Remaining function/task
+declaration, lifetime, formal, result, default, reference, unpacked-value, and
+generated-subprogram closure remains Batch 103.
 
 The authoritative Batch 99 through 130 language-closure sequence is recorded
 under **Forward language-closure feature batches** in the implementation plan;
@@ -1222,9 +1301,10 @@ handoff, then the Batch 96 bounded whole-container-equality handoff and Batch
 97 bounded SystemVerilog membership-expression handoff, followed by Batch 98
 bounded SystemVerilog case-inside statement handoff and Batch 99 bounded
 SystemVerilog case-qualifier handoff, followed by the Batch 100 bounded
-SystemVerilog case-pattern handoff. Treat the newest pushed commit on the same
-branch as the authoritative continuation and read this file from that checkout
-before doing work.
+SystemVerilog case-pattern handoff and the Batch 101 SystemVerilog expression-
+sizing, short-circuit, dynamic-read-selection, and streaming-concatenation
+handoff. Treat the newest pushed commit on the same branch as the authoritative
+continuation and read this file from that checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -1255,7 +1335,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 101 below and return to focused tests until its tenth feature.
+resume Batch 102 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1273,14 +1353,16 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin Batch 101 from the completed case-pattern baseline described above.
+3. Begin Batch 102 from the completed expression-sizing/selection baseline
+   described above.
    Inspect the live tree first and rerun focused evidence if the host changed.
-4. Keep Batch 101 within bounded SystemVerilog expression-value sizing,
-   conversion, short-circuit, dynamic read part-select, and streaming behavior.
-   Record intentional scope changes in this handoff before implementation.
+4. Keep Batch 102 within bounded SystemVerilog procedural lvalues, chained and
+   dynamic targets, timed compound assignments, expression-form increments/
+   decrements, and force/release behavior. Record intentional scope changes in
+   this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, update the four documents named above, commit, and
-   push. Batch 101 is not a CI-inspection boundary.
+   push. Batch 102 is not a CI-inspection boundary.
 
 The existing exact-LLVM build trees on the recorded development host are:
 
@@ -1289,17 +1371,17 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 101 is in progress, extending the
-frontend, constant evaluator, expression elaboration, native cache, and
-application/debug/VCD tests as sizing and selection behavior lands:
+Use a narrow test expression while Batch 102 is in progress, extending the
+frontend, lvalue/statement elaboration, scheduler, native cache, and
+application/debug/VCD tests as procedural-target behavior lands:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
-  -R 'fsim\.(frontend|runtime|elaboration|llvm|application\.assertions|application\.expressions|application\.sv_functions|diagnostics-catalog|source-line-budget)'
+  -R 'fsim\.(frontend|runtime|elaboration|llvm|application\.procedural_assignments|application\.assertions|application\.sv_functions|diagnostics-catalog|source-line-budget)'
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after the local feature-batch-100 gates.
+recorded 59-test inventories are clean after the local feature-batch-101 gates.
 
 Before declaring any row complete, consult:
 

@@ -155,7 +155,15 @@ module conditional_process;
   logic [3:0] lhs;
   logic [3:0] rhs;
   logic [3:0] result;
+  bit [7:0] bit_lhs;
+  bit [7:0] bit_rhs;
+  bit [15:0] bit_result;
+  logic signed [7:0] signed_lhs;
+  logic signed [7:0] signed_rhs;
+  logic signed [15:0] signed_result;
   always_comb result = select ? lhs : rhs;
+  always_comb bit_result = bit_lhs + bit_rhs;
+  always_comb signed_result = signed_lhs + signed_rhs;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
@@ -186,6 +194,45 @@ endmodule
              fsim::runtime::simir::EdgeKind::any},
             {*conditional_select,
              fsim::runtime::simir::EdgeKind::any}}));
+    const auto& conditional_profiles =
+        elaborated_conditional.design->processes().front()
+            .expression_profiles;
+    assert(std::ranges::any_of(
+        conditional_profiles,
+        [](const auto& profile) {
+          return profile.width == 4
+              && profile.sizing
+                  == fsim::runtime::simir::ExpressionSizingKind::
+                      context_determined
+              && profile.domain
+                  == fsim::runtime::simir::ExpressionValueDomain::
+                      four_state;
+        }));
+    const auto has_resolved_profile =
+        [&](const bool is_signed,
+            const fsim::runtime::simir::ExpressionValueDomain domain) {
+          return std::ranges::any_of(
+              elaborated_conditional.design->processes(),
+              [&](const auto& process) {
+                return std::ranges::any_of(
+                    process.expression_profiles,
+                    [&](const auto& profile) {
+                      return profile.width == 16
+                          && profile.is_signed == is_signed
+                          && profile.sizing
+                              == fsim::runtime::simir::
+                                  ExpressionSizingKind::
+                                      context_determined
+                          && profile.domain == domain;
+                    });
+              });
+        };
+    assert(has_resolved_profile(
+        false,
+        fsim::runtime::simir::ExpressionValueDomain::two_state));
+    assert(has_resolved_profile(
+        true,
+        fsim::runtime::simir::ExpressionValueDomain::four_state));
     auto conditional_interpreter =
         elaborated_conditional.design->create_interpreter();
     conditional_interpreter->deposit_signal(
@@ -224,8 +271,8 @@ endmodule
             == "10XZ");
     }
 
-    const auto invalid_conditional = fsim::frontend::parse_text(
-        "invalid_conditional.sv",
+    const auto sized_conditional = fsim::frontend::parse_text(
+        "sized_conditional.sv",
         R"(
 module vector_condition;
   logic [1:0] select;
@@ -239,21 +286,17 @@ module mismatched_alternatives;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(invalid_conditional.ok());
-    const auto rejected_vector_condition =
+    assert(sized_conditional.ok());
+    const auto elaborated_vector_condition =
         fsim::elaboration::elaborate(
-            invalid_conditional.design,
+            sized_conditional.design,
             "sv:work.vector_condition");
-    assert(!rejected_vector_condition.ok());
-    assert(has_diagnostic(
-        rejected_vector_condition, "FSIM-ELAB-064"));
-    const auto rejected_alternatives =
+    assert(elaborated_vector_condition.ok());
+    const auto elaborated_alternatives =
         fsim::elaboration::elaborate(
-            invalid_conditional.design,
+            sized_conditional.design,
             "sv:work.mismatched_alternatives");
-    assert(!rejected_alternatives.ok());
-    assert(has_diagnostic(
-        rejected_alternatives, "FSIM-ELAB-065"));
+    assert(elaborated_alternatives.ok());
 
     const auto comparison_process = fsim::frontend::parse_text(
         "comparison_process.sv",
@@ -507,6 +550,48 @@ endmodule
                 .to_msb_string()
             == expected);
     }
+
+    const auto power_context = fsim::frontend::parse_text(
+        "power_context.sv",
+        R"(
+module power_context;
+  logic [15:0] result;
+  initial result = 8'd2 ** 32'd8;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(power_context.ok());
+    const auto elaborated_power_context =
+        fsim::elaboration::elaborate(
+            power_context.design, "sv:work.power_context");
+    assert(elaborated_power_context.ok());
+    const auto& power_profiles =
+        elaborated_power_context.design->processes().front()
+            .expression_profiles;
+    assert(std::ranges::any_of(
+        power_profiles,
+        [](const auto& profile) {
+          return profile.source.path == "power_context.sv"
+              && profile.source.line == 4
+              && profile.width == 16
+              && !profile.is_signed
+              && profile.sizing
+                  == fsim::runtime::simir::ExpressionSizingKind::
+                      context_determined;
+        }));
+    auto power_context_interpreter =
+        elaborated_power_context.design->create_interpreter();
+    assert(
+        power_context_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto power_context_result =
+        elaborated_power_context.design->find_signal("result");
+    assert(power_context_result);
+    assert(
+        power_context_interpreter
+            ->signal_value(*power_context_result)
+            .to_msb_string()
+        == "0000000100000000");
 
     const auto vhdl_power = fsim::frontend::parse_text(
         "vhdl_power.vhd",

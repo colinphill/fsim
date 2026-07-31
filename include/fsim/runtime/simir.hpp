@@ -573,6 +573,21 @@ struct DynamicExtract {
   DynamicIndex selection;
 };
 
+/// Extract a fixed-width indexed part-select from a runtime signed base.
+/// Unknown or out-of-range selected bits become X (or zero for a two-state
+/// source) instead of raising the scalar dynamic-index runtime error.
+struct DynamicPartSelect {
+  RegisterId destination{};
+  RegisterId source{};
+  RegisterId base{};
+  std::int64_t left{};
+  std::int64_t right{};
+  std::uint32_t width{};
+  bool increasing{};
+  bool source_descending{};
+  bool two_state{};
+};
+
 /// Replace a contiguous normalized range in a packed value.
 struct Insert {
   RegisterId destination{};
@@ -969,6 +984,30 @@ struct SourceLocation {
                          const SourceLocation&) = default;
 };
 
+enum class ExpressionSizingKind : std::uint8_t {
+  self_determined,
+  context_determined,
+};
+
+enum class ExpressionValueDomain : std::uint8_t {
+  two_state,
+  four_state,
+  nine_state,
+  integer,
+  boolean,
+};
+
+/// Resolved source-expression profile retained independently of transient
+/// host-C++ inference. Repeated source spans are intentional when distinct
+/// control-flow paths lower the same lexical expression.
+struct ExpressionProfile {
+  SourceLocation source;
+  std::uint32_t width{};
+  bool is_signed{};
+  ExpressionSizingKind sizing{ExpressionSizingKind::self_determined};
+  ExpressionValueDomain domain{ExpressionValueDomain::four_state};
+};
+
 enum class DebugPointKind : std::uint8_t {
   statement,
   call,
@@ -1121,8 +1160,8 @@ using Operation =
                  FileWriteString, FileReadLine, FileEndOfFile,
                  FileErrorStatus, UnaryNot,
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
-                 Shift, Extract, DynamicExtract, Concatenate, Binary, Insert,
-                 DynamicInsert,
+                 Shift, Extract, DynamicExtract, DynamicPartSelect,
+                 Concatenate, Binary, Insert, DynamicInsert,
                  IntegerUnary, IntegerBinary, IntegerCheck,
                  ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
                  WriteInertial, WriteProjected, WriteProjectedWaveform,
@@ -1234,6 +1273,7 @@ struct Process {
   // A SystemVerilog final process is excluded from ordinary initialization
   // and queued exactly once when ordinary simulation terminates.
   bool final{};
+  std::vector<ExpressionProfile> expression_profiles;
 };
 
 /// Narrow signal/update surface available to an alternate process executor.

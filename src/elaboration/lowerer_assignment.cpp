@@ -37,11 +37,15 @@ using namespace elaboration_detail;
         // 1, and unknown truth while normalizing any packed width to a
         // scalar. Branching subsequently treats X/Z as false, as required
         // for procedural conditions.
+        const auto truth_domain =
+            is_two_state_domain(register_domain(*source))
+                ? frontend::ValueDomain::Bit2
+                : frontend::ValueDomain::Logic4;
         const auto inverted =
-            allocate_register(1, frontend::ValueDomain::Logic4);
+            allocate_register(1, truth_domain);
         process_.operations.emplace_back(LogicalNot{inverted, *source});
         const auto normalized =
-            allocate_register(1, frontend::ValueDomain::Logic4);
+            allocate_register(1, truth_domain);
         process_.operations.emplace_back(
             LogicalNot{normalized, inverted});
         return normalized;
@@ -911,6 +915,20 @@ using namespace elaboration_detail;
                     > std::numeric_limits<std::uint32_t>::max()
                 || selection->width
                     > std::numeric_limits<std::uint32_t>::max()) {
+                if (language_
+                        == frontend::Language::SystemVerilog2017
+                    && (statement.target.text == "+:"
+                        || statement.target.text == "-:")
+                    && !static_integer_value(
+                        statement.target.operands[1])) {
+                    report(
+                        "FSIM-ELAB-SVEXPR-005",
+                        "runtime-base packed part-selects are read-only in "
+                        "Batch 101; dynamic procedural targets remain in "
+                        "the procedural-lvalue batch",
+                        statement.target.span);
+                    return;
+                }
                 report(
                     "FSIM-ELAB-068",
                     "an assignment part-select requires constant in-range "

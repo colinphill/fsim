@@ -9,6 +9,93 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
+        if (expression.kind == ExpressionKind::Call
+            && (expression.text == "@stream-left"
+                || expression.text == "@stream-right")) {
+            if (language_
+                    != frontend::Language::SystemVerilog2017
+                || expression.operands.size() < 2) {
+                report(
+                    "FSIM-ELAB-SVEXPR-001",
+                    "streaming concatenation requires SystemVerilog and "
+                    "at least one packed operand",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto slice_size = static_integer_value(
+                expression.operands.front());
+            if (!slice_size || *slice_size <= 0
+                || *slice_size > 64) {
+                report(
+                    "FSIM-ELAB-SVEXPR-002",
+                    "streaming concatenation requires a positive locally "
+                    "constant slice size within the 64-bit integral "
+                    "contract",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            std::vector<Expression> stream_operands;
+            stream_operands.reserve(expression.operands.size() - 1);
+            for (std::size_t index = 1;
+                 index < expression.operands.size(); ++index) {
+                if (is_container_expression(
+                        expression.operands[index])) {
+                    report(
+                        "FSIM-ELAB-SVEXPR-003",
+                        "streaming concatenation supports only fixed-width "
+                        "packed integral operands",
+                        expression.operands[index].span);
+                    return std::nullopt;
+                }
+                stream_operands.push_back(
+                    expression.operands[index]);
+            }
+            const Expression ordinary_stream{
+                ExpressionKind::Concatenation,
+                "concat",
+                std::move(stream_operands),
+                expression.span};
+            const auto width = infer_width(ordinary_stream);
+            if (!width || *width == 0 || *width > 64) {
+                report(
+                    "FSIM-ELAB-SVEXPR-003",
+                    "streaming concatenation requires a statically known "
+                    "packed result width from 1 through 64",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source = lower_expression(
+                ordinary_stream, *width);
+            if (!source) {
+                return std::nullopt;
+            }
+            if (expression.text == "@stream-right"
+                || static_cast<std::size_t>(*slice_size) >= *width) {
+                return *source;
+            }
+            std::vector<RegisterId> slices;
+            for (std::size_t offset = 0; offset < *width;) {
+                const auto chunk = std::min(
+                    static_cast<std::size_t>(*slice_size),
+                    *width - offset);
+                const auto slice = allocate_register(
+                    chunk, register_domain(*source));
+                process_.operations.emplace_back(Extract{
+                    slice,
+                    *source,
+                    static_cast<std::uint32_t>(offset),
+                    static_cast<std::uint32_t>(chunk)});
+                slices.push_back(slice);
+                offset += chunk;
+            }
+            const auto destination = allocate_register(
+                *width, register_domain(*source));
+            process_.operations.emplace_back(Concatenate{
+                destination,
+                std::move(slices),
+                static_cast<std::uint32_t>(*width)});
+            return destination;
+        }
         const auto lower_handle =
             [&](const Expression& handle)
                 -> std::optional<RegisterId> {
@@ -353,6 +440,152 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
         if (expression.kind == ExpressionKind::Call
             && expression.text == "?:"
             && expression.operands.size() == 3) {
+            if (language_
+                == frontend::Language::SystemVerilog2017) {
+                const auto condition = lower_condition(
+                    expression.operands[0],
+                    "FSIM-ELAB-064",
+                    "conditional-expression");
+                if (!condition) {
+                    return std::nullopt;
+                }
+                const auto true_width =
+                    infer_width(expression.operands[1])
+                        .value_or(expected_width);
+                const auto false_width =
+                    infer_width(expression.operands[2])
+                        .value_or(expected_width);
+                const auto value_width = std::max(
+                    expected_width,
+                    std::max(true_width, false_width));
+                const bool result_signed =
+                    is_signed_expression(expression.operands[1])
+                    && is_signed_expression(expression.operands[2]);
+
+                const auto known_one = allocate_register(
+                    1, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant{
+                    known_one, unsigned_value(1, 1)});
+                const auto definitely_true = allocate_register(
+                    1, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary{
+                    BinaryOperator::case_equal,
+                    definitely_true,
+                    *condition,
+                    known_one});
+                const auto true_branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch{
+                    definitely_true,
+                    0,
+                    true_branch + 1,
+                    UnknownBranchPolicy::when_false});
+
+                const auto known_zero = allocate_register(
+                    1, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant{
+                    known_zero, unsigned_value(0, 1)});
+                const auto definitely_false = allocate_register(
+                    1, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary{
+                    BinaryOperator::case_equal,
+                    definitely_false,
+                    *condition,
+                    known_zero});
+                const auto false_branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch{
+                    definitely_false,
+                    0,
+                    false_branch + 1,
+                    UnknownBranchPolicy::when_false});
+
+                auto unknown_true = lower_expression(
+                    expression.operands[1],
+                    value_width,
+                    expected_type);
+                auto unknown_false = lower_expression(
+                    expression.operands[2],
+                    value_width,
+                    expected_type);
+                if (!unknown_true || !unknown_false) {
+                    return std::nullopt;
+                }
+                *unknown_true = resize_register(
+                    *unknown_true, value_width, result_signed);
+                *unknown_false = resize_register(
+                    *unknown_false, value_width, result_signed);
+                const auto result_domain =
+                    register_domain(*condition)
+                                == frontend::ValueDomain::Bit2
+                            && is_two_state_domain(
+                                register_domain(*unknown_true))
+                            && is_two_state_domain(
+                                register_domain(*unknown_false))
+                        ? frontend::ValueDomain::Bit2
+                        : frontend::ValueDomain::Logic4;
+                const auto destination = allocate_register(
+                    value_width, result_domain);
+                process_.operations.emplace_back(ConditionalSelect{
+                    destination,
+                    *condition,
+                    *unknown_true,
+                    *unknown_false});
+                const auto unknown_exit =
+                    static_cast<InstructionIndex>(
+                        process_.operations.size());
+                process_.operations.emplace_back(Jump{0});
+
+                const auto true_start =
+                    static_cast<InstructionIndex>(
+                        process_.operations.size());
+                auto when_true = lower_expression(
+                    expression.operands[1],
+                    value_width,
+                    expected_type);
+                if (!when_true) {
+                    return std::nullopt;
+                }
+                *when_true = resize_register(
+                    *when_true, value_width, result_signed);
+                process_.operations.emplace_back(
+                    CopyRegister{destination, *when_true});
+                const auto true_exit =
+                    static_cast<InstructionIndex>(
+                        process_.operations.size());
+                process_.operations.emplace_back(Jump{0});
+
+                const auto false_start =
+                    static_cast<InstructionIndex>(
+                        process_.operations.size());
+                auto when_false = lower_expression(
+                    expression.operands[2],
+                    value_width,
+                    expected_type);
+                if (!when_false) {
+                    return std::nullopt;
+                }
+                *when_false = resize_register(
+                    *when_false, value_width, result_signed);
+                process_.operations.emplace_back(
+                    CopyRegister{destination, *when_false});
+                const auto end = static_cast<InstructionIndex>(
+                    process_.operations.size());
+
+                process_.operations[true_branch] = Branch{
+                    definitely_true,
+                    true_start,
+                    true_branch + 1,
+                    UnknownBranchPolicy::when_false};
+                process_.operations[false_branch] = Branch{
+                    definitely_false,
+                    false_start,
+                    false_branch + 1,
+                    UnknownBranchPolicy::when_false};
+                process_.operations[unknown_exit] = Jump{end};
+                process_.operations[true_exit] = Jump{end};
+                return destination;
+            }
             const auto condition =
                 lower_expression(expression.operands[0], 1);
             if (!condition) {

@@ -927,6 +927,7 @@ package math_pkg;
 endpackage
 
 module function_user(input logic select, output logic [7:0] result);
+  logic observed;
   function automatic logic [7:0] choose(
       input logic condition,
       input logic [7:0] when_true,
@@ -937,6 +938,11 @@ module function_user(input logic select, output logic [7:0] result);
     else
       temporary = when_false;
     choose = temporary;
+  endfunction
+
+  function automatic logic observe(input logic value);
+    observed = value;
+    observe = observed;
   endfunction
 
   initial result = choose(select, 8'h2a, 8'h11);
@@ -967,6 +973,13 @@ endmodule
           && module_function.statements.back().kind
               == StatementKind::Assignment,
       "module function arguments, locals, and body HIR");
+  require(
+      parsed.design.units.back().functions.size() == 2
+          && parsed.design.units.back().functions[1].name == "observe"
+          && parsed.design.units.back().functions[1].statements.size() == 2
+          && parsed.design.units.back().functions[1].statements.front()
+                 .target.text == "observed",
+      "time-free function writes to nonlocal variables remain observable");
 
   const auto classic = parse_text(
       "classic_function.v",
@@ -992,6 +1005,10 @@ module invalid_functions;
   function static logic bad(output logic argument);
     #1 bad = argument;
   endfunction
+  function automatic logic writes_input(input logic argument);
+    argument = 1'b0;
+    writes_input = argument;
+  endfunction
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -1007,8 +1024,9 @@ endmodule
   require(
       has_code("FSIM-SV-UNSUPPORTED-033")
           && has_code("FSIM-SV-UNSUPPORTED-035")
+          && has_code("FSIM-SV-SEM-062")
           && has_code("FSIM-SV-SEM-064"),
-      "function lifetime, direction, and timing diagnostics");
+      "function lifetime, direction, input-write, and timing diagnostics");
 }
 
 void test_vhdl_function_declarations() {

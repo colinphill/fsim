@@ -73,6 +73,14 @@ each VHDL or SV process read/write view applies the table below, with automated
 runtime evidence in both hierarchy directions. General ascending/descending
 ordinal remapping and Boolean/integer conversion remain v1 work.
 
+Batch 101 expression profiles and runtime-base packed read selections are
+same-language SystemVerilog semantics. Their width, signedness, state-domain,
+and declared-direction metadata remain inside the owning process and native
+cache key; they do not relax the equal-width whole-signal mixed-language
+boundary above. Streaming concatenations likewise produce an ordinary packed
+value before any later boundary use. Dynamic selected port actuals and any new
+cross-language resize or state-domain coercion remain deferred.
+
 ### Logic mapping
 
 | Source | Destination | Result |

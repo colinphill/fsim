@@ -25,6 +25,26 @@ void normalize(Value& value) noexcept {
     value.bits &= ~value.unknown_bits;
 }
 
+void append_packed(Value& destination, const Value& operand) noexcept {
+    if (operand.width >= 64U) {
+        destination.bits = operand.bits & operand.mask();
+        destination.unknown_bits =
+            operand.unknown_bits & operand.mask();
+        destination.high_impedance_bits =
+            operand.high_impedance_bits & operand.mask();
+        return;
+    }
+    destination.bits =
+        (destination.bits << operand.width)
+        | (operand.bits & operand.mask());
+    destination.unknown_bits =
+        (destination.unknown_bits << operand.width)
+        | (operand.unknown_bits & operand.mask());
+    destination.high_impedance_bits =
+        (destination.high_impedance_bits << operand.width)
+        | (operand.high_impedance_bits & operand.mask());
+}
+
 [[nodiscard]] Value make_known(
     const std::uint64_t bits,
     const std::uint32_t width,
@@ -811,6 +831,102 @@ enum class Truth { False, True, Unknown };
         return result;
     }
     if (expression.kind == ExpressionKind::Call
+        && (expression.text == "@stream-left"
+            || expression.text == "@stream-right")) {
+        if (expression.operands.size() < 2U) {
+            error =
+                "streaming concatenation requires a slice size and at "
+                "least one operand";
+            return std::nullopt;
+        }
+        const auto slice = evaluate_impl(
+            expression.operands.front(),
+            environment,
+            fallback_environment,
+            error);
+        if (!slice) {
+            return std::nullopt;
+        }
+        const auto slice_size = nonnegative_count(*slice, error);
+        if (!slice_size || *slice_size == 0U || *slice_size > 64U) {
+            if (slice_size) {
+                error =
+                    "streaming concatenation slice size must be from 1 "
+                    "through 64";
+            }
+            return std::nullopt;
+        }
+
+        std::vector<Value> operands;
+        std::uint64_t width = 0;
+        for (std::size_t index = 1;
+             index < expression.operands.size(); ++index) {
+            auto operand = evaluate_impl(
+                expression.operands[index],
+                environment,
+                fallback_environment,
+                error);
+            if (!operand) {
+                return std::nullopt;
+            }
+            if (operand->width > 64U - width) {
+                error =
+                    "streaming concatenation result exceeds the bounded "
+                    "64-bit width";
+                return std::nullopt;
+            }
+            width += operand->width;
+            operands.push_back(std::move(*operand));
+        }
+        if (width == 0U) {
+            error = "streaming concatenation requires a nonempty operand";
+            return std::nullopt;
+        }
+
+        Value ordinary{
+            0,
+            0,
+            0,
+            static_cast<std::uint32_t>(width),
+            false,
+            false,
+            expression.span};
+        for (const auto& operand : operands) {
+            append_packed(ordinary, operand);
+        }
+        normalize(ordinary);
+        if (expression.text == "@stream-right"
+            || *slice_size >= width) {
+            return ordinary;
+        }
+
+        Value result{
+            0,
+            0,
+            0,
+            static_cast<std::uint32_t>(width),
+            false,
+            false,
+            expression.span};
+        for (std::uint64_t offset = 0; offset < width;) {
+            const auto chunk = std::min(*slice_size, width - offset);
+            const auto mask = width_mask(
+                static_cast<std::uint32_t>(chunk));
+            result.bits =
+                (result.bits << chunk)
+                | ((ordinary.bits >> offset) & mask);
+            result.unknown_bits =
+                (result.unknown_bits << chunk)
+                | ((ordinary.unknown_bits >> offset) & mask);
+            result.high_impedance_bits =
+                (result.high_impedance_bits << chunk)
+                | ((ordinary.high_impedance_bits >> offset) & mask);
+            offset += chunk;
+        }
+        normalize(result);
+        return result;
+    }
+    if (expression.kind == ExpressionKind::Call
         && expression.text == "inside") {
         if (expression.operands.size() < 2U) {
             error = "inside requires a left operand and a nonempty list";
@@ -1056,15 +1172,7 @@ enum class Truth { False, True, Unknown };
              repetition < repetitions;
              ++repetition) {
             for (const auto& operand : operands) {
-                result.bits =
-                    (result.bits << operand.width)
-                    | (operand.bits & operand.mask());
-                result.unknown_bits =
-                    (result.unknown_bits << operand.width)
-                    | (operand.unknown_bits & operand.mask());
-                result.high_impedance_bits =
-                    (result.high_impedance_bits << operand.width)
-                    | (operand.high_impedance_bits & operand.mask());
+                append_packed(result, operand);
             }
         }
         normalize(result);

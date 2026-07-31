@@ -22,7 +22,6 @@
 #include <variant>
 #include <vector>
 namespace fsim::compiler::llvm_detail {
-
 using runtime::Logic9;
 using runtime::simir::Assert;
 using runtime::simir::Binary;
@@ -37,6 +36,7 @@ using runtime::simir::CopyRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::Display;
 using runtime::simir::DynamicExtract;
+using runtime::simir::DynamicPartSelect;
 using runtime::simir::DynamicIndex;
 using runtime::simir::DynamicInsert;
 using runtime::simir::EdgeKind;
@@ -649,7 +649,6 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                 i64, logic9_plane_pointer(storage, 3)),
             ValueKind::logic9};
       };
-
   const auto return_result =
       [&](const std::uint32_t status, const std::uint32_t instruction,
           const std::uint64_t delay, const std::uint32_t frame_state,
@@ -674,7 +673,6 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             builder.CreateStructGEP(result_type, result_argument, 4));
         builder.CreateRet(llvm::ConstantInt::get(i32, status));
       };
-
   std::vector<llvm::BasicBlock *> instruction_blocks;
   instruction_blocks.reserve(process.operations.size());
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
@@ -1125,6 +1123,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             [&](const DynamicExtract& operation) {
               value_lowerer.lower(operation);
             },
+            [&](const DynamicPartSelect& operation) {
+              value_lowerer.lower(operation); },
             [&](const Insert& operation) {
               value_lowerer.lower(operation);
             },

@@ -24,6 +24,33 @@ silently discarded.
 | Preprocessing/directives | Quoted and angle includes, manifest/CLI definitions, object/function macros with default arguments, multiline replacement, argument substitution, token concatenation/stringification, `__FILE__`/`__LINE__`, `undef`, nested conditional compilation, logical `` `line`` source remapping, legal `` `timescale``, `` `default_nettype``, reset/cell/keyword-version/unconnected-drive state, and ordered `file`/`source-set`/`combined` policies | Included units and macro-selected executable source enter the normal frontend; active `` `line`` mappings reach parser diagnostics, macro ancestry, DesignIR/SimIR debug points, report callbacks, and LLVM objects while physical ownership remains in analysis/native cache provenance; mappings reset for includes and compilation-unit roots; source-set/combined roots otherwise share macro, conditional, and parser directive state while retaining library ownership; scalar implicit nets and default port net types honor `` `default_nettype``; cell metadata and omitted-input pulls reach DesignIR/runtime; time directives and declarations scale exact delays and contribute to `auto` resolution; ordered snapshots participate in cache identity | Standardized pragma behavior, multi-driver wired-net resolution, and complete trireg charge semantics remain incomplete; unsupported directives receive targeted errors |
 | SystemC | C++ compatibility header, versioned plug-in entry point, typed factories, and peer mixed-language hierarchy | Common signals/ports/exports/events/channels, native and foreign children, lifecycle callbacks, `SC_METHOD`, and Boost.Context-backed `SC_THREAD`/`SC_CTHREAD` timed/event/static waits execute on the deterministic common kernel | Arbitrary custom-interface metadata, dynamic processes, thread reset/kill, TLM/AMS/CCI, and Accellera ABI compatibility remain unsupported |
 
+SystemVerilog expression-sizing status update: the bounded 1–64-bit scalar
+path now retains source-spanned resolved width, signedness, self- versus
+context-determined sizing, and two-/four-state domain metadata. Sized,
+unsized, unbased-unsized, unary, arithmetic, bitwise, comparison, shift,
+power, conditional, concatenation, and replication values apply the supported
+SystemVerilog extension/truncation rules at assignments, arguments, returns,
+conditions, and read selections. Runtime `&&`, `||`, and `?:` use explicit
+branch-directed evaluation: definite controlling values skip unneeded
+time-free function calls, while an X/Z conditional evaluates both alternatives
+once and performs the required bit merge. Bounded functions may therefore
+write nonlocal variables for observable time-free side effects; input-formal,
+nonblocking, and timed writes remain rejected.
+
+Runtime-base packed `base +: width` and `base -: width` reads now support a
+positive locally constant width, exact ascending/descending declared-range
+mapping, per-bit X filling for partial four-state out-of-range selections,
+zero filling for two-state values, and all-X/zero results for an unknown base.
+Dynamic procedural part-select targets remain deferred to the procedural-
+lvalue batch. Bounded integral streaming concatenation supports `{<<{...}}`,
+`{>>{...}}`, positive constant slice sizes, nested ordinary concatenations,
+constant folding, and exact final partial chunks. Dynamic stream sizes,
+aggregate/container streams, results wider than 64 bits, and general
+aggregate streaming remain unsupported. This update supersedes the compact
+table's older statements that all dynamic part-selects, streaming
+concatenations, vector conditional truth, observable expression side effects,
+and supported scalar context sizing were pending.
+
 SystemVerilog constant-expression status update: supported integral parameter
 expressions now use a typed 1–64-bit semantic value rather than host-C++
 promotion rules. It retains width, signedness, X/Z masks, unsized status, and

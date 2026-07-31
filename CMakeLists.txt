@@ -521,6 +521,7 @@ if(FSIM_WITH_LLVM)
       src/compiler/llvm_jit_operations_container.cpp
       src/compiler/llvm_jit_operations_value.cpp
       src/compiler/llvm_jit_validation.cpp
+      src/compiler/llvm_jit_validation_selection.cpp
       src/compiler/llvm_jit_validation_support.cpp
       src/compiler/llvm_jit_value_lowering.cpp
   )

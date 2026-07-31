@@ -22,6 +22,29 @@ using namespace elaboration_detail;
             return std::size_t{1};
         }
         if (expression.kind == ExpressionKind::Call
+            && (expression.text == "@stream-left"
+                || expression.text == "@stream-right")) {
+            if (expression.operands.size() < 2) {
+                return std::nullopt;
+            }
+            std::size_t width = 0;
+            for (std::size_t index = 1;
+                 index < expression.operands.size(); ++index) {
+                const auto operand_width =
+                    infer_width(expression.operands[index]);
+                if (!operand_width || *operand_width == 0
+                    || *operand_width
+                        > std::numeric_limits<std::size_t>::max()
+                            - width) {
+                    return std::nullopt;
+                }
+                width += *operand_width;
+            }
+            return width == 0
+                ? std::nullopt
+                : std::optional<std::size_t>{width};
+        }
+        if (expression.kind == ExpressionKind::Call
             && expression.operands.size() == 1
             && (expression.text == ".sum"
                 || expression.text == ".product"

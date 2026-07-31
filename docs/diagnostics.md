@@ -561,6 +561,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-188` | error | Bounded `matches` pattern matching is combined with `casez` or `casex`. |
 | `FSIM-SV-PARSE-189` | error | A bounded `case matches` item contains a comma-separated pattern list instead of exactly one pattern. |
 | `FSIM-SV-PARSE-190` | error | A `case matches` dot pattern is missing its wildcard or variable name. |
+| `FSIM-SV-PARSE-191` | error | Expected the inner `{` before streaming-concatenation operands. |
+| `FSIM-SV-PARSE-192` | error | A streaming concatenation contains no operand. |
+| `FSIM-SV-PARSE-193` | error | Expected the inner `}` after streaming-concatenation operands. |
+| `FSIM-SV-PARSE-194` | error | Expected the outer `}` after a streaming concatenation. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -731,7 +735,7 @@ therefore excluded.
 | `FSIM-SV-SEM-058` | error | A bounded function repeats an argument name or conflicts with its result name. |
 | `FSIM-SV-SEM-059` | error | A function closing name does not match its declaration name. |
 | `FSIM-SV-SEM-060` | error | A bounded function repeats or conflicts with a local declaration. |
-| `FSIM-SV-SEM-061` | error | A bounded function assigns an object outside its local activation frame. |
+| `FSIM-SV-SEM-061` | error | A bounded function assignment target does not have an identifier root. |
 | `FSIM-SV-SEM-062` | error | A bounded function assigns one of its input arguments. |
 | `FSIM-SV-SEM-063` | error | A bounded function assignment is nonblocking or contains a procedural timing/event control. |
 | `FSIM-SV-SEM-064` | error | A bounded function contains a timing control, event statement, or task statement. |
@@ -764,6 +768,7 @@ therefore excluded.
 | `FSIM-SV-SEM-092` | error | A `sort` or `rsort` key has an empty `with` clause, a malformed or multiple iterator binder, or a named binder without a `with` clause. |
 | `FSIM-SV-SEM-093` | error | An extrema/uniqueness locator transformation has an empty `with` clause, a malformed or multiple iterator binder, or a named binder without a `with` clause. |
 | `FSIM-SV-SEM-094` | error | A reduction transformation has a malformed or multiple iterator binder, or a named binder without a `with` clause. |
+| `FSIM-SV-SEM-100` | error | A streaming concatenation is used outside SystemVerilog-2017. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -1074,6 +1079,11 @@ therefore excluded.
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |
+| `FSIM-ELAB-SVEXPR-001` | error | Streaming-concatenation HIR has the wrong language, arity, or operand shape. |
+| `FSIM-ELAB-SVEXPR-002` | error | A streaming-concatenation slice size is not a positive locally constant value within the 64-bit integral contract. |
+| `FSIM-ELAB-SVEXPR-003` | error | A streaming concatenation has a container, aggregate, unknown-width, or wider-than-64-bit packed operand/result. |
+| `FSIM-ELAB-SVEXPR-004` | error | A runtime-base packed part-select width is not a positive locally constant value from 1 through 64. |
+| `FSIM-ELAB-SVEXPR-005` | error | A runtime-base packed part-select is used as a procedural assignment target before dynamic-lvalue closure. |
 | `FSIM-ELAB-SVFILE-001` | error | A bounded SystemVerilog text-file handle is not a 32-bit integer expression. |
 | `FSIM-ELAB-SVFILE-002` | error | A file read/error target is not a whole mutable string object or automatic local. |
 | `FSIM-ELAB-SVFILE-003` | error | `$fopen` does not have bounded SystemVerilog byte-string filename and mode operands. |

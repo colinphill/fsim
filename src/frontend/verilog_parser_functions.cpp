@@ -216,12 +216,12 @@ void VerilogParser::validate_function_body(
                    && !root->operands.empty()) {
               root = &root->operands.front();
             }
-            if (root->kind != ExpressionKind::Identifier
-                || !locals.contains(root->text)) {
+            if (root->kind != ExpressionKind::Identifier) {
               error(
                   start,
                   "FSIM-SV-SEM-061",
-                  "a function cannot assign a nonlocal object");
+                  "a function assignment target must have an identifier "
+                  "root");
             } else if (
                 std::ranges::any_of(
                     function.arguments,

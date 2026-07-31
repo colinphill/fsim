@@ -235,6 +235,160 @@ endmodule
             .to_msb_string()
         == "1");
 
+    const auto dynamic_part_select = fsim::frontend::parse_text(
+        "dynamic_part_select.sv",
+        R"(
+module dynamic_part_select;
+  logic [15:0] down;
+  logic [0:15] up;
+  bit [15:0] bits;
+  logic signed [31:0] base;
+  logic [3:0] down_plus;
+  logic [3:0] down_minus;
+  logic [3:0] partial;
+  logic [3:0] unknown;
+  logic [3:0] up_plus;
+  logic [3:0] up_minus;
+  logic [3:0] bit_partial;
+  initial begin
+    down = 16'habcd;
+    up = 16'habcd;
+    bits = 16'habcd;
+    base = 4;
+    down_plus = down[base +: 4];
+    base = 7;
+    down_minus = down[base -: 4];
+    base = 14;
+    partial = down[base +: 4];
+    base = 32'bx;
+    unknown = down[base +: 4];
+    base = 4;
+    up_plus = up[base +: 4];
+    base = 7;
+    up_minus = up[base -: 4];
+    base = 14;
+    bit_partial = bits[base +: 4];
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_part_select.ok());
+    const auto elaborated_dynamic_part_select =
+        fsim::elaboration::elaborate(
+            dynamic_part_select.design,
+            "sv:work.dynamic_part_select");
+    assert(elaborated_dynamic_part_select.ok());
+    const auto& part_process =
+        elaborated_dynamic_part_select.design->processes().front();
+    assert(
+        std::count_if(
+            part_process.operations.begin(),
+            part_process.operations.end(),
+            [](const auto& operation) {
+              return std::holds_alternative<
+                  fsim::runtime::simir::DynamicPartSelect>(operation);
+            })
+        == 7);
+    auto part_interpreter =
+        elaborated_dynamic_part_select.design->create_interpreter();
+    assert(
+        part_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto& [name, expected] :
+         std::array{
+             std::pair{"down_plus", "1100"},
+             std::pair{"down_minus", "1100"},
+             std::pair{"partial", "XX10"},
+             std::pair{"unknown", "XXXX"},
+             std::pair{"up_plus", "1011"},
+             std::pair{"up_minus", "1011"},
+             std::pair{"bit_partial", "0010"}}) {
+      const auto signal =
+          elaborated_dynamic_part_select.design->find_signal(name);
+      assert(signal);
+      assert(
+          part_interpreter->signal_value(*signal).to_msb_string()
+          == expected);
+    }
+
+    const auto invalid_dynamic_parts = fsim::frontend::parse_text(
+        "invalid_dynamic_parts.sv",
+        R"(
+module dynamic_width;
+  logic [15:0] source;
+  logic signed [31:0] base;
+  logic signed [31:0] width;
+  logic [3:0] result;
+  initial result = source[base +: width];
+endmodule
+module dynamic_target;
+  logic [15:0] target;
+  logic signed [31:0] base;
+  initial target[base +: 4] = 4'ha;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_dynamic_parts.ok());
+    const auto rejected_dynamic_width =
+        fsim::elaboration::elaborate(
+            invalid_dynamic_parts.design,
+            "sv:work.dynamic_width");
+    assert(!rejected_dynamic_width.ok());
+    assert(has_diagnostic(
+        rejected_dynamic_width, "FSIM-ELAB-SVEXPR-004"));
+    const auto rejected_dynamic_target =
+        fsim::elaboration::elaborate(
+            invalid_dynamic_parts.design,
+            "sv:work.dynamic_target");
+    assert(!rejected_dynamic_target.ok());
+    assert(has_diagnostic(
+        rejected_dynamic_target, "FSIM-ELAB-SVEXPR-005"));
+
+    const auto invalid_streams = fsim::frontend::parse_text(
+        "invalid_streams.sv",
+        R"(
+module dynamic_stream;
+  logic [7:0] source;
+  logic signed [31:0] slice_size;
+  logic [7:0] result;
+  initial result = {<<slice_size{source}};
+endmodule
+module wide_stream;
+  logic [63:0] lhs;
+  logic [63:0] rhs;
+  logic [127:0] result;
+  initial result = {>>{lhs, rhs}};
+endmodule
+module container_stream;
+  logic [7:0] values[$];
+  logic [7:0] result;
+  initial result = {>>{values}};
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_streams.ok());
+    const auto rejected_dynamic_stream =
+        fsim::elaboration::elaborate(
+            invalid_streams.design,
+            "sv:work.dynamic_stream");
+    assert(!rejected_dynamic_stream.ok());
+    assert(has_diagnostic(
+        rejected_dynamic_stream, "FSIM-ELAB-SVEXPR-002"));
+    const auto rejected_wide_stream =
+        fsim::elaboration::elaborate(
+            invalid_streams.design,
+            "sv:work.wide_stream");
+    assert(!rejected_wide_stream.ok());
+    assert(has_diagnostic(
+        rejected_wide_stream, "FSIM-ELAB-SVEXPR-003"));
+    const auto rejected_container_stream =
+        fsim::elaboration::elaborate(
+            invalid_streams.design,
+            "sv:work.container_stream");
+    assert(!rejected_container_stream.ok());
+    assert(has_diagnostic(
+        rejected_container_stream, "FSIM-ELAB-SVEXPR-003"));
+
     const auto narrow_dynamic_select =
         fsim::frontend::parse_text(
             "narrow_dynamic_select.sv",
@@ -1509,4 +1663,3 @@ end architecture;
 }
 
 } // namespace fsim::tests::elaboration
-

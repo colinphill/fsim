@@ -76,6 +76,32 @@ validate_container_reduction_metadata(
 validate_container_ordering_metadata(
     const runtime::simir::OrderContainer& operation,
     const runtime::simir::ContainerType& target);
+[[nodiscard]] std::optional<std::string>
+validate_dynamic_index_metadata(
+    const runtime::simir::DynamicIndex& selection);
+[[nodiscard]] std::optional<std::string>
+validate_dynamic_index_bounds(
+    const runtime::simir::DynamicIndex& selection,
+    std::uint64_t target_width);
+[[nodiscard]] std::optional<std::string>
+validate_dynamic_part_select_metadata(
+    const runtime::simir::DynamicPartSelect& operation);
+[[nodiscard]] std::optional<std::string>
+validate_dynamic_part_select_source_width(
+    const runtime::simir::DynamicPartSelect& operation,
+    std::uint32_t source_width);
+[[nodiscard]] std::optional<std::string>
+validate_expression_profile_metadata(
+    std::span<const runtime::simir::ExpressionProfile> profiles);
+[[nodiscard]] std::optional<std::string>
+validate_extract_bounds(
+    const runtime::simir::Extract& operation,
+    std::uint32_t source_width);
+[[nodiscard]] std::optional<std::string>
+validate_insert_bounds(
+    const runtime::simir::Insert& operation,
+    std::uint32_t target_width,
+    std::uint32_t source_width);
 
 [[nodiscard]] ValidatedProcess validate_process(
     const runtime::simir::Process& process,

@@ -358,6 +358,75 @@ namespace fsim::runtime::simir {
       + static_cast<std::uint32_t>(offset);
 }
 
+[[nodiscard]] PackedLogic4 dynamic_part_select_value(
+    const PackedLogic4& source,
+    const PackedLogic4& base,
+    const std::int64_t left,
+    const std::int64_t right,
+    const std::uint32_t width,
+    const bool increasing,
+    const bool source_descending,
+    const bool two_state) {
+  if (base.width() != 32 || width == 0 || width > 64) {
+    throw std::invalid_argument(
+        "dynamic part-select requires a signed 32-bit base and a "
+        "fixed width from 1 through 64");
+  }
+  auto result = PackedLogic4{
+      width, two_state ? Logic4::zero : Logic4::x};
+  if (source.is_logic9()) {
+    result.fill(Logic9::x);
+  }
+
+  std::uint32_t raw{};
+  for (std::size_t bit = 0; bit < 32; ++bit) {
+    const auto value = base.get(bit);
+    if (value == Logic4::x || value == Logic4::z) {
+      return result;
+    }
+    if (value == Logic4::one) {
+      raw |= UINT32_C(1) << bit;
+    }
+  }
+  const auto signed_base =
+      raw <= static_cast<std::uint32_t>(
+                 std::numeric_limits<std::int32_t>::max())
+          ? static_cast<std::int64_t>(raw)
+          : static_cast<std::int64_t>(raw)
+                - (INT64_C(1) << 32);
+  const auto lower = std::min(left, right);
+  const auto upper = std::max(left, right);
+  const auto edge_distance =
+      static_cast<std::int64_t>(width - 1U);
+  const auto selected_right =
+      increasing
+          ? signed_base
+                + (source_descending ? 0 : edge_distance)
+          : signed_base
+                - (source_descending ? edge_distance : 0);
+  for (std::uint32_t bit = 0; bit < width; ++bit) {
+    const auto selected =
+        source_descending
+            ? selected_right + static_cast<std::int64_t>(bit)
+            : selected_right - static_cast<std::int64_t>(bit);
+    if (selected < lower || selected > upper) {
+      continue;
+    }
+    const auto offset = selected >= right
+        ? static_cast<std::uint64_t>(selected - right)
+        : static_cast<std::uint64_t>(right - selected);
+    if (offset >= source.width()) {
+      continue;
+    }
+    if (source.is_logic9()) {
+      result.set_logic9(bit, source.get_logic9(offset));
+    } else {
+      result.set(bit, source.get(offset));
+    }
+  }
+  return result;
+}
+
 [[nodiscard]] PackedLogic4 concatenate_values(
     const std::vector<PackedLogic4>& operands,
     const std::size_t expected_width) {

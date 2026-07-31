@@ -32,10 +32,13 @@ using runtime::simir::CopyStringRegister;
 using runtime::simir::DebugPoint;
 using runtime::simir::Display;
 using runtime::simir::DynamicExtract;
+using runtime::simir::DynamicPartSelect;
 using runtime::simir::DynamicIndex;
 using runtime::simir::DynamicInsert;
 using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
+using runtime::simir::ExpressionSizingKind;
+using runtime::simir::ExpressionValueDomain;
 using runtime::simir::FileClose;
 using runtime::simir::FileEndOfFile;
 using runtime::simir::FileErrorStatus;
@@ -115,7 +118,7 @@ using runtime::simir::Yield;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v52";
+    "fsim-llvm-native-object-v53";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -249,6 +252,30 @@ void add_dynamic_index_key(
         builder,
         "register-value-kind",
         static_cast<std::underlying_type_t<ValueKind>>(kind));
+  }
+  add_key_u64(
+      builder,
+      "expression-profile-count",
+      process.expression_profiles.size());
+  for (const auto& profile : process.expression_profiles) {
+    builder.add("expression-source-path", profile.source.path);
+    add_key_u64(
+        builder, "expression-source-line", profile.source.line);
+    add_key_u64(
+        builder, "expression-source-column", profile.source.column);
+    add_key_u64(builder, "expression-width", profile.width);
+    add_key_u64(
+        builder, "expression-signed", profile.is_signed ? 1U : 0U);
+    add_key_u64(
+        builder,
+        "expression-sizing",
+        static_cast<std::underlying_type_t<ExpressionSizingKind>>(
+            profile.sizing));
+    add_key_u64(
+        builder,
+        "expression-domain",
+        static_cast<std::underlying_type_t<ExpressionValueDomain>>(
+            profile.domain));
   }
   std::vector<runtime::simir::SignalId> referenced_signals;
   for (const auto& operation : process.operations) {
@@ -800,6 +827,29 @@ void add_dynamic_index_key(
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "source", value.source);
               add_dynamic_index_key(builder, value.selection);
+            },
+            [&](const DynamicPartSelect& value) {
+              builder.add("operation", "DynamicPartSelect");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "base", value.base);
+              add_key_u64(
+                  builder,
+                  "left",
+                  static_cast<std::uint64_t>(value.left));
+              add_key_u64(
+                  builder,
+                  "right",
+                  static_cast<std::uint64_t>(value.right));
+              add_key_u64(builder, "width", value.width);
+              add_key_u64(
+                  builder, "increasing", value.increasing ? 1U : 0U);
+              add_key_u64(
+                  builder,
+                  "source-descending",
+                  value.source_descending ? 1U : 0U);
+              add_key_u64(
+                  builder, "two-state", value.two_state ? 1U : 0U);
             },
             [&](const Insert& value) {
               builder.add("operation", "Insert");

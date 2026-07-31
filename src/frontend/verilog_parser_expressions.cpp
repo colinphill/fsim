@@ -515,6 +515,55 @@ Expression VerilogParser::parse_primary() {
   }
   if (match(TokenKind::LeftBrace)) {
     const auto open = previous();
+    if (at(TokenKind::ShiftLeft)
+        || at(TokenKind::ShiftRight)) {
+      const auto direction = advance();
+      if (language_ != Language::SystemVerilog2017) {
+        error(
+            direction,
+            "FSIM-SV-SEM-100",
+            "streaming concatenation requires SystemVerilog-2017");
+      }
+      Expression slice_size{
+          ExpressionKind::IntegerLiteral,
+          "1",
+          {},
+          direction.span};
+      if (!at(TokenKind::LeftBrace)) {
+        slice_size = parse_expression();
+      }
+      expect(
+          TokenKind::LeftBrace,
+          "'{' before streaming operands",
+          "FSIM-SV-PARSE-191");
+      std::vector<Expression> operands;
+      operands.push_back(std::move(slice_size));
+      if (at(TokenKind::RightBrace)) {
+        error(
+            current(),
+            "FSIM-SV-PARSE-192",
+            "streaming concatenation requires at least one operand");
+      } else {
+        do {
+          operands.push_back(parse_expression());
+        } while (match(TokenKind::Comma));
+      }
+      expect(
+          TokenKind::RightBrace,
+          "'}' after streaming operands",
+          "FSIM-SV-PARSE-193");
+      expect(
+          TokenKind::RightBrace,
+          "'}' after streaming concatenation",
+          "FSIM-SV-PARSE-194");
+      return Expression{
+          ExpressionKind::Call,
+          direction.kind == TokenKind::ShiftLeft
+              ? "@stream-left"
+              : "@stream-right",
+          std::move(operands),
+          span_from(open, previous())};
+    }
     std::vector<Expression> elements;
     if (!at(TokenKind::RightBrace)) {
       Expression first = parse_expression();
