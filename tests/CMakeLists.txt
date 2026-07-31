@@ -1010,6 +1010,12 @@ set_tests_properties(
   )
   target_link_libraries(fsim_application_tests PRIVATE fsim_application)
   add_test(NAME fsim.application COMMAND fsim_application_tests)
+  if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set_tests_properties(
+      fsim.application
+      PROPERTIES TIMEOUT 600
+    )
+  endif()
 
   if(FSIM_WITH_TCL)
     add_executable(
