@@ -350,12 +350,14 @@ void test_static_slice_consumer_cache_identity(
       1);
   materialize(
       make_slice_consumer_process(
-          4, 8, SliceConsumer::reduction, 1, 17),
+          4, 8, SliceConsumer::reduction,
+          std::uint8_t{1}, 17),
       0,
       1);
   materialize(
       make_slice_consumer_process(
-          4, 8, SliceConsumer::reduction, 2, 17),
+          4, 8, SliceConsumer::reduction,
+          std::uint8_t{2}, 17),
       0,
       1);
   materialize(
@@ -365,12 +367,14 @@ void test_static_slice_consumer_cache_identity(
       1);
   materialize(
       make_slice_consumer_process(
-          4, 8, SliceConsumer::find_index, 3, 17),
+          4, 8, SliceConsumer::find_index,
+          std::uint8_t{3}, 17),
       0,
       1);
   materialize(
       make_slice_consumer_process(
-          4, 8, SliceConsumer::find_index, 2, 17),
+          4, 8, SliceConsumer::find_index,
+          std::uint8_t{2}, 17),
       0,
       1);
   materialize(
@@ -499,13 +503,15 @@ void test_static_slice_ordering_cache_identity(
   materialize(
       make(
           4, 8,
-          ContainerOrderingOperator::ascending, 1),
+          ContainerOrderingOperator::ascending,
+          std::uint8_t{1}),
       0,
       1);
   materialize(
       make(
           4, 8,
-          ContainerOrderingOperator::ascending, 2),
+          ContainerOrderingOperator::ascending,
+          std::uint8_t{2}),
       0,
       1);
   materialize(make(4, 8, ContainerOrderingOperator::reverse,
