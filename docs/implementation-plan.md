@@ -5363,6 +5363,50 @@ in 0.83 seconds, functions in 10.46 seconds, containers in 84.69 seconds, and
 the monolithic application in 13.56 seconds, on 2026-07-31. Batch 98 is not a
 ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### Ninety-ninth feature batch — bounded SystemVerilog case qualifiers
+
+SystemVerilog `unique`, `unique0`, and `priority` now retain distinct compact
+`CaseQualifier` HIR metadata independently of exact, `casez`, `casex`, and
+bounded `case inside` matching modes. The parser accepts one qualifier only in
+SystemVerilog, begins the statement span at that qualifier, and diagnoses
+duplicate, misplaced, and wrong-language forms while retaining following-
+statement recovery.
+
+Qualified lowering evaluates the selector once and computes one definite
+two-state match bit per source alternative. Comma-separated choices are ORed
+within their alternative, so a single item can never count twice. Unknown
+comparison results are nonmatches for qualifier checks. Exact, wildcard-Z,
+wildcard-XZ, and inside value/range matching otherwise retain their established
+semantics. All alternatives are checked before execution; the first matching
+body or final default then executes in ordinary source order.
+
+`unique` emits a source-aware warning for more than one matching alternative
+and for no match when no default exists. `unique0` warns only for multiple
+alternatives, while `priority` warns only for no match without a default and
+does not diagnose overlap. A default suppresses the applicable no-match
+warning. Shared `Report` SimIR operations carry warning severity and the
+qualifier source location through interpreter, LLVM O0/O2, callbacks, and CLI
+rendering without changing the public runtime ABI.
+
+Positive evidence covers alternative-level counting, first-body/default
+selection, exact/casez/casex/case-inside modes, unknown fallthrough,
+constant-function selection, report ordering/source metadata, interpreter,
+LLVM O0/O2, cold/warm reuse, source-edit invalidation, CLI rendering, and
+malformed-HIR diagnostics. Native-object schema 51 records the added report and
+control-flow identity in an 18-object matrix; container semantic revision 24
+and the public ABI remain unchanged.
+
+The diagnostic catalog now covers all 1,259 production codes, and the source
+gate covers 294 authored files with an empty allowlist and a 2,000-line
+maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all
+59 tests in 427.12 seconds, including scoped locals in 0.90 seconds, functions
+in 12.52 seconds, containers in 341.61 seconds, qualified assertions in 6.07
+seconds, and the monolithic application in 39.64 seconds. Release passed all
+59 tests in 131.20 seconds, including scoped locals in 0.79 seconds, functions
+in 10.50 seconds, containers in 86.11 seconds, qualified assertions in 5.89
+seconds, and the monolithic application in 13.47 seconds, on 2026-07-31. Batch
+99 is not a ten-batch CI-inspection boundary, so no Actions run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

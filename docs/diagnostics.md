@@ -555,6 +555,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-182` | error | Expected `]` after a `case inside` range. |
 | `FSIM-SV-PARSE-183` | error | A `case inside` alternative contains no choice or a trailing empty choice. |
 | `FSIM-SV-PARSE-184` | error | `inside` matching is combined with `casez` or `casex`. |
+| `FSIM-SV-PARSE-185` | error | A `unique`, `unique0`, or `priority` case qualifier is used outside SystemVerilog. |
+| `FSIM-SV-PARSE-186` | error | A case statement contains more than one qualifier. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -768,7 +770,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-010` | error | ANSI port default expressions are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-011` | error | Declaration initializers are parsed but not executable. |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
-| `FSIM-SV-UNSUPPORTED-017` | error | A `case` statement uses an unsupported `unique`, `unique0`, or `priority` qualifier. |
+| `FSIM-SV-UNSUPPORTED-017` | error | A `unique`, `unique0`, or `priority` qualifier is not followed by a case statement. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
 | `FSIM-SV-UNSUPPORTED-020` | error | A parameter data type is outside the supported integral subset. |
 | `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded integral-parameter, local-signal, continuous assignment, process, instance, and nested-generate subset. |
@@ -1116,6 +1118,8 @@ therefore excluded.
 | `FSIM-ELAB-SVCASEINSIDE-004` | error | A `case inside` value or range bound does not exactly match the selector width and signedness. |
 | `FSIM-ELAB-SVCASEINSIDE-005` | error | Internal `case inside` HIR contains an alternative without a choice. |
 | `FSIM-ELAB-SVCASEINSIDE-006` | error | Internal `case inside` range metadata does not contain exactly one low and high bound. |
+| `FSIM-ELAB-SVCASEQUAL-001` | error | Internal case-statement HIR contains an invalid qualifier. |
+| `FSIM-ELAB-SVCASEQUAL-002` | error | A qualified case statement is lowered outside SystemVerilog. |
 | `FSIM-ELAB-SVQUERY-001` | error | A bounded unpacked-container query has the wrong language or arity, an indirect expression, or no direct typed container object. |
 | `FSIM-ELAB-SVQUERY-002` | error | A bounded unpacked-container query dimension is not the locally constant dimension `1`. |
 | `FSIM-ELAB-SVQUERY-003` | error | A finite-bound query is applied to an associative array. |

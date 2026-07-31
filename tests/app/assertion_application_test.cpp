@@ -45,6 +45,7 @@ struct Capture {
   fsim::runtime::simir::AssertionSeverity failure_severity{};
   bool failure_was_reported{};
   std::size_t compiled_processes{};
+  fsim::app::NativeCacheStatistics native_cache;
 };
 
 int run_cli(
@@ -131,6 +132,7 @@ Capture execute(
   assert(qualifier_marker);
   capture.qualifier_marker =
       simulation.read_signal(*qualifier_marker).low_word();
+  capture.native_cache = simulation.native_cache_statistics();
   return capture;
 }
 
@@ -158,12 +160,32 @@ void test_assertion_actions(
       run_once(config, fsim::app::SimulationEngine::interpreter);
   const auto compiled =
       run_once(config, fsim::app::SimulationEngine::compiled);
+  const auto warm =
+      run_once(config, fsim::app::SimulationEngine::compiled);
+
+  {
+    std::ofstream output(source, std::ios::app);
+    output << "\n// qualified-case cache source edit\n";
+    assert(output.good());
+  }
+  const auto changed =
+      run_once(config, fsim::app::SimulationEngine::compiled);
 
   assert(reference.reports == compiled.reports);
+  assert(reference.reports == warm.reports);
+  assert(reference.reports == changed.reports);
   assert(reference.marker == compiled.marker);
+  assert(reference.marker == warm.marker);
+  assert(reference.marker == changed.marker);
   assert(reference.qualifier_marker == compiled.qualifier_marker);
+  assert(reference.qualifier_marker == warm.qualifier_marker);
+  assert(reference.qualifier_marker == changed.qualifier_marker);
   assert(reference.failure == compiled.failure);
+  assert(reference.failure == warm.failure);
+  assert(reference.failure == changed.failure);
   assert(reference.failure_severity == compiled.failure_severity);
+  assert(reference.failure_severity == warm.failure_severity);
+  assert(reference.failure_severity == changed.failure_severity);
   assert(
       reference.failure_was_reported
       && compiled.failure_was_reported);
@@ -224,8 +246,20 @@ void test_assertion_actions(
   assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
+  assert(compiled.native_cache.hits == 0);
+  assert(compiled.native_cache.misses == 1);
+  assert(compiled.native_cache.stores == 1);
+  assert(warm.compiled_processes == 1);
+  assert(warm.native_cache.hits == 1);
+  assert(warm.native_cache.misses == 0);
+  assert(changed.compiled_processes == 1);
+  assert(changed.native_cache.hits == 0);
+  assert(changed.native_cache.misses == 1);
+  assert(changed.native_cache.stores == 1);
 #else
   assert(compiled.compiled_processes == 0);
+  assert(warm.compiled_processes == 0);
+  assert(changed.compiled_processes == 0);
 #endif
 }
 
@@ -284,10 +318,17 @@ module assertion_actions;
   logic [5:0] marker;
   logic [1:0] selector;
   logic [3:0] qualifier_marker;
+  function automatic logic [3:0] qualified_seed(input logic [1:0] value);
+    unique case (value)
+      2'b01: return 4'h0;
+      default: return 4'hf;
+    endcase
+  endfunction
+  localparam logic [3:0] QUALIFIED_SEED = qualified_seed(2'b01);
   initial begin
     marker = 0;
     selector = 2'b01;
-    qualifier_marker = 0;
+    qualifier_marker = QUALIFIED_SEED;
     $info;
     $warning("standalone warning");
     $error("standalone error");

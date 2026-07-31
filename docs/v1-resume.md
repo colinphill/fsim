@@ -9,33 +9,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Reboot checkpoint: Batch 99 is intentionally in progress, not complete. The
-  checkpoint commit contains compact `CaseQualifier` HIR metadata; parsing for
-  `unique`, `unique0`, and `priority` before `case`, `casez`, `casex`, and
-  bounded `case inside`; qualified-case lowering with alternative-level
-  definite-match counting and source-aware warning reports; frontend,
-  elaboration, and assertion-application evidence; native-object schema 51;
-  and an 18-shape LLVM cache-key matrix. The warnings-as-errors Debug tree was
-  rebuilt with eight workers after all checkpoint edits; the focused Debug
-  frontend, elaboration, assertion-application, and LLVM tests pass (the LLVM
-  cache test completed in 2.48 seconds). Diagnostics and release documents
-  have not yet been updated, and the full Debug/Release regressions have not
-  yet run. Resume with the focused expression below, then complete diagnostics,
-  documentation, full gates, and the final Batch 99 commit. Do not treat the
-  checkpoint commit as Batch 99 completion.
-- Implementation baseline: completed feature-batch-98 bounded SystemVerilog
-  case-inside statements on top of the feature-batch-97 bounded membership
-  expression handoff.
-- The source-size refactor is complete: all 292 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-99 bounded SystemVerilog
+  case qualifiers on top of the feature-batch-98 bounded case-inside handoff.
+- The source-size refactor is complete: all 294 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 59
-  configured tests in 420.22 seconds, and Release passed all 59 configured
-  tests in 125.07 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 1.02/0.83 seconds, the expanded function differential in 12.74/10.46
-  seconds, containers in 338.48/84.69 seconds, and the monolithic application
-  in 39.71/13.56 seconds.
-- The diagnostic catalog covers all 1,255 production codes.
+  configured tests in 427.12 seconds, and Release passed all 59 configured
+  tests in 131.20 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.90/0.79 seconds, the expanded function differential in 12.52/10.50
+  seconds, containers in 341.61/86.11 seconds, qualified assertions in
+  6.07/5.89 seconds, and the monolithic application in 39.64/13.47 seconds.
+- The diagnostic catalog covers all 1,259 production codes.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -1057,31 +1042,61 @@ application 13.56). The catalog covers 1,255 codes and the source gate covers
 292 files. Batch 98 is not a CI-inspection boundary, so no Actions run was
 inspected.
 
+## Completed feature batch 99
+
+Bounded SystemVerilog `unique`, `unique0`, and `priority` qualifiers now retain
+compact source-spanned metadata independently of exact, `casez`, `casex`, and
+`case inside` matching modes. The selector executes once and choices are ORed
+per alternative before qualifier checks, so comma-separated choices in one
+item never count twice. Unknown comparison results are nonmatches.
+
+`unique` warns for multiple matching alternatives and for no match without a
+default; `unique0` warns only for multiple alternatives; `priority` warns only
+for no match without a default. A default suppresses no-match warnings, and
+ordinary first-matching-body/default execution remains source ordered. Common
+source-aware warning reports agree through constant-function selection,
+interpreter, LLVM O0/O2, callbacks, CLI rendering, cold/warm reuse, and source
+edits. Duplicate, misplaced, non-SystemVerilog, invalid-HIR, and wrong-language
+forms retain targeted diagnostics.
+
+Native-object schema 51 records qualifier report/control-flow identity in an
+18-object cache matrix while container semantic revision 24 and the public ABI
+remain unchanged. Debug passed all 59 tests in 427.12 seconds (scoped locals
+0.90, functions 12.52, containers 341.61, qualified assertions 6.07,
+application 39.64). Release passed all 59 tests in 131.20 seconds (scoped
+locals 0.79, functions 10.50, containers 86.11, qualified assertions 5.89,
+application 13.47). The catalog covers 1,259 codes and the source gate covers
+294 files. Batch 99 is not a CI-inspection boundary, so no Actions run was
+inspected.
+
 ## Next ten-feature batch
 
-Resume with **feature batch 99: bounded SystemVerilog case qualifiers**:
+Resume with **feature batch 100: bounded SystemVerilog case-pattern matching**:
 
-1. Retain `unique`, `unique0`, and `priority` as distinct source-spanned case
-   qualifier metadata without changing the selected case matching mode.
-2. Parse each qualifier before `case`, `casez`, `casex`, and bounded
-   `case inside` while rejecting duplicate or misplaced qualifiers.
-3. Preserve ordinary source-ordered first-match and default execution.
-4. Diagnose a `unique` case when no alternative definitely matches and no
-   default exists.
-5. Diagnose `unique` when more than one alternative definitely matches.
-6. Diagnose `unique0` only when more than one alternative definitely matches.
-7. Diagnose `priority` when no alternative definitely matches and no default
-   exists, while retaining first-match execution when several choices match.
-8. Treat unknown comparisons as nonmatches for qualifier checks and cover
-   exact, casez, casex, and case-inside selectors.
-9. Cover constant-function selection, interpreter, LLVM O0/O2, report/debug
-   callbacks, cold/warm reuse, source edits, and malformed-HIR diagnostics.
-10. Raise native-object schema 50 to 51, serialize qualifier and checking
-    control flow, complete full Debug/Release evidence, then push Batch 99.
+1. Retain `case (selector) matches` as a distinct source-spanned matching mode
+   whose patterns are not flattened into ordinary case expressions.
+2. Parse the form only in SystemVerilog and reject combinations with `casez`,
+   `casex`, `inside`, duplicate matching keywords, or malformed alternatives.
+3. Admit a bounded scalar-integral literal/constant pattern subset with exact
+   width and signedness and explicit `?` wildcard-bit metadata.
+4. Evaluate the selector once and normalize each pattern result to a definite
+   match, treating unresolved comparison state as a nonmatch.
+5. Preserve comma-choice OR semantics, source-ordered first-body selection,
+   and one final default.
+6. Compose `unique`, `unique0`, and `priority` with the per-alternative pattern
+   match bits and established warning rules.
+7. Cover constant-function selection plus interpreter and LLVM O0/O2 runtime
+   behavior with report/debug/VCD evidence.
+8. Cover cold/warm reuse, source edits, specialization provenance, and exact
+   native-cache identity.
+9. Diagnose tagged, variable-binding, struct/array/member, open, type/class,
+   and malformed-HIR patterns without silently accepting unsupported syntax.
+10. Raise native-object schema 51 to 52, complete full Debug/Release evidence,
+    push Batch 100, then inspect and repair all non-documentation GitHub CI.
 
-Keep Batch 99 to procedural case qualifiers and deterministic diagnostics.
-`case matches`, tagged patterns, assertion-style severity controls, and
-cross-language qualifier behavior remain separate release-gate work.
+Keep Batch 100 to bounded scalar-integral case-pattern matching and explicit
+tagged/composite-pattern diagnostics. Implementing tagged unions or general
+destructuring patterns remains in the later aggregate-type batch.
 The authoritative Batch 99 through 130 language-closure sequence is recorded
 under **Forward language-closure feature batches** in the implementation plan;
 preserve that order unless both documents are explicitly amended.
@@ -1157,8 +1172,9 @@ return handoff, followed by the Batch 94 bounded nonstatic-container-function
 return handoff and Batch 95 bounded function-result-consumer/conditional
 handoff, then the Batch 96 bounded whole-container-equality handoff and Batch
 97 bounded SystemVerilog membership-expression handoff, followed by Batch 98
-bounded SystemVerilog case-inside statement handoff. Treat the newest pushed
-commit on the same branch as the
+bounded SystemVerilog case-inside statement handoff and Batch 99 bounded
+SystemVerilog case-qualifier handoff. Treat the newest pushed commit on the
+same branch as the
 authoritative continuation and read this file from that checkout before doing
 work.
 
@@ -1191,7 +1207,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 99 below and return to focused tests until its tenth feature.
+resume Batch 100 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1209,17 +1225,14 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Continue the in-progress Batch 99 checkpoint described in the Snapshot.
-   Inspect the live diff first, rerun focused evidence if the host changed,
-   then add diagnostics and release-document evidence. Do not rerun Batch 98's
-   full regression until the case-qualifier implementation and evidence are
-   complete unless an intervening repair needs it.
-4. Keep Batch 99 within procedural SystemVerilog `unique`, `unique0`, and
-   `priority` case qualifiers and their deterministic diagnostics.
+3. Begin Batch 100 from the completed case-qualifier baseline described above.
+   Inspect the live tree first and rerun focused evidence if the host changed.
+4. Keep Batch 100 within bounded scalar-integral `case matches` behavior and
+   targeted diagnostics for deferred tagged/composite patterns.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
-   after all ten features, then update the four documents named above, commit,
-   and push.
+   after all ten features, update the four documents named above, commit and
+   push, then perform the mandatory non-documentation CI inspection.
 
 The existing exact-LLVM build trees on the recorded development host are:
 
@@ -1228,9 +1241,9 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 99 is in progress, extending the
+Use a narrow test expression while Batch 100 is in progress, extending the
 frontend, statement elaboration, native cache, and application/report tests as
-case qualifiers appear:
+case patterns appear:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
@@ -1238,7 +1251,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 59-test inventories are clean after feature batch 98.
+recorded 59-test inventories are clean after feature batch 99.
 
 Before declaring any row complete, consult:
 
