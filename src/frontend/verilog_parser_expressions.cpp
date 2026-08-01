@@ -5,9 +5,36 @@ namespace fsim::frontend {
 
 DelayAlternative VerilogParser::parse_verilog_delay_alternative() {
   DelayAlternative alternative;
-  const auto magnitude =
-      expect(TokenKind::Number, "delay magnitude", "FSIM-SV-PARSE-023");
-  if (const auto parsed = decimal_ratio(magnitude.text)) {
+  const auto start = current();
+  if (at(TokenKind::Colon) || at(TokenKind::Comma)
+      || at(TokenKind::RightParen) || at(TokenKind::Semicolon)
+      || at(TokenKind::EndOfFile)) {
+    error(
+        current(),
+        "FSIM-SV-PARSE-023",
+        "expected delay magnitude expression");
+    alternative.span = current().span;
+    return alternative;
+  }
+  const bool explicit_time_literal =
+      at(TokenKind::Number)
+      && at(TokenKind::Identifier, 1)
+      && time_unit_femtoseconds(current(1).text).has_value();
+  auto expression = explicit_time_literal
+      ? Expression{}
+      : parse_expression();
+  const bool plain_decimal_literal =
+      expression.kind == ExpressionKind::IntegerLiteral
+      && decimal_ratio(expression.text).has_value();
+  const auto magnitude = explicit_time_literal
+      ? advance()
+      : Token{
+            TokenKind::Number,
+            expression.text,
+            expression.span,
+            {}};
+  if (explicit_time_literal || plain_decimal_literal) {
+    const auto parsed = decimal_ratio(magnitude.text);
     alternative.magnitude = parsed->numerator;
     alternative.divisor = parsed->denominator;
     if (at(TokenKind::Identifier)
@@ -41,18 +68,28 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative() {
           "a fractional delay requires an explicit time unit or an "
           "active `timescale/timeunit");
     }
-  } else {
+  } else if (
+      expression.kind == ExpressionKind::IntegerLiteral
+      || expression.kind == ExpressionKind::LogicLiteral) {
     const bool nondecimal =
-        magnitude.text.find('\'') != std::string::npos;
+        expression.text.find('\'') != std::string::npos;
     error(
-        magnitude,
+        start,
         nondecimal ? "FSIM-SV-SEM-002" : "FSIM-SV-SEM-049",
         nondecimal
             ? "delay magnitude must be a decimal literal"
             : "delay magnitude must be a representable nonnegative "
               "decimal literal");
+  } else {
+    alternative.expression = std::move(expression);
+    if (!module_time_unit_.empty()) {
+      alternative.magnitude = module_time_unit_magnitude_;
+      alternative.unit = module_time_unit_;
+    } else {
+      alternative.magnitude = 1;
+    }
   }
-  alternative.span = span_from(magnitude, previous());
+  alternative.span = span_from(start, previous());
   return alternative;
 }
 
@@ -62,6 +99,7 @@ void VerilogParser::set_selected_delay(
   delay.magnitude = alternative.magnitude;
   delay.divisor = alternative.divisor;
   delay.unit = alternative.unit;
+  delay.expression = alternative.expression;
 }
 
 Delay VerilogParser::parse_verilog_delay_value(const bool parenthesized) {

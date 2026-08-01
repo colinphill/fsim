@@ -896,7 +896,19 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
       parse_declaration(unit);
     } else if (is_gate_primitive()) {
       module_has_non_time_item_ = true;
-      parse_gate_primitive(unit.concurrent_statements);
+      parse_gate_primitive(
+          unit.concurrent_statements, unit.signals, unit.ports);
+    } else if (any_keyword({
+                   "cmos", "rcmos", "nmos", "pmos", "rnmos",
+                   "rpmos", "tran", "rtran", "tranif0", "tranif1",
+                   "rtranif0", "rtranif1", "pullup", "pulldown"})) {
+      module_has_non_time_item_ = true;
+      error(
+          current(),
+          "FSIM-SV-UNSUPPORTED-040",
+          "MOS, bidirectional switch, resistive, and pull primitives are "
+          "outside the bounded v1 gate-primitive subset");
+      skip_to_semicolon();
     } else if (match_keyword("assign")) {
       module_has_non_time_item_ = true;
       if (auto assignment = parse_continuous_assignment(previous())) {

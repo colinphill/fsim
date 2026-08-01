@@ -127,6 +127,40 @@ struct Expression {
   }
 };
 
+struct DelayAlternative {
+  std::uint64_t magnitude{};
+  std::uint64_t divisor{1};
+  std::string unit;
+  // A locally constant SystemVerilog delay expression. Literal delays keep
+  // this empty. Before elaboration, `magnitude` is the physical-unit scale;
+  // after project time normalization it is the tick scale applied to the
+  // independently specialized expression value.
+  std::optional<Expression> expression;
+  SourceSpan span;
+};
+
+struct Delay {
+  std::uint64_t magnitude{};
+  // Exact decimal denominator retained until project time normalization.
+  // Integer/VHDL delays use one.
+  std::uint64_t divisor{1};
+  // Empty when the source supplies no physical unit or active `timescale.
+  std::string unit;
+  // Present for a locally constant SystemVerilog delay expression. The
+  // expression remains specialization-aware while `magnitude` is normalized
+  // into the number of project ticks per expression unit.
+  std::optional<Expression> expression;
+  // Present together only for a parenthesized min:typ:max delay triple.
+  std::optional<DelayAlternative> minimum;
+  std::optional<DelayAlternative> typical;
+  std::optional<DelayAlternative> maximum;
+  // Parenthesized transition-delay values after the first. Continuous
+  // assignments accept fall and turnoff values; supported gate primitives
+  // accept a fall value.
+  std::vector<Delay> additional_values;
+  SourceSpan span;
+};
+
 struct PackedRangeExpression {
   Expression left;
   Expression right;
@@ -371,6 +405,22 @@ struct SignalDeclaration {
   PortDirection direction{PortDirection::Unknown};
   bool is_port{};
   SourceSpan span;
+  // A SystemVerilog net-declaration propagation delay. Elaboration applies
+  // it to every continuous driver targeting this net after specialization.
+  std::optional<Delay> net_delay;
+
+  SignalDeclaration() = default;
+  SignalDeclaration(
+      std::string signal_name,
+      Type signal_type,
+      PortDirection signal_direction,
+      bool signal_is_port,
+      SourceSpan signal_span,
+      std::optional<Delay> signal_net_delay = std::nullopt)
+      : name(std::move(signal_name)), type(std::move(signal_type)),
+        direction(signal_direction), is_port(signal_is_port),
+        span(std::move(signal_span)),
+        net_delay(std::move(signal_net_delay)) {}
 };
 
 struct VariableDeclaration {
@@ -693,31 +743,6 @@ enum class ProceduralUpdateKind {
   Compound,
   Prefix,
   Postfix,
-};
-
-struct DelayAlternative {
-  std::uint64_t magnitude{};
-  std::uint64_t divisor{1};
-  std::string unit;
-  SourceSpan span;
-};
-
-struct Delay {
-  std::uint64_t magnitude{};
-  // Exact decimal denominator retained until project time normalization.
-  // Integer/VHDL delays use one.
-  std::uint64_t divisor{1};
-  // Empty when the source supplies no physical unit or active `timescale.
-  std::string unit;
-  // Present together only for a parenthesized min:typ:max delay triple.
-  std::optional<DelayAlternative> minimum;
-  std::optional<DelayAlternative> typical;
-  std::optional<DelayAlternative> maximum;
-  // Parenthesized transition-delay values after the first. Continuous
-  // assignments accept fall and turnoff values; supported gate primitives
-  // accept a fall value.
-  std::vector<Delay> additional_values;
-  SourceSpan span;
 };
 
 enum class VhdlDelayMechanism {

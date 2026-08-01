@@ -5735,6 +5735,59 @@ fork in 0.08 seconds, procedural assignments in 1.90 seconds, containers in
 2026-07-31. Batch 105 is not a ten-batch CI-inspection boundary, so no Actions
 run was inspected.
 
+### One-hundred-sixth feature batch — SystemVerilog delay, primitive, and continuous-assignment closure
+
+SystemVerilog delay HIR now retains locally constant integral expressions in
+single, min/typ/max, and rise/fall/turnoff alternatives while preserving each
+module's time-unit scale. Parameter and localparam substitution occurs per
+specialization before checked tick normalization. Unknown, negative, and
+overflowing values fail through stable diagnostics rather than being silently
+accepted or truncated.
+
+Scalar and packed net declarations now retain declaration delays and lower
+initializers as continuous drivers. Generated declarations follow the same
+path. Net delay is applied after specialization and combines transition by
+transition with any explicit continuous-assignment delay, including checked
+overflow. A delayed net can establish automatic project precision even when
+it is the only timed object.
+
+Named, statically bounded arrays of the supported logic and tri-state
+primitives expand into stable indexed continuous processes. Direct packed
+terminals map ordinally across differing declared directions while scalar
+terminals broadcast. `bufif0`, `bufif1`, `notif0`, and `notif1` implement
+four-state enable behavior, Z turnoff, and one-, two-, or three-value delays.
+MOS, bidirectional-switch, resistive, pull, strength, and path-delay families
+remain explicitly deferred rather than partially parsed.
+
+Continuous-driver evidence covers whole and disjoint slice ownership,
+generated net initialization, explicit-plus-net delay composition,
+rise/fall/turnoff selection, inertial pulse cancellation, preservation of an
+already pending same-value transaction, zero-delay update-region publication,
+multiple parameter specializations, callbacks, debugger reads and indexed
+process names, and normalized VCD. Interpreter and LLVM O0/O2 cold/warm runs
+agree, while parameter, delay, primitive, range, and generated-source edits
+invalidate schema-58 objects without changing the public native ABI.
+
+Stable parser, semantic, elaboration, and unsupported-feature diagnostics
+cover malformed arrays, missing instance names, nonstatic or oversized ranges,
+terminal-width mismatches, delayed variable declarations, invalid constant
+delays, normalization/composition overflow, and the explicitly deferred
+primitive families. The diagnostic catalog covers all 1,335 production codes,
+and the source gate covers 310 authored files with an empty allowlist and a
+2,000-line maximum.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 61 tests
+in 455.69 seconds, including scoped locals in 0.90 seconds, LLVM in 2.94
+seconds, transition delays in 1.46 seconds, named events in 1.01 seconds, fork
+in 0.12 seconds, procedural assignments in 2.53 seconds, containers in 356.83
+seconds, and the monolithic application in 39.68 seconds. Release passed all
+61 tests in 141.87 seconds, including scoped locals in 0.79 seconds, LLVM in
+2.58 seconds, transition delays in 0.57 seconds, named events in 0.83 seconds,
+fork in 0.07 seconds, procedural assignments in 1.91 seconds, containers in
+87.40 seconds, and the monolithic application in 13.58 seconds, on
+2026-07-31. Batch 106 is not a ten-batch CI-inspection boundary, so no Actions
+run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

@@ -1506,6 +1506,12 @@ module gates;
   logic y_nor;
   logic y_xor;
   logic y_xnor;
+  logic [3:0] vector_a;
+  logic [0:3] vector_b;
+  logic [7:4] vector_result;
+  logic enable;
+  logic tri_buf;
+  logic tri_not;
   buf #2 (y_buf, a), named_buf (y_buf_second, b);
   not named_not (y_not, a);
   and (y_and, a, b, c);
@@ -1514,6 +1520,9 @@ module gates;
   nor (y_nor, a, b, c);
   xor (y_xor, a, b, c);
   xnor (y_xnor, a, b, c);
+  and array_gate[3:0] (vector_result, vector_a, vector_b);
+  bufif1 #(1, 2, 3) tri_buf_gate (tri_buf, a, enable);
+  notif0 tri_not_gate (tri_not, b, enable);
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -1521,7 +1530,7 @@ endmodule
   const auto& statements =
       result.design.units.front().concurrent_statements;
   require(
-      statements.size() == 9
+      statements.size() == 15
           && std::ranges::all_of(
               statements,
               [](const Statement& statement) {
@@ -1538,6 +1547,30 @@ endmodule
           && statements[3].value.kind == ExpressionKind::Binary
           && statements[4].value.kind == ExpressionKind::Unary,
       "gate primitives lower into continuous expression HIR");
+  require(
+      statements[9].label == "array_gate[3]"
+          && statements[12].label == "array_gate[0]"
+          && statements[9].target.kind == ExpressionKind::Index
+          && statements[9].target.operands[1].text == "7"
+          && statements[9].value.kind == ExpressionKind::Binary
+          && statements[9].value.operands[0].kind
+              == ExpressionKind::Index
+          && statements[9].value.operands[0].operands[1].text == "3"
+          && statements[9].value.operands[1].operands[1].text == "0",
+      "gate arrays expand by ordinal across differing packed directions");
+  require(
+      statements[13].label == "tri_buf_gate"
+          && statements[13].value.kind == ExpressionKind::Call
+          && statements[13].value.text == "?:"
+          && statements[13].delay
+          && statements[13].delay->additional_values.size() == 2
+          && statements[14].label == "tri_not_gate"
+          && statements[14].value.kind == ExpressionKind::Call
+          && statements[14].value.operands[0].kind
+              == ExpressionKind::Unary
+          && statements[14].value.operands[1].kind
+              == ExpressionKind::Unary,
+      "bufif/notif primitives lower to four-state conditional drivers");
 
   const auto invalid = parse_text(
       "invalid_gate.sv",
@@ -1547,7 +1580,14 @@ module invalid_gate;
   logic y;
   and (y, a);
   not (y, a, a);
+  bufif1 (y, a);
+  logic [1:0] narrow;
+  and too_wide[3:0] (narrow, a, a);
+  and enormous[64:0] (y, a, a);
+  and [3:0] (y, a, a);
+  and symbolic[a:0] (y, a, a);
   and (strong1, pull0) (y, a, a);
+  nmos deferred_switch(y, a, b);
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -1558,7 +1598,7 @@ endmodule
                  [](const Diagnostic& diagnostic) {
                    return diagnostic.code == "FSIM-SV-SEM-026";
                  })
-              == 2,
+              == 3,
       "invalid gate terminal counts are targeted");
   require(
       std::ranges::any_of(
@@ -1567,6 +1607,35 @@ endmodule
             return diagnostic.code == "FSIM-SV-UNSUPPORTED-030";
           }),
       "unsupported gate strengths are targeted");
+  require(
+      std::ranges::any_of(
+          invalid.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-111";
+          })
+          && std::ranges::any_of(
+              invalid.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-112";
+              })
+          && std::ranges::any_of(
+              invalid.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-113";
+              })
+          && std::ranges::any_of(
+              invalid.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-114";
+              }),
+      "gate-array bounds and terminal widths are checked");
+  require(
+      std::ranges::any_of(
+          invalid.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-UNSUPPORTED-040";
+          }),
+      "deferred switch and pull primitive families are targeted");
 }
 
 void test_systemverilog_select_and_concatenation_expressions() {

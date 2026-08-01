@@ -9,20 +9,20 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-105 SystemVerilog
-  fork/process and NBA-ordering closure on top of Batch 104 commit `deae784`;
-  the current handoff commit is the Batch 105 baseline.
+- Implementation baseline: completed feature-batch-106 SystemVerilog delay,
+  primitive, and continuous-assignment closure on top of Batch 105 commit
+  `b520e17`; the current handoff commit is the Batch 106 baseline.
 - The source-size refactor is complete: all 310 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 61
-  configured tests in 450.47 seconds, and Release passed all 61 configured
-  tests in 140.49 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 0.91/0.81 seconds, LLVM in 4.99/3.33 seconds, named events in 1.01/0.83
-  seconds, fork in 0.14/0.08 seconds, procedural assignments in 2.55/1.90
-  seconds, containers in 347.55/83.33 seconds, and the monolithic application
-  in 40.41/14.11 seconds.
-- The diagnostic catalog covers all 1,324 production codes.
+  configured tests in 455.69 seconds, and Release passed all 61 configured
+  tests in 141.87 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.90/0.79 seconds, LLVM in 2.94/2.58 seconds, transition delays in
+  1.46/0.57 seconds, named events in 1.01/0.83 seconds, fork in 0.12/0.07
+  seconds, procedural assignments in 2.53/1.91 seconds, containers in
+  356.83/87.40 seconds, and the monolithic application in 39.68/13.58 seconds.
+- The diagnostic catalog covers all 1,335 production codes.
 - The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
   `30640792808` and replacements `30647570353`/`30651503050` passed every
   ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
@@ -1245,35 +1245,54 @@ identity, 1,324 diagnostics, the 310-file source gate, and both 61-test full
 regressions pass. Feature-matrix rows SV-611 through SV-620 are the detailed
 release evidence. Batch 105 is not a CI-inspection boundary.
 
-Resume with **feature batch 106: SystemVerilog delay, primitive, and
-continuous-assignment closure**:
+Batch 106 closes bounded SystemVerilog delay, primitive, and continuous-driver
+semantics. Locally constant parameter/localparam delay expressions retain
+their module time scale and normalize after specialization with checked
+unknown, negative, and overflow paths. Scalar/packed net declaration delays
+and initializers, including generated declarations, lower through continuous
+drivers; explicit assignment and net delays compose transition by transition.
+Named static arrays of supported logic primitives map packed terminals
+ordinally or broadcast scalars, while `bufif0`, `bufif1`, `notif0`, and
+`notif1` add exact four-state enable, Z turnoff, and one-/two-/three-value
+delays. Deferred MOS, switch, resistive, pull, strength, and path forms remain
+explicitly diagnosed. Inertial cancellation, same-value pending transactions,
+zero-delay publication, generated and specialized drivers, debugger/process
+metadata, callbacks, normalized VCD, interpreter/LLVM O0/O2, and schema-58
+cold/warm/edit identity have positive and negative evidence. The catalog has
+1,335 diagnostics, the source gate covers 310 files, and both 61-test full
+regressions pass. Feature-matrix rows SV-621 through SV-630 are the detailed
+release evidence. Batch 106 is not a CI-inspection boundary.
 
-1. Audit parameterized delays, net delays, primitive instances/arrays, and
-   continuous assignments against the v1 scheduling and driver contract.
-2. Add bounded constant-parameter and localparam delay expressions with exact
-   timeunit/timeprecision selection, rounding, overflow, and cache identity.
-3. Complete net-declaration delays and their initialization/driver semantics
-   for supported scalar and packed nets.
-4. Add statically bounded built-in gate-instance arrays with exact range,
-   ordinal connection, naming, hierarchy, and delay behavior.
-5. Complete the remaining nondeferred built-in primitive families admitted by
-   v1, including four-state truth tables and checked terminal legality.
-6. Close continuous-assignment whole/slice driver ownership, reevaluation,
-   multi-driver resolution, and same-value transaction behavior.
-7. Complete rise/fall/turnoff selection, inertial cancellation, parameterized
-   delay changes, zero-delay ordering, and packed mixed-transition behavior.
-8. Prove primitive/continuous safe points, hierarchy/debug metadata, signal
-   callbacks, scheduling observations, and normalized VCD across interpreter
-   and LLVM O0/O2.
-9. Add stable frontend/elaboration/native diagnostics for malformed delay,
-   primitive-array, terminal, driver, and malformed HIR/SimIR forms.
-10. Version the complete delay/primitive/continuous graph in native-cache
-    identity, add full positive/negative/differential evidence, run
-    Debug/Release gates, and push the non-boundary batch.
+Resume with **feature batch 107: SystemVerilog interface, modport, and package
+visibility closure**:
 
-Keep Batch 106 to parameterized/net delays, gate arrays, remaining nondeferred
-primitives, and continuous-assignment closure. Interfaces, modports, package
-exports, and package/interface visibility remain Batch 107.
+1. Audit existing package visibility, module ports, hierarchy aliases, and
+   declaration lookup against the bounded v1 interface/modport contract.
+2. Add retained interface declarations, parameters, time context, members,
+   continuous/procedural processes, and stable source identities.
+3. Elaborate parameterized interface instances and bounded static interface
+   arrays through nested and generated hierarchy with unique instance paths.
+4. Add modport declarations with checked input/output/inout/ref directions,
+   task/function import/export entries, and exact member visibility.
+5. Add module interface ports for explicit interface types and modport views,
+   including named/positional connections and parameter-specialized types.
+6. Enforce direction-aware driver ownership and callable access through
+   interface and modport boundaries, including deterministic diagnostics for
+   missing, ambiguous, or illegal members.
+7. Add package export and re-export semantics, wildcard and selective export,
+   transitive visibility, collision handling, and cycle-safe lookup.
+8. Prove interface/package hierarchy, debugger reads and process names,
+   callbacks, safe points, and normalized VCD across interpreter and LLVM
+   O0/O2.
+9. Add stable frontend/elaboration/native diagnostics for malformed interface,
+   modport, port, export, visibility, driver, and malformed HIR/SimIR forms.
+10. Version the complete interface/modport/package graph in native-cache
+    identity, add positive/negative/generated/specialization evidence, run the
+    full Debug/Release gates, and push the non-boundary batch.
+
+Keep Batch 107 to interfaces, modports, interface ports, package exports, and
+package/interface visibility. Preprocessor/directive and remaining generate
+constant-specialization semantics remain Batch 108.
 
 The authoritative Batch 99 through 130 language-closure sequence is recorded
 under **Forward language-closure feature batches** in the implementation plan;
@@ -1357,10 +1376,11 @@ sizing, short-circuit, dynamic-read-selection, and streaming-concatenation
 handoff, followed by the Batch 102 procedural-lvalue, timed-update,
 expression-increment, and selected-force/release handoff and the Batch 103
 function/task lifetime, association, reference, static-local, and generated-
-callable handoff, followed by the Batch 104 always/procedural-control handoff
-and the Batch 105 fork/process/NBA-ordering handoff. Treat the newest pushed
-commit on the same branch as the authoritative continuation and read this
-file from that checkout before doing work.
+callable handoff, followed by the Batch 104 always/procedural-control handoff,
+the Batch 105 fork/process/NBA-ordering handoff, and the Batch 106
+delay/primitive/continuous-assignment handoff. Treat the newest pushed commit
+on the same branch as the authoritative continuation and read this file from
+that checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -1391,7 +1411,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 106 below and return to focused tests until its tenth feature.
+resume Batch 107 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1409,15 +1429,15 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin Batch 106 from the completed fork/process/NBA-ordering baseline
-   described above.
+3. Begin Batch 107 from the completed delay/primitive/continuous-assignment
+   baseline described above.
    Inspect the live tree first and rerun focused evidence if the host changed.
-4. Keep Batch 106 within bounded SystemVerilog parameterized/net delays, gate
-   arrays, remaining nondeferred primitives, and continuous assignments.
+4. Keep Batch 107 within bounded SystemVerilog interfaces, modports, interface
+   ports, package exports, and package/interface visibility.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, update the four documents named above, commit, and
-   push. Batch 106 is not a CI-inspection boundary.
+   push. Batch 107 is not a CI-inspection boundary.
 
 The existing exact-LLVM build trees on the recorded development host are:
 
@@ -1426,9 +1446,9 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 106 is in progress, extending the
-frontend, delay/primitive elaboration, scheduler/native cache, and
-application/debug/VCD tests as continuous-driver behavior lands:
+Use a narrow test expression while Batch 107 is in progress, extending the
+frontend, package/interface elaboration, hierarchy/native cache, and
+application/debug/VCD tests as interface visibility behavior lands:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
@@ -1436,7 +1456,7 @@ ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 61-test inventories are clean after the local feature-batch-105 gates.
+recorded 61-test inventories are clean after the local feature-batch-106 gates.
 
 Before declaring any row complete, consult:
 

@@ -3,6 +3,78 @@
 
 namespace fsim::elaboration::elaboration_detail {
 
+namespace {
+
+void substitute_delay_parameters(
+    frontend::Delay& delay,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics,
+    const frontend::Language language) {
+  if (delay.expression) {
+    substitute_parameters(
+        *delay.expression, environment, domains, language);
+  }
+  const auto substitute_alternative =
+      [&](frontend::DelayAlternative& alternative) {
+        if (alternative.expression) {
+          substitute_parameters(
+              *alternative.expression,
+              environment,
+              domains,
+              language);
+        }
+      };
+  if (delay.minimum) {
+    substitute_alternative(*delay.minimum);
+  }
+  if (delay.typical) {
+    substitute_alternative(*delay.typical);
+  }
+  if (delay.maximum) {
+    substitute_alternative(*delay.maximum);
+  }
+  if (delay.expression) {
+    std::string error;
+    const auto value = evaluate_systemverilog_constant_expression(
+        *delay.expression, {}, environment, error);
+    const auto negative = value && value->known()
+        && value->is_signed && value->width != 0
+        && ((value->bits >> (value->width - 1U)) & 1U) != 0;
+    if (!value || !value->known() || negative) {
+      diagnostics.push_back({
+          "FSIM-ELAB-SVDELAY-001",
+          "SystemVerilog delay expression must be a known "
+          "nonnegative locally constant integral value"
+              + (error.empty() ? std::string{} : ": " + error),
+          delay.expression->span});
+      delay.magnitude = 0;
+    } else {
+      const auto magnitude = value->bits & value->mask();
+      if (magnitude != 0
+          && delay.magnitude
+              > std::numeric_limits<std::uint64_t>::max()
+                  / magnitude) {
+        diagnostics.push_back({
+            "FSIM-ELAB-SVDELAY-002",
+            "SystemVerilog delay expression overflows the 64-bit "
+            "simulation time range after time-unit normalization",
+            delay.expression->span});
+        delay.magnitude = 0;
+      } else {
+        delay.magnitude *= magnitude;
+      }
+    }
+    delay.expression.reset();
+  }
+  for (auto& additional : delay.additional_values) {
+    substitute_delay_parameters(
+        additional, environment, domains, diagnostics, language);
+  }
+}
+
+}  // namespace
+
 std::string generated_scope(
     const std::string_view parent_scope,
     const std::string_view local_scope) {
@@ -33,6 +105,28 @@ void substitute_parameters(
     }
 }
 
+void substitute_parameters(
+    frontend::SignalDeclaration& declaration,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics,
+    const frontend::Language language) {
+    substitute_parameters(
+        declaration.type,
+        environment,
+        domains,
+        diagnostics,
+        language);
+    if (declaration.net_delay) {
+        substitute_delay_parameters(
+            *declaration.net_delay,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
+}
+
 
 
 void substitute_parameters(
@@ -42,6 +136,14 @@ void substitute_parameters(
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
     for (auto& statement : statements) {
+        if (statement.delay) {
+            substitute_delay_parameters(
+                *statement.delay,
+                environment,
+                domains,
+                diagnostics,
+                language);
+        }
         substitute_parameters(
             statement.target, environment, domains, language);
         substitute_parameters(
@@ -158,7 +260,7 @@ void substitute_parameters(
     }
     for (auto& signal : body.signals) {
         substitute_parameters(
-            signal.type,
+            signal,
             environment,
             domains,
             diagnostics,

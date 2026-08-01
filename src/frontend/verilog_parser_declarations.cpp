@@ -887,6 +887,16 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     parse_optional_signedness(spec.type);
     parse_optional_range(spec.type);
   }
+  std::optional<Delay> net_delay;
+  if (match(TokenKind::Hash)) {
+    net_delay = parse_verilog_delay(previous(), 3);
+    if (spec.type.spelling != "wire") {
+      error(
+          start,
+          "FSIM-SV-SEM-110",
+          "a net-declaration delay requires a wire net type");
+    }
+  }
 
   for (;;) {
     const auto name = expect_identifier("declared name");
@@ -898,7 +908,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     }
     if (initializer
         && declaration_type.domain != ValueDomain::String
-        && !declaration_type.systemverilog_container) {
+        && !declaration_type.systemverilog_container
+        && spec.type.spelling != "wire") {
       error(
           name,
           "FSIM-SV-UNSUPPORTED-011",
@@ -973,7 +984,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     SignalDeclaration declaration{
         name.text, std::move(declaration_type), spec.direction,
         spec.direction != PortDirection::Unknown,
-        span_from(start, previous())};
+        span_from(start, previous()), net_delay};
     const auto parameter_conflict = std::any_of(
         unit.parameters.begin(),
         unit.parameters.end(),
@@ -1044,6 +1055,17 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       } else {
         unit.signals.push_back(std::move(declaration));
       }
+    }
+    if (initializer && spec.type.spelling == "wire"
+        && spec.direction == PortDirection::Unknown) {
+      Statement driver;
+      driver.kind = StatementKind::Assignment;
+      driver.assignment_kind = AssignmentKind::Continuous;
+      driver.target = Expression{
+          ExpressionKind::Identifier, name.text, {}, name.span};
+      driver.value = std::move(*initializer);
+      driver.span = span_from(name, previous());
+      unit.concurrent_statements.push_back(std::move(driver));
     }
     if (!match(TokenKind::Comma)) {
       break;
@@ -1117,6 +1139,7 @@ bool VerilogParser::update_existing_port_type(
   for (auto& existing : unit.ports) {
     if (existing.name == declaration.name) {
       existing.type = declaration.type;
+      existing.net_delay = declaration.net_delay;
       existing.span = cover(existing.span, declaration.span);
       return true;
     }
@@ -1151,14 +1174,19 @@ std::optional<Statement> VerilogParser::parse_continuous_assignment(const Token&
   return statement;
 }
 
-[[nodiscard]] bool VerilogParser::is_gate_primitive() const  {
+[[nodiscard]] bool VerilogParser::is_gate_primitive() const {
   return keyword("buf") || keyword("not")
       || keyword("and") || keyword("nand")
       || keyword("or") || keyword("nor")
-      || keyword("xor") || keyword("xnor");
+      || keyword("xor") || keyword("xnor")
+      || keyword("bufif0") || keyword("bufif1")
+      || keyword("notif0") || keyword("notif1");
 }
 
-void VerilogParser::parse_gate_primitive(std::vector<Statement>& statements) {
+void VerilogParser::parse_gate_primitive(
+    std::vector<Statement>& statements,
+    const std::vector<SignalDeclaration>& signals,
+    const std::vector<SignalDeclaration>& ports) {
   const auto start = advance();
   const auto operation = detail::ascii_lower(start.text);
   const auto strength_keyword =
@@ -1185,15 +1213,98 @@ void VerilogParser::parse_gate_primitive(std::vector<Statement>& statements) {
   }
   std::optional<Delay> delay;
   if (match(TokenKind::Hash)) {
-    delay = parse_verilog_delay(previous(), 2);
+    const bool tristate = operation == "bufif0"
+        || operation == "bufif1" || operation == "notif0"
+        || operation == "notif1";
+    delay = parse_verilog_delay(previous(), tristate ? 3 : 2);
   }
 
   const bool unary = operation == "buf" || operation == "not";
+  const bool tristate = operation == "bufif0"
+      || operation == "bufif1" || operation == "notif0"
+      || operation == "notif1";
   do {
     const auto instance_start = current();
+    std::string instance_name;
     if (at(TokenKind::Identifier)
-        && at(TokenKind::LeftParen, 1)) {
-      advance();  // Optional instance name.
+        && (at(TokenKind::LeftParen, 1)
+            || at(TokenKind::LeftBracket, 1))) {
+      instance_name = advance().text;
+    }
+    std::vector<std::int64_t> instance_indices;
+    if (match(TokenKind::LeftBracket)) {
+      const auto range_start = previous();
+      const auto left = parse_expression();
+      expect(
+          TokenKind::Colon,
+          "':' in gate-instance array range",
+          "FSIM-SV-PARSE-210");
+      const auto right = parse_expression();
+      expect(
+          TokenKind::RightBracket,
+          "']' after gate-instance array range",
+          "FSIM-SV-PARSE-211");
+      const auto literal_value =
+          [&](auto& self,
+              const Expression& expression)
+              -> std::optional<std::int64_t> {
+            if (expression.kind == ExpressionKind::IntegerLiteral) {
+              return detail::decimal_i64(expression.text);
+            }
+            if (expression.kind == ExpressionKind::Unary
+                && expression.operands.size() == 1
+                && (expression.text == "+"
+                    || expression.text == "-")) {
+              const auto operand = self(
+                  self, expression.operands.front());
+              if (!operand) {
+                return std::nullopt;
+              }
+              if (expression.text == "+") {
+                return operand;
+              }
+              if (*operand
+                  == std::numeric_limits<std::int64_t>::min()) {
+                return std::nullopt;
+              }
+              return -*operand;
+            }
+            return std::nullopt;
+          };
+      const auto left_value = literal_value(literal_value, left);
+      const auto right_value = literal_value(literal_value, right);
+      if (instance_name.empty()) {
+        error(
+            range_start,
+            "FSIM-SV-SEM-111",
+            "a gate-instance array requires an instance name");
+      } else if (!left_value || !right_value) {
+        error(
+            range_start,
+            "FSIM-SV-SEM-112",
+            "gate-instance array bounds must be decimal locally static "
+            "integers in this bounded slice");
+      } else {
+        const auto distance = *left_value >= *right_value
+            ? static_cast<std::uint64_t>(*left_value)
+                - static_cast<std::uint64_t>(*right_value)
+            : static_cast<std::uint64_t>(*right_value)
+                - static_cast<std::uint64_t>(*left_value);
+        if (distance >= 64) {
+          error(
+              range_start,
+              "FSIM-SV-SEM-113",
+              "a gate-instance array may contain at most 64 instances");
+        } else {
+          const auto count = distance + 1;
+          for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal) {
+            instance_indices.push_back(
+                *left_value >= *right_value
+                    ? *left_value - static_cast<std::int64_t>(ordinal)
+                    : *left_value + static_cast<std::int64_t>(ordinal));
+          }
+        }
+      }
     }
     expect(
         TokenKind::LeftParen,
@@ -1218,62 +1329,183 @@ void VerilogParser::parse_gate_primitive(std::vector<Statement>& statements) {
         "FSIM-SV-PARSE-093");
 
     if ((unary && inputs.size() != 1)
-        || (!unary && inputs.size() < 2)) {
+        || (tristate && inputs.size() != 2)
+        || (!unary && !tristate && inputs.size() < 2)) {
       error(
           instance_start,
           "FSIM-SV-SEM-026",
           unary
               ? "buf/not primitives require exactly one input terminal"
+          : tristate
+              ? "bufif/notif primitives require one data and one control "
+                "input terminal"
               : "logic gate primitives require at least two input terminals");
       continue;
     }
 
-    Expression value = std::move(inputs.front());
-    if (unary) {
-      if (operation == "not") {
-        const auto combined = cover(start.span, value.span);
-        value = Expression{
-            ExpressionKind::Unary,
-            "~",
-            {std::move(value)},
-            combined};
-      }
-    } else {
-      const auto binary_operation =
-          operation == "and" || operation == "nand"
-              ? "&"
-              : operation == "or" || operation == "nor"
-                  ? "|"
-                  : "^";
-      for (std::size_t index = 1;
-           index < inputs.size(); ++index) {
-        const auto combined =
-            cover(value.span, inputs[index].span);
-        value = Expression{
-            ExpressionKind::Binary,
-            binary_operation,
-            {std::move(value), std::move(inputs[index])},
-            combined};
-      }
-      if (operation == "nand" || operation == "nor"
-          || operation == "xnor") {
-        const auto combined = cover(start.span, value.span);
-        value = Expression{
-            ExpressionKind::Unary,
-            "~",
-            {std::move(value)},
-            combined};
-      }
+    const auto terminal_for =
+        [&](Expression terminal,
+            const std::size_t ordinal,
+            const std::int64_t instance_index) {
+          auto terminal_index = instance_index;
+          const SignalDeclaration* declaration = nullptr;
+          if (terminal.kind == ExpressionKind::Identifier) {
+            const auto find = [&](const auto& declarations) {
+              return std::find_if(
+                  declarations.begin(),
+                  declarations.end(),
+                  [&](const SignalDeclaration& candidate) {
+                    return candidate.name == terminal.text;
+                  });
+            };
+            const auto signal = find(signals);
+            if (signal != signals.end()) {
+              declaration = &*signal;
+            } else {
+              const auto port = find(ports);
+              if (port != ports.end()) {
+                declaration = &*port;
+              }
+            }
+          }
+          if (declaration) {
+            const auto width = declaration->type.width();
+            if (width && *width == 1) {
+              return terminal;
+            }
+            if (!width || *width != instance_indices.size()) {
+              error(
+                  instance_start,
+                  "FSIM-SV-SEM-114",
+                  "a gate-array terminal must be scalar or match the "
+                  "instance count");
+              return terminal;
+            }
+            if (declaration->type.packed_range) {
+              const auto& range = *declaration->type.packed_range;
+              terminal_index = range.left
+                  + (range.descending
+                         ? -static_cast<std::int64_t>(ordinal)
+                         : static_cast<std::int64_t>(ordinal));
+            }
+          } else if (
+              terminal.kind == ExpressionKind::LogicLiteral
+              && terminal.text.starts_with("1'")) {
+            return terminal;
+          }
+          Expression index{
+              ExpressionKind::IntegerLiteral,
+              std::to_string(terminal_index),
+              {},
+              terminal.span};
+          return Expression{
+              ExpressionKind::Index,
+              "",
+              {std::move(terminal), std::move(index)},
+              terminal.span};
+        };
+    const bool gate_array = !instance_indices.empty();
+    if (!gate_array) {
+      instance_indices.push_back(0);
     }
+    for (std::size_t ordinal = 0;
+         ordinal < instance_indices.size(); ++ordinal) {
+      auto mapped_target = !gate_array
+          ? target
+          : terminal_for(target, ordinal, instance_indices[ordinal]);
+      std::vector<Expression> mapped_inputs;
+      mapped_inputs.reserve(inputs.size());
+      for (const auto& input : inputs) {
+        mapped_inputs.push_back(
+            !gate_array
+                ? input
+                : terminal_for(input, ordinal, instance_indices[ordinal]));
+      }
 
-    Statement statement;
-    statement.kind = StatementKind::Assignment;
-    statement.assignment_kind = AssignmentKind::Continuous;
-    statement.target = std::move(target);
-    statement.value = std::move(value);
-    statement.delay = delay;
-    statement.span = cover(start.span, previous().span);
-    statements.push_back(std::move(statement));
+      Expression value = std::move(mapped_inputs.front());
+      if (unary) {
+        if (operation == "not") {
+          const auto combined = cover(start.span, value.span);
+          value = Expression{
+              ExpressionKind::Unary,
+              "~",
+              {std::move(value)},
+              combined};
+        }
+      } else if (tristate) {
+        if (operation == "notif0" || operation == "notif1") {
+          const auto inverted_span = cover(start.span, value.span);
+          value = Expression{
+              ExpressionKind::Unary,
+              "~",
+              {std::move(value)},
+              inverted_span};
+        }
+        auto control = std::move(mapped_inputs[1]);
+        if (operation == "bufif0" || operation == "notif0") {
+          const auto inverted_span = cover(start.span, control.span);
+          control = Expression{
+              ExpressionKind::Unary,
+              "~",
+              {std::move(control)},
+              inverted_span};
+        }
+        Expression high_impedance{
+            ExpressionKind::LogicLiteral,
+            "1'bz",
+            {},
+            start.span};
+        value = Expression{
+            ExpressionKind::Call,
+            "?:",
+            {std::move(control), std::move(value),
+             std::move(high_impedance)},
+            cover(start.span, previous().span)};
+      } else {
+        const auto binary_operation =
+            operation == "and" || operation == "nand"
+                ? "&"
+                : operation == "or" || operation == "nor"
+                    ? "|"
+                    : "^";
+        for (std::size_t index = 1;
+             index < mapped_inputs.size(); ++index) {
+          const auto combined =
+              cover(value.span, mapped_inputs[index].span);
+          value = Expression{
+              ExpressionKind::Binary,
+              binary_operation,
+              {std::move(value), std::move(mapped_inputs[index])},
+              combined};
+        }
+        if (operation == "nand" || operation == "nor"
+            || operation == "xnor") {
+          const auto combined = cover(start.span, value.span);
+          value = Expression{
+              ExpressionKind::Unary,
+              "~",
+              {std::move(value)},
+              combined};
+        }
+      }
+
+      Statement statement;
+      statement.kind = StatementKind::Assignment;
+      statement.assignment_kind = AssignmentKind::Continuous;
+      statement.target = std::move(mapped_target);
+      statement.value = std::move(value);
+      statement.delay = delay;
+      statement.label = instance_name.empty()
+          ? std::string{}
+          : instance_name
+              + (instance_indices.size() == 1
+                     && !gate_array
+                     ? std::string{}
+                     : "[" + std::to_string(instance_indices[ordinal])
+                         + "]");
+      statement.span = cover(start.span, previous().span);
+      statements.push_back(std::move(statement));
+    }
   } while (match(TokenKind::Comma));
   expect(
       TokenKind::Semicolon,

@@ -1411,6 +1411,97 @@ endmodule
   verify(*process[2].delay, {7, 8, 9}, {1, 1, 1}, "ps");
   verify(*process[3].delay, {10, 11, 12}, {1, 1, 1}, "ps");
 
+  const auto parameterized = parse_text(
+      "parameterized-delays.sv",
+      R"(timeunit 10ps / 1ps;
+module parameterized_delays #(
+    parameter int RISE = 2,
+    localparam int FALL = RISE + 1);
+  logic source;
+  wire result;
+  wire #(RISE, FALL, RISE + 2) net_result;
+  wire #2 initialized = source;
+  assign #(RISE:FALL:RISE + 2, FALL) result = source;
+  assign net_result = source;
+  initial #(RISE + 1) source = 1'b1;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      parameterized.ok(),
+      "locally constant parameterized delay expressions must parse");
+  const auto& parameterized_unit = parameterized.design.units.front();
+  const auto explicit_driver = std::ranges::find_if(
+      parameterized_unit.concurrent_statements,
+      [](const Statement& statement) {
+        return statement.target.text == "result";
+      });
+  require(
+      explicit_driver
+          != parameterized_unit.concurrent_statements.end(),
+      "parameterized continuous driver is retained");
+  const auto& continuous = *explicit_driver->delay;
+  require(
+      continuous.expression
+          && continuous.expression->kind == ExpressionKind::Identifier
+          && continuous.expression->text == "FALL"
+          && continuous.magnitude == 10
+          && continuous.unit == "ps"
+          && continuous.minimum && continuous.minimum->expression
+          && continuous.typical && continuous.typical->expression
+          && continuous.maximum && continuous.maximum->expression
+          && continuous.additional_values.size() == 1
+          && continuous.additional_values.front().expression,
+      "parameterized transition-delay HIR retains expressions and time scale");
+  const auto& procedural =
+      *parameterized_unit.processes.front().statements.front().delay;
+  require(
+      procedural.expression
+          && procedural.expression->kind == ExpressionKind::Binary
+          && procedural.expression->text == "+"
+          && procedural.magnitude == 10
+          && procedural.unit == "ps",
+      "parameterized procedural-delay HIR retains its expression tree");
+  const auto net_result = std::ranges::find_if(
+      parameterized_unit.signals,
+      [](const SignalDeclaration& signal) {
+        return signal.name == "net_result";
+      });
+  const auto initialized = std::ranges::find_if(
+      parameterized_unit.signals,
+      [](const SignalDeclaration& signal) {
+        return signal.name == "initialized";
+      });
+  require(
+      net_result != parameterized_unit.signals.end()
+          && net_result->net_delay
+          && net_result->net_delay->expression
+          && net_result->net_delay->additional_values.size() == 2
+          && initialized != parameterized_unit.signals.end()
+          && initialized->net_delay
+          && initialized->net_delay->magnitude == 20
+          && std::ranges::any_of(
+              parameterized_unit.concurrent_statements,
+              [](const Statement& statement) {
+                return statement.target.text == "initialized"
+                    && statement.assignment_kind
+                        == AssignmentKind::Continuous;
+              }),
+      "net-declaration delays and declaration assignments retain HIR");
+
+  const auto invalid_net_delay = parse_text(
+      "invalid-net-delay.sv",
+      "module invalid_net_delay; logic #2 value; endmodule\n",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_net_delay.ok()
+          && std::ranges::any_of(
+              invalid_net_delay.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-110";
+              }),
+      "net-declaration delays reject variable data types");
+
   const auto malformed = parse_text(
       "bad-delay-triples.sv",
       R"(module bad_delay_triples;

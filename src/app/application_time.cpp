@@ -89,6 +89,41 @@ void visit_delays(
   }
 }
 
+template <typename Function>
+void visit_signal_delays(
+    std::vector<frontend::SignalDeclaration>& signals,
+    Function& function) {
+  for (auto& signal : signals) {
+    if (signal.net_delay) {
+      visit_delay(*signal.net_delay, function);
+    }
+  }
+}
+
+template <typename Function>
+void visit_generate_delays(
+    std::vector<frontend::GenerateRegion>& regions,
+    Function& function) {
+  const auto visit_body = [&](frontend::GenerateBody& body) {
+    visit_signal_delays(body.signals, function);
+    visit_delays(body.concurrent_statements, function);
+    for (auto& process : body.processes) {
+      visit_delays(process.statements, function);
+    }
+    for (auto& task : body.tasks) {
+      visit_delays(task.statements, function);
+    }
+    visit_generate_delays(body.generate_regions, function);
+  };
+  for (auto& region : regions) {
+    visit_body(region.then_body);
+    visit_body(region.else_body);
+    for (auto& alternative : region.alternatives) {
+      visit_body(alternative.body);
+    }
+  }
+}
+
 void validate_vhdl_rejection_limits(
     const std::vector<frontend::Statement>& statements,
     diagnostic::Engine& diagnostics,
@@ -192,6 +227,8 @@ std::string effective_resolution(
       }
       consider_resolution("1" + delay.unit);
     };
+    visit_signal_delays(unit.ports, consider);
+    visit_signal_delays(unit.signals, consider);
     visit_delays(unit.concurrent_statements, consider);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, consider);
@@ -202,6 +239,7 @@ std::string effective_resolution(
     for (auto& procedure : unit.procedures) {
       visit_delays(procedure.statements, consider);
     }
+    visit_generate_delays(unit.generate_regions, consider);
   }
   return finest_spelling;
 }
@@ -370,6 +408,8 @@ bool normalize_delays(
       delay.divisor = 1;
       delay.unit.clear();
     };
+    visit_signal_delays(unit.ports, normalize);
+    visit_signal_delays(unit.signals, normalize);
     visit_delays(unit.concurrent_statements, normalize);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, normalize);
@@ -380,6 +420,7 @@ bool normalize_delays(
     for (auto& procedure : unit.procedures) {
       visit_delays(procedure.statements, normalize);
     }
+    visit_generate_delays(unit.generate_regions, normalize);
     validate_vhdl_rejection_limits(
         unit.concurrent_statements, diagnostics, valid);
     for (const auto& process : unit.processes) {
@@ -424,7 +465,10 @@ void select_delay_alternatives(
       delay.magnitude = alternative->magnitude;
       delay.divisor = alternative->divisor;
       delay.unit = alternative->unit;
+      delay.expression = alternative->expression;
     };
+    visit_signal_delays(unit.ports, select);
+    visit_signal_delays(unit.signals, select);
     visit_delays(unit.concurrent_statements, select);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, select);
@@ -435,6 +479,7 @@ void select_delay_alternatives(
     for (auto& procedure : unit.procedures) {
       visit_delays(procedure.statements, select);
     }
+    visit_generate_delays(unit.generate_regions, select);
   }
 }
 

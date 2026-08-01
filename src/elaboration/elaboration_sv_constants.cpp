@@ -1330,6 +1330,34 @@ convert_systemverilog_parameter_value(
 
 namespace {
 
+void substitute_sv_delay_parameters(
+    frontend::Delay& delay,
+    const SystemVerilogConstantEnvironment& environment) {
+    if (delay.expression) {
+        substitute_systemverilog_parameters(
+            *delay.expression, environment);
+    }
+    const auto substitute_alternative =
+        [&](frontend::DelayAlternative& alternative) {
+            if (alternative.expression) {
+                substitute_systemverilog_parameters(
+                    *alternative.expression, environment);
+            }
+        };
+    if (delay.minimum) {
+        substitute_alternative(*delay.minimum);
+    }
+    if (delay.typical) {
+        substitute_alternative(*delay.typical);
+    }
+    if (delay.maximum) {
+        substitute_alternative(*delay.maximum);
+    }
+    for (auto& additional : delay.additional_values) {
+        substitute_sv_delay_parameters(additional, environment);
+    }
+}
+
 void substitute_sv_type(
     frontend::Type& type,
     const SystemVerilogConstantEnvironment& environment) {
@@ -1427,6 +1455,10 @@ void substitute_sv_statements(
     std::vector<Statement>& statements,
     const SystemVerilogConstantEnvironment& environment) {
     for (auto& statement : statements) {
+        if (statement.delay) {
+            substitute_sv_delay_parameters(
+                *statement.delay, environment);
+        }
         substitute_systemverilog_parameters(
             statement.target, environment);
         substitute_systemverilog_parameters(
@@ -1506,6 +1538,10 @@ void substitute_sv_generate_body(
     }
     for (auto& signal : body.signals) {
         substitute_sv_type(signal.type, body_environment);
+        if (signal.net_delay) {
+            substitute_sv_delay_parameters(
+                *signal.net_delay, body_environment);
+        }
     }
     for (auto& function : body.functions) {
         substitute_sv_function(function, body_environment);
@@ -1600,9 +1636,17 @@ void substitute_systemverilog_parameters(
     }
     for (auto& port : unit.ports) {
         substitute_sv_type(port.type, environment);
+        if (port.net_delay) {
+            substitute_sv_delay_parameters(
+                *port.net_delay, environment);
+        }
     }
     for (auto& signal : unit.signals) {
         substitute_sv_type(signal.type, environment);
+        if (signal.net_delay) {
+            substitute_sv_delay_parameters(
+                *signal.net_delay, environment);
+        }
     }
     for (auto& variable : unit.variables) {
         substitute_sv_variable(variable, environment);

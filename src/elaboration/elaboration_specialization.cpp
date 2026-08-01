@@ -77,6 +77,114 @@ bool parameter_name_matches(
     return true;
 }
 
+namespace {
+
+std::array<std::uint64_t, 3> transition_delays(
+    const frontend::Delay& delay) {
+    const auto rise = delay.magnitude;
+    const auto fall = delay.additional_values.empty()
+        ? rise
+        : delay.additional_values.front().magnitude;
+    const auto turnoff = delay.additional_values.size() < 2
+        ? std::min(rise, fall)
+        : delay.additional_values[1].magnitude;
+    return {rise, fall, turnoff};
+}
+
+std::optional<frontend::Delay> combined_delay(
+    const frontend::Delay& driver,
+    const frontend::Delay& net,
+    const frontend::SourceSpan& span,
+    std::vector<Diagnostic>& diagnostics) {
+    const auto driver_values = transition_delays(driver);
+    const auto net_values = transition_delays(net);
+    std::array<std::uint64_t, 3> combined{};
+    for (std::size_t index = 0; index < combined.size(); ++index) {
+        if (driver_values[index]
+            > std::numeric_limits<std::uint64_t>::max()
+                - net_values[index]) {
+            diagnostics.push_back({
+                "FSIM-ELAB-SVDELAY-003",
+                "combined continuous-assignment and net-declaration delay "
+                "overflows the 64-bit simulation time range",
+                span});
+            return std::nullopt;
+        }
+        combined[index] = driver_values[index] + net_values[index];
+    }
+    frontend::Delay result;
+    result.magnitude = combined[0];
+    result.additional_values.resize(2);
+    result.additional_values[0].magnitude = combined[1];
+    result.additional_values[1].magnitude = combined[2];
+    result.span = span;
+    return result;
+}
+
+const frontend::Expression* delay_target_base(
+    const frontend::Expression& expression) {
+    if ((expression.kind == frontend::ExpressionKind::Index
+         || expression.kind == frontend::ExpressionKind::Slice)
+        && !expression.operands.empty()) {
+        return delay_target_base(expression.operands.front());
+    }
+    return &expression;
+}
+
+void apply_net_delays(
+    DesignUnit& unit,
+    std::vector<Diagnostic>& diagnostics) {
+    std::vector<const frontend::SignalDeclaration*> delayed;
+    for (const auto& port : unit.ports) {
+        if (port.net_delay) {
+            delayed.push_back(&port);
+        }
+    }
+    for (const auto& signal : unit.signals) {
+        if (signal.net_delay) {
+            delayed.push_back(&signal);
+        }
+    }
+    for (auto& statement : unit.concurrent_statements) {
+        if (statement.kind != frontend::StatementKind::Assignment
+            || statement.assignment_kind
+                != frontend::AssignmentKind::Continuous) {
+            continue;
+        }
+        const auto* base = delay_target_base(statement.target);
+        if (base->kind != frontend::ExpressionKind::Identifier) {
+            continue;
+        }
+        const frontend::SignalDeclaration* declaration = nullptr;
+        for (const auto* candidate : delayed) {
+            const bool matches = base->text == candidate->name
+                || (base->text.starts_with(candidate->name)
+                    && base->text.size() > candidate->name.size()
+                    && base->text[candidate->name.size()] == '.');
+            if (matches
+                && (declaration == nullptr
+                    || candidate->name.size()
+                        > declaration->name.size())) {
+                declaration = candidate;
+            }
+        }
+        if (declaration == nullptr) {
+            continue;
+        }
+        if (!statement.delay) {
+            statement.delay = declaration->net_delay;
+        } else {
+            statement.delay = combined_delay(
+                *statement.delay,
+                *declaration->net_delay,
+                statement.span,
+                diagnostics);
+        }
+    }
+}
+
+}  // namespace
+
 
 
 SpecializedUnit specialize_unit(
@@ -865,7 +973,7 @@ SpecializedUnit specialize_unit(
     }
     for (auto& port : result.unit.ports) {
         substitute_parameters(
-            port.type,
+            port,
             result.environment,
             domains,
             diagnostics,
@@ -873,7 +981,7 @@ SpecializedUnit specialize_unit(
     }
     for (auto& signal : result.unit.signals) {
         substitute_parameters(
-            signal.type,
+            signal,
             result.environment,
             domains,
             diagnostics,
@@ -1153,6 +1261,7 @@ SpecializedUnit specialize_unit(
         result.unit,
         diagnostics);
     result.unit.generate_regions.clear();
+    apply_net_delays(result.unit, diagnostics);
     return result;
 }
 

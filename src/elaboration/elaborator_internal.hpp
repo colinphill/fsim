@@ -312,6 +312,13 @@ void substitute_parameters(
     const frontend::Language language);
 
 void substitute_parameters(
+    frontend::SignalDeclaration& declaration,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics,
+    const frontend::Language language);
+
+void substitute_parameters(
     std::vector<Statement>& statements,
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,

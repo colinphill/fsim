@@ -580,6 +580,8 @@ therefore excluded.
 | `FSIM-SV-PARSE-207` | error | A `wait fork` statement is missing its terminating semicolon. |
 | `FSIM-SV-PARSE-208` | error | A bounded `disable` process-control statement does not select `fork`. |
 | `FSIM-SV-PARSE-209` | error | A `disable fork` statement is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-210` | error | A static gate-instance array range is missing its colon. |
+| `FSIM-SV-PARSE-211` | error | A static gate-instance array range is missing its closing bracket. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -728,6 +730,11 @@ therefore excluded.
 | `FSIM-SV-SEM-107` | error | `wait fork` or `disable fork` is used outside SystemVerilog-2017 input. |
 | `FSIM-SV-SEM-108` | error | `join_any` or `join_none` is used outside SystemVerilog-2017 input. |
 | `FSIM-SV-SEM-109` | error | A procedural fork closing label has no opening label or does not match it. |
+| `FSIM-SV-SEM-110` | error | A net-declaration delay is attached to a variable rather than a `wire` net. |
+| `FSIM-SV-SEM-111` | error | A static gate-instance array has no instance name. |
+| `FSIM-SV-SEM-112` | error | A static gate-instance array bound is not a decimal locally static integer in the bounded slice. |
+| `FSIM-SV-SEM-113` | error | A static gate-instance array exceeds the 64-instance bound. |
+| `FSIM-SV-SEM-114` | error | A gate-array terminal is neither scalar nor equal in width to the instance count. |
 | `FSIM-SV-SEM-030` | error | A reachable `forever` path can take its backedge without suspending, exiting, or terminating the simulation. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
@@ -824,6 +831,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-029` | error | A packed-struct member has an unpacked dimension or initializer. |
 | `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
 | `FSIM-SV-UNSUPPORTED-035` | error | A bounded function output, inout, or ref formal uses a string or unpacked-container type instead of the supported packed integral type. |
+| `FSIM-SV-UNSUPPORTED-040` | error | A MOS, bidirectional-switch, resistive, or pull primitive is outside the bounded v1 gate subset. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
 | `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
@@ -961,6 +969,9 @@ therefore excluded.
 | `FSIM-ELAB-SVEVENT-002` | error | Packed event-expression HIR is mixed with another event or timeout. |
 | `FSIM-ELAB-SVEVENT-003` | error | A packed event expression does not have an executable width from 1 through 64 bits. |
 | `FSIM-ELAB-SVEVENT-004` | error | A repeated event-control count is not an executable integral value. |
+| `FSIM-ELAB-SVDELAY-001` | error | A SystemVerilog delay expression is not a known nonnegative locally constant integral value after specialization. |
+| `FSIM-ELAB-SVDELAY-002` | error | A specialized SystemVerilog delay expression overflows 64-bit simulation time after time-unit normalization. |
+| `FSIM-ELAB-SVDELAY-003` | error | Combined continuous-assignment and net-declaration transition delays overflow 64-bit simulation time. |
 | `FSIM-ELAB-SVFUNC-001` | error | The visible bounded function set exceeds the representable SimIR call-stack capacity. |
 | `FSIM-ELAB-SVFUNC-002` | error | More than one bounded function has the same visible name. |
 | `FSIM-ELAB-SVFUNC-003` | error | A bounded function call has the wrong number of arguments. |

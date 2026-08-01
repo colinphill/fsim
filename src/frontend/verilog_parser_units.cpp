@@ -669,6 +669,16 @@ void VerilogParser::parse_generate_declaration(
     parse_optional_signedness(type);
     parse_optional_range(type);
   }
+  std::optional<Delay> net_delay;
+  if (match(TokenKind::Hash)) {
+    net_delay = parse_verilog_delay(previous(), 3);
+    if (type.spelling != "wire") {
+      error(
+          start,
+          "FSIM-SV-SEM-110",
+          "a net-declaration delay requires a wire net type");
+    }
+  }
   for (;;) {
     const auto name = expect_identifier(
         "generated local signal name");
@@ -681,12 +691,16 @@ void VerilogParser::parse_generate_declaration(
       skip_balanced(
           TokenKind::LeftBracket, TokenKind::RightBracket);
     }
+    std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
-      (void)parse_expression();
-      error(
-          name,
-          "FSIM-SV-UNSUPPORTED-011",
-          "generated declaration initializers are not executable");
+      initializer = parse_expression();
+      if (type.spelling != "wire") {
+        error(
+            name,
+            "FSIM-SV-UNSUPPORTED-011",
+            "generated variable declaration initializers are not "
+            "executable");
+      }
     }
     const auto duplicate = std::find_if(
         body.signals.begin(),
@@ -719,9 +733,20 @@ void VerilogParser::parse_generate_declaration(
           type,
           PortDirection::Unknown,
           false,
-          span_from(start, previous())});
+          span_from(start, previous()),
+          net_delay});
       ++current_generate_names_[name.text];
       local_names.push_back(name.text);
+    }
+    if (initializer && type.spelling == "wire") {
+      Statement driver;
+      driver.kind = StatementKind::Assignment;
+      driver.assignment_kind = AssignmentKind::Continuous;
+      driver.target = Expression{
+          ExpressionKind::Identifier, name.text, {}, name.span};
+      driver.value = std::move(*initializer);
+      driver.span = span_from(name, previous());
+      body.concurrent_statements.push_back(std::move(driver));
     }
     if (!match(TokenKind::Comma)) {
       break;

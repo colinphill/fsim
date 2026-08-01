@@ -628,7 +628,10 @@ class VerilogParser final : private detail::ParserBase {
 
   [[nodiscard]] bool is_gate_primitive() const;
 
-  void parse_gate_primitive(std::vector<Statement>& statements);
+  void parse_gate_primitive(
+      std::vector<Statement>& statements,
+      const std::vector<SignalDeclaration>& signals,
+      const std::vector<SignalDeclaration>& ports);
 
   Process parse_always();
 
