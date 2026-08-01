@@ -1518,7 +1518,7 @@ catalog contains 1,435 production codes and all 340 authored sources pass the
 overload/static lowering contract from Batch 111 cache entries; the public
 runtime ABI and container semantic revision 28 remain unchanged.
 
-## In-progress feature batch 113
+## Completed feature batch 113
 
 1. Complete entity, architecture, component, and direct-instantiation generic
    interfaces with ordered class, subtype, mode, default, and source identity.
@@ -1541,9 +1541,8 @@ runtime ABI and container semantic revision 28 remain unchanged.
 10. Close focused positive/negative/runtime, sanitizer, source/catalog, full
     Debug/Release, matrix/docs, commit, and push evidence.
 
-Batch status is **in progress**. Keep this ten-task list current in both the
-official plan and this handoff. Change it to complete only after all ten tasks
-and their gates close and work moves to Batch 114.
+Batch status is **complete**. All ten tasks and their gates are closed, and the
+current in-progress ten-task record has moved to Batch 114 below.
 
 Current evidence: `open` generic actuals are retained as explicit default
 selections, and indexed/general expression port actuals are retained in HIR
@@ -1557,7 +1556,7 @@ output/buffer/inout expressions require writable names. `hierarchy_ports.cpp`
 holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
 2,000 lines. The focused frontend, elaboration, component interpreter/LLVM
 O0/O2/cache, catalog, and 343-source line-budget evidence passes in the LLVM
-Debug tree. Batch 113 remains in progress; only Task 10 remains.
+Debug tree. All ten Batch 113 tasks are now complete.
 
 Task 1 now has focused implementation evidence: implicit/explicit value
 generics retain normalized constant class and input mode, invalid classes/modes
@@ -1586,8 +1585,7 @@ application proves interpreter and LLVM O0/O2 cold/warm equivalence and
 configuration-edit selective invalidation for the direct form. The latest
 focused frontend, elaboration, analysis-order, configuration-application,
 1,436-code catalog, and 343-source line-budget gates pass in the LLVM Debug
-tree. The current ten-task Batch 113 record remains **in progress**; do not
-mark it complete until all tasks close and the Batch 114 list is created.
+tree.
 
 Task 2 is now focused-complete. The parser and elaborator jointly cover legal
 positional, named, positional-then-named, explicit `open`, conversions, and
@@ -1596,7 +1594,7 @@ duplicate, named-then-positional, missing/defaultless-open, and non-static
 associations. The elaboration matrix directly checks
 `FSIM-ELAB-GENERIC-001` through `004`; the existing component application
 retains interpreter and LLVM O0/O2 execution evidence for the supported forms.
-Batch 113 remains **in progress**.
+Task 2 is focused-complete.
 
 Task 6 is now focused-complete. The parser retains
 `type_mark'(expression)` qualification as explicit HIR. Input-port elaboration
@@ -1605,8 +1603,7 @@ literals/aggregates, and drives qualified dynamic slices and converted
 concatenations through the existing per-instance boundary path. A mismatched
 mark reports `FSIM-ELAB-VHPORT-001`, and non-input expressions retain
 `FSIM-ELAB-VHPORT-002`. The component interpreter and LLVM O0/O2 cold/warm
-differential covers both qualified and converted runtime expressions. Batch
-113 remains **in progress**.
+differential covers both qualified and converted runtime expressions.
 
 Task 7 is now focused-complete. VHDL port maps accept positional-then-named
 associations and diagnose duplicate names or named-then-positional ordering as
@@ -1616,8 +1613,8 @@ their component/direct diagnostics, and omitted or explicit-open output/buffer
 ports execute through child-local signals without a parent driver. The
 component interpreter and LLVM O0/O2 cold/warm differential observes values 5
 and 7 from open output and buffer formals. The current catalog covers 1,438
-codes and the source gate accepts all 343 authored sources. Batch 113 remains
-**in progress** with Task 10 outstanding.
+codes and the source gate accepts all 343 authored sources. Task 7 is
+focused-complete.
 
 Task 8 is now focused-complete. Generic-dependent port constraints specialize
 component views and direct instances before connection, with child hierarchy
@@ -1627,8 +1624,7 @@ direction now report `FSIM-ELAB-BIND-031` rather than silently aliasing
 different index maps. The component application executes distinct 4-bit and
 8-bit component/direct specializations across interpreter and LLVM O0/O2
 cold/warm paths. The catalog now covers 1,439 codes and all 343 authored
-sources pass the line gate. Batch 113 remains **in progress** with Task 10
-outstanding.
+sources pass the line gate.
 
 Task 5 is now focused-complete. `vhdl-component-binding-v6` retains effective
 value/type/function/procedure/package bindings, component profiles, defaults,
@@ -1645,8 +1641,49 @@ width-4 component instances and one width-8 direct instance identically in the
 interpreter and LLVM O0/O2 cold/warm paths, checks exact hierarchy aliases and
 source debugger points, and compares deterministic VCD containing all three
 specialized outputs. Existing source-edit differentials retain selective key
-invalidation and warm native-cache hits. Batch 113 remains **in progress**
-pending Task 10's focused/full gates, documentation closure, commit, and push.
+invalidation and warm native-cache hits.
+
+Task 10 is complete. Exact LLVM 22.1.8 warnings-as-errors Debug passed all 66
+tests in 170.07 seconds, including the component application in 0.87 seconds
+and `fsim.application.scoped_locals` in 0.83 seconds. Release passed all 66 in
+156.91 seconds, including the component application in 0.91 seconds and scoped
+locals in 0.84 seconds. The LLVM-disabled ASan/UBSan focused six-test gate
+passed in 3.13 seconds with LeakSanitizer disabled only because the managed
+ptrace environment cannot start it. The diagnostic catalog retains 1,439
+production codes and all 343 authored sources pass the 2,000-line gate;
+`elaboration_vhdl_components.cpp` is exactly 2,000 lines. Component binding
+identity is now version 6; native-object schema 69, the public runtime ABI, and
+container semantic revision 28 are unchanged. All ten Batch 113 tasks are
+complete and checkpoint `4af01cd` contains the final implementation slice.
+
+## In-progress feature batch 114
+
+1. Retain guarded block syntax, guard expressions, optional `is`, opening/end
+   labels, and exact source regions with checked unsupported-form diagnostics.
+2. Elaborate implicit Boolean `GUARD`, guard sensitivity and activation, nested
+   scope identity, and invalid/non-Boolean guard diagnostics.
+3. Complete block generic/port clauses and maps, defaults, `open`, profile
+   legality, hierarchy aliases, and specialization/cache provenance.
+4. Complete declarative parts for `if`, `for`, and `case` generate alternatives
+   before `begin`, retaining alternative and iteration scope.
+5. Add generated type/subtype declarations with declaration-order visibility,
+   specialized constraints, nominal identity, and source provenance.
+6. Add generated function/procedure declarations, bodies, and bounded
+   instantiations with local overload visibility and scope-qualified identity.
+7. Complete generated constants, signals, aliases, components, package
+   instantiations, nested items, and collision/unsupported-item diagnostics.
+8. Complete architecture/block/generate/process/subprogram local declarative
+   regions for bounded constants, types, objects, aliases, packages, and
+   non-suspending local callables.
+9. Complete remaining locally static `if`/`for`/`case` generate choices,
+   including enumeration/character choices, groups, ranges, `others`,
+   overlap/null handling, labels, hierarchy, and specialization identity.
+10. Close focused positive/negative/runtime, sanitizer, source/catalog, full
+    Debug/Release, matrix/docs, commit, and push evidence.
+
+Batch status is **in progress**. Keep this ten-task list current in both the
+official plan and this handoff. Change it to complete only after all ten tasks
+and their gates close and work moves to Batch 115.
 
 Batch 110 has advanced through these validated features:
 
