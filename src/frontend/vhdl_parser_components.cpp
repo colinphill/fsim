@@ -69,7 +69,9 @@ bool same_component_generic(
     return false;
   }
   if (left.kind == ParameterKind::Value) {
-    return same_component_type(left.type, right.type);
+    return left.object_class == right.object_class
+        && left.direction == right.direction
+        && same_component_type(left.type, right.type);
   }
   if (left.kind == ParameterKind::Type) {
     return true;

@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
-
 #include <numeric>
 #include <sstream>
-
 namespace fsim::elaboration {
 using namespace elaboration_detail;
 
@@ -246,7 +244,10 @@ std::string generic_profile(
     output << static_cast<int>(generic.kind);
     switch (generic.kind) {
     case frontend::ParameterKind::Value:
-        output << ";type=" << type_profile(generic.type, names);
+        output << ";class="
+               << static_cast<int>(generic.object_class)
+               << ";mode=" << static_cast<int>(generic.direction)
+               << ";type=" << type_profile(generic.type, names);
         break;
     case frontend::ParameterKind::Type:
         output << ";unclassified";

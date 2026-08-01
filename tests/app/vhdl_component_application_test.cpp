@@ -35,6 +35,7 @@ struct Capture {
   std::string dynamic_expression;
   std::array<std::string, 2> expression_inputs;
   std::array<std::string, 2> direct_default_inputs;
+  std::array<std::string, 3> dependent_generic_outputs;
   std::array<std::string, 2> composite_expression_outputs;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
@@ -115,7 +116,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 13);
+  assert(project->design.specializations().size() == 16);
   for (const auto path : {
            "component_runtime_top.positional_child",
            "component_runtime_top.default_child"}) {
@@ -251,6 +252,12 @@ Capture run_once(
   std::array<fsim::runtime::simir::SignalId, 3> output_ids{};
   std::array<fsim::runtime::simir::SignalId, 2>
       packet_output_ids{};
+  constexpr std::array<std::string_view, 3> dependent_outputs{
+      "component_runtime_top.direct_dependent_default_output",
+      "component_runtime_top.direct_dependent_open_output",
+      "component_runtime_top.component_dependent_default_output"};
+  std::array<fsim::runtime::simir::SignalId, 3>
+      dependent_output_ids{};
   const auto nonvalue_input = simulation.find_signal(
       "component_runtime_top.nonvalue_input");
   const auto nonvalue_output = simulation.find_signal(
@@ -311,6 +318,12 @@ Capture run_once(
             packet_values[index]));
     packet_output_ids[index] = *output;
   }
+  for (std::size_t index = 0;
+       index < dependent_outputs.size(); ++index) {
+    const auto output = simulation.find_signal(dependent_outputs[index]);
+    assert(output);
+    dependent_output_ids[index] = *output;
+  }
 
   capture.result = simulation.run();
   for (std::size_t index = 0; index < output_ids.size(); ++index) {
@@ -322,6 +335,12 @@ Capture run_once(
     capture.packets[index] =
         simulation.read_signal(
             packet_output_ids[index]).to_msb_string();
+  }
+  for (std::size_t index = 0;
+       index < dependent_output_ids.size(); ++index) {
+    capture.dependent_generic_outputs[index] =
+        simulation.read_signal(dependent_output_ids[index])
+            .to_msb_string();
   }
   capture.nonvalue =
       simulation.read_signal(*nonvalue_output).to_msb_string();
@@ -384,6 +403,8 @@ void verify(
           == std::array<std::string, 2>{bits(41), bits(42)}));
   assert((capture.direct_default_inputs
           == std::array<std::string, 2>{bits(13), bits(13)}));
+  assert((capture.dependent_generic_outputs
+          == std::array<std::string, 3>{bits(8), bits(6), bits(6)}));
   assert(std::ranges::count_if(
              capture.points,
              [](const auto& point) {
@@ -488,6 +509,17 @@ architecture rtl of component_runtime_vector is
 begin
   output_value <= input_value;
 end architecture;
+
+entity component_runtime_generic_defaults is
+  generic (
+    constant base_value : in integer := 4;
+    derived_value : integer := base_value * 2);
+  port (output_value : out integer);
+end entity;
+architecture rtl of component_runtime_generic_defaults is
+begin
+  output_value <= derived_value;
+end architecture;
 )";
     assert(output.good());
   }
@@ -587,6 +619,12 @@ architecture rtl of component_runtime_top is
   end procedure;
   package helper_instance is new work.component_runtime_helper_template
     generic map (seed => 4);
+  component component_runtime_generic_defaults is
+    generic (
+      constant component_base : in integer := 5;
+      component_derived : integer := component_base + 1);
+    port (component_output : out integer);
+  end component;
   signal positional_input : integer;
   signal positional_output : integer;
   signal default_input : integer;
@@ -604,6 +642,9 @@ architecture rtl of component_runtime_top is
   signal vector_expression_input : std_logic_vector(7 downto 0);
   signal slice_expression_output : std_logic_vector(3 downto 0);
   signal concat_expression_output : std_logic_vector(3 downto 0);
+  signal direct_dependent_default_output : integer;
+  signal direct_dependent_open_output : integer;
+  signal component_dependent_default_output : integer;
 begin
   positional_child: component_runtime_leaf
     generic map (5)
@@ -662,6 +703,15 @@ begin
     port map (
       entity_default_input => open,
       entity_default_output => open);
+  direct_dependent_default: entity work.component_runtime_generic_defaults(rtl)
+    port map (output_value => direct_dependent_default_output);
+  direct_dependent_open: entity work.component_runtime_generic_defaults(rtl)
+    generic map (
+      base_value => 3,
+      derived_value => open)
+    port map (output_value => direct_dependent_open_output);
+  component_dependent_default: component_runtime_generic_defaults
+    port map (component_output => component_dependent_default_output);
 end architecture;
 )";
     assert(output.good());
@@ -700,6 +750,10 @@ end architecture;
     assert(cold.expression_inputs == warm.expression_inputs);
     assert(reference.direct_default_inputs == cold.direct_default_inputs);
     assert(cold.direct_default_inputs == warm.direct_default_inputs);
+    assert(reference.dependent_generic_outputs
+           == cold.dependent_generic_outputs);
+    assert(cold.dependent_generic_outputs
+           == warm.dependent_generic_outputs);
     assert(reference.dynamic_expression == cold.dynamic_expression);
     assert(cold.dynamic_expression == warm.dynamic_expression);
     assert(reference.composite_expression_outputs

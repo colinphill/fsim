@@ -6219,6 +6219,16 @@ catalog, and 341-source line-budget evidence passes in the LLVM Debug tree.
 Tasks 2, 6, and 7 remain in progress; these bounded slices are not yet the
 complete task claims.
 
+Task 1 now has focused implementation evidence. Implicit and explicit VHDL
+value-generic interfaces normalize to retained constant class and input mode;
+illegal classes and modes have dedicated frontend diagnostics. Component
+profile conformance and specialization identity include that metadata, while
+the existing ordered type/function/procedure/package generic families remain
+unchanged. The Task 3 slice now proves declaration-ordered dependent defaults
+for direct and component instances, including an earlier overridden generic
+followed by `open`, across interpreter and LLVM O0/O2 cold/warm execution.
+Task 3 remains in progress pending its complete static-expression matrix.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

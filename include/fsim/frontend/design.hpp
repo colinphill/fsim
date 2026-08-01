@@ -668,6 +668,10 @@ struct ParameterDeclaration {
   // template-generic compatibility map independently from every other
   // generic family.
   std::optional<InterfacePackageProfile> package_profile;
+  // VHDL value generics normalize implicit and explicit interface object
+  // syntax to constant class and input mode.
+  InterfaceObjectClass object_class{InterfaceObjectClass::Constant};
+  PortDirection direction{PortDirection::Input};
   ParameterDeclaration() = default;
 
   ParameterDeclaration(
@@ -683,7 +687,10 @@ struct ParameterDeclaration {
       std::optional<InterfaceProcedureProfile>
           parameter_procedure_profile = std::nullopt,
       std::optional<InterfacePackageProfile>
-          parameter_package_profile = std::nullopt)
+          parameter_package_profile = std::nullopt,
+      InterfaceObjectClass parameter_object_class =
+          InterfaceObjectClass::Constant,
+      PortDirection parameter_direction = PortDirection::Input)
       : name(std::move(parameter_name)),
         type(std::move(parameter_type)),
         default_value(std::move(parameter_default)),
@@ -693,7 +700,9 @@ struct ParameterDeclaration {
         default_type(std::move(parameter_default_type)),
         function_profile(std::move(parameter_function_profile)),
         procedure_profile(std::move(parameter_procedure_profile)),
-        package_profile(std::move(parameter_package_profile)) {}
+        package_profile(std::move(parameter_package_profile)),
+        object_class(parameter_object_class),
+        direction(parameter_direction) {}
 };
 
 enum class VhdlComponentDeclarationRegion {

@@ -810,7 +810,8 @@ void test_vhdl_generics() {
 entity generic_child is
   generic (
     type Element_T;
-    Width, Depth : positive := 8;
+    constant Width : in positive := 8;
+    Depth : positive := 8;
     Enabled : boolean := true;
     Required : integer
   );
@@ -886,6 +887,10 @@ end architecture;
           && child->parameters[0].default_value.kind
               == ExpressionKind::Invalid
           && child->parameters[1].name == "width"
+          && child->parameters[1].object_class
+              == InterfaceObjectClass::Constant
+          && child->parameters[1].direction
+              == PortDirection::Input
           && child->parameters[1].type.spelling == "positive"
           && child->parameters[1].default_value.text == "8"
           && child->parameters[2].name == "depth"
@@ -968,7 +973,9 @@ entity invalid_generic is
     type Defaulted := integer;
     Clash : integer := 1;
     Clash : integer := 2;
-    Vector_Value : bit_vector(1 downto 0) := "00"
+    Vector_Value : bit_vector(1 downto 0) := "00";
+    variable Bad_Class : integer;
+    Bad_Mode : out integer
   );
   type Classified is (First, Second);
   port (Clash : in bit);
@@ -1005,6 +1012,8 @@ end architecture;
           && has_code("FSIM-VHDL-SEM-015")
           && has_code("FSIM-VHDL-SEM-016")
           && has_code("FSIM-VHDL-SEM-036")
+          && has_code("FSIM-VHDL-SEM-076")
+          && has_code("FSIM-VHDL-SEM-077")
           && has_code("FSIM-VHDL-UNSUPPORTED-018")
           && has_code("FSIM-VHDL-UNSUPPORTED-028"),
       "VHDL generic diagnostics are stable and targeted");

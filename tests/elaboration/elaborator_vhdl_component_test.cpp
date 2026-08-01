@@ -43,7 +43,7 @@ void test_vhdl_components() {
         "component_leaf.vhd",
         R"(
 entity component_leaf is
-  generic (entity_width : positive := 9);
+  generic (constant entity_width : in positive := 9);
   port (
     entity_input : in std_logic_vector(entity_width - 1 downto 0);
     entity_output : out std_logic_vector(entity_width - 1 downto 0));
@@ -67,7 +67,7 @@ architecture rtl of component_top is
   signal direct_input : std_logic_vector(8 downto 0);
   signal direct_output : std_logic_vector(8 downto 0);
   component component_leaf is
-    generic (component_width : positive := 4);
+    generic (constant component_width : in positive := 4);
     port (
       component_input :
         in std_logic_vector(component_width - 1 downto 0);

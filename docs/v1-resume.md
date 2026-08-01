@@ -1559,6 +1559,15 @@ holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
 O0/O2/cache, catalog, and 341-source line-budget evidence passes in the LLVM
 Debug tree. Batch 113 and Tasks 2, 6, and 7 remain in progress.
 
+Task 1 now has focused implementation evidence: implicit/explicit value
+generics retain normalized constant class and input mode, invalid classes/modes
+are diagnosed, and component conformance/cache identity includes the metadata
+without changing type/function/procedure/package generic behavior. Task 3 now
+proves declaration-ordered dependent arithmetic defaults for direct and
+component instances, including an overridden earlier generic followed by
+`open`, in the component interpreter/LLVM O0/O2 cold/warm differential. Task 3
+remains in progress pending the full static-expression matrix.
+
 Batch 110 has advanced through these validated features:
 
 1. deterministic string expression and mutation/conversion methods;

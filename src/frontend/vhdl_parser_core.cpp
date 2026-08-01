@@ -642,6 +642,17 @@ void VhdlParser::parse_vhdl_generics(
       }
       continue;
     }
+    InterfaceObjectClass object_class =
+        InterfaceObjectClass::Constant;
+    if (!match_keyword("constant", true)
+        && (match_keyword("variable", true)
+            || match_keyword("signal", true)
+            || match_keyword("file", true))) {
+      error(
+          previous(),
+          "FSIM-VHDL-SEM-076",
+          "a VHDL value generic must have constant object class");
+    }
     std::vector<Token> names;
     names.push_back(expect_identifier("generic name"));
     while (match(TokenKind::Comma)) {
@@ -651,6 +662,17 @@ void VhdlParser::parse_vhdl_generics(
         TokenKind::Colon,
         "':' after generic name",
         "FSIM-VHDL-PARSE-051");
+    PortDirection direction = PortDirection::Input;
+    if (!match_keyword("in", true)
+        && (match_keyword("out", true)
+            || match_keyword("inout", true)
+            || match_keyword("buffer", true))) {
+      direction = PortDirection::Unknown;
+      error(
+          previous(),
+          "FSIM-VHDL-SEM-077",
+          "a VHDL value generic must have input mode");
+    }
     const auto type = parse_vhdl_type(true);
     if (type.named_type.empty()
         && (type.packed_range
@@ -677,7 +699,12 @@ void VhdlParser::parse_vhdl_generics(
               false,
               span_from(name, previous()),
               ParameterKind::Value,
-              std::nullopt},
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              object_class,
+              direction},
           name);
     }
     if (!match(TokenKind::Semicolon)
