@@ -1569,9 +1569,15 @@ endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      !repeat_event.ok()
-          && has_code(repeat_event, "FSIM-SV-UNSUPPORTED-032"),
-      "unsupported repeated NBA event control is diagnosed explicitly");
+      repeat_event.ok()
+          && repeat_event.design.units.front().processes.front()
+                 .statements.front().procedural_assignment_repeat
+          && repeat_event.design.units.front().processes.front()
+                 .statements.front().loop_limit.text == "2"
+          && repeat_event.design.units.front().processes.front()
+                 .statements.front().sensitivities.front().edge
+              == EdgeKind::Positive,
+      "repeated NBA event control retains count and event metadata");
 
   const auto restricted = parse_text(
       "restricted-assignment-controls.sv",

@@ -102,9 +102,44 @@ Lowerer::Lowerer(
         initialize_procedure_support();
         initialize_variables(source.variables);
         bool wildcard_sensitivity = false;
+        const frontend::Sensitivity* general_sensitivity = nullptr;
         for (const auto& sensitivity : source.sensitivities) {
             if (sensitivity.signal == "*") {
                 wildcard_sensitivity = true;
+                continue;
+            }
+            if (sensitivity.expression.valid()) {
+                if (general_sensitivity != nullptr
+                    || source.sensitivities.size() != 1) {
+                    report(
+                        "FSIM-ELAB-SVEVENT-002",
+                        "packed process event-expression metadata is "
+                        "mixed with another event",
+                        sensitivity.span);
+                    continue;
+                }
+                general_sensitivity = &sensitivity;
+                std::set<std::string> dependencies;
+                collect_identifiers(
+                    sensitivity.expression, dependencies);
+                for (const auto& dependency : dependencies) {
+                    if (locals_.contains(dependency)) {
+                        continue;
+                    }
+                    if (const auto found = signals_.find(dependency);
+                        found != signals_.end()) {
+                        process_.static_sensitivity.push_back(
+                            {found->second,
+                             runtime::simir::EdgeKind::any});
+                    }
+                }
+                if (process_.static_sensitivity.empty()) {
+                    report(
+                        "FSIM-ELAB-SVEVENT-001",
+                        "packed process event expression has no readable "
+                        "signal dependencies",
+                        sensitivity.span);
+                }
                 continue;
             }
             const auto found = signals_.find(sensitivity.signal);
@@ -125,7 +160,7 @@ Lowerer::Lowerer(
         }
         if (wildcard_sensitivity) {
             std::set<std::string> dependencies;
-            collect_statement_identifiers(
+            collect_wildcard_identifiers(
                 source.statements, dependencies);
             for (const auto& dependency : dependencies) {
                 if (locals_.contains(dependency)) {
@@ -155,6 +190,10 @@ Lowerer::Lowerer(
             && source.kind
                 != ProcessKind::SystemVerilogAlwaysLatch
             && !process_.static_sensitivity.empty();
+        const bool body_timed_always =
+            language != frontend::Language::Vhdl2008
+            && source.kind == ProcessKind::VerilogAlways
+            && source.sensitivities.empty();
         const Statement* vhdl_edge_guard =
             language == frontend::Language::Vhdl2008
                 ? recognized_vhdl_edge_guard(source)
@@ -166,8 +205,55 @@ Lowerer::Lowerer(
             && contains_explicit_wait(source.statements);
         const auto resume_entry =
             static_cast<InstructionIndex>(process_.operations.size());
-        if (waits_before_first_execution) {
+        std::optional<InstructionIndex> event_wait_entry;
+        std::optional<InstructionIndex> event_filter_branch;
+        if (general_sensitivity != nullptr) {
+            const auto width = infer_width(
+                general_sensitivity->expression);
+            if (!width || *width == 0 || *width > 64) {
+                report(
+                    "FSIM-ELAB-SVEVENT-003",
+                    "packed process event expression must have an "
+                    "executable width from 1 through 64 bits",
+                    general_sensitivity->span);
+            } else if (const auto baseline = lower_expression(
+                           general_sensitivity->expression, *width)) {
+                event_wait_entry = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(WaitSensitivity{});
+                const auto current = lower_expression(
+                    general_sensitivity->expression, *width);
+                if (current) {
+                    const auto equal = allocate_register(
+                        1, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary{
+                        BinaryOperator::case_equal,
+                        equal,
+                        *baseline,
+                        *current});
+                    process_.operations.emplace_back(
+                        CopyRegister{*baseline, *current});
+                    event_filter_branch =
+                        static_cast<InstructionIndex>(
+                            process_.operations.size());
+                    process_.operations.emplace_back(Branch{
+                        equal, 0, 0,
+                        UnknownBranchPolicy::when_false});
+                }
+            }
+        } else if (waits_before_first_execution) {
             process_.operations.emplace_back(WaitSensitivity{});
+        }
+        const auto body_entry = static_cast<InstructionIndex>(
+            process_.operations.size());
+        if (event_filter_branch && event_wait_entry) {
+            process_.operations[*event_filter_branch] = Branch{
+                std::get<Branch>(
+                    process_.operations[*event_filter_branch])
+                    .condition,
+                *event_wait_entry,
+                body_entry,
+                UnknownBranchPolicy::when_false};
         }
         emit_debug_point(DebugPointKind::process_entry, source.span);
         if (vhdl_edge_guard != nullptr) {
@@ -188,6 +274,9 @@ Lowerer::Lowerer(
             // Event-controlled processes wait before their first execution.
             // Returning directly to operation zero preserves one body
             // execution per matching event.
+            process_.operations.emplace_back(Jump{
+                event_wait_entry.value_or(resume_entry)});
+        } else if (body_timed_always) {
             process_.operations.emplace_back(Jump{resume_entry});
         } else if (
             language == frontend::Language::Vhdl2008
@@ -272,7 +361,7 @@ Lowerer::Lowerer(
             DebugPointKind::process_entry, statement.span);
 
         std::set<std::string> dependencies;
-        collect_statement_identifiers(
+        collect_wildcard_identifiers(
             std::vector<Statement>{statement}, dependencies);
         for (const auto& dependency : dependencies) {
             if (const auto found = signals_.find(dependency); found != signals_.end()) {
@@ -1060,16 +1149,7 @@ Lowerer::Lowerer(
             lower_statements(statement.statements);
             break;
         case StatementKind::WaitOn: {
-            auto [signals, edges] =
-                resolve_wait_sensitivities(statement);
-            if (!signals.empty() || statement.delay) {
-                WaitOn wait{
-                    std::move(signals), std::move(edges)};
-                if (statement.delay) {
-                    wait.timeout = statement.delay->magnitude;
-                }
-                process_.operations.emplace_back(std::move(wait));
-            }
+            (void)emit_event_control_wait(statement);
             lower_statements(statement.statements);
             break;
         }
@@ -1579,80 +1659,6 @@ Lowerer::Lowerer(
         case StatementKind::Null:
             break;
         }
-    }
-
-
-
-    [[nodiscard]] std::pair<
-        std::vector<SignalId>,
-        std::vector<runtime::simir::EdgeKind>>
-    Lowerer::resolve_wait_sensitivities(
-        const Statement& statement) {
-        std::vector<SignalId> signals;
-        std::vector<runtime::simir::EdgeKind> edges;
-        signals.reserve(statement.sensitivities.size());
-        edges.reserve(statement.sensitivities.size());
-        for (const auto& sensitivity : statement.sensitivities) {
-            if (sensitivity.signal == "*") {
-                std::set<std::string> dependencies;
-                collect_statement_identifiers(
-                    statement.statements, dependencies);
-                if (statement.kind == StatementKind::Assignment) {
-                    collect_identifiers(
-                        statement.value, dependencies);
-                }
-                for (const auto& dependency : dependencies) {
-                    if (locals_.contains(dependency)) {
-                        continue;
-                    }
-                    if (const auto found =
-                            signals_.find(dependency);
-                        found != signals_.end()) {
-                        signals.push_back(found->second);
-                        edges.push_back(
-                            runtime::simir::EdgeKind::any);
-                    }
-                }
-                if (dependencies.empty() || signals.empty()) {
-                    report(
-                        "FSIM-ELAB-062",
-                        "dynamic wildcard event control has no readable "
-                        "signal dependencies",
-                        sensitivity.span);
-                }
-                continue;
-            }
-            const auto found = signals_.find(sensitivity.signal);
-            if (found == signals_.end()) {
-                report(
-                    "FSIM-ELAB-059",
-                    "unknown wait signal '" + sensitivity.signal + "'",
-                    sensitivity.span);
-                continue;
-            }
-            if (sensitivity.edge != frontend::EdgeKind::Any
-                && design_.signal_info_[found->second].width != 1) {
-                report(
-                    "FSIM-ELAB-060",
-                    "dynamic edge-qualified wait signal '"
-                        + sensitivity.signal
-                        + "' must be scalar",
-                    sensitivity.span);
-                continue;
-            }
-            signals.push_back(found->second);
-            auto edge = runtime::simir::EdgeKind::any;
-            if (sensitivity.edge
-                == frontend::EdgeKind::Positive) {
-                edge = runtime::simir::EdgeKind::posedge;
-            } else if (
-                sensitivity.edge
-                == frontend::EdgeKind::Negative) {
-                edge = runtime::simir::EdgeKind::negedge;
-            }
-            edges.push_back(edge);
-        }
-        return {std::move(signals), std::move(edges)};
     }
 
 

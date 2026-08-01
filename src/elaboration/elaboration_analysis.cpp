@@ -56,6 +56,13 @@ void substitute_parameters(
             substitute_parameters(
                 argument, environment, domains, language);
         }
+        for (auto& sensitivity : statement.sensitivities) {
+            substitute_parameters(
+                sensitivity.expression,
+                environment,
+                domains,
+                language);
+        }
         for (auto& association :
              statement.procedure_arguments) {
             substitute_parameters(
@@ -238,6 +245,13 @@ void substitute_parameters(
                 environment,
                 domains,
                 diagnostics,
+                language);
+        }
+        for (auto& sensitivity : process.sensitivities) {
+            substitute_parameters(
+                sensitivity.expression,
+                environment,
+                domains,
                 language);
         }
         substitute_parameters(
@@ -461,6 +475,10 @@ void collect_qualified_identifiers(
             collect_qualified_identifiers(
                 argument, identifiers);
         }
+        for (const auto& sensitivity : statement.sensitivities) {
+            collect_qualified_identifiers(
+                sensitivity.expression, identifiers);
+        }
         for (const auto& association :
              statement.procedure_arguments) {
             collect_qualified_identifiers(
@@ -567,6 +585,10 @@ void collect_qualified_identifiers(
                 collect_qualified_identifiers(
                     *variable.initializer, identifiers);
             }
+        }
+        for (const auto& sensitivity : process.sensitivities) {
+            collect_qualified_identifiers(
+                sensitivity.expression, identifiers);
         }
         collect_qualified_identifiers(
             process.statements, identifiers);
@@ -787,6 +809,10 @@ QualifiedIdentifierMap qualified_identifiers(
                     *variable.initializer, result);
             }
         }
+        for (const auto& sensitivity : process.sensitivities) {
+            collect_qualified_identifiers(
+                sensitivity.expression, result);
+        }
         collect_qualified_identifiers(process.statements, result);
     }
     for (const auto& instance : unit.instances) {
@@ -856,6 +882,8 @@ void qualify_generated_statement(
         }
     }
     for (auto& sensitivity : statement.sensitivities) {
+        qualify_generated_expression(
+            sensitivity.expression, body_names);
         if (const auto found = body_names.find(sensitivity.signal);
             found != body_names.end()) {
             sensitivity.signal = found->second;
@@ -901,6 +929,8 @@ void qualify_generated_process(
         process_names.erase(variable.name);
     }
     for (auto& sensitivity : process.sensitivities) {
+        qualify_generated_expression(
+            sensitivity.expression, process_names);
         if (const auto found = process_names.find(sensitivity.signal);
             found != process_names.end()) {
             sensitivity.signal = found->second;

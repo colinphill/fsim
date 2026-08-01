@@ -5630,6 +5630,55 @@ seconds, containers in 87.28 seconds, and the monolithic application in 13.72
 seconds, on 2026-07-31. Batch 103 is not a ten-batch CI-inspection boundary,
 so no Actions run was inspected.
 
+### One-hundred-fourth feature batch — SystemVerilog always/procedural-control closure
+
+SystemVerilog process/control HIR now retains body-timed versus header-event
+`always` lifecycle, exact general packed event expressions, runtime loop and
+repeat operands, inline-loop-variable lifetime, and repeated intra-assignment
+event counts. `always_ff` requires exactly one edge-qualified header event and
+rejects nested timing, while inferred combinational and latch processes retain
+their time-zero execution.
+
+Plain body-timed `always` starts at time zero and returns to the body only after
+a proven suspension. Cycle-safe path analysis admits timed/event-controlled or
+terminating `forever` paths and deterministic `break`, while rejecting every
+reachable nonprogressing backedge, including unsafe `continue` and partial
+conditional paths. Procedural `for` accepts inline signed integers or existing
+packed variables, direct integral comparison bounds, and positive nonunit
+constant steps; runtime repeat counts are evaluated once, with negative or
+unknown counts producing zero iterations. `break` and `continue` target the
+correct loop exit and update/increment points.
+
+General packed any-change controls lower to exact expression snapshots: the
+process waits on transitive signal dependencies and filters operand wakes that
+do not change the expression value. Repeated intra-assignment event controls
+evaluate their integral count once and wait exactly that many qualifying
+events before the deferred assignment. Edge-qualified general expressions and
+general expressions mixed with another event-list item remain bounded,
+explicitly diagnosed exclusions. Wildcard inference now follows visible
+function and task bodies transitively and cycle-safely while excluding their
+formals, locals, and default-only names.
+
+The dedicated named-event application proves lifecycle, runtime `for` and
+`repeat`, safe `forever`, exact expression filtering, repeated controls,
+transitive wildcard dependencies, callback/delta ordering, safe points, and
+normalized VCD equality across interpreter and LLVM O0/O2. Native-object
+schema 56 records the exact lowered control graph; an O0/O2 cold/warm matrix
+and branch-target edit prove reuse and invalidation without changing the public
+runtime ABI. Stable frontend and elaboration diagnostics cover illegal
+lifecycle paths, loop shapes, event forms, and malformed HIR.
+
+The diagnostic catalog covers all 1,315 production codes, and the source gate
+covers 304 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 60 tests
+in 447.24 seconds, including scoped locals in 0.86 seconds, LLVM in 3.61
+seconds, named events in 0.92 seconds, containers in 348.34 seconds, and the
+monolithic application in 39.88 seconds. Release passed all 60 tests in 139.06
+seconds, including scoped locals in 0.81 seconds, LLVM in 2.46 seconds, named
+events in 0.78 seconds, containers in 85.25 seconds, and the monolithic
+application in 13.45 seconds, on 2026-07-31. Batch 104 is not a ten-batch
+CI-inspection boundary, so no Actions run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

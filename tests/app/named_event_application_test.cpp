@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 
 #include <cassert>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -32,6 +35,14 @@ struct Capture {
   fsim::runtime::RunResult result;
   std::string event;
   std::string observed;
+  std::string repeated;
+  std::string function_observed;
+  std::string task_observed;
+  std::string expression_observed;
+  std::string controlled;
+  std::string body_clock;
+  std::string repeat_count_calls;
+  std::string vcd;
   std::vector<Change> event_changes;
   std::vector<Change> observed_changes;
   std::size_t compiled_processes{};
@@ -45,15 +56,63 @@ Capture execute(
   const auto event = simulation.find_signal("named_event_test.fired");
   const auto observed =
       simulation.find_signal("named_event_test.observed");
-  assert(event && observed);
+  const auto repeated =
+      simulation.find_signal("named_event_test.repeated");
+  const auto function_observed =
+      simulation.find_signal("named_event_test.function_observed");
+  const auto task_observed =
+      simulation.find_signal("named_event_test.task_observed");
+  const auto expression_observed =
+      simulation.find_signal("named_event_test.expression_observed");
+  const auto controlled =
+      simulation.find_signal("named_event_test.controlled");
+  const auto body_clock =
+      simulation.find_signal("named_event_test.body_clock");
+  const auto repeat_count_calls =
+      simulation.find_signal("named_event_test.repeat_count_calls");
+  assert(
+      event && observed && repeated
+      && function_observed && task_observed
+      && expression_observed && controlled && body_clock
+      && repeat_count_calls);
 
   Capture capture;
   capture.compiled_processes = simulation.compiled_process_count();
+  std::ostringstream vcd_text;
+  fsim::runtime::VcdWriter vcd{vcd_text, "1ns", 32};
+  const std::array signal_ids{
+      *event, *observed, *repeated, *expression_observed,
+      *controlled, *body_clock, *repeat_count_calls};
+  const std::array signal_names{
+      "named_event_test.fired",
+      "named_event_test.observed",
+      "named_event_test.repeated",
+      "named_event_test.expression_observed",
+      "named_event_test.controlled",
+      "named_event_test.body_clock",
+      "named_event_test.repeat_count_calls"};
+  std::array<fsim::runtime::VcdSignal, signal_ids.size()> traces{};
+  for (std::size_t index = 0; index < traces.size(); ++index) {
+    traces[index] = vcd.declare_signal(
+        signal_names[index],
+        simulation.read_signal(signal_ids[index]).width());
+  }
+  vcd.begin(simulation.now());
+  for (std::size_t index = 0; index < traces.size(); ++index) {
+    vcd.change(
+        traces[index], simulation.read_signal(signal_ids[index]));
+  }
   simulation.set_signal_change_hook(
       [&](const fsim::runtime::simir::SignalId signal,
           const fsim::runtime::PackedLogic4& value,
           const fsim::runtime::SimulationTick time,
           const std::uint64_t delta) {
+        for (std::size_t index = 0; index < signal_ids.size(); ++index) {
+          if (signal_ids[index] == signal) {
+            vcd.set_time(time);
+            vcd.change(traces[index], value);
+          }
+        }
         auto* changes =
             signal == *event
             ? &capture.event_changes
@@ -70,6 +129,22 @@ Capture execute(
   capture.event = simulation.read_signal(*event).to_msb_string();
   capture.observed =
       simulation.read_signal(*observed).to_msb_string();
+  capture.repeated =
+      simulation.read_signal(*repeated).to_msb_string();
+  capture.function_observed =
+      simulation.read_signal(*function_observed).to_msb_string();
+  capture.task_observed =
+      simulation.read_signal(*task_observed).to_msb_string();
+  capture.expression_observed =
+      simulation.read_signal(*expression_observed).to_msb_string();
+  capture.controlled =
+      simulation.read_signal(*controlled).to_msb_string();
+  capture.body_clock =
+      simulation.read_signal(*body_clock).to_msb_string();
+  capture.repeat_count_calls =
+      simulation.read_signal(*repeat_count_calls).to_msb_string();
+  vcd.flush();
+  capture.vcd = vcd_text.str();
   return capture;
 }
 
@@ -123,6 +198,13 @@ void test_named_events(
     assert(capture->result.time == 4);
     assert(capture->event == "0");
     assert(capture->observed == "10");
+    assert(capture->repeated == "111");
+    assert(capture->function_observed == "1");
+    assert(capture->task_observed == "1");
+    assert(capture->expression_observed == "01");
+    assert(capture->controlled == "11");
+    assert(capture->body_clock == "0");
+    assert(capture->repeat_count_calls == "01");
     assert(capture->event_changes.size() == 2);
     assert(capture->event_changes[0].time == 1);
     assert(capture->event_changes[0].value == "1");
@@ -143,8 +225,10 @@ void test_named_events(
         > capture->event_changes[1].delta);
   }
   assert(reference.compiled_processes == 0);
+  assert(reference.vcd == compiled.vcd);
+  assert(reference.vcd.find("#4") != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 2);
+  assert(compiled.compiled_processes == 8);
 #else
   assert(compiled.compiled_processes == 0);
 #endif
@@ -166,6 +250,38 @@ int main() {
 module named_event_test;
   event fired;
   logic [1:0] observed;
+  logic [2:0] repeated;
+  bit source_a;
+  bit source_b;
+  logic function_observed;
+  logic task_observed;
+  bit [1:0] expression_observed;
+  bit [1:0] controlled;
+  bit body_clock;
+  bit [1:0] repeat_count_calls;
+  function automatic logic read_a_leaf;
+    return source_a;
+  endfunction
+  function automatic logic read_a;
+    logic nested = read_a_leaf();
+    return nested;
+  endfunction
+  task automatic read_b_leaf;
+    task_observed = source_b;
+  endtask
+  task automatic read_b;
+    read_b_leaf();
+  endtask
+  function automatic logic [2:0] counted_repeat;
+    repeat_count_calls = repeat_count_calls + 1'b1;
+    return 3'd2;
+  endfunction
+  always_comb function_observed = read_a();
+  always_comb read_b();
+  always @(source_a | source_b)
+    expression_observed = expression_observed + 1'b1;
+  initial controlled <= repeat (2) @(fired) 2'b11;
+  always #1 body_clock = ~body_clock;
   initial begin
     #1 -> fired;
     #1 ->> #1 fired;
@@ -177,6 +293,25 @@ module named_event_test;
       @(fired);
       observed = observed + 2'b01;
     end
+  end
+  initial begin
+    integer runtime_lane;
+    repeated = 3'd0;
+    repeat (counted_repeat()) repeated = repeated + 1'b1;
+    for (runtime_lane = 0; runtime_lane < 4; runtime_lane += 2)
+      repeated = repeated + 1'b1;
+    for (int local_lane = 0; local_lane < 4;
+         local_lane = local_lane + 2) begin
+      repeated = repeated + 1'b1;
+      continue;
+      repeated = 3'b111;
+    end
+    forever begin
+      repeated = repeated + 1'b1;
+      break;
+    end
+    #1 source_a = 1'b1;
+    #1 source_b = 1'b1;
   end
 endmodule
 )";

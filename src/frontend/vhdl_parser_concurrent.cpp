@@ -663,7 +663,8 @@ Process VhdlParser::parse_process(std::string label) {
     while (!at_end() && !at(TokenKind::RightParen)) {
       const auto signal = expect_identifier("sensitivity name");
       process.sensitivities.push_back(
-          Sensitivity{EdgeKind::Any, vhdl_name(signal.text), signal.span});
+          Sensitivity{
+              EdgeKind::Any, vhdl_name(signal.text), signal.span, {}});
       if (!match(TokenKind::Comma)) {
         break;
       }

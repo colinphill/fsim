@@ -95,6 +95,7 @@ int main() {
   test_logic9_at_level(
       JitOptimizationLevel::o2, "logic9_o2");
   test_persistent_object_cache();
+  test_process_control_cache_identity();
   test_rejections();
   std::cout << "LLVM JIT tests passed with LLVM " << LlvmJit::llvm_version()
             << '\n';

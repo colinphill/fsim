@@ -822,6 +822,9 @@ struct Sensitivity {
   EdgeKind edge{EdgeKind::Any};
   std::string signal;
   SourceSpan span;
+  // General packed event expressions retain their exact value graph. Direct
+  // signal and wildcard controls keep the compact `signal` representation.
+  Expression expression;
 };
 
 struct CaseAlternative;
@@ -850,6 +853,8 @@ struct Statement {
   // A VHDL sequential for-loop retains its implicit constant name and
   // locally-static discrete range until elaboration unrolls the body.
   std::string loop_variable;
+  // SystemVerilog procedural for-loop variable declared in its initializer.
+  bool loop_variable_declared{};
   // Canonical VHDL opening label for a loop, and the optional label selected
   // by exit/next on a loop-control statement.
   std::string loop_label;
@@ -876,6 +881,9 @@ struct Statement {
   // `sensitivities` payload is distinct from statement-level timing controls.
   ProceduralAssignmentControl procedural_assignment_control{
       ProceduralAssignmentControl::None};
+  // A repeated intra-assignment event control stores its single-evaluation
+  // count in loop_limit and otherwise shares ordinary event metadata.
+  bool procedural_assignment_repeat{};
   // SystemVerilog update syntax remains explicit even though `value` retains
   // the normalized binary expression used by older consumers. Elaboration
   // uses this metadata to capture the lvalue once for read-modify-write.

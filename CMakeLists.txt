@@ -299,6 +299,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_events.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_concurrent.cpp"
@@ -373,6 +374,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_callables.cpp
       src/elaboration/lowerer_procedures.cpp
       src/elaboration/lowerer_process.cpp
+      src/elaboration/lowerer_events.cpp
       src/elaboration/lowerer_tasks.cpp
       src/elaboration/lowerer_types.cpp
       src/elaboration/lowerer_sv_strings.cpp

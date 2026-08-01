@@ -824,6 +824,8 @@ using namespace elaboration_detail;
             case StatementKind::Loop:
                 if (statement.loop_runtime) {
                     collect_identifiers(
+                        statement.loop_initial, output);
+                    collect_identifiers(
                         statement.condition, output);
                 } else {
                     collect_identifiers(
@@ -882,6 +884,153 @@ using namespace elaboration_detail;
                 collect_statement_identifiers(
                     alternative.statements, output);
             }
+        }
+    }
+
+
+
+    void Lowerer::collect_wildcard_identifiers(
+        const std::vector<Statement>& statements,
+        std::set<std::string>& output) const {
+        std::deque<std::string> pending_functions;
+        std::deque<std::string> pending_tasks;
+        std::unordered_set<std::string> visited_functions;
+        std::unordered_set<std::string> visited_tasks;
+
+        const auto collect_expression_calls =
+            [&](const auto& self, const Expression& expression) -> void {
+            if (expression.kind == ExpressionKind::Call
+                && function_indices_.contains(expression.text)) {
+                pending_functions.push_back(expression.text);
+            }
+            for (const auto& operand : expression.operands) {
+                self(self, operand);
+            }
+        };
+        const auto collect_statement_calls =
+            [&](const auto& self,
+                const std::vector<Statement>& body) -> void {
+            for (const auto& statement : body) {
+                collect_expression_calls(
+                    collect_expression_calls, statement.target);
+                collect_expression_calls(
+                    collect_expression_calls, statement.value);
+                collect_expression_calls(
+                    collect_expression_calls, statement.condition);
+                collect_expression_calls(
+                    collect_expression_calls, statement.loop_initial);
+                collect_expression_calls(
+                    collect_expression_calls, statement.loop_limit);
+                collect_expression_calls(
+                    collect_expression_calls, statement.file_handle);
+                for (const auto& argument : statement.task_arguments) {
+                    collect_expression_calls(
+                        collect_expression_calls, argument);
+                }
+                for (const auto& argument : statement.procedure_arguments) {
+                    collect_expression_calls(
+                        collect_expression_calls, argument.value);
+                }
+                for (const auto& value : statement.output_values) {
+                    collect_expression_calls(
+                        collect_expression_calls, value.value);
+                }
+                for (const auto& alternative : statement.case_alternatives) {
+                    for (const auto& choice : alternative.choices) {
+                        collect_expression_calls(
+                            collect_expression_calls, choice);
+                    }
+                    self(self, alternative.statements);
+                }
+                if (statement.kind == StatementKind::TaskCall
+                    && task_indices_.contains(statement.task_name)) {
+                    pending_tasks.push_back(statement.task_name);
+                }
+                self(self, statement.statements);
+                self(self, statement.else_statements);
+            }
+        };
+
+        collect_statement_identifiers(statements, output);
+        collect_statement_calls(collect_statement_calls, statements);
+        while (!pending_functions.empty() || !pending_tasks.empty()) {
+            if (!pending_functions.empty()) {
+                auto name = std::move(pending_functions.front());
+                pending_functions.pop_front();
+                if (!visited_functions.insert(name).second) {
+                    continue;
+                }
+                const auto found = function_indices_.find(name);
+                if (found == function_indices_.end()) {
+                    continue;
+                }
+                const auto& function =
+                    *function_frames_[found->second].source;
+                std::set<std::string> dependencies;
+                collect_statement_identifiers(
+                    function.statements, dependencies);
+                collect_statement_calls(
+                    collect_statement_calls, function.statements);
+                for (const auto& argument : function.arguments) {
+                    dependencies.erase(argument.name);
+                    if (argument.default_value) {
+                        collect_identifiers(
+                            *argument.default_value, dependencies);
+                        collect_expression_calls(
+                            collect_expression_calls,
+                            *argument.default_value);
+                    }
+                }
+                for (const auto& variable : function.variables) {
+                    dependencies.erase(variable.name);
+                    if (variable.initializer) {
+                        collect_identifiers(
+                            *variable.initializer, dependencies);
+                        collect_expression_calls(
+                            collect_expression_calls,
+                            *variable.initializer);
+                    }
+                }
+                output.insert(
+                    dependencies.begin(), dependencies.end());
+                continue;
+            }
+
+            auto name = std::move(pending_tasks.front());
+            pending_tasks.pop_front();
+            if (!visited_tasks.insert(name).second) {
+                continue;
+            }
+            const auto found = task_indices_.find(name);
+            if (found == task_indices_.end()) {
+                continue;
+            }
+            const auto& task = *task_frames_[found->second].source;
+            std::set<std::string> dependencies;
+            collect_statement_identifiers(task.statements, dependencies);
+            collect_statement_calls(
+                collect_statement_calls, task.statements);
+            for (const auto& argument : task.arguments) {
+                dependencies.erase(argument.name);
+                if (argument.default_value) {
+                    collect_identifiers(
+                        *argument.default_value, dependencies);
+                    collect_expression_calls(
+                        collect_expression_calls,
+                        *argument.default_value);
+                }
+            }
+            for (const auto& variable : task.variables) {
+                dependencies.erase(variable.name);
+                if (variable.initializer) {
+                    collect_identifiers(
+                        *variable.initializer, dependencies);
+                    collect_expression_calls(
+                        collect_expression_calls,
+                        *variable.initializer);
+                }
+            }
+            output.insert(dependencies.begin(), dependencies.end());
         }
     }
 

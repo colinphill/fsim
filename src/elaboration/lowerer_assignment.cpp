@@ -919,16 +919,22 @@ using namespace elaboration_detail;
                 statement.span);
             return;
         }
+        if (statement.procedural_assignment_repeat
+            && (!procedural_event
+                || !statement.loop_limit.valid())) {
+            report(
+                "FSIM-ELAB-105",
+                "repeated procedural assignment event control has "
+                "invalid control or count metadata",
+                statement.span);
+            return;
+        }
         if (procedural_event) {
-            auto [signals, edges] =
-                resolve_wait_sensitivities(statement);
-            if (signals.empty()) {
-                return;
-            }
             emit_debug_point(
                 DebugPointKind::wait, statement.span);
-            process_.operations.emplace_back(
-                WaitOn{std::move(signals), std::move(edges)});
+            if (!emit_event_control_wait(statement)) {
+                return;
+            }
         }
         if (local != locals_.end()) {
             if (statement.assignment_kind != AssignmentKind::Blocking) {

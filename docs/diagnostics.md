@@ -573,6 +573,9 @@ therefore excluded.
 | `FSIM-SV-PARSE-200` | error | Expected `)` after a named function actual. |
 | `FSIM-SV-PARSE-201` | error | Expected `(` after a named task actual. |
 | `FSIM-SV-PARSE-202` | error | Expected `)` after a named task actual. |
+| `FSIM-SV-PARSE-203` | error | A repeated intra-assignment event control is missing its opening parenthesis. |
+| `FSIM-SV-PARSE-204` | error | A repeated intra-assignment event control is missing its closing parenthesis. |
+| `FSIM-SV-PARSE-205` | error | A repeated intra-assignment event control is missing its `@` event marker. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -711,10 +714,14 @@ therefore excluded.
 | `FSIM-SV-SEM-024` | error | A bounded scope declares the same typedef name more than once. |
 | `FSIM-SV-SEM-025` | error | A bounded packed aggregate declares the same member name more than once. |
 | `FSIM-SV-SEM-026` | error | A bounded built-in gate primitive has an invalid number of input terminals. |
-| `FSIM-SV-SEM-027` | error | A bounded procedural loop condition is not a canonical comparison of its loop variable and a locally static bound. |
+| `FSIM-SV-SEM-027` | error | A bounded procedural loop condition does not compare its loop variable against an integral bound. |
 | `FSIM-SV-SEM-028` | error | A bounded procedural loop iteration updates a name other than its loop variable. |
-| `FSIM-SV-SEM-029` | error | A bounded procedural loop update is not a unit step toward its comparison bound. |
-| `FSIM-SV-SEM-030` | error | A bounded `forever` body has no timing control and therefore cannot suspend its process. |
+| `FSIM-SV-SEM-029` | error | A bounded procedural loop update is not a positive constant step toward its comparison bound. |
+| `FSIM-SV-SEM-103` | error | A procedural loop update is not an assignment or increment of its loop variable. |
+| `FSIM-SV-SEM-104` | error | An edge-qualified event expression is not a direct scalar signal in the bounded expression-control slice. |
+| `FSIM-SV-SEM-105` | error | A general packed event expression is mixed with another event-list item. |
+| `FSIM-SV-SEM-106` | error | A body-timed `always` process has a reachable re-entry path without suspension or termination. |
+| `FSIM-SV-SEM-030` | error | A reachable `forever` path can take its backedge without suspending, exiting, or terminating the simulation. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
 | `FSIM-SV-SEM-033` | error | A SystemVerilog `final` procedure contains a nonblocking assignment. |
@@ -784,6 +791,8 @@ therefore excluded.
 | `FSIM-SV-SEM-098` | error | A `ref` task formal is declared in a static or implicit-lifetime task. |
 | `FSIM-SV-SEM-099` | error | A static or implicit-lifetime callable declares a nested block local outside its supported persistent body scope. |
 | `FSIM-SV-SEM-100` | error | A streaming concatenation is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-101` | error | A bounded `always_ff` process does not have exactly one edge-qualified event. |
+| `FSIM-SV-SEM-102` | error | A bounded `always_ff` body contains a nested timing control. |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |
@@ -807,8 +816,6 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-028` | error | A packed-struct member uses a nested aggregate or unsupported data type. |
 | `FSIM-SV-UNSUPPORTED-029` | error | A packed-struct member has an unpacked dimension or initializer. |
 | `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
-| `FSIM-SV-UNSUPPORTED-031` | error | A procedural `for` loop does not declare an inline `int` or `integer` index. |
-| `FSIM-SV-UNSUPPORTED-032` | error | A nonblocking assignment uses a repeated event control, which is not executable yet. |
 | `FSIM-SV-UNSUPPORTED-035` | error | A bounded function output, inout, or ref formal uses a string or unpacked-container type instead of the supported packed integral type. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
@@ -867,8 +874,7 @@ therefore excluded.
 | `FSIM-ELAB-072` | error | A sequential VHDL for-loop final bound is not locally static. |
 | `FSIM-ELAB-073` | error | A sequential VHDL for loop exceeds the bounded one-million-iteration elaboration limit. |
 | `FSIM-ELAB-074` | error | A sequential for-loop body assigns its VHDL implicit constant or statically substituted SystemVerilog index. |
-| `FSIM-ELAB-075` | error | A Verilog/SystemVerilog repeat count is not locally static. |
-| `FSIM-ELAB-076` | error | A Verilog/SystemVerilog repeat count is negative. |
+| `FSIM-ELAB-075` | error | A runtime Verilog/SystemVerilog repeat count is not a supported integral value. |
 | `FSIM-ELAB-077` | error | A VHDL while condition is not scalar Boolean. |
 | `FSIM-ELAB-078` | error | Loop-control HIR reached elaboration without an enclosing loop. |
 | `FSIM-ELAB-079` | error | A VHDL wait-until condition is not scalar Boolean. |
@@ -940,6 +946,12 @@ therefore excluded.
 | `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
 | `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
+| `FSIM-ELAB-SVLOOP-001` | error | A runtime procedural for-loop inline variable shadows an active local. |
+| `FSIM-ELAB-SVLOOP-002` | error | A runtime procedural for-loop condition is not executable as a packed truth value. |
+| `FSIM-ELAB-SVEVENT-001` | error | A packed event expression has no readable signal dependencies. |
+| `FSIM-ELAB-SVEVENT-002` | error | Packed event-expression HIR is mixed with another event or timeout. |
+| `FSIM-ELAB-SVEVENT-003` | error | A packed event expression does not have an executable width from 1 through 64 bits. |
+| `FSIM-ELAB-SVEVENT-004` | error | A repeated event-control count is not an executable integral value. |
 | `FSIM-ELAB-SVFUNC-001` | error | The visible bounded function set exceeds the representable SimIR call-stack capacity. |
 | `FSIM-ELAB-SVFUNC-002` | error | More than one bounded function has the same visible name. |
 | `FSIM-ELAB-SVFUNC-003` | error | A bounded function call has the wrong number of arguments. |

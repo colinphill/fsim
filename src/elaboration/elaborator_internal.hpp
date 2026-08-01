@@ -832,6 +832,12 @@ private:
     resolve_wait_sensitivities(
         const Statement& statement);
 
+    [[nodiscard]] bool emit_event_control_wait(
+        const Statement& statement);
+
+    [[nodiscard]] bool emit_single_event_control_wait(
+        const Statement& statement);
+
     void emit_debug_point(
         const DebugPointKind kind,
         const frontend::SourceSpan& span);
@@ -906,6 +912,10 @@ private:
     void lower_loop(const Statement& statement);
 
     void lower_runtime_loop(const Statement& statement);
+
+    void lower_runtime_for(const Statement& statement);
+
+    void lower_runtime_repeat(const Statement& statement);
 
     void lower_loop_control(
         const Statement& statement, const bool is_break);
@@ -1144,6 +1154,10 @@ private:
         std::set<std::string>& output) const;
 
     void collect_statement_identifiers(
+        const std::vector<Statement>& statements,
+        std::set<std::string>& output) const;
+
+    void collect_wildcard_identifiers(
         const std::vector<Statement>& statements,
         std::set<std::string>& output) const;
 

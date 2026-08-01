@@ -651,6 +651,210 @@ endmodule
     assert(has_diagnostic(
         rejected_empty_wildcard, "FSIM-ELAB-061"));
 
+    const auto callable_wildcard = fsim::frontend::parse_text(
+        "callable_wildcard.sv",
+        R"(
+module callable_wildcard;
+  logic source_a;
+  logic source_b;
+  bit source_c;
+  logic function_result;
+  logic task_result;
+  logic [2:0] loop_result;
+  function automatic logic read_a_leaf;
+    return source_a;
+  endfunction
+  function automatic logic read_a;
+    logic nested = read_a_leaf();
+    return nested;
+  endfunction
+  task automatic read_b_leaf;
+    task_result = source_b;
+  endtask
+  task automatic read_b;
+    read_b_leaf();
+  endtask
+  always_comb function_result = read_a();
+  always_comb read_b();
+  always_comb begin
+    loop_result = 3'd0;
+    for (int lane = source_c; lane < 3; lane += 2)
+      loop_result = loop_result + 1'b1;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(callable_wildcard.ok());
+    const auto elaborated_callable_wildcard =
+        fsim::elaboration::elaborate(
+            callable_wildcard.design,
+            "sv:work.callable_wildcard");
+    assert(elaborated_callable_wildcard.ok());
+    const auto callable_source_a =
+        elaborated_callable_wildcard.design->find_signal("source_a");
+    const auto callable_source_b =
+        elaborated_callable_wildcard.design->find_signal("source_b");
+    const auto callable_source_c =
+        elaborated_callable_wildcard.design->find_signal("source_c");
+    assert(callable_source_a && callable_source_b && callable_source_c);
+    const auto& callable_processes =
+        elaborated_callable_wildcard.design->processes();
+    assert(callable_processes.size() == 3);
+    assert(
+        callable_processes[0].static_sensitivity.size() == 1
+        && callable_processes[0].static_sensitivity[0].signal
+            == *callable_source_a);
+    assert(
+        callable_processes[1].static_sensitivity.size() == 1
+        && callable_processes[1].static_sensitivity[0].signal
+            == *callable_source_b);
+    assert(
+        std::ranges::any_of(
+            callable_processes[2].static_sensitivity,
+            [&](const auto& item) {
+              return item.signal == *callable_source_c;
+            }));
+
+    const auto packed_event_expression = fsim::frontend::parse_text(
+        "packed_event_expression.sv",
+        R"(
+module packed_event_expression;
+  logic left;
+  logic right;
+  bit [1:0] static_observed;
+  bit [1:0] dynamic_observed;
+  bit [1:0] repeated_observed;
+  initial begin
+    left = 1'b0;
+    right = 1'b0;
+    #1 left = 1'b1;
+    #1 right = 1'b1;
+    #1 left = 1'b0;
+    #1 right = 1'b0;
+    #1 $finish;
+  end
+  always @(left | right)
+    static_observed = static_observed + 1'b1;
+  initial begin
+    @(left | right);
+    dynamic_observed = dynamic_observed + 1'b1;
+    @(left | right);
+    dynamic_observed = dynamic_observed + 1'b1;
+  end
+  initial
+    repeated_observed <= repeat (2'b10) @(left | right) 2'b11;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(packed_event_expression.ok());
+    const auto elaborated_packed_event_expression =
+        fsim::elaboration::elaborate(
+            packed_event_expression.design,
+            "sv:work.packed_event_expression");
+    if (!elaborated_packed_event_expression.ok()) {
+        for (const auto& diagnostic :
+             elaborated_packed_event_expression.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << std::endl;
+        }
+    }
+    assert(elaborated_packed_event_expression.ok());
+    assert(std::ranges::any_of(
+        elaborated_packed_event_expression.design->processes(),
+        [](const auto& process) {
+          return std::ranges::any_of(
+              process.operations,
+              [](const auto& operation) {
+                const auto* binary = std::get_if<
+                    fsim::runtime::simir::Binary>(&operation);
+                return binary != nullptr
+                    && binary->operation
+                        == fsim::runtime::simir::BinaryOperator::less_unsigned;
+              });
+        }));
+    auto packed_event_interpreter =
+        elaborated_packed_event_expression.design
+            ->create_interpreter();
+    const auto packed_event_result =
+        packed_event_interpreter->run();
+    assert(
+        packed_event_result.status
+        == fsim::runtime::RunStatus::stopped);
+    assert(packed_event_result.time == 5);
+    for (const auto name : {
+             std::string_view{"static_observed"},
+             std::string_view{"dynamic_observed"}}) {
+        const auto signal =
+            elaborated_packed_event_expression.design
+                ->find_signal(name);
+        assert(signal);
+        assert(
+            packed_event_interpreter
+                ->signal_value(*signal)
+                .to_msb_string()
+            == "10");
+    }
+    const auto repeated_observed =
+        elaborated_packed_event_expression.design
+            ->find_signal("repeated_observed");
+    assert(repeated_observed);
+    assert(
+        packed_event_interpreter
+            ->signal_value(*repeated_observed)
+            .to_msb_string()
+        == "11");
+
+    auto malformed_event_expression = fsim::frontend::parse_text(
+        "malformed_event_expression.sv",
+        R"(
+module malformed_event_expression;
+  logic left;
+  logic right;
+  logic observed;
+  always @(left | right) observed = left;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(malformed_event_expression.ok());
+    malformed_event_expression.design.units.front()
+        .processes.front().sensitivities.push_back(
+            fsim::frontend::Sensitivity{
+                fsim::frontend::EdgeKind::Any,
+                "left",
+                {},
+                {}});
+    const auto rejected_malformed_event_expression =
+        fsim::elaboration::elaborate(
+            malformed_event_expression.design,
+            "sv:work.malformed_event_expression");
+    assert(!rejected_malformed_event_expression.ok());
+    assert(has_diagnostic(
+        rejected_malformed_event_expression,
+        "FSIM-ELAB-SVEVENT-002"));
+
+    auto malformed_repeated_event = fsim::frontend::parse_text(
+        "malformed_repeated_event.sv",
+        R"(
+module malformed_repeated_event;
+  logic clock;
+  logic source;
+  logic observed;
+  initial observed <= @(clock) source;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(malformed_repeated_event.ok());
+    malformed_repeated_event.design.units.front().processes.front()
+        .statements.front().procedural_assignment_repeat = true;
+    const auto rejected_malformed_repeated_event =
+        fsim::elaboration::elaborate(
+            malformed_repeated_event.design,
+            "sv:work.malformed_repeated_event");
+    assert(!rejected_malformed_repeated_event.ok());
+    assert(has_diagnostic(
+        rejected_malformed_repeated_event,
+        "FSIM-ELAB-105"));
+
     const auto dynamic_wildcard = fsim::frontend::parse_text(
         "dynamic_wildcard.sv",
         R"(
@@ -1109,6 +1313,13 @@ module repeat_statements;
     observed = 3'b000;
     repeat (3) observed = observed + 1;
     repeat (0) observed = 3'b111;
+    begin
+      logic [2:0] runtime_count = 3'd2;
+      logic [2:0] unknown_count = 3'bxxx;
+      repeat (runtime_count) observed = observed + 1;
+      repeat (unknown_count) observed = 3'b111;
+    end
+    repeat (-1) observed = 3'b111;
   end
 endmodule
 )",
@@ -1119,6 +1330,15 @@ endmodule
             repeat_statements.design,
             "sv:work.repeat_statements");
     assert(elaborated_repeat_statements.ok());
+    assert(std::ranges::any_of(
+        elaborated_repeat_statements.design->processes().front().operations,
+        [](const auto& operation) {
+          const auto* binary = std::get_if<
+              fsim::runtime::simir::Binary>(&operation);
+          return binary != nullptr
+              && binary->operation
+                  == fsim::runtime::simir::BinaryOperator::less_unsigned;
+        }));
     auto repeat_interpreter =
         elaborated_repeat_statements.design
             ->create_interpreter();
@@ -1134,17 +1354,55 @@ endmodule
         repeat_interpreter
             ->signal_value(*repeat_observed)
             .to_msb_string()
-        == "011");
+        == "101");
+
+    const auto runtime_for_statements =
+        fsim::frontend::parse_text(
+            "runtime_for_statements.sv",
+            R"(
+module runtime_for_statements;
+  logic [3:0] observed;
+  initial begin
+    integer lane;
+    observed = 4'd0;
+    for (lane = 0; lane < 4; lane += 2)
+      observed = observed + 1;
+    for (int local_lane = 0; local_lane < 4;
+         local_lane = local_lane + 2) begin
+      observed = observed + 1;
+      continue;
+      observed = 4'd15;
+    end
+  end
+endmodule
+)",
+            fsim::frontend::Language::SystemVerilog2017);
+    assert(runtime_for_statements.ok());
+    const auto elaborated_runtime_for =
+        fsim::elaboration::elaborate(
+            runtime_for_statements.design,
+            "sv:work.runtime_for_statements");
+    assert(elaborated_runtime_for.ok());
+    auto runtime_for_interpreter =
+        elaborated_runtime_for.design->create_interpreter();
+    assert(
+        runtime_for_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto runtime_for_observed =
+        elaborated_runtime_for.design->find_signal("observed");
+    assert(runtime_for_observed);
+    assert(
+        runtime_for_interpreter
+            ->signal_value(*runtime_for_observed)
+            .to_msb_string()
+        == "0100");
 
     const auto invalid_repeat_statements =
         fsim::frontend::parse_text(
             "invalid_repeat_statements.sv",
             R"(
 module invalid_repeat_statements;
-  logic dynamic_count;
   initial begin
-    repeat (dynamic_count);
-    repeat (-1);
     repeat (1000001);
   end
 endmodule
@@ -1156,13 +1414,8 @@ endmodule
             invalid_repeat_statements.design,
             "sv:work.invalid_repeat_statements");
     assert(!rejected_repeat_statements.ok());
-    for (const auto code :
-         {"FSIM-ELAB-073", "FSIM-ELAB-075",
-          "FSIM-ELAB-076"}) {
-        assert(
-            has_diagnostic(
-                rejected_repeat_statements, code));
-    }
+    assert(has_diagnostic(
+        rejected_repeat_statements, "FSIM-ELAB-073"));
 
     const auto runtime_loop_statements =
         fsim::frontend::parse_text(

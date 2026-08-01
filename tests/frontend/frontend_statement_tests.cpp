@@ -51,6 +51,56 @@ void require(bool condition, std::string_view message) {
 } // namespace
 
 void test_wildcard_and_always_comb_processes() {
+  const auto packed_events = parse_text(
+      "packed_events.sv",
+      R"(
+module packed_events;
+  logic left;
+  logic right;
+  logic observed;
+  always @(left | right) observed = left;
+  initial @(left ^ right) observed = right;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(packed_events.ok(), "packed event expressions must parse");
+  const auto& packed_processes =
+      packed_events.design.units.front().processes;
+  require(
+      packed_processes.size() == 2
+          && packed_processes[0].sensitivities.size() == 1
+          && packed_processes[0].sensitivities.front()
+                 .expression.kind == ExpressionKind::Binary
+          && packed_processes[0].sensitivities.front()
+                 .expression.text == "|"
+          && packed_processes[1].statements.front()
+                 .sensitivities.front().expression.text == "^",
+      "packed event-expression HIR");
+
+  const auto invalid_packed_events = parse_text(
+      "invalid_packed_events.sv",
+      R"(
+module invalid_packed_events;
+  logic left;
+  logic right;
+  always @(posedge (left | right));
+  always @(left | right or left);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid_packed_events.ok(), "bounded event-expression limits");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-SEM-104"},
+           std::string_view{"FSIM-SV-SEM-105"}}) {
+    require(
+        std::ranges::any_of(
+            invalid_packed_events.diagnostics,
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "packed event-expression diagnostic");
+  }
+
   const auto result = parse_text(
       "combinational.sv",
       R"(
@@ -84,6 +134,41 @@ endmodule
           && processes[2].sensitivities.front().signal == "*",
       "wildcard process metadata");
 
+  const auto body_timed = parse_text(
+      "body_timed_always.sv",
+      R"(
+module body_timed_always;
+  logic clock;
+  always #1 clock = ~clock;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      body_timed.ok()
+          && body_timed.design.units.front().processes.front()
+                 .sensitivities.empty()
+          && body_timed.design.units.front().processes.front()
+                 .statements.front().kind == StatementKind::Delay,
+      "body-timed always retains its suspension control");
+
+  const auto nonprogressing_always = parse_text(
+      "nonprogressing_always.sv",
+      R"(
+module nonprogressing_always;
+  logic clock;
+  always clock = ~clock;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !nonprogressing_always.ok()
+          && std::ranges::any_of(
+              nonprogressing_always.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-106";
+              }),
+      "nonprogressing body-timed always diagnostic");
+
   const auto invalid_system_verilog = parse_text(
       "bad_comb.sv",
       R"(
@@ -109,6 +194,33 @@ endmodule
               return diagnostic.code == code;
             }),
         "targeted always_comb diagnostic");
+  }
+
+  const auto invalid_always_ff = parse_text(
+      "bad_always_ff.sv",
+      R"(
+module bad_always_ff;
+  logic clk;
+  logic reset;
+  logic q;
+  always_ff @(clk) q <= 1'b0;
+  always_ff @(posedge clk or negedge reset) q <= 1'b0;
+  always_ff @(posedge clk) #1 q <= 1'b0;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!invalid_always_ff.ok(), "invalid always_ff forms");
+  for (const auto code : {
+           std::string_view{"FSIM-SV-SEM-101"},
+           std::string_view{"FSIM-SV-SEM-102"}}) {
+    require(
+        std::any_of(
+            invalid_always_ff.diagnostics.begin(),
+            invalid_always_ff.diagnostics.end(),
+            [&](const Diagnostic& diagnostic) {
+              return diagnostic.code == code;
+            }),
+        "targeted always_ff diagnostic");
   }
 
   const auto invalid_verilog = parse_text(
@@ -458,6 +570,7 @@ void test_systemverilog_procedural_for_loops() {
 module procedural_for;
   logic [3:0] result;
   initial begin
+    integer runtime_lane;
     result = 4'b0000;
     for (int lane = 0; lane < 4; lane++)
       result[lane] = 1'b1;
@@ -470,6 +583,10 @@ module procedural_for;
       result[0] = result[0];
     for (int lane = 0; lane > 0; lane -= 1)
       result[0] = 1'b0;
+    for (runtime_lane = 0; runtime_lane < 4; runtime_lane += 2)
+      result[runtime_lane] = 1'b1;
+    for (int lane = 0; lane < 4; lane = lane + 2)
+      result[lane] = result[lane];
   end
 endmodule
 )",
@@ -485,7 +602,7 @@ endmodule
   const auto& statements =
       result.design.units.front().processes.front().statements;
   require(
-      statements.size() == 6
+      statements.size() == 8
           && statements[1].kind == StatementKind::Loop
           && statements[1].loop_variable == "lane"
           && statements[1].loop_initial.text == "0"
@@ -501,7 +618,13 @@ endmodule
           && !statements[4].loop_limit_exclusive
           && statements[5].kind == StatementKind::Loop
           && statements[5].loop_descending
-          && statements[5].loop_limit_exclusive,
+          && statements[5].loop_limit_exclusive
+          && statements[6].loop_runtime
+          && !statements[6].loop_variable_declared
+          && statements[6].value.text == "+"
+          && statements[7].loop_runtime
+          && statements[7].loop_variable_declared
+          && statements[7].value.text == "+",
       "SystemVerilog loop range normalization and bodies");
 
   const auto invalid = parse_text(
@@ -509,20 +632,20 @@ endmodule
       R"(
 module bad_procedural_for;
   initial begin
-    for (lane = 0; lane < 4; lane++);
     for (int lane = 0; other < 4; lane++);
     for (int lane = 0; lane < 4; other++);
     for (int lane = 0; lane < 4; lane--);
+    for (int lane = 0; lane < 4; lane);
   end
 endmodule
 )",
       Language::SystemVerilog2017);
   require(!invalid.ok(), "noncanonical procedural loops must fail");
   for (const auto code : {
-           std::string_view{"FSIM-SV-UNSUPPORTED-031"},
            std::string_view{"FSIM-SV-SEM-027"},
            std::string_view{"FSIM-SV-SEM-028"},
-           std::string_view{"FSIM-SV-SEM-029"}}) {
+           std::string_view{"FSIM-SV-SEM-029"},
+           std::string_view{"FSIM-SV-SEM-103"}}) {
     require(
         std::ranges::any_of(
             invalid.diagnostics,
@@ -623,6 +746,11 @@ module runtime_loops;
   initial begin
     count = 3'b000;
     while (count < 3) count = count + 1;
+    forever begin
+      count = count + 1;
+      break;
+    end
+    forever if (flag) break; else @(flag);
     forever #1 flag = ~flag;
   end
 endmodule
@@ -636,18 +764,18 @@ endmodule
           .processes.front()
           .statements;
   require(
-      statements.size() == 3
+      statements.size() == 5
           && statements[1].kind == StatementKind::Loop
           && statements[1].loop_runtime
           && statements[1].condition.kind
               == ExpressionKind::Binary
           && statements[1].condition.text == "<"
-          && statements[2].kind == StatementKind::Loop
-          && statements[2].loop_runtime
-          && statements[2].condition.kind
+          && statements[4].kind == StatementKind::Loop
+          && statements[4].loop_runtime
+          && statements[4].condition.kind
               == ExpressionKind::LogicLiteral
-          && statements[2].statements.size() == 1
-          && statements[2].statements.front().kind
+          && statements[4].statements.size() == 1
+          && statements[4].statements.front().kind
               == StatementKind::Delay,
       "runtime loop conditions and suspension body HIR");
 
@@ -683,6 +811,8 @@ module bad_runtime_loops;
   logic flag;
   initial while flag;
   initial forever flag = ~flag;
+  initial forever if (flag) #1; else flag = ~flag;
+  initial forever continue;
 endmodule
 )",
       Language::SystemVerilog2017);

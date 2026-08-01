@@ -1312,6 +1312,8 @@ Process VerilogParser::parse_always() {
   const bool implicit_sensitivity =
       process.kind == ProcessKind::SystemVerilogAlwaysComb
       || process.kind == ProcessKind::SystemVerilogAlwaysLatch;
+  const bool sequential_always =
+      process.kind == ProcessKind::SystemVerilogAlwaysFF;
   if (implicit_sensitivity) {
     if (match(TokenKind::At)) {
       error(
@@ -1322,10 +1324,10 @@ Process VerilogParser::parse_always() {
       (void)parse_sensitivity();
     }
     process.sensitivities.push_back(
-        Sensitivity{EdgeKind::Any, "*", start.span});
+        Sensitivity{EdgeKind::Any, "*", start.span, {}});
   } else if (match(TokenKind::At)) {
     process.sensitivities = parse_sensitivity();
-  } else {
+  } else if (process.kind != ProcessKind::VerilogAlways) {
     error(current(), "FSIM-SV-PARSE-012",
           "always process requires an event control in this frontend "
           "slice");
@@ -1340,7 +1342,16 @@ Process VerilogParser::parse_always() {
       process.statements.push_back(std::move(*body));
     }
   }
-  if (implicit_sensitivity) {
+  if (process.kind == ProcessKind::VerilogAlways
+      && process.sensitivities.empty()
+      && !cycle_paths_are_safe(process.statements)) {
+    error(
+        start,
+        "FSIM-SV-SEM-106",
+        "every reachable body-timed always path must suspend or "
+        "terminate before process re-entry");
+  }
+  if (implicit_sensitivity || sequential_always) {
     const auto inspect =
         [&](const auto& self,
             const std::vector<Statement>& statements,
@@ -1377,18 +1388,32 @@ Process VerilogParser::parse_always() {
     inspect(
         inspect, process.statements, has_timing,
         has_nonblocking);
-    if (has_timing) {
+    if (implicit_sensitivity && has_timing) {
       error(
           start,
           "FSIM-SV-SEM-012",
           "always_comb/always_latch cannot contain timing controls");
     }
-    if (has_nonblocking) {
+    if (implicit_sensitivity && has_nonblocking) {
       error(
           start,
           "FSIM-SV-SEM-013",
           "always_comb/always_latch assignments must be blocking in this "
           "executable slice");
+    }
+    if (sequential_always
+        && (process.sensitivities.size() != 1
+            || process.sensitivities.front().edge == EdgeKind::Any)) {
+      error(
+          start,
+          "FSIM-SV-SEM-101",
+          "bounded always_ff requires exactly one edge-qualified event");
+    }
+    if (sequential_always && has_timing) {
+      error(
+          start,
+          "FSIM-SV-SEM-102",
+          "bounded always_ff cannot contain a nested timing control");
     }
   }
   process.span = span_from(start, previous());

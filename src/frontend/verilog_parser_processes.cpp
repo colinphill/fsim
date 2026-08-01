@@ -110,71 +110,6 @@ Process VerilogParser::parse_final() {
   return process;
 }
 
-std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
-  std::vector<Sensitivity> sensitivities;
-  if (match(TokenKind::Star)) {
-    sensitivities.push_back(
-        Sensitivity{EdgeKind::Any, "*", previous().span});
-    return sensitivities;
-  }
-  if (at(TokenKind::Identifier)) {
-    const auto signal = advance();
-    std::string signal_name = signal.text;
-    while (match(TokenKind::Dot)) {
-      signal_name += '.';
-      signal_name +=
-          expect_identifier("selected sensitivity signal").text;
-    }
-    if (signal_name.find('.') == std::string::npos) {
-      note_implicit_net_reference(signal);
-    }
-    sensitivities.push_back(
-        Sensitivity{
-            EdgeKind::Any, std::move(signal_name), signal.span});
-    return sensitivities;
-  }
-  expect(TokenKind::LeftParen, "'(' after '@'", "FSIM-SV-PARSE-014");
-  if (match(TokenKind::Star)) {
-    sensitivities.push_back(
-        Sensitivity{EdgeKind::Any, "*", previous().span});
-    expect(TokenKind::RightParen, "')' after '@*'",
-           "FSIM-SV-PARSE-015");
-    return sensitivities;
-  }
-  while (!at_end() && !at(TokenKind::RightParen)) {
-    EdgeKind edge = EdgeKind::Any;
-    if (match_keyword("posedge")) {
-      edge = EdgeKind::Positive;
-    } else if (match_keyword("negedge")) {
-      edge = EdgeKind::Negative;
-    }
-    const auto signal = expect_identifier("sensitivity signal");
-    std::string signal_name = signal.text;
-    while (match(TokenKind::Dot)) {
-      signal_name += '.';
-      signal_name += expect_identifier("selected signal name").text;
-    }
-    if (signal_name.find('.') == std::string::npos) {
-      note_implicit_net_reference(signal);
-    }
-    sensitivities.push_back(
-        Sensitivity{edge, std::move(signal_name), signal.span});
-    if (match(TokenKind::Comma) || match_keyword("or")) {
-      continue;
-    }
-    break;
-  }
-  expect(TokenKind::RightParen, "')' after sensitivity list",
-         "FSIM-SV-PARSE-016");
-  if (sensitivities.empty()) {
-    error(
-        previous(),
-        "FSIM-SV-PARSE-136",
-        "an event control requires at least one event expression");
-  }
-  return sensitivities;
-}
-
 void VerilogParser::skip_case_statement() {
   std::size_t depth = 1;
   while (!at_end() && depth != 0) {
@@ -395,16 +330,17 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
       TokenKind::LeftParen,
       "'(' after procedural for",
       "FSIM-SV-PARSE-095");
-  if (!match_keyword("int") && !match_keyword("integer")) {
-    error(
-        current(),
-        "FSIM-SV-UNSUPPORTED-031",
-        "this bounded procedural for-loop slice requires an inline "
-        "int or integer loop variable");
-  }
+  const bool inline_variable =
+      match_keyword("int") || match_keyword("integer");
   const auto variable =
       expect_identifier("procedural loop variable");
   statement.loop_variable = variable.text;
+  statement.loop_variable_declared = inline_variable;
+  statement.target = Expression{
+      ExpressionKind::Identifier,
+      variable.text,
+      {},
+      variable.span};
   expect(
       TokenKind::Assign,
       "'=' after procedural loop variable",
@@ -417,31 +353,36 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
       "FSIM-SV-PARSE-097");
 
   auto condition = parse_expression();
+  statement.condition = condition;
   expect(
       TokenKind::Semicolon,
       "';' after procedural loop condition",
       "FSIM-SV-PARSE-098");
-  if (condition.kind != ExpressionKind::Binary
-      || condition.operands.size() != 2
-      || condition.operands.front().kind
-          != ExpressionKind::Identifier
-      || condition.operands.front().text
-          != statement.loop_variable
-      || (condition.text != "<" && condition.text != "<="
-          && condition.text != ">" && condition.text != ">=")) {
+  const bool canonical_condition =
+      condition.kind == ExpressionKind::Binary
+      && condition.operands.size() == 2
+      && condition.operands.front().kind
+          == ExpressionKind::Identifier
+      && condition.operands.front().text
+          == statement.loop_variable
+      && (condition.text == "<" || condition.text == "<="
+          || condition.text == ">" || condition.text == ">=");
+  if (!canonical_condition) {
     error(
         variable,
         "FSIM-SV-SEM-027",
-        "bounded procedural for-loop condition must compare the loop "
-        "variable against a locally static upper or lower bound");
-    statement.loop_limit = Expression{
-        ExpressionKind::Invalid, {}, {}, condition.span};
+        "bounded procedural for-loop condition must compare its loop "
+        "variable against an integral bound");
+    statement.loop_runtime = true;
   } else {
     statement.loop_descending =
         condition.text == ">" || condition.text == ">=";
     statement.loop_limit_exclusive =
         condition.text == "<" || condition.text == ">";
-    statement.loop_limit = std::move(condition.operands[1]);
+    statement.loop_limit = condition.operands[1];
+  }
+  if (!inline_variable) {
+    statement.loop_runtime = true;
   }
 
   std::optional<Token> prefix_update;
@@ -459,46 +400,72 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
             + statement.loop_variable + "'");
   }
   std::string update_operation;
-  std::optional<std::int64_t> update_amount;
+  std::optional<Expression> update_operand;
   if (prefix_update) {
     update_operation =
         prefix_update->kind == TokenKind::PlusPlus ? "+" : "-";
-    update_amount = 1;
+    update_operand = Expression{
+        ExpressionKind::IntegerLiteral,
+        "1",
+        {},
+        prefix_update->span};
   } else if (
       match(TokenKind::PlusPlus)
       || match(TokenKind::MinusMinus)) {
     update_operation =
         previous().kind == TokenKind::PlusPlus ? "+" : "-";
-    update_amount = 1;
+    update_operand = Expression{
+        ExpressionKind::IntegerLiteral,
+        "1",
+        {},
+        previous().span};
   } else if (
       match(TokenKind::PlusAssign)
       || match(TokenKind::MinusAssign)) {
     update_operation =
         previous().kind == TokenKind::PlusAssign ? "+" : "-";
-    update_amount = simple_integer_constant(parse_expression());
+    update_operand = parse_expression();
   } else if (match(TokenKind::Assign)) {
-    auto iteration = parse_expression();
-    if (iteration.kind == ExpressionKind::Binary
-        && iteration.operands.size() == 2
-        && iteration.operands[0].kind
-            == ExpressionKind::Identifier
-        && iteration.operands[0].text
-            == statement.loop_variable
-        && (iteration.text == "+" || iteration.text == "-")) {
-      update_operation = iteration.text;
-      update_amount =
-          simple_integer_constant(iteration.operands[1]);
-    }
+    statement.value = parse_expression();
   }
-  if (!update_amount || *update_amount != 1
-      || (statement.loop_descending
-              ? update_operation != "-"
-              : update_operation != "+")) {
+  if (update_operand) {
+    statement.value = Expression{
+        ExpressionKind::Binary,
+        update_operation,
+        {statement.target, std::move(*update_operand)},
+        cover(iteration_variable.span, previous().span)};
+  }
+  if (!statement.value.valid()) {
+    error(
+        iteration_variable,
+        "FSIM-SV-SEM-103",
+        "procedural loop update is not an assignment or increment of '"
+            + statement.loop_variable + "'");
+    statement.loop_runtime = true;
+  }
+
+  const auto update_amount =
+      statement.value.kind == ExpressionKind::Binary
+          && statement.value.operands.size() == 2
+          && (statement.value.text == "+"
+              || statement.value.text == "-")
+      ? simple_integer_constant(statement.value.operands[1])
+      : std::nullopt;
+  const bool supported_update =
+      update_amount && *update_amount > 0
+      && (statement.loop_descending
+              ? statement.value.text == "-"
+              : statement.value.text == "+");
+  if (!supported_update) {
     error(
         iteration_variable,
         "FSIM-SV-SEM-029",
-        "bounded procedural for-loop iteration must advance by one "
-        "toward its comparison bound");
+        "bounded procedural for-loop iteration must advance by a "
+        "positive constant toward its comparison bound");
+  }
+  if (!canonical_condition || !supported_update
+      || !inline_variable || *update_amount != 1) {
+    statement.loop_runtime = true;
   }
   expect(
       TokenKind::RightParen,
@@ -578,50 +545,6 @@ Statement VerilogParser::parse_do_while_statement(const Token& start) {
       TokenKind::Semicolon,
       "';' after do-while statement",
       "FSIM-SV-PARSE-108");
-  statement.span = span_from(start, previous());
-  return statement;
-}
-
-Statement VerilogParser::parse_forever_statement(const Token& start) {
-  Statement statement;
-  statement.kind = StatementKind::Loop;
-  statement.loop_runtime = true;
-  statement.condition = Expression{
-      ExpressionKind::LogicLiteral,
-      "1'b1",
-      {},
-      start.span};
-  parse_procedural_loop_body(start, statement);
-  const auto contains_timing =
-      [&](const auto& self,
-          const std::vector<Statement>& statements) -> bool {
-    for (const auto& child : statements) {
-      if (child.kind == StatementKind::Delay
-          || child.kind == StatementKind::WaitOn
-          || (child.kind == StatementKind::Assignment
-              && child.procedural_assignment_control
-                  != ProceduralAssignmentControl::None)
-          || self(self, child.statements)
-          || self(self, child.else_statements)) {
-        return true;
-      }
-      for (const auto& alternative :
-           child.case_alternatives) {
-        if (self(self, alternative.statements)) {
-          return true;
-        }
-      }
-    }
-    return false;
-  };
-  if (!contains_timing(
-          contains_timing, statement.statements)) {
-    error(
-        start,
-        "FSIM-SV-SEM-030",
-        "a bounded forever loop requires a timing control so it can "
-        "suspend the simulation process");
-  }
   statement.span = span_from(start, previous());
   return statement;
 }
@@ -1688,10 +1611,30 @@ std::optional<Statement> VerilogParser::parse_statement() {
 
     std::optional<Delay> delay;
     std::vector<Sensitivity> assignment_sensitivities;
+    Expression assignment_repeat_count;
+    bool assignment_repeat = false;
     ProceduralAssignmentControl assignment_control{
         ProceduralAssignmentControl::None};
     if (!unit_update) {
-      if (match(TokenKind::Hash)) {
+      if (match_keyword("repeat")) {
+        assignment_repeat = true;
+        expect(
+            TokenKind::LeftParen,
+            "'(' after repeated assignment control",
+            "FSIM-SV-PARSE-203");
+        assignment_repeat_count = parse_expression();
+        expect(
+            TokenKind::RightParen,
+            "')' after repeated assignment count",
+            "FSIM-SV-PARSE-204");
+        expect(
+            TokenKind::At,
+            "'@' after repeated assignment count",
+            "FSIM-SV-PARSE-205");
+        assignment_control =
+            ProceduralAssignmentControl::Event;
+        assignment_sensitivities = parse_sensitivity();
+      } else if (match(TokenKind::Hash)) {
         assignment_control =
             ProceduralAssignmentControl::Delay;
         delay = parse_verilog_delay(previous());
@@ -1728,18 +1671,6 @@ std::optional<Statement> VerilogParser::parse_statement() {
                   {},
                   previous().span}},
           cover(target.span, previous().span)};
-    } else if (
-        keyword("repeat")
-        && assignment_kind == AssignmentKind::NonBlocking) {
-      error(
-          current(),
-          "FSIM-SV-UNSUPPORTED-032",
-          "repeat event controls on nonblocking assignments are not "
-          "implemented yet");
-      skip_to_semicolon();
-      recovered_through_semicolon = true;
-      value = Expression{
-          ExpressionKind::IntegerLiteral, "0", {}, current().span};
     } else {
       value = parse_expression();
       if (update_operation) {
@@ -1765,6 +1696,10 @@ std::optional<Statement> VerilogParser::parse_statement() {
         std::move(assignment_sensitivities);
     statement.procedural_assignment_control =
         assignment_control;
+    statement.procedural_assignment_repeat =
+        assignment_repeat;
+    statement.loop_limit =
+        std::move(assignment_repeat_count);
     statement.procedural_update_kind = update_kind;
     statement.procedural_update_operator =
         update_operation.value_or(std::string{});

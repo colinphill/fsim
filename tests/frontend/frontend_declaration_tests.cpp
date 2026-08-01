@@ -1893,6 +1893,7 @@ endmodule
               == StatementKind::Assignment,
       "SystemVerilog procedural event metadata");
 
+
   const auto malformed_sv_wait = parse_text(
       "bad_wait.sv",
       R"(

@@ -638,6 +638,9 @@ class VerilogParser final : private detail::ParserBase {
 
   std::vector<Sensitivity> parse_sensitivity();
 
+  [[nodiscard]] bool cycle_paths_are_safe(
+      const std::vector<Statement>& statements) const;
+
   void skip_case_statement();
 
   Statement parse_case_statement(

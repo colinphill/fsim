@@ -45,7 +45,7 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
       do {
         const auto signal = expect_identifier("wait sensitivity name");
         statement.sensitivities.push_back(Sensitivity{
-            EdgeKind::Any, vhdl_name(signal.text), signal.span});
+            EdgeKind::Any, vhdl_name(signal.text), signal.span, {}});
       } while (match(TokenKind::Comma));
     }
     if (match_keyword("until", true)) {

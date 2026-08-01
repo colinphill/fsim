@@ -9,7 +9,13 @@ using namespace elaboration_detail;
 
     void Lowerer::lower_loop(const Statement& statement) {
         if (statement.loop_runtime) {
-            lower_runtime_loop(statement);
+            if (!statement.loop_variable.empty()
+                && statement.target.valid()
+                && statement.value.valid()) {
+                lower_runtime_for(statement);
+            } else {
+                lower_runtime_loop(statement);
+            }
             return;
         }
         const auto assigns_loop_parameter =
@@ -103,24 +109,19 @@ using namespace elaboration_detail;
             limit = evaluate_constant_expression(
                 statement.loop_limit, {}, error);
             if (!limit) {
+                if (statement.loop_repeat) {
+                    lower_runtime_repeat(statement);
+                    return;
+                }
                 report(
-                    statement.loop_repeat
-                        ? "FSIM-ELAB-075"
-                        : "FSIM-ELAB-072",
-                    (statement.loop_repeat
-                         ? "cannot evaluate repeat count: "
-                         : "cannot evaluate sequential for-loop final "
-                           "bound: ")
+                    "FSIM-ELAB-072",
+                    "cannot evaluate sequential for-loop final bound: "
                         + error,
                     statement.loop_limit.span);
                 return;
             }
         }
         if (statement.loop_repeat && *limit < 0) {
-            report(
-                "FSIM-ELAB-076",
-                "repeat count must be nonnegative",
-                statement.loop_limit.span);
             return;
         }
 
@@ -215,6 +216,174 @@ using namespace elaboration_detail;
         const auto end =
             static_cast<InstructionIndex>(
                 process_.operations.size());
+        for (const auto jump : loop_control.break_jumps) {
+            process_.operations[jump] = Jump{end};
+        }
+    }
+
+
+
+    void Lowerer::lower_runtime_for(const Statement& statement) {
+        bool inline_local = false;
+        const auto erase_inline_local = [&]() {
+            if (!inline_local) {
+                return;
+            }
+            locals_.erase(statement.loop_variable);
+            local_signed_.erase(statement.loop_variable);
+            local_ranges_.erase(statement.loop_variable);
+            local_integer_ranges_.erase(statement.loop_variable);
+            local_members_.erase(statement.loop_variable);
+        };
+        if (statement.loop_variable_declared) {
+            if (locals_.contains(statement.loop_variable)) {
+                report(
+                    "FSIM-ELAB-SVLOOP-001",
+                    "runtime procedural for-loop variable shadows an "
+                    "active local with the same name",
+                    statement.target.span);
+                return;
+            }
+            const auto index = allocate_register(
+                32, frontend::ValueDomain::Bit2);
+            locals_.emplace(statement.loop_variable, index);
+            local_signed_.emplace(statement.loop_variable, true);
+            local_ranges_.emplace(
+                statement.loop_variable, std::nullopt);
+            local_integer_ranges_.emplace(
+                statement.loop_variable, std::nullopt);
+            local_members_.emplace(
+                statement.loop_variable,
+                std::vector<frontend::PackedMember>{});
+            inline_local = true;
+        }
+
+        Statement initializer;
+        initializer.kind = StatementKind::Assignment;
+        initializer.assignment_kind = AssignmentKind::Blocking;
+        initializer.target = statement.target;
+        initializer.value = statement.loop_initial;
+        initializer.span = statement.loop_initial.span;
+        lower_assignment(initializer);
+
+        const auto loop_start = static_cast<InstructionIndex>(
+            process_.operations.size());
+        emit_debug_point(DebugPointKind::statement, statement.span);
+        const auto condition = lower_condition(
+            statement.condition,
+            "FSIM-ELAB-SVLOOP-002",
+            "procedural for-loop");
+        if (!condition) {
+            erase_inline_local();
+            return;
+        }
+        const auto branch_index = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch{
+            *condition, 0, 0, UnknownBranchPolicy::when_false});
+        const auto body_start = static_cast<InstructionIndex>(
+            process_.operations.size());
+        loop_controls_.push_back({});
+        lower_statements(statement.statements);
+        auto loop_control = std::move(loop_controls_.back());
+        loop_controls_.pop_back();
+        const auto update_start = static_cast<InstructionIndex>(
+            process_.operations.size());
+        for (const auto jump : loop_control.continue_jumps) {
+            process_.operations[jump] = Jump{update_start};
+        }
+        Statement update;
+        update.kind = StatementKind::Assignment;
+        update.assignment_kind = AssignmentKind::Blocking;
+        update.target = statement.target;
+        update.value = statement.value;
+        update.span = statement.value.span;
+        lower_assignment(update);
+        process_.operations.emplace_back(Jump{loop_start});
+        const auto end = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations[branch_index] = Branch{
+            *condition,
+            body_start,
+            end,
+            UnknownBranchPolicy::when_false};
+        for (const auto jump : loop_control.break_jumps) {
+            process_.operations[jump] = Jump{end};
+        }
+        erase_inline_local();
+    }
+
+
+
+    void Lowerer::lower_runtime_repeat(const Statement& statement) {
+        auto limit = lower_expression(statement.loop_limit, 32);
+        if (!limit) {
+            report(
+                "FSIM-ELAB-075",
+                "runtime repeat count is not a supported integral value",
+                statement.loop_limit.span);
+            return;
+        }
+        if (register_width(*limit) != 32) {
+            *limit = resize_register(
+                *limit, 32,
+                is_signed_expression(statement.loop_limit));
+        }
+        const auto counter = allocate_register(
+            32, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LoadConstant{counter, unsigned_value(0, 32)});
+        const auto one = allocate_register(
+            32, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LoadConstant{one, unsigned_value(1, 32)});
+
+        const auto loop_start = static_cast<InstructionIndex>(
+            process_.operations.size());
+        emit_debug_point(DebugPointKind::statement, statement.span);
+        const auto condition = allocate_register(
+            1,
+            is_two_state_domain(register_domain(*limit))
+                ? frontend::ValueDomain::Bit2
+                : frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary{
+            is_signed_expression(statement.loop_limit)
+                ? BinaryOperator::less_signed
+                : BinaryOperator::less_unsigned,
+            condition,
+            counter,
+            *limit});
+        const auto branch_index = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch{
+            condition, 0, 0, UnknownBranchPolicy::when_false});
+        const auto body_start = static_cast<InstructionIndex>(
+            process_.operations.size());
+        loop_controls_.push_back({});
+        lower_statements(statement.statements);
+        auto loop_control = std::move(loop_controls_.back());
+        loop_controls_.pop_back();
+        const auto increment_start = static_cast<InstructionIndex>(
+            process_.operations.size());
+        for (const auto jump : loop_control.continue_jumps) {
+            process_.operations[jump] = Jump{increment_start};
+        }
+        const auto next = allocate_register(
+            32, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary{
+            BinaryOperator::add_signed,
+            next,
+            counter,
+            one});
+        process_.operations.emplace_back(CopyRegister{counter, next});
+        process_.operations.emplace_back(Jump{loop_start});
+        const auto end = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations[branch_index] = Branch{
+            condition,
+            body_start,
+            end,
+            UnknownBranchPolicy::when_false};
         for (const auto jump : loop_control.break_jumps) {
             process_.operations[jump] = Jump{end};
         }
