@@ -64,6 +64,8 @@ architecture rtl of component_top is
   signal first_output : std_logic_vector(3 downto 0);
   signal second_input : std_logic_vector(3 downto 0);
   signal second_output : std_logic_vector(3 downto 0);
+  signal direct_input : std_logic_vector(8 downto 0);
+  signal direct_output : std_logic_vector(8 downto 0);
   component component_leaf is
     generic (component_width : positive := 4);
     port (
@@ -77,9 +79,13 @@ begin
     generic map (4)
     port map (first_input, first_output);
   default_child: component_leaf
+    generic map (component_width => open)
     port map (
       component_input => second_input,
       component_output => second_output);
+  direct_open_child: entity work.component_leaf(rtl)
+    generic map (entity_width => open)
+    port map (direct_input, direct_output);
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -121,6 +127,36 @@ end architecture;
           return value.first == "entity_width"
               && value.second == "4";
         }));
+    assert(std::ranges::any_of(
+        specialization(positive, "component_top.direct_open_child")
+            .parameter_values,
+        [](const auto& value) {
+          return value.first == "entity_width"
+              && value.second == "9";
+        }));
+
+    const auto required_open = elaborate_text(
+        "required_open_generic.vhd",
+        R"(
+entity required_open_leaf is
+  generic (required_value : integer);
+end entity;
+architecture rtl of required_open_leaf is
+begin
+end architecture;
+entity required_open_top is
+end entity;
+architecture rtl of required_open_top is
+begin
+  child: entity work.required_open_leaf(rtl)
+    generic map (required_value => open)
+    port map ();
+end architecture;
+)",
+        "vhdl:work.required_open_top(rtl)");
+    assert(!required_open.ok());
+    assert(has_diagnostic(
+        required_open, "FSIM-ELAB-GENERIC-001"));
 
     auto visible_profiles = fsim::frontend::parse_text(
         "visible_component_profiles.vhd",

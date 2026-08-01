@@ -6202,6 +6202,14 @@ Batch status is **in progress**. Keep this ten-task list current in both the
 official plan and resume handoff. Change it to complete only after all ten tasks
 and their gates close and work moves to Batch 114.
 
+Current Batch 113 evidence: the frontend retains `open` generic actuals as
+explicit default selections and retains indexed/general expression port actual
+HIR instead of issuing the former parser-only unsupported diagnostics.
+Component and direct-entity value generics now materialize valid selected
+defaults, while direct `open` on a required generic reports the existing
+generic-actual diagnostic. The focused frontend, elaboration, diagnostic
+catalog, and 340-source line-budget gate passes in the LLVM Debug tree.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

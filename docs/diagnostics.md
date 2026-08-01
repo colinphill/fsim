@@ -388,14 +388,12 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-006` | error | Unsupported concurrent statement. |
 | `FSIM-VHDL-UNSUPPORTED-007` | error | A process declarative item is not a bounded variable declaration. |
 | `FSIM-VHDL-UNSUPPORTED-008` | error | Unsupported sequential statement. |
-| `FSIM-VHDL-UNSUPPORTED-010` | error | A port-map actual is not a simple identifier. |
 | `FSIM-VHDL-UNSUPPORTED-011` | error | Port default expressions are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family subtype appears in a declaration context that does not yet admit scalar integer objects. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
-| `FSIM-VHDL-UNSUPPORTED-019` | error | An `open` generic actual is not implemented. |
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
 | `FSIM-VHDL-UNSUPPORTED-021` | error | Guarded VHDL block statements are not executable yet. |
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package declaration item is outside the bounded constant, type, subtype, or function subset. |

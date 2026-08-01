@@ -1545,6 +1545,14 @@ Batch status is **in progress**. Keep this ten-task list current in both the
 official plan and this handoff. Change it to complete only after all ten tasks
 and their gates close and work moves to Batch 114.
 
+Current evidence: `open` generic actuals are retained as explicit default
+selections, and indexed/general expression port actuals are retained in HIR
+without the old parser-only rejection. Component and direct-entity value
+generic defaults elaborate, while `open` on a required direct generic reports
+`FSIM-ELAB-GENERIC-001`. The focused frontend, elaboration, catalog, and
+340-source line-budget gate passes in the LLVM Debug tree. Batch 113 remains in
+progress; this is the first Task 2/6 slice, not task completion.
+
 Batch 110 has advanced through these validated features:
 
 1. deterministic string expression and mutation/conversion methods;

@@ -782,22 +782,11 @@ end architecture;
 
   const auto result =
       parse_text("instances.vhd", source, Language::Vhdl2008);
-  require(!result.ok(), "unsupported VHDL instance forms must fail");
+  require(result.ok(), "VHDL indexed and open port actuals must parse");
   const auto* architecture =
       result.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(architecture != nullptr && architecture->instances.size() == 2,
-          "unsupported associations must recover to following instances");
-
-  std::size_t complex_actuals = 0;
-  for (const auto& diagnostic : result.diagnostics) {
-    if (diagnostic.code == "FSIM-VHDL-UNSUPPORTED-010") {
-      ++complex_actuals;
-      require(diagnostic.span.source_name == "instances.vhd",
-              "unsupported actual diagnostic source span");
-    }
-  }
-  require(complex_actuals == 1,
-          "indexed actuals need a targeted diagnostic");
+          "port associations must retain both instances");
   require(
       architecture->instances[0].parameter_overrides.size() == 1
           && architecture->instances[0].parameter_overrides[0].name
@@ -808,10 +797,10 @@ end architecture;
       "named generic maps must remain in the instance HIR");
   require(architecture->instances[1].connections.size() == 2 &&
               architecture->instances[1].connections[0].value.kind ==
-                  ExpressionKind::Invalid &&
+                  ExpressionKind::Call &&
               architecture->instances[1].connections[1].kind ==
                   PortActualKind::Open,
-          "unsupported indexed actual and explicit open state retained");
+          "indexed actual and explicit open state retained");
 }
 
 void test_vhdl_generics() {
@@ -872,6 +861,14 @@ begin
       Required => 2
     )
     port map (data => constrained_data);
+  open_default_child: entity work.generic_child(rtl)
+    generic map (
+      Element_T => bit,
+      Width => open,
+      Enabled => open,
+      Required => 2
+    )
+    port map (data => named_data);
 end architecture;
 )",
       Language::Vhdl2008);
@@ -916,7 +913,7 @@ end architecture;
       });
   require(
       top_architecture != result.design.units.end()
-          && top_architecture->instances.size() == 4
+          && top_architecture->instances.size() == 5
           && top_architecture->instances[0]
                  .parameter_overrides.size()
               == 3
@@ -929,6 +926,13 @@ end architecture;
                  .parameter_overrides[2].name
               == std::optional<std::string>{"enabled"},
       "named and positional-then-named generic maps are represented");
+  require(
+      top_architecture->instances[4].parameter_overrides.size() == 4
+          && top_architecture->instances[4]
+                 .parameter_overrides[1].default_box
+          && top_architecture->instances[4]
+                 .parameter_overrides[2].default_box,
+      "open value-generic actuals retain default selection in HIR");
   const auto& ranged_actual =
       top_architecture->instances[2].parameter_overrides[0];
   require(

@@ -532,16 +532,7 @@ void VhdlParser::parse_vhdl_generic_map(
           "a positional generic actual cannot follow a named actual");
     }
     if (match_keyword("open", true)) {
-      actual.value = Expression{
-          ExpressionKind::Invalid,
-          "open",
-          {},
-          previous().span};
-      error(
-          previous(),
-          "FSIM-VHDL-UNSUPPORTED-019",
-          "open generic actuals are not implemented in this frontend "
-          "slice");
+      actual.default_box = true;
     } else if (match(TokenKind::Less)) {
       expect(
           TokenKind::Greater,
@@ -583,31 +574,7 @@ PortConnection VhdlParser::parse_vhdl_port_connection() {
     return connection;
   }
 
-  bool simple_identifier = false;
-  if (at(TokenKind::Identifier)) {
-    const auto actual = advance();
-    connection.value =
-        Expression{ExpressionKind::Identifier, vhdl_name(actual.text), {},
-                   actual.span};
-    simple_identifier =
-        at(TokenKind::Comma) || at(TokenKind::RightParen);
-  }
-
-  if (!simple_identifier) {
-    const auto unsupported = current();
-    error(unsupported, "FSIM-VHDL-UNSUPPORTED-010",
-          "port-map actuals must be simple identifiers in the "
-          "vertical-slice frontend");
-    skip_vhdl_connection_actual();
-    const auto end = previous();
-    connection.value.kind = ExpressionKind::Invalid;
-    if (connection.value.text.empty()) {
-      connection.value.text = unsupported.text;
-      connection.value.span = unsupported.span;
-    } else {
-      connection.value.span = cover(connection.value.span, end.span);
-    }
-  }
+  connection.value = parse_expression();
   connection.span = cover(start.span, previous().span);
   return connection;
 }

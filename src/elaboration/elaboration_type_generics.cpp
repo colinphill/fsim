@@ -804,6 +804,34 @@ InterfaceTypeSpecialization specialize_vhdl_interface_types(
 
     for (std::size_t index = 0; index < formals.size(); ++index) {
         const auto& formal = *formals[index];
+        if (actuals[index] && actuals[index]->default_box) {
+            const bool has_default = [&]() {
+                switch (formal.kind) {
+                case frontend::ParameterKind::Value:
+                    return formal.default_value.valid();
+                case frontend::ParameterKind::Function:
+                    return formal.function_profile
+                        && (formal.function_profile->default_name
+                            || formal.function_profile->default_box);
+                case frontend::ParameterKind::Procedure:
+                    return formal.procedure_profile
+                        && (formal.procedure_profile->default_name
+                            || formal.procedure_profile->default_box);
+                case frontend::ParameterKind::Type:
+                case frontend::ParameterKind::Package:
+                    return false;
+                }
+                return false;
+            }();
+            if (!has_default) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-GENERIC-001",
+                    "generic '" + formal.name
+                        + "' has no default selected by open",
+                    actuals[index]->span});
+            }
+            actuals[index].reset();
+        }
         if (formal.kind == frontend::ParameterKind::Value) {
             if (actuals[index]) {
                 if (actuals[index]->type_value) {

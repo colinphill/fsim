@@ -242,6 +242,7 @@ SpecializedUnit specialize_unit(
         systemverilog_actuals(overridable.size());
     std::vector<std::optional<SystemVerilogStringValue>>
         systemverilog_string_actuals(overridable.size());
+    std::vector<bool> explicitly_associated(overridable.size());
     std::size_t next_positional = 0;
     bool saw_named = false;
     bool saw_positional = false;
@@ -306,6 +307,30 @@ SpecializedUnit specialize_unit(
             actual_index = next_positional++;
         }
         if (actual_index) {
+            if (explicitly_associated[*actual_index]) {
+                diagnostics.push_back({
+                    code(SpecializationDiagnostic::duplicate_actual),
+                    "duplicate " + std::string{object_kind}
+                        + " actual for '"
+                        + overridable[*actual_index]->name + "'",
+                    override.span});
+                continue;
+            }
+            explicitly_associated[*actual_index] = true;
+            if (override.default_box) {
+                if (!is_vhdl
+                    || !overridable[*actual_index]
+                            ->default_value.valid()) {
+                    diagnostics.push_back({
+                        code(SpecializationDiagnostic::invalid_actual),
+                        std::string{object_kind} + " '"
+                            + overridable[*actual_index]->name
+                            + "' has no default selected by open",
+                        override.span});
+                    actuals[*actual_index] = 0;
+                }
+                continue;
+            }
             std::string error;
             bool range_error = false;
             auto actual_expression = override.value;
