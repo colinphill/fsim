@@ -91,6 +91,8 @@ architecture rtl of configured_top is
   signal remaining_output : integer;
   signal direct_input : integer;
   signal direct_output : integer;
+  signal configured_direct_input : integer;
+  signal configured_direct_output : integer;
   component configured_leaf is
     generic (component_amount : integer := 1);
     port (
@@ -119,6 +121,12 @@ begin
     port map (
       input_value => direct_input,
       output_value => direct_output);
+  configured_direct_child:
+    configuration work.direct_leaf_configuration
+    generic map (amount => 6)
+    port map (
+      input_value => configured_direct_input,
+      output_value => configured_direct_output);
   wrapper_child: entity work.configured_wrapper(rtl)
     port map ();
 end architecture;
@@ -143,14 +151,34 @@ configuration selected_configuration of configured_top is
 end configuration;
 )",
         fsim::frontend::Language::Vhdl2008);
-    assert(leaf.ok() && hierarchy.ok() && configuration.ok());
+    auto direct_configuration = fsim::frontend::parse_text(
+        "direct_leaf_configuration.vhd",
+        R"(
+configuration direct_leaf_configuration of configured_leaf is
+  for fast
+  end for;
+end configuration;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(
+        leaf.ok() && hierarchy.ok() && configuration.ok()
+        && direct_configuration.ok());
     append_design(leaf.design, std::move(hierarchy.design));
     append_design(leaf.design, std::move(configuration.design));
+    append_design(
+        leaf.design, std::move(direct_configuration.design));
 
     const auto architecture_result =
         fsim::elaboration::elaborate(
             leaf.design,
             "vhdl:work.configured_top(rtl)");
+    if (!architecture_result.ok()) {
+        for (const auto& diagnostic :
+             architecture_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
     assert(architecture_result.ok());
     assert(
         specialization(
@@ -170,6 +198,27 @@ end configuration;
     assert(
         specialization(
             architecture_result,
+            "configured_top.configured_direct_child").unit
+        == "vhdl:work.configured_leaf(fast)");
+    assert(has_parameter(
+        specialization(
+            architecture_result,
+            "configured_top.configured_direct_child"),
+        "amount",
+        "6"));
+    assert(std::ranges::any_of(
+        specialization(
+            architecture_result,
+            "configured_top.configured_direct_child")
+            .parameter_identity_values,
+        [](const auto& item) {
+          return item.first == "__configuration"
+              && item.second.find("direct_leaf_configuration")
+                  != std::string::npos;
+        }));
+    assert(
+        specialization(
+            architecture_result,
             "configured_top.wrapper_child.nested").unit
         == "vhdl:work.configured_leaf(fast)");
     assert(has_parameter(
@@ -178,6 +227,64 @@ end configuration;
             "configured_top.exact_child"),
         "amount",
         "3"));
+
+    const auto find_direct_configuration_instance =
+        [](fsim::frontend::ParsedDesign& design)
+            -> fsim::frontend::Instance& {
+          const auto architecture = std::ranges::find_if(
+              design.units,
+              [](const auto& unit) {
+                return unit.kind
+                        == fsim::frontend::UnitKind::VhdlArchitecture
+                    && unit.primary_name == "configured_top"
+                    && unit.name == "rtl";
+              });
+          assert(architecture != design.units.end());
+          const auto instance = std::ranges::find_if(
+              architecture->instances,
+              [](const auto& candidate) {
+                return candidate.vhdl_configuration_instance;
+              });
+          assert(instance != architecture->instances.end());
+          return *instance;
+        };
+    auto missing_direct_configuration = leaf.design;
+    find_direct_configuration_instance(
+        missing_direct_configuration).unit_name =
+        "work.absent_direct_configuration";
+    const auto missing_direct_result =
+        fsim::elaboration::elaborate(
+            missing_direct_configuration,
+            "vhdl:work.configured_top(rtl)");
+    assert(!missing_direct_result.ok());
+    assert(has_diagnostic(
+        missing_direct_result,
+        "FSIM-ELAB-VHCONFIG-013"));
+
+    auto ambiguous_direct_configuration = leaf.design;
+    const auto direct_configuration_unit =
+        std::ranges::find_if(
+            ambiguous_direct_configuration.units,
+            [](const auto& unit) {
+              return unit.kind
+                      == fsim::frontend::UnitKind::VhdlConfiguration
+                  && unit.name == "direct_leaf_configuration";
+            });
+    assert(
+        direct_configuration_unit
+        != ambiguous_direct_configuration.units.end());
+    const auto duplicate_direct_configuration =
+        *direct_configuration_unit;
+    ambiguous_direct_configuration.units.push_back(
+        duplicate_direct_configuration);
+    const auto ambiguous_direct_result =
+        fsim::elaboration::elaborate(
+            ambiguous_direct_configuration,
+            "vhdl:work.configured_top(rtl)");
+    assert(!ambiguous_direct_result.ok());
+    assert(has_diagnostic(
+        ambiguous_direct_result,
+        "FSIM-ELAB-VHCONFIG-014"));
 
     const auto configured_result =
         fsim::elaboration::elaborate(

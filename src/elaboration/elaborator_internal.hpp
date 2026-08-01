@@ -1469,6 +1469,11 @@ private:
     std::string vhdl_configuration_identity(
         const DesignUnit& configuration) const;
 
+    ConfiguredVhdlInstance bind_vhdl_direct_configuration_instance(
+        const DesignUnit& unit,
+        const frontend::Instance& instance,
+        const std::string& path);
+
     void validate_vhdl_component_configurations(
         const DesignUnit& unit,
         const std::string& path);

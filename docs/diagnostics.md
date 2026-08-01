@@ -118,7 +118,6 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-036` | error | Expected `)` after an architecture name in an entity aspect. |
 | `FSIM-VHDL-PARSE-037` | error | Expected `map` after `generic`. |
 | `FSIM-VHDL-PARSE-038` | error | Expected `(` after `generic map`. |
-| `FSIM-VHDL-PARSE-039` | error | Expected `port map` in an instance. |
 | `FSIM-VHDL-PARSE-040` | error | Expected `map` after `port`. |
 | `FSIM-VHDL-PARSE-041` | error | Expected `(` after `port map`. |
 | `FSIM-VHDL-PARSE-042` | error | Expected `)` after port associations. |

@@ -1556,7 +1556,7 @@ execute through owned boundary signals and per-instance VHDL drivers, while
 output/buffer/inout expressions require writable names. `hierarchy_ports.cpp`
 holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
 2,000 lines. The focused frontend, elaboration, component interpreter/LLVM
-O0/O2/cache, catalog, and 341-source line-budget evidence passes in the LLVM
+O0/O2/cache, catalog, and 342-source line-budget evidence passes in the LLVM
 Debug tree. Batch 113 and Tasks 2, 6, and 7 remain in progress.
 
 Task 1 now has focused implementation evidence: implicit/explicit value
@@ -1574,6 +1574,20 @@ visible pure package function; overriding the first generic and selecting
 `open` for the rest recomputes the chain across interpreter/LLVM O0/O2
 cold/warm runs. Type validation moved to
 `hierarchy_generic_interfaces.cpp` to preserve the source budget.
+
+Task 4 is now focused-complete. Direct
+`configuration [library.]name` instances have distinct retained HIR, optional
+generic/port maps, previously-analyzed configuration lookup, root-architecture
+selection, recursive nested-rule activation, source provenance, and canonical
+configuration cache identity. Missing and ambiguous declarations retain
+`FSIM-ELAB-VHCONFIG-013/014`; direct use before analysis reports
+`FSIM-FE-VHORDER-008`, including inside generate bodies. The configuration
+application proves interpreter and LLVM O0/O2 cold/warm equivalence and
+configuration-edit selective invalidation for the direct form. The latest
+focused frontend, elaboration, analysis-order, configuration-application,
+1,436-code catalog, and 342-source line-budget gates pass in the LLVM Debug
+tree. The current ten-task Batch 113 record remains **in progress**; do not
+mark it complete until all tasks close and the Batch 114 list is created.
 
 Batch 110 has advanced through these validated features:
 

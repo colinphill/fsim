@@ -229,5 +229,22 @@ end architecture;
        configuration_declaration},
       "FSIM-FE-VHORDER-008");
 
+  const Source direct_configuration_instance{
+      "direct_configuration_instance.vhd", "libb", R"(
+entity configuration_host is
+end entity;
+architecture rtl of configuration_host is
+begin
+  child: configuration work.leaf_configuration;
+end architecture;
+)"};
+  expect_code(
+      directory.path,
+      "instance-before-configuration",
+      {direct_configuration_instance, configuration_declaration,
+       entity_declaration, architecture_declaration,
+       context_declaration, package_declaration},
+      "FSIM-FE-VHORDER-008");
+
   return 0;
 }

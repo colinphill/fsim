@@ -1231,8 +1231,10 @@ using namespace elaboration_detail;
                 &instance;
             const DesignUnit* target = nullptr;
             if (binding == nullptr) {
-                configured =
-                    bind_vhdl_component_instance(
+                configured = instance.vhdl_configuration_instance
+                    ? bind_vhdl_direct_configuration_instance(
+                        unit, instance, child_path)
+                    : bind_vhdl_component_instance(
                         unit,
                         instance,
                         child_path,
@@ -1286,6 +1288,12 @@ using namespace elaboration_detail;
                 child_specialized.identity_values.emplace_back(
                     "__component",
                     configured.component_identity);
+            }
+            if (!configured.configuration_identity.empty()
+                && configured.component_identity.empty()) {
+                child_specialized.identity_values.emplace_back(
+                    "__configuration",
+                    configured.configuration_identity);
             }
             auto child_aliases = connect_instance(
                 *selected_instance,

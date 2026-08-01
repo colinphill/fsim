@@ -176,6 +176,51 @@ class AnalysisOrderValidator {
     }
   }
 
+  void validate_instances(
+      const std::span<const frontend::Instance> instances,
+      const std::string_view owner_library) {
+    for (const auto& instance : instances) {
+      if (!instance.vhdl_configuration_instance) {
+        continue;
+      }
+      const auto parts = selected_name_parts(instance.unit_name);
+      if (parts.empty() || parts.size() > 2) {
+        continue;
+      }
+      const auto library = parts.size() == 2
+          ? selected_library(parts[0], owner_library)
+          : std::string{owner_library};
+      if (!configurations_.contains(
+              primary_key(library, parts.back()))) {
+        report(
+            "FSIM-FE-VHORDER-008",
+            "VHDL configuration '" + library + "."
+                + std::string{parts.back()}
+                + "' must be analyzed before its direct instantiation",
+            instance.span);
+      }
+    }
+  }
+
+  void validate_generate_body(
+      const frontend::GenerateBody& body,
+      const std::string_view owner_library) {
+    validate_instances(body.instances, owner_library);
+    for (const auto& region : body.generate_regions) {
+      validate_generate_region(region, owner_library);
+    }
+  }
+
+  void validate_generate_region(
+      const frontend::GenerateRegion& region,
+      const std::string_view owner_library) {
+    validate_generate_body(region.then_body, owner_library);
+    validate_generate_body(region.else_body, owner_library);
+    for (const auto& alternative : region.alternatives) {
+      validate_generate_body(alternative.body, owner_library);
+    }
+  }
+
   void validate_unit(const DesignUnit& unit) {
     const auto library = library_of(unit);
     switch (unit.kind) {
@@ -229,6 +274,10 @@ class AnalysisOrderValidator {
     for (const auto& specification :
          unit.vhdl_configuration_specifications) {
       validate_binding(specification.binding, library);
+    }
+    validate_instances(unit.instances, library);
+    for (const auto& region : unit.generate_regions) {
+      validate_generate_region(region, library);
     }
   }
 

@@ -756,6 +756,9 @@ struct Instance {
   // instantiation. VHDL configuration specifications apply only to the
   // component form.
   bool vhdl_component_instance{};
+  // True for `label: configuration library.name`; the selected declaration
+  // is resolved before specialization and supplies nested binding rules.
+  bool vhdl_configuration_instance{};
   // Compilation-directive state at the instance declaration. Pull values
   // apply only to omitted input ports.
   VerilogUnconnectedDrive unconnected_drive{

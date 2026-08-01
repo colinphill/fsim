@@ -113,7 +113,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 7);
+  assert(project->design.specializations().size() == 9);
   assert(
       specialization(
           *project,
@@ -125,6 +125,23 @@ Capture run_once(
           "runtime_configuration.wrapper_child.nested").unit
       == std::string{"vhdl:work.configuration_leaf("}
              + (fast_wrapper ? "fast)" : "rtl)"));
+  assert(
+      specialization(
+          *project,
+          "runtime_configuration.direct_configuration_child.nested")
+          .unit
+      == std::string{"vhdl:work.configuration_leaf("}
+             + (fast_wrapper ? "fast)" : "rtl)"));
+  assert(std::ranges::any_of(
+      specialization(
+          *project,
+          "runtime_configuration.direct_configuration_child")
+          .parameter_identity_values,
+      [](const auto& item) {
+        return item.first == "__configuration"
+            && item.second.find("wrapper_configuration")
+                != std::string::npos;
+      }));
   const auto& root =
       specialization(*project, "runtime_configuration");
   assert(std::ranges::any_of(
@@ -160,7 +177,9 @@ Capture run_once(
              .source_dependencies.end());
   for (const auto path : {
            "runtime_configuration.wrapper_child",
-           "runtime_configuration.wrapper_child.nested"}) {
+           "runtime_configuration.wrapper_child.nested",
+           "runtime_configuration.direct_configuration_child",
+           "runtime_configuration.direct_configuration_child.nested"}) {
     assert(std::ranges::find(
         specialization(*project, path).source_dependencies,
         config.source_sets.front().files[2].string())
@@ -383,6 +402,8 @@ begin
       output_value => stable_output);
   wrapper_child: configuration_wrapper
     port map ();
+  direct_configuration_child:
+    configuration work.wrapper_configuration;
 end architecture;
 )";
     assert(output.good());
@@ -486,7 +507,9 @@ end configuration;
              "runtime_configuration.direct_child",
              "runtime_configuration.stable_child",
              "runtime_configuration.wrapper_child",
-             "runtime_configuration.wrapper_child.nested"}) {
+             "runtime_configuration.wrapper_child.nested",
+             "runtime_configuration.direct_configuration_child",
+             "runtime_configuration.direct_configuration_child.nested"}) {
       assert(
           key_for(cold, path)
           == key_for(changed, path));
@@ -505,7 +528,9 @@ end configuration;
     verify(nested_changed, false);
     for (const auto path : {
              "runtime_configuration.wrapper_child",
-             "runtime_configuration.wrapper_child.nested"}) {
+             "runtime_configuration.wrapper_child.nested",
+             "runtime_configuration.direct_configuration_child",
+             "runtime_configuration.direct_configuration_child.nested"}) {
       assert(
           key_for(changed, path)
           != key_for(nested_changed, path));

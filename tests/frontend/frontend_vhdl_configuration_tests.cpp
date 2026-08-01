@@ -66,6 +66,7 @@ begin
     port map (
       input_value => source_value,
       output_value => result_value);
+  configured_child: configuration work.leaf_configuration;
 end architecture;
 
 configuration configured_top_fast of configured_top is
@@ -104,10 +105,14 @@ end configuration configured_top_fast;
           && exact.binding.port_map.size() == 2,
       "explicit configuration binding profile retained");
   require(
-      architecture.instances.size() == 2
+      architecture.instances.size() == 3
           && architecture.instances[0].vhdl_component_instance
-          && !architecture.instances[1].vhdl_component_instance,
-      "component and direct entity forms remain distinct");
+          && !architecture.instances[1].vhdl_component_instance
+          && !architecture.instances[1].vhdl_configuration_instance
+          && architecture.instances[2].vhdl_configuration_instance
+          && architecture.instances[2].unit_name
+              == "work.leaf_configuration",
+      "component, direct entity, and direct configuration forms remain distinct");
 
   const auto& configuration = parsed.design.units[2];
   require(

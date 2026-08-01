@@ -400,6 +400,7 @@ void VhdlParser::parse_vhdl_generate_branch(
     }
     if (label && (
         keyword("entity", 0, true)
+        || keyword("configuration", 0, true)
         || (at(TokenKind::Identifier)
             && (keyword("port", 1, true)
                 || keyword("generic", 1, true))))) {
@@ -444,6 +445,16 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
       expect(TokenKind::RightParen, "')' after architecture name",
              "FSIM-VHDL-PARSE-036");
     }
+  } else if (match_keyword("configuration", true)) {
+    const auto first = expect_identifier("configuration name");
+    instance.unit_name = vhdl_name(first.text);
+    if (match(TokenKind::Dot)) {
+      const auto unit =
+          expect_identifier("configuration name after library");
+      instance.unit_name += '.';
+      instance.unit_name += vhdl_name(unit.text);
+    }
+    instance.vhdl_configuration_instance = true;
   } else {
     const auto component = expect_identifier("component name");
     instance.unit_name = vhdl_name(component.text);
@@ -455,9 +466,8 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
   }
 
   if (!match_keyword("port", true)) {
-    error(current(), "FSIM-VHDL-PARSE-039",
-          "expected 'port map' in VHDL instance");
-    skip_to_semicolon();
+    expect(TokenKind::Semicolon, "';' after VHDL instance",
+           "FSIM-VHDL-PARSE-043");
     instance.span = span_from(label, previous());
     return instance;
   }

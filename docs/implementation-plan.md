@@ -6215,7 +6215,7 @@ owned boundary signals and per-instance VHDL drivers, while output/buffer/inout
 expressions require writable signal names. The partitioned port-boundary
 implementation keeps `hierarchy_types.cpp` at 2,000 lines. The focused frontend,
 elaboration, component interpreter/LLVM O0/O2 cache differential, diagnostic
-catalog, and 341-source line-budget evidence passes in the LLVM Debug tree.
+catalog, and 342-source line-budget evidence passes in the LLVM Debug tree.
 Tasks 2, 6, and 7 remain in progress; these bounded slices are not yet the
 complete task claims.
 
@@ -6237,6 +6237,22 @@ dependent chain. Both matrices agree across interpreter and LLVM O0/O2
 cold/warm cache execution. The packed generic validation is partitioned into
 `hierarchy_generic_interfaces.cpp` so the protected hierarchy source remains
 under budget.
+
+Task 4 now has focused implementation evidence and is complete. Direct
+`configuration [library.]name` instances retain a distinct HIR marker, accept
+the standard optional generic and port maps, and resolve one previously
+analyzed configuration to its selected root architecture before ordinary
+generic specialization and port connection. The selected configuration's
+recursive rules, physical source, and canonical identity propagate beneath the
+direct instance and into its specialization/cache key. Missing and ambiguous
+configuration declarations use the existing targeted configuration
+diagnostics; direct use before analysis is rejected by the project-order gate,
+including instances nested in generate bodies. The runtime configuration
+differential now exercises direct configuration instances across interpreter
+and LLVM O0/O2 cold/warm builds and proves selective invalidation after the
+selected configuration changes. The focused frontend, elaboration, analysis
+order, configuration application, 1,436-code catalog, and 342-source line
+budget gates pass in the LLVM Debug tree. Batch 113 remains **in progress**.
 
 ## Forward language-closure feature batches
 

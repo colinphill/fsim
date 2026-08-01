@@ -280,6 +280,75 @@ std::string HierarchyBuilder::vhdl_configuration_identity(
     return output.str();
 }
 
+HierarchyBuilder::ConfiguredVhdlInstance
+HierarchyBuilder::bind_vhdl_direct_configuration_instance(
+    const DesignUnit& unit,
+    const frontend::Instance& instance,
+    const std::string& path) {
+    ConfiguredVhdlInstance result;
+    result.instance = instance;
+    if (unit.language != frontend::Language::Vhdl2008
+        || !instance.vhdl_configuration_instance) {
+        return result;
+    }
+    const auto parts = selected_name_parts(instance.unit_name);
+    if (parts.empty() || parts.size() > 2) {
+        report(
+            "FSIM-ELAB-VHCONFIG-013",
+            "direct configuration instance '" + path
+                + "' has a malformed selected name",
+            instance.span);
+        result.valid = false;
+        return result;
+    }
+    const auto parent_library = normalized_library(unit);
+    const auto requested_library = parts.size() == 2
+        ? (parts.front() == "work" ? parent_library : parts.front())
+        : parent_library;
+    const DesignUnit* configuration = nullptr;
+    std::size_t matches = 0;
+    for (const auto& candidate : parsed_.units) {
+        if (candidate.kind == frontend::UnitKind::VhdlConfiguration
+            && candidate.name == parts.back()
+            && normalized_library(candidate) == requested_library) {
+            configuration = &candidate;
+            ++matches;
+        }
+    }
+    if (matches != 1 || configuration == nullptr) {
+        report(
+            matches == 0
+                ? "FSIM-ELAB-VHCONFIG-013"
+                : "FSIM-ELAB-VHCONFIG-014",
+            "direct configuration instance '" + path + "' selects "
+                + (matches == 0 ? "missing" : "ambiguous")
+                + " configuration '" + requested_library + "."
+                + parts.back() + "'",
+            instance.span);
+        result.valid = false;
+        return result;
+    }
+    const auto* root = select_vhdl_configuration_root(*configuration);
+    if (root == nullptr) {
+        result.valid = false;
+        return result;
+    }
+    result.target = *root;
+    const auto source = std::string{
+        frontend::physical_source(configuration->span)};
+    if (!source.empty()
+        && std::ranges::find(
+               result.target->source_dependencies, source)
+            == result.target->source_dependencies.end()) {
+        result.target->source_dependencies.push_back(source);
+    }
+    result.referenced_configuration = configuration;
+    result.configuration_identity =
+        vhdl_configuration_identity(*configuration);
+    result.applied = true;
+    return result;
+}
+
 void HierarchyBuilder::validate_vhdl_component_configurations(
     const DesignUnit& unit,
     const std::string& path) {

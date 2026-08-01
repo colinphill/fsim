@@ -630,6 +630,7 @@ void VhdlParser::parse_concurrent_statement(DesignUnit& unit) {
   }
   if (label_token &&
       (keyword("entity", 0, true) ||
+       keyword("configuration", 0, true) ||
        (at(TokenKind::Identifier) &&
         (keyword("port", 1, true) ||
          keyword("generic", 1, true))))) {
