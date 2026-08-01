@@ -1676,6 +1676,300 @@ end architecture;
     assert(!ambiguous_actual.ok());
     assert(has_diagnostic(
         ambiguous_actual, "FSIM-ELAB-PARAM-009"));
+
+    const auto nested_aggregate = fsim::frontend::parse_text(
+        "nested_aggregate.sv",
+        R"(
+package nested_types;
+  typedef enum logic [1:0] {
+    ZERO, ONE, TWO, THREE
+  } code_t;
+  typedef struct packed {
+    code_t code;
+    logic valid;
+  } inner_t;
+  typedef union packed {
+    inner_t inner;
+    logic [2:0] raw;
+  } overlay_t;
+  typedef struct packed {
+    logic prefix;
+    overlay_t overlay;
+    logic [1:0] tail;
+  } outer_t;
+endpackage
+
+import nested_types::*;
+module nested_aggregate_top(
+  output logic [5:0] observed,
+  output logic [5:0] patterned_observed,
+  output logic [5:0] cast_observed
+);
+  outer_t value;
+  outer_t patterned;
+  outer_t casted;
+  logic [5:0] raw;
+  initial begin
+    value.prefix = 1'b1;
+    value.overlay.inner.code = TWO;
+    value.overlay.inner.valid = 1'b1;
+    value.tail = 2'b01;
+    patterned = '{
+      prefix: 1'b1,
+      overlay: '{inner: '{code: TWO, valid: 1'b1}},
+      tail: 2'b01
+    };
+    raw = 6'b110101;
+    casted = outer_t'(raw);
+  end
+  assign observed = value;
+  assign patterned_observed = patterned;
+  assign cast_observed = casted;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(nested_aggregate.ok());
+    const auto nested_elaborated = fsim::elaboration::elaborate(
+        nested_aggregate.design,
+        "sv:work.nested_aggregate_top");
+    if (!nested_elaborated.ok()) {
+        for (const auto& diagnostic : nested_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(nested_elaborated.ok());
+    const auto nested_value =
+        nested_elaborated.design->find_signal("value");
+    const auto nested_observed =
+        nested_elaborated.design->find_signal("observed");
+    const auto patterned_observed =
+        nested_elaborated.design->find_signal("patterned_observed");
+    const auto cast_observed =
+        nested_elaborated.design->find_signal("cast_observed");
+    assert(
+        nested_value && nested_observed && patterned_observed
+        && cast_observed);
+    const auto& nested_info =
+        nested_elaborated.design->signals().at(*nested_value);
+    assert(nested_info.width == 6);
+    assert(nested_info.packed_members.size() == 3);
+    assert(
+        nested_info.packed_members[1].nested_types.size() == 1
+        && nested_info.packed_members[1].nested_types.front()
+               .packed_members.size()
+            == 2);
+    auto nested_interpreter =
+        nested_elaborated.design->create_interpreter();
+    assert(
+        nested_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        nested_interpreter->signal_value(*nested_observed)
+            .to_msb_string()
+        == "110101");
+    assert(
+        nested_interpreter->signal_value(*patterned_observed)
+            .to_msb_string()
+        == "110101");
+    assert(
+        nested_interpreter->signal_value(*cast_observed)
+            .to_msb_string()
+        == "110101");
+
+    const auto invalid_aggregate = fsim::frontend::parse_text(
+        "invalid_nested_aggregate.sv",
+        R"(
+package invalid_aggregate_types;
+  typedef struct packed {
+    logic [1:0] value;
+  } first_t;
+  typedef struct packed {
+    logic [1:0] value;
+  } second_t;
+endpackage
+
+import invalid_aggregate_types::*;
+
+module invalid_nominal;
+  first_t first;
+  second_t second;
+  initial first = second;
+endmodule
+
+module invalid_pattern;
+  first_t first;
+  initial first = '{missing: 2'b01};
+endmodule
+
+module invalid_cast;
+  logic [1:0] value;
+  initial value = absent_t'(2'b01);
+endmodule
+
+module invalid_comparison;
+  first_t first;
+  second_t second;
+  logic same;
+  initial same = first == second;
+endmodule
+
+module invalid_multidimensional_index;
+  logic [3:0] matrix[1:0][0:2];
+  initial matrix[1][3] = 4'h0;
+endmodule
+
+module invalid_multidimensional_rank;
+  logic [3:0] matrix[1:0][0:2];
+  initial matrix[1] = 4'h0;
+endmodule
+
+module invalid_multidimensional_pattern;
+  logic [3:0] matrix[1:0][0:2];
+  initial matrix = '{'{4'h1, 4'h2, 4'h3}};
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_aggregate.ok());
+    const auto invalid_nominal = fsim::elaboration::elaborate(
+        invalid_aggregate.design, "sv:work.invalid_nominal");
+    const auto invalid_pattern = fsim::elaboration::elaborate(
+        invalid_aggregate.design, "sv:work.invalid_pattern");
+    const auto invalid_cast = fsim::elaboration::elaborate(
+        invalid_aggregate.design, "sv:work.invalid_cast");
+    const auto invalid_comparison = fsim::elaboration::elaborate(
+        invalid_aggregate.design, "sv:work.invalid_comparison");
+    const auto invalid_multidimensional_index =
+        fsim::elaboration::elaborate(
+            invalid_aggregate.design,
+            "sv:work.invalid_multidimensional_index");
+    const auto invalid_multidimensional_rank =
+        fsim::elaboration::elaborate(
+            invalid_aggregate.design,
+            "sv:work.invalid_multidimensional_rank");
+    const auto invalid_multidimensional_pattern =
+        fsim::elaboration::elaborate(
+            invalid_aggregate.design,
+            "sv:work.invalid_multidimensional_pattern");
+    assert(
+        !invalid_nominal.ok()
+        && has_diagnostic(
+            invalid_nominal, "FSIM-ELAB-SVTYPE-004"));
+    assert(
+        !invalid_pattern.ok()
+        && has_diagnostic(
+            invalid_pattern, "FSIM-ELAB-SVAGG-002"));
+    assert(
+        !invalid_cast.ok()
+        && has_diagnostic(
+            invalid_cast, "FSIM-ELAB-SVCAST-002"));
+    assert(
+        !invalid_comparison.ok()
+        && has_diagnostic(
+            invalid_comparison, "FSIM-ELAB-SVTYPE-005"));
+    assert(
+        !invalid_multidimensional_index.ok()
+        && has_diagnostic(
+            invalid_multidimensional_index,
+            "FSIM-ELAB-SVMDARRAY-003"));
+    assert(
+        !invalid_multidimensional_rank.ok()
+        && has_diagnostic(
+            invalid_multidimensional_rank,
+            "FSIM-ELAB-SVMDARRAY-001"));
+    assert(
+        !invalid_multidimensional_pattern.ok()
+        && has_diagnostic(
+            invalid_multidimensional_pattern,
+            "FSIM-ELAB-SVPATTERN-002"));
+
+    const auto multidimensional = fsim::frontend::parse_text(
+        "multidimensional_static.sv",
+        R"(
+module multidimensional_static(
+  output logic [23:0] observed,
+  output int dimensions,
+  output int unpacked_dimensions,
+  output int outer_size,
+  output int inner_size,
+  output int inner_left,
+  output int inner_right,
+  output logic [3:0] dynamic_observed
+);
+  logic [3:0] matrix[1:0][0:2];
+  int row;
+  int column;
+  initial begin
+    matrix[1][0] = 4'h1;
+    matrix[1][1] = 4'h2;
+    matrix[1][2] = 4'h3;
+    matrix[0][0] = 4'h4;
+    matrix[0][1] = 4'h5;
+    matrix[0][2] = 4'h6;
+    dimensions = $dimensions(matrix);
+    unpacked_dimensions = $unpacked_dimensions(matrix);
+    outer_size = $size(matrix, 1);
+    inner_size = $size(matrix, 2);
+    inner_left = $left(matrix, 2);
+    inner_right = $right(matrix, 2);
+    observed = {
+      matrix[1][0], matrix[1][1], matrix[1][2],
+      matrix[0][0], matrix[0][1], matrix[0][2]
+    };
+    row = 0;
+    column = 1;
+    matrix[row][column] = 4'ha;
+    dynamic_observed = matrix[row][column];
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(multidimensional.ok());
+    const auto multidimensional_elaborated =
+        fsim::elaboration::elaborate(
+            multidimensional.design,
+            "sv:work.multidimensional_static");
+    if (!multidimensional_elaborated.ok()) {
+        for (const auto& diagnostic :
+             multidimensional_elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(multidimensional_elaborated.ok());
+    auto multidimensional_interpreter =
+        multidimensional_elaborated.design->create_interpreter();
+    assert(
+        multidimensional_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto multidimensional_value =
+        [&](const std::string_view name) {
+          const auto signal =
+              multidimensional_elaborated.design->find_signal(name);
+          assert(signal);
+          return multidimensional_interpreter->signal_value(*signal);
+        };
+    const auto observed_multidimensional =
+        multidimensional_value("observed").to_msb_string();
+    if (observed_multidimensional
+        != "000100100011010001010110") {
+        std::cerr << "multidimensional observed: "
+                  << observed_multidimensional << '\n';
+    }
+    assert(
+        observed_multidimensional
+        == "000100100011010001010110");
+    assert(multidimensional_value("dimensions").low_word().aval == 3);
+    assert(
+        multidimensional_value("unpacked_dimensions").low_word().aval
+        == 2);
+    assert(multidimensional_value("outer_size").low_word().aval == 2);
+    assert(multidimensional_value("inner_size").low_word().aval == 3);
+    assert(multidimensional_value("inner_left").low_word().aval == 0);
+    assert(multidimensional_value("inner_right").low_word().aval == 2);
+    assert(
+        multidimensional_value("dynamic_observed").to_msb_string()
+        == "1010");
 }
 
 } // namespace fsim::tests::elaboration

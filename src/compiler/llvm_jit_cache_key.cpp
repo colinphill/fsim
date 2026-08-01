@@ -130,7 +130,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v60";
+    "fsim-llvm-native-object-v61";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -254,6 +254,16 @@ void add_dynamic_part_index_key(
         builder, "container-index-right",
         static_cast<std::uint32_t>(type.index_right));
     add_key_u64(
+        builder, "container-dimension-count", type.dimensions.size());
+    for (const auto& dimension : type.dimensions) {
+      add_key_u64(
+          builder, "container-dimension-left",
+          static_cast<std::uint32_t>(dimension.first));
+      add_key_u64(
+          builder, "container-dimension-right",
+          static_cast<std::uint32_t>(dimension.second));
+    }
+    add_key_u64(
         builder, "container-has-maximum",
         type.maximum_elements ? 1U : 0U);
     add_key_u64(
@@ -262,7 +272,7 @@ void add_dynamic_part_index_key(
   }
   builder.add(
       "container-semantics",
-      "bounded-static-associative-v24-whole-container-equality");
+      "bounded-static-associative-v25-multidimensional-aggregate");
   add_key_u64(
       builder,
       "container-entry-limit",
@@ -656,6 +666,9 @@ void add_dynamic_part_index_key(
               add_key_u64(builder, "source", value.source);
               add_key_u64(builder, "index", value.index);
               add_key_u64(
+                  builder, "linear-index",
+                  value.linear_index ? 1U : 0U);
+              add_key_u64(
                   builder, "signed-index",
                   value.signed_index ? 1U : 0U);
             },
@@ -664,6 +677,9 @@ void add_dynamic_part_index_key(
               add_key_u64(builder, "target", value.target);
               add_key_u64(builder, "index", value.index);
               add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder, "linear-index",
+                  value.linear_index ? 1U : 0U);
               add_key_u64(
                   builder, "signed-index",
                   value.signed_index ? 1U : 0U);

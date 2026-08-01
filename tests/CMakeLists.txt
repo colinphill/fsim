@@ -792,6 +792,26 @@ set_tests_properties(
   )
 
   add_executable(
+    fsim_sv_aggregate_multidimensional_application_tests
+    app/sv_aggregate_multidimensional_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_sv_aggregate_multidimensional_application_tests
+  )
+  target_link_libraries(
+    fsim_sv_aggregate_multidimensional_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_aggregate_multidimensional
+    COMMAND fsim_sv_aggregate_multidimensional_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_aggregate_multidimensional
+    PROPERTIES LABELS "fast;aggregates;containers;systemverilog;cache;debugger"
+  )
+
+  add_executable(
     fsim_time_application_tests
     app/time_application_test.cpp
   )

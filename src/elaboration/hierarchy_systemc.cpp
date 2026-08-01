@@ -868,30 +868,6 @@ using namespace elaboration_detail;
                     const auto& ranges =
                         variable.type.systemverilog_container
                             ->static_range_expressions;
-                    const auto* range =
-                        ranges.empty() ? nullptr : &ranges.front();
-                    std::string left_error;
-                    std::string right_error;
-                    const auto left_value =
-                        range
-                            ? evaluate_systemverilog_constant_expression(
-                                  range->left, {},
-                                  parameter_environment, left_error)
-                            : std::nullopt;
-                    const auto right_value =
-                        range
-                            ? evaluate_systemverilog_constant_expression(
-                                  range->right, {},
-                                  parameter_environment, right_error)
-                            : std::nullopt;
-                    const auto left =
-                        left_value
-                            ? left_value->integer_value()
-                            : std::nullopt;
-                    const auto right =
-                        right_value
-                            ? right_value->integer_value()
-                            : std::nullopt;
                     const auto in_int32 =
                         [](const std::int64_t value) {
                           return value
@@ -901,31 +877,68 @@ using namespace elaboration_detail;
                                   <= std::numeric_limits<
                                       std::int32_t>::max();
                         };
-                    const auto valid_bounds =
-                        left && right && in_int32(*left)
-                        && in_int32(*right);
-                    const auto count =
-                        valid_bounds
-                            ? static_cast<std::uint64_t>(
-                                  *left >= *right
-                                      ? *left - *right
-                                      : *right - *left)
-                                  + 1U
-                            : 0U;
-                    if (!valid_bounds || count == 0
-                        || count > maximum_container_elements) {
+                    std::uint64_t total = 1;
+                    bool valid_dimensions = !ranges.empty();
+                    for (const auto& range : ranges) {
+                        std::string left_error;
+                        std::string right_error;
+                        const auto left_value =
+                            evaluate_systemverilog_constant_expression(
+                                range.left, {}, parameter_environment,
+                                left_error);
+                        const auto right_value =
+                            evaluate_systemverilog_constant_expression(
+                                range.right, {}, parameter_environment,
+                                right_error);
+                        std::int64_t left{};
+                        std::int64_t right{};
+                        bool has_left{};
+                        bool has_right{};
+                        if (left_value) {
+                            if (const auto converted =
+                                    left_value->integer_value()) {
+                                left = *converted;
+                                has_left = true;
+                            }
+                        }
+                        if (right_value) {
+                            if (const auto converted =
+                                    right_value->integer_value()) {
+                                right = *converted;
+                                has_right = true;
+                            }
+                        }
+                        if (!has_left || !has_right || !in_int32(left)
+                            || !in_int32(right)) {
+                            valid_dimensions = false;
+                            break;
+                        }
+                        const auto count = static_cast<std::uint64_t>(
+                            left >= right
+                                ? left - right
+                                : right - left) + 1U;
+                        if (count > maximum_container_elements
+                            || total
+                                > maximum_container_elements / count) {
+                            valid_dimensions = false;
+                            break;
+                        }
+                        total *= count;
+                        type.dimensions.push_back(ContainerDimension{
+                            static_cast<std::int32_t>(left),
+                            static_cast<std::int32_t>(right)});
+                    }
+                    if (!valid_dimensions) {
                         report(
                             "FSIM-ELAB-SVCONTAINER-020",
-                            "static unpacked-array bounds must specialize "
-                            "to 32-bit integral values spanning 1..4096 "
-                            "elements",
+                            "static unpacked-array dimensions must "
+                            "specialize to 32-bit ranges spanning at most "
+                            "4096 total elements",
                             variable.type.systemverilog_container->span);
                         continue;
                     }
-                    type.index_left =
-                        static_cast<std::int32_t>(*left);
-                    type.index_right =
-                        static_cast<std::int32_t>(*right);
+                    type.index_left = type.dimensions.front().first;
+                    type.index_right = type.dimensions.front().second;
                 }
                 if (variable.initializer) {
                     report(

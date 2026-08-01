@@ -17,8 +17,8 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
       || type.domain == frontend::ValueDomain::Unknown) {
     report(
         "FSIM-ELAB-SVPORT-001",
-        "SystemVerilog container ports require one-dimensional integral "
-        "elements with width in 1..64",
+        "SystemVerilog container ports require integral elements with "
+        "width in 1..64",
         source);
     return std::nullopt;
   }
@@ -86,24 +86,6 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
   if (result.fixed) {
     const auto& ranges =
         type.systemverilog_container->static_range_expressions;
-    const auto* range =
-        ranges.empty() ? nullptr : &ranges.front();
-    std::string left_error;
-    std::string right_error;
-    const auto left_value =
-        range
-            ? evaluate_systemverilog_constant_expression(
-                  range->left, {}, environment, left_error)
-            : std::nullopt;
-    const auto right_value =
-        range
-            ? evaluate_systemverilog_constant_expression(
-                  range->right, {}, environment, right_error)
-            : std::nullopt;
-    const auto left =
-        left_value ? left_value->integer_value() : std::nullopt;
-    const auto right =
-        right_value ? right_value->integer_value() : std::nullopt;
     const auto in_int32 =
         [](const std::int64_t value) {
           return value
@@ -111,36 +93,75 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
               && value
                   <= std::numeric_limits<std::int32_t>::max();
         };
-    if (!left || !right
-        || !in_int32(left.value())
-        || !in_int32(right.value())) {
+    if (ranges.empty()) {
+      const auto& concrete =
+          type.systemverilog_container->static_range;
+      if (!concrete || !in_int32(concrete->left)
+          || !in_int32(concrete->right)) {
+        report(
+            "FSIM-ELAB-SVPORT-002",
+            "static-array port bounds must specialize to signed 32-bit "
+            "values spanning at most 4096 total elements",
+            type.systemverilog_container->span);
+        return std::nullopt;
+      }
+      result.dimensions.push_back(ContainerDimension{
+          static_cast<std::int32_t>(concrete->left),
+          static_cast<std::int32_t>(concrete->right)});
+      result.index_left = result.dimensions.front().first;
+      result.index_right = result.dimensions.front().second;
+      return result;
+    }
+    std::uint64_t total = 1;
+    for (const auto& range : ranges) {
+      std::string left_error;
+      std::string right_error;
+      const auto left_value =
+          evaluate_systemverilog_constant_expression(
+              range.left, {}, environment, left_error);
+      const auto right_value =
+          evaluate_systemverilog_constant_expression(
+              range.right, {}, environment, right_error);
+      const auto left =
+          left_value ? left_value->integer_value() : std::nullopt;
+      const auto right =
+          right_value ? right_value->integer_value() : std::nullopt;
+      if (!left || !right || !in_int32(*left) || !in_int32(*right)) {
+        report(
+            "FSIM-ELAB-SVPORT-002",
+            "static-array port bounds must specialize to signed 32-bit "
+            "values spanning at most 4096 total elements",
+            range.span);
+        return std::nullopt;
+      }
+      const auto count =
+          static_cast<std::uint64_t>(
+              *left >= *right ? *left - *right : *right - *left)
+          + 1U;
+      if (count > maximum_container_elements
+          || total > maximum_container_elements / count) {
+        report(
+            "FSIM-ELAB-SVPORT-002",
+            "static-array port bounds must specialize to signed 32-bit "
+            "values spanning at most 4096 total elements",
+            type.systemverilog_container->span);
+        return std::nullopt;
+      }
+      total *= count;
+      result.dimensions.push_back(ContainerDimension{
+          static_cast<std::int32_t>(*left),
+          static_cast<std::int32_t>(*right)});
+    }
+    if (result.dimensions.empty()) {
       report(
           "FSIM-ELAB-SVPORT-002",
           "static-array port bounds must specialize to signed 32-bit "
-          "values spanning 1..4096 elements",
+          "values spanning at most 4096 total elements",
           type.systemverilog_container->span);
       return std::nullopt;
     }
-    const auto left_bound = left.value();
-    const auto right_bound = right.value();
-    const auto count =
-        static_cast<std::uint64_t>(
-            left_bound >= right_bound
-                ? left_bound - right_bound
-                : right_bound - left_bound)
-        + 1U;
-    if (count > maximum_container_elements) {
-      report(
-          "FSIM-ELAB-SVPORT-002",
-          "static-array port bounds must specialize to signed 32-bit "
-          "values spanning 1..4096 elements",
-          type.systemverilog_container->span);
-      return std::nullopt;
-    }
-    result.index_left =
-        static_cast<std::int32_t>(left_bound);
-    result.index_right =
-        static_cast<std::int32_t>(right_bound);
+    result.index_left = result.dimensions.front().first;
+    result.index_right = result.dimensions.front().second;
   }
   return result;
 }
@@ -563,8 +584,8 @@ void HierarchyBuilder::validate_boundary_type(
           || port.type.nominal_type != actual.nominal_type)) {
     report(
         "FSIM-ELAB-BIND-057",
-        "VHDL record boundary '" + path + "." + port.name
-            + "' requires the same nominal record type",
+        "aggregate boundary '" + path + "." + port.name
+            + "' requires the same nominal aggregate type",
         source);
     return;
   }

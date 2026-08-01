@@ -499,6 +499,28 @@ Expression VerilogParser::parse_primary() {
       canonical +=
           expect_identifier("package-scoped name").text;
     }
+    if (match(TokenKind::Apostrophe)) {
+      if (language_ != Language::SystemVerilog2017) {
+        error(
+            name,
+            "FSIM-SV-SEM-125",
+            "type casts require SystemVerilog-2017");
+      }
+      expect(
+          TokenKind::LeftParen,
+          "'(' after SystemVerilog cast type",
+          "FSIM-SV-PARSE-219");
+      auto operand = parse_expression();
+      expect(
+          TokenKind::RightParen,
+          "')' after SystemVerilog cast expression",
+          "FSIM-SV-PARSE-220");
+      return parse_postfix(Expression{
+          ExpressionKind::Call,
+          "@sv-cast:" + canonical,
+          {std::move(operand)},
+          span_from(name, previous())});
+    }
     Expression expression{
         ExpressionKind::Identifier,
         canonical,

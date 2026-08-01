@@ -77,6 +77,7 @@ inline constexpr std::size_t maximum_container_predicate_nodes = 64;
 inline constexpr std::size_t maximum_memory_file_bytes =
     1024U * 1024U;
 
+using ContainerDimension = std::pair<std::int32_t, std::int32_t>;
 struct ContainerType {
   std::uint32_t element_width{1};
   bool two_state{};
@@ -90,18 +91,16 @@ struct ContainerType {
   std::int32_t index_left{};
   std::int32_t index_right{};
   std::optional<std::uint32_t> maximum_elements;
-
+  std::vector<ContainerDimension> dimensions;
   friend bool operator==(const ContainerType&,
                          const ContainerType&) = default;
 };
-
 struct ContainerValue {
   ContainerType type;
   std::vector<PackedLogic4> elements;
   // Associative-array keys are kept in canonical numeric order and are
   // positionally paired with elements. Other container kinds keep this empty.
   std::vector<PackedLogic4> keys;
-
   friend bool operator==(const ContainerValue&,
                          const ContainerValue&) = default;
 };
@@ -346,13 +345,14 @@ struct ContainerRead {
   ContainerRegisterId source{};
   RegisterId index{};
   bool signed_index{true};
+  bool linear_index{};
 };
-
 struct ContainerWrite {
   ContainerRegisterId target{};
   RegisterId index{};
   RegisterId source{};
   bool signed_index{true};
+  bool linear_index{};
 };
 
 struct DeleteContainer {

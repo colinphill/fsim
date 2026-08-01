@@ -68,6 +68,9 @@ std::uint64_t PackedRange::width() const noexcept {
 }
 
 std::optional<std::uint64_t> PackedMember::width() const noexcept {
+  if (!nested_types.empty()) {
+    return nested_types.front().width();
+  }
   if (packed_range) {
     return packed_range->width();
   }

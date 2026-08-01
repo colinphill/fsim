@@ -385,6 +385,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_sv_strings.cpp
       src/elaboration/lowerer_sv_container_slices.cpp
       src/elaboration/lowerer_sv_containers.cpp
+      src/elaboration/lowerer_sv_multidimensional.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)

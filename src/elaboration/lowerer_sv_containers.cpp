@@ -84,8 +84,6 @@ std::optional<ContainerType> Lowerer::container_type(
         static_cast<std::uint32_t>(*maximum_index + 1);
   }
   if (result.fixed) {
-    std::optional<std::int64_t> left;
-    std::optional<std::int64_t> right;
     const auto bound_value =
         [](const Expression& expression) {
           if (const auto simple = constant_index(expression)) {
@@ -99,18 +97,6 @@ std::optional<ContainerType> Lowerer::container_type(
               ? value->integer_value()
               : std::optional<std::int64_t>{};
         };
-    if (const auto& ranges =
-            type.systemverilog_container
-                ->static_range_expressions;
-        !ranges.empty()) {
-      left = bound_value(ranges.front().left);
-      right = bound_value(ranges.front().right);
-    } else if (
-        const auto& concrete_range =
-            type.systemverilog_container->static_range) {
-      left = concrete_range->left;
-      right = concrete_range->right;
-    }
     const auto in_int32 =
         [](const std::int64_t value) {
           return value
@@ -118,8 +104,17 @@ std::optional<ContainerType> Lowerer::container_type(
               && value
                   <= std::numeric_limits<std::int32_t>::max();
         };
-    if (!left || !right || !in_int32(*left)
-        || !in_int32(*right)) {
+    const auto& ranges = type.systemverilog_container
+        ->static_range_expressions;
+    if (ranges.empty()) {
+      if (const auto& concrete =
+              type.systemverilog_container->static_range) {
+        result.index_left = static_cast<std::int32_t>(concrete->left);
+        result.index_right = static_cast<std::int32_t>(concrete->right);
+        result.dimensions.push_back(ContainerDimension{
+            result.index_left, result.index_right});
+        return result;
+      }
       report(
           "FSIM-ELAB-SVCONTAINER-020",
           "static unpacked-array bounds must be locally constant "
@@ -127,19 +122,38 @@ std::optional<ContainerType> Lowerer::container_type(
           type.systemverilog_container->span);
       return std::nullopt;
     }
-    const auto count =
-        *left >= *right
-            ? static_cast<std::uint64_t>(*left - *right) + 1U
-            : static_cast<std::uint64_t>(*right - *left) + 1U;
-    if (count > maximum_container_elements) {
-      report(
-          "FSIM-ELAB-SVCONTAINER-020",
-          "static unpacked arrays are limited to 4096 elements",
-          type.systemverilog_container->span);
-      return std::nullopt;
+    std::uint64_t total = 1;
+    for (const auto& range : ranges) {
+      const auto left = bound_value(range.left);
+      const auto right = bound_value(range.right);
+      if (!left || !right || !in_int32(*left)
+          || !in_int32(*right)) {
+        report(
+            "FSIM-ELAB-SVCONTAINER-020",
+            "static unpacked-array bounds must be locally constant "
+            "32-bit integral values",
+            range.span);
+        return std::nullopt;
+      }
+      const auto count =
+          *left >= *right
+              ? static_cast<std::uint64_t>(*left - *right) + 1U
+              : static_cast<std::uint64_t>(*right - *left) + 1U;
+      if (count > maximum_container_elements
+          || total > maximum_container_elements / count) {
+        report(
+            "FSIM-ELAB-SVCONTAINER-020",
+            "static unpacked arrays are limited to 4096 total elements",
+            type.systemverilog_container->span);
+        return std::nullopt;
+      }
+      total *= count;
+      result.dimensions.push_back(ContainerDimension{
+          static_cast<std::int32_t>(*left),
+          static_cast<std::int32_t>(*right)});
     }
-    result.index_left = static_cast<std::int32_t>(*left);
-    result.index_right = static_cast<std::int32_t>(*right);
+    result.index_left = result.dimensions.front().first;
+    result.index_right = result.dimensions.front().second;
   }
   return result;
 }
@@ -396,24 +410,17 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
         expression.span);
     return std::nullopt;
   }
+  std::optional<std::int64_t> requested_dimension{1};
   if (expression.operands.size() == 2) {
-    auto dimension =
+    requested_dimension =
         constant_index(expression.operands[1]);
-    if (!dimension) {
+    if (!requested_dimension) {
       std::string error;
       if (const auto value =
               evaluate_systemverilog_constant_expression(
                   expression.operands[1], {}, {}, error)) {
-        dimension = value->integer_value();
+        requested_dimension = value->integer_value();
       }
-    }
-    if (!dimension || *dimension != 1) {
-      report(
-          "FSIM-ELAB-SVQUERY-002",
-          expression.text
-              + " supports only the constant unpacked dimension 1",
-          expression.operands[1].span);
-      return std::nullopt;
     }
   }
   const auto& operand = expression.operands.front();
@@ -429,6 +436,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
         operand.span);
     return std::nullopt;
   }
+  const auto unpacked_dimensions =
+      runtime_type->fixed && !runtime_type->dimensions.empty()
+          ? runtime_type->dimensions.size()
+          : std::size_t{1};
+  if (!requested_dimension || *requested_dimension < 1
+      || static_cast<std::uint64_t>(*requested_dimension)
+          > unpacked_dimensions) {
+    report(
+        "FSIM-ELAB-SVQUERY-002",
+        expression.text
+            + " requires a constant unpacked dimension inside the "
+              "declared rank",
+        expression.operands.size() == 2
+            ? expression.operands[1].span
+            : expression.span);
+    return std::nullopt;
+  }
   const auto constant_result =
       [&](const std::int64_t value) {
         const auto destination =
@@ -441,10 +465,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
         return ExpressionAttempt{destination};
       };
   if (dimensions_query) {
-    return constant_result(2);
+    return constant_result(
+        static_cast<std::int64_t>(unpacked_dimensions + 1U));
   }
   if (unpacked_dimensions_query) {
-    return constant_result(1);
+    return constant_result(
+        static_cast<std::int64_t>(unpacked_dimensions));
   }
   if (runtime_type->associative && bound_query) {
     report(
@@ -455,19 +481,33 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
     return std::nullopt;
   }
   if (runtime_type->fixed) {
-    const auto left =
-        static_cast<std::int64_t>(
-            runtime_type->index_left);
-    const auto right =
-        static_cast<std::int64_t>(
-            runtime_type->index_right);
+    const auto dimension_index = static_cast<std::size_t>(
+        *requested_dimension - 1);
+    const auto selected_dimension =
+        runtime_type->dimensions.empty()
+            ? ContainerDimension{
+                  runtime_type->index_left,
+                  runtime_type->index_right}
+            : runtime_type->dimensions[dimension_index];
+    const auto left = static_cast<std::int64_t>(
+        selected_dimension.first);
+    const auto right = static_cast<std::int64_t>(
+        selected_dimension.second);
     const auto count =
         left >= right
             ? left - right + 1
             : right - left + 1;
     if (bits_query) {
-      return constant_result(
-          count * runtime_type->element_width);
+      std::int64_t total = runtime_type->element_width;
+      for (const auto& dimension : runtime_type->dimensions) {
+        total *= std::abs(
+            static_cast<std::int64_t>(dimension.first)
+            - dimension.second) + 1;
+      }
+      if (runtime_type->dimensions.empty()) {
+        total *= count;
+      }
+      return constant_result(total);
     }
     if (size_query) {
       return constant_result(count);
@@ -543,6 +583,10 @@ Lowerer::lower_container_pattern(
         "SystemVerilog aggregate metadata",
         expression.span);
     return std::nullopt;
+  }
+  if (runtime_type.fixed && runtime_type.dimensions.size() > 1) {
+    return lower_multidimensional_container_pattern(
+        expression, source_type, runtime_type);
   }
   bool has_positional = false;
   bool has_keyed = false;

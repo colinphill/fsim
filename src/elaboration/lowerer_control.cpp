@@ -533,14 +533,14 @@ using namespace elaboration_detail;
 
     std::optional<Lowerer::PackedMemberReference> Lowerer::packed_member_reference(
         const std::string_view name) const {
-        const auto separator = name.rfind('.');
+        const auto separator = name.find('.');
         if (separator == std::string_view::npos
             || separator == 0
             || separator + 1 >= name.size()) {
             return std::nullopt;
         }
         const auto base = std::string{name.substr(0, separator)};
-        const auto member_name = name.substr(separator + 1);
+        auto member_name = name.substr(separator + 1);
         const std::vector<frontend::PackedMember>* members = nullptr;
         if (const auto local = local_members_.find(base);
             local != local_members_.end()) {
@@ -553,16 +553,32 @@ using namespace elaboration_detail;
         if (members == nullptr) {
             return std::nullopt;
         }
-        const auto member = std::find_if(
-            members->begin(),
-            members->end(),
-            [&](const frontend::PackedMember& candidate) {
-                return candidate.name == member_name;
-            });
-        if (member == members->end()) {
-            return std::nullopt;
+        std::uint64_t offset = 0;
+        for (;;) {
+            const auto dot = member_name.find('.');
+            const auto segment = member_name.substr(0, dot);
+            const auto member = std::find_if(
+                members->begin(),
+                members->end(),
+                [&](const frontend::PackedMember& candidate) {
+                    return candidate.name == segment;
+                });
+            if (member == members->end()
+                || member->lsb_offset
+                    > std::numeric_limits<std::uint64_t>::max() - offset) {
+                return std::nullopt;
+            }
+            offset += member->lsb_offset;
+            if (dot == std::string_view::npos) {
+                return PackedMemberReference{base, &*member, offset};
+            }
+            if (member->nested_types.empty()
+                || member->nested_types.front().packed_members.empty()) {
+                return std::nullopt;
+            }
+            members = &member->nested_types.front().packed_members;
+            member_name.remove_prefix(dot + 1);
         }
-        return PackedMemberReference{base, &*member};
     }
 
 

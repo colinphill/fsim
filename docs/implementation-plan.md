@@ -5874,6 +5874,54 @@ seconds, containers in 88.05 seconds, and the monolithic application in 13.59
 seconds, on 2026-07-31. Batch 108 is not a ten-batch CI-inspection boundary,
 so no Actions run was inspected.
 
+### One-hundred-ninth feature batch — SystemVerilog aggregate, multidimensional array, pattern, cast, and nominal-legality closure
+
+Named packed structs, unions, and enums now retain recursive member type
+structure, enum literals, declaration order, layout, source provenance, and
+nominal identity through typedef aliases and type-parameter substitution.
+Chained constant member reads/writes accumulate exact nested offsets.
+Recursive positional, member-keyed, and default assignment patterns build a
+fresh contextual value before one atomic update, while packed unions require
+exactly one selected member. Bounded unpacked structs admit scalar, enum, and
+nested packed or unpacked-struct members through deterministic flattened
+storage while retaining nominal metadata.
+
+Locally constant static arrays now retain one through four declaration-ordered
+dimensions and up to 4,096 dense elements. Direction-aware row-major
+flattening supports full-rank constant and runtime signed-32 indexing,
+per-dimension bounds checks, system queries, whole-value copies, exact-rank
+same-language hierarchy ports, and automatic function/task boundaries.
+Recursive positional, integral-keyed, and default patterns initialize ranked
+arrays atomically. A selected one-dimensional slice normalizes its dimension
+metadata after selection; multidimensional subarray slices remain explicitly
+deferred.
+
+Visible named or bounded builtin SystemVerilog casts now retain a target type.
+Explicit aggregate casts authorize compatible conversion, while direct
+assignment and equality diagnose distinct nominal aggregate types. The
+dedicated differential transports nested packed/unpacked aggregates and a
+multidimensional array through generated hierarchy, a type parameter,
+functions, tasks, debugger container reads, callbacks, VCD, interpreter, LLVM
+O0/O2, cold/warm reuse, and source-edit invalidation. Native schema 61 and
+container semantic revision 25 record recursive type identity, ordered
+dimensions, and linearized access without changing the public ABI.
+Feature-matrix rows SV-651 through SV-660 are the detailed release evidence.
+
+The optimized gate exposed and repaired a GCC maybe-uninitialized warning in
+SystemC hierarchy range materialization. The Debug gate also exposed stale
+one-dimensional slice-dimension metadata, which was repaired before the final
+container regression. The diagnostic catalog covers 1,393 production codes,
+and the source gate covers 319 authored files with an empty allowlist and a
+2,000-line maximum. The exact LLVM 22.1.8 warnings-as-errors Debug regression
+passed all 64 tests in 446.15 seconds, including scoped locals in 0.89 seconds,
+LLVM in 3.86 seconds, containers in 342.38 seconds, the aggregate/
+multidimensional differential in 0.70 seconds, and the monolithic application
+in 39.75 seconds. Release passed all 64 tests in 145.46 seconds, including
+scoped locals in 0.80 seconds, LLVM in 2.70 seconds, containers in 87.53
+seconds, the aggregate/multidimensional differential in 0.32 seconds, and the
+monolithic application in 13.64 seconds, on 2026-07-31. Batch 109 is not a
+ten-batch CI-inspection boundary, so no Actions run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

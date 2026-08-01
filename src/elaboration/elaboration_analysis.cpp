@@ -490,6 +490,10 @@ void collect_qualified_identifiers(
             type.named_type, type.named_type_span);
     }
     for (const auto& member : type.packed_members) {
+        if (!member.nested_types.empty()) {
+            collect_qualified_identifiers(
+                member.nested_types.front(), identifiers);
+        }
         if (!member.packed_range_expression) {
             continue;
         }
@@ -535,11 +539,9 @@ void collect_qualified_identifiers(
                 *type.systemverilog_container->queue_maximum,
                 identifiers);
         }
-        if (const auto& ranges =
-                type.systemverilog_container
-                    ->static_range_expressions;
-            !ranges.empty()) {
-            const auto& range = ranges.front();
+        for (const auto& range :
+             type.systemverilog_container
+                 ->static_range_expressions) {
             collect_qualified_identifiers(
                 range.left, identifiers);
             collect_qualified_identifiers(

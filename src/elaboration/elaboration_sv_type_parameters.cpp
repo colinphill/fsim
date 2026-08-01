@@ -6,6 +6,18 @@
 namespace fsim::elaboration::elaboration_detail {
 namespace {
 
+void append_expression_identity(
+    std::ostringstream& output,
+    const frontend::Expression& expression) {
+    output << '{' << static_cast<unsigned>(expression.kind)
+           << ':' << expression.text
+           << ':' << expression.nominal_type;
+    for (const auto& operand : expression.operands) {
+        append_expression_identity(output, operand);
+    }
+    output << '}';
+}
+
 std::string canonical_type_identity(const frontend::Type& type) {
     std::ostringstream output;
     output << "sv-type-v1;domain="
@@ -33,6 +45,38 @@ std::string canonical_type_identity(const frontend::Type& type) {
             output << ':' << member.packed_range->left << ':'
                    << member.packed_range->right << ':'
                    << (member.packed_range->descending ? 1 : 0);
+        }
+        for (const auto& nested : member.nested_types) {
+            output << ";nested={"
+                   << canonical_type_identity(nested) << '}';
+        }
+    }
+    if (type.systemverilog_container) {
+        const auto& container = *type.systemverilog_container;
+        output << ";container="
+               << static_cast<unsigned>(container.kind);
+        if (container.queue_maximum) {
+            output << ";queue-maximum=";
+            append_expression_identity(
+                output, *container.queue_maximum);
+        }
+        if (container.associative_index_type) {
+            output << ";index-type={"
+                   << canonical_type_identity(
+                          *container.associative_index_type)
+                   << '}';
+        }
+        if (container.static_range) {
+            output << ";static=" << container.static_range->left
+                   << ':' << container.static_range->right << ':'
+                   << (container.static_range->descending ? 1 : 0);
+        }
+        for (const auto& dimension :
+             container.static_range_expressions) {
+            output << ";dimension=";
+            append_expression_identity(output, dimension.left);
+            append_expression_identity(output, dimension.right);
+            output << ':' << (dimension.descending ? 1 : 0);
         }
     }
     return output.str();

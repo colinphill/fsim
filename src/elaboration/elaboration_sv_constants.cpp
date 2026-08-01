@@ -1382,14 +1382,13 @@ void substitute_sv_type(
                 *type.systemverilog_container->queue_maximum,
                 environment);
         }
-        if (auto& ranges =
-                type.systemverilog_container
-                    ->static_range_expressions;
-            !ranges.empty()) {
+        for (auto& range :
+             type.systemverilog_container
+                 ->static_range_expressions) {
             substitute_systemverilog_parameters(
-                ranges.front().left, environment);
+                range.left, environment);
             substitute_systemverilog_parameters(
-                ranges.front().right, environment);
+                range.right, environment);
         }
         if (type.systemverilog_container
                 ->associative_index_type) {
@@ -1400,6 +1399,10 @@ void substitute_sv_type(
         }
     }
     for (auto& member : type.packed_members) {
+        if (!member.nested_types.empty()) {
+            substitute_sv_type(
+                member.nested_types.front(), environment);
+        }
         substitute_range(member.packed_range_expression);
     }
 }

@@ -11,10 +11,22 @@ using namespace elaboration_detail;
         const bool vhdl,
         const bool resolve_ports) {
         std::unordered_map<std::string, std::size_t> local_types;
+        const auto owner =
+            (unit.library.empty() ? std::string{"work"} : unit.library)
+            + "." + unit.name;
         for (std::size_t index = 0;
              index < unit.type_aliases.size(); ++index) {
+            auto& alias = unit.type_aliases[index];
+            if (!vhdl
+                && alias.type.nominal_type.empty()
+                && (alias.type.packed_aggregate
+                        != frontend::PackedAggregateKind::None
+                    || !alias.enum_literals.empty())) {
+                alias.type.nominal_type =
+                    "sv:" + owner + "." + alias.name;
+            }
             local_types.emplace(
-                unit.type_aliases[index].name, index);
+                alias.name, index);
         }
         std::vector<unsigned char> states(
             unit.type_aliases.size(), 0);
@@ -220,6 +232,21 @@ using namespace elaboration_detail;
             return resolved;
         };
         resolve_type = [&](frontend::Type& type) {
+            for (auto& member : type.packed_members) {
+                if (member.nested_types.empty()) {
+                    continue;
+                }
+                auto& nested = member.nested_types.front();
+                if (!resolve_type(nested)) {
+                    return false;
+                }
+                member.domain = nested.domain;
+                member.spelling = nested.spelling;
+                member.packed_range = nested.packed_range;
+                member.packed_range_expression =
+                    nested.packed_range_expression;
+                member.is_signed = nested.is_signed;
+            }
             if (type.systemverilog_container
                 && type.systemverilog_container
                        ->associative_index_type

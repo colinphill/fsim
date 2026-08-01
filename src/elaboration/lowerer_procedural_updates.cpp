@@ -276,7 +276,7 @@ void Lowerer::lower_force_release(const Statement& statement) {
       const auto width = selected->member->width();
       if (!width || *width == 0
           || *width > std::numeric_limits<std::uint32_t>::max()
-          || selected->member->lsb_offset
+          || selected->lsb_offset
               > std::numeric_limits<std::uint32_t>::max()) {
         report(
             "FSIM-ELAB-SVFORCE-002",
@@ -285,7 +285,7 @@ void Lowerer::lower_force_release(const Statement& statement) {
         return;
       }
       target_name = selected->base;
-      offset = static_cast<std::uint32_t>(selected->member->lsb_offset);
+      offset = static_cast<std::uint32_t>(selected->lsb_offset);
       selected_width = static_cast<std::size_t>(*width);
       selected_domain = selected->member->domain;
     }

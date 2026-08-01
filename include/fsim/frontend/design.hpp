@@ -224,6 +224,8 @@ struct DiscreteRangeExpression {
   bool descending{};
 };
 
+struct Type;
+
 struct PackedMember {
   std::string name;
   ValueDomain domain{ValueDomain::Unknown};
@@ -235,6 +237,10 @@ struct PackedMember {
   // packed aggregate. Filled once every member width is concrete.
   std::uint64_t lsb_offset{};
   SourceSpan span;
+  // Empty for a scalar leaf and exactly one element for a nested packed
+  // aggregate or enum member. Vector-backed recursion keeps Type value-copy
+  // semantics without embedding another Type in every member.
+  std::vector<Type> nested_types;
 
   [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
@@ -264,8 +270,6 @@ enum class SystemVerilogContainerKind {
   StaticArray,
 };
 
-struct Type;
-
 /// Source-level metadata for one bounded SystemVerilog unpacked container.
 ///
 /// The surrounding Type continues to describe one packed integral element.
@@ -284,8 +288,9 @@ struct SystemVerilogContainerInfo {
   // Present for a static unpacked `[left:right]` dimension. Expressions remain
   // specialization-aware until elaboration produces a bounded dense layout.
   std::optional<PackedRange> static_range;
-  // Empty or exactly one element. Vector-backed storage preserves value-copy
-  // isolation without embedding two full Expression trees in every Type.
+  // Declaration-ordered static unpacked dimensions. Vector-backed storage
+  // preserves value-copy isolation without embedding expression trees in
+  // every Type; nonstatic containers keep this empty.
   std::vector<PackedRangeExpression> static_range_expressions;
   SourceSpan span;
 };
@@ -294,6 +299,7 @@ enum class PackedAggregateKind {
   None,
   Struct,
   Union,
+  UnpackedStruct,
 };
 
 struct Type {
@@ -333,8 +339,8 @@ struct Type {
   std::optional<EnumerationRange> enumeration_base_range;
   std::optional<DiscreteRangeExpression>
       enumeration_base_range_expression;
-  // Non-empty for a bounded SystemVerilog packed struct or union. Nested
-  // aggregates are intentionally excluded from the current representation.
+  // Non-empty for a bounded packed struct or union. A member may retain one
+  // nested aggregate or enum type in PackedMember::nested_types.
   std::vector<PackedMember> packed_members;
   PackedAggregateKind packed_aggregate{PackedAggregateKind::None};
   // Concrete or specialization-dependent VHDL scalar constraint. This never

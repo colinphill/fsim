@@ -9,21 +9,22 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-108 SystemVerilog
-  preprocessing, directive, and generate-specialization closure on top of
-  Batch 107 commit `7169b45`; the current handoff commit is the Batch 108
-  baseline.
-- The source-size refactor is complete: all 317 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-109 SystemVerilog
+  aggregate, multidimensional-array, pattern, cast, and nominal-legality
+  closure on top of Batch 108 commit `a7bfb0d`; the current handoff commit is
+  the Batch 109 baseline.
+- The source-size refactor is complete: all 319 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 63
-  configured tests in 443.90 seconds, and Release passed all 63 configured
-  tests in 145.66 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 0.89/0.81 seconds, preprocessing and generate specialization in
-  1.24/1.12 seconds, interfaces in 1.84/1.55 seconds, LLVM in 2.83/2.66
-  seconds, containers in 342.96/88.05 seconds, and the monolithic application
-  in 39.11/13.59 seconds.
-- The diagnostic catalog covers all 1,368 production codes.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 64
+  configured tests in 446.15 seconds, and Release passed all 64 configured
+  tests in 145.46 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.89/0.80 seconds, preprocessing and generate specialization in
+  1.20/1.13 seconds, interfaces in 1.84/1.51 seconds, LLVM in 3.86/2.70
+  seconds, containers in 342.38/87.53 seconds, aggregate/multidimensional
+  execution in 0.70/0.32 seconds, and the monolithic application in
+  39.75/13.64 seconds.
+- The diagnostic catalog covers all 1,393 production codes.
 - The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
   `30640792808` and replacements `30647570353`/`30651503050` passed every
   ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
@@ -1298,34 +1299,58 @@ codes, the source gate covers 317 files, and both 63-test full regressions
 pass. Feature-matrix rows SV-641 through SV-650 are the detailed release
 evidence. Batch 108 is not a CI-inspection boundary.
 
-Resume with **feature batch 109: SystemVerilog aggregate, multidimensional
-array, pattern, cast, and nominal-legality closure**:
+Batch 109 completes bounded SystemVerilog aggregate, multidimensional-array,
+pattern, cast, and nominal-legality closure. Named packed structs, unions, and
+enums retain recursive type structure, literals, exact layout, source
+provenance, and nominal identity through aliases and type parameters. Bounded
+unpacked structs admit scalar, enum, and nested packed or unpacked-struct
+members. Chained member access, recursive positional/keyed/default patterns,
+explicit casts, nominal assignment/equality checks, and exactly-one-member
+packed-union patterns have checked positive and negative evidence.
 
-1. Audit every remaining aggregate, array-rank, pattern, cast, and nominal-type
-   SystemVerilog v1 matrix row against live parser, elaborator, and runtime
-   evidence.
-2. Retain recursive nested packed struct, union, and enum type structure in HIR
-   with exact member names, widths, signedness, state domains, and source spans.
-3. Add unpacked aggregate members and locally constant multidimensional fixed
-   unpacked arrays without expanding recursive parser stack frames inline.
-4. Complete direction-aware multidimensional indexing, selection, assignment,
-   and deterministic dense storage layout across ascending/descending ranges.
-5. Complete nested positional, keyed, member-keyed, and default assignment
-   patterns with exact contextual conversion and one atomic destination update.
-6. Complete integral/aggregate casts, qualified expressions, and nominal-versus-
-   structural assignment legality with stable checked diagnostics.
-7. Carry aggregate and multidimensional types through hierarchy ports,
-   callables, generated declarations, parameters, and specialization.
-8. Prove debugger reads, callbacks, normalized VCD, interpreter, and LLVM O0/O2
-   equivalence for the supported aggregate and multidimensional slice.
-9. Add malformed-HIR, collision, compatibility, bounds, pattern, cast, and
-   source-edit invalidation evidence.
-10. Advance native schema 61, run the exact full Debug/Release gates, document,
-    commit, and push the non-boundary batch.
+Static arrays retain one through four ordered dimensions and at most 4,096
+dense elements. Direction-aware row-major full-rank constant/runtime indexing,
+per-dimension queries and checks, whole-value copy, generated/type-parameter
+specialization, same-language ports, automatic functions/tasks, debugger
+reads, callbacks, VCD, interpreter/LLVM O0/O2, cold/warm reuse, and source-edit
+invalidation agree. Native schema 61 and container semantic revision 25 record
+the recursive types, dimensions, and linear accesses without a public ABI
+change. Multidimensional subarray slices, unpacked unions, unpacked-array
+aggregate members, widths above 64 bits, and cross-language aggregate/
+container boundaries remain deferred. The catalog covers 1,393 codes, the
+source gate covers 319 files, and both 64-test full regressions pass.
+Feature-matrix rows SV-651 through SV-660 are the detailed release evidence.
+Batch 109 is not a CI-inspection boundary.
 
-Keep Batch 109 to aggregate and multidimensional type semantics. Batch 110
-remains the strings, files, and containers release audit and is the next
-mandatory non-documentation CI-inspection boundary.
+Resume with **feature batch 110: SystemVerilog strings, files, containers, and
+memories release audit**:
+
+1. Audit every SystemVerilog v1 matrix row against live parser, elaborator,
+   interpreter, LLVM, cache, debugger, VCD, and diagnostic evidence; record
+   each remaining gap explicitly before changing scope.
+2. Close remaining bounded mutable-string allocation, indexing, slicing,
+   methods, conversions, formatting, callables, ports, and lifetime semantics.
+3. Close remaining bounded file descriptor, mode, status, byte/text, positioned,
+   formatted, and lifecycle semantics with manifest-confined deterministic I/O.
+4. Close remaining dynamic array, queue, associative array, and static memory
+   construction, methods, selection, pattern, equality, and callable behavior.
+5. Close the interactions among aggregate element types, multidimensional
+   memories, containers, strings, generated hierarchy, type parameters, and
+   supported same-language port boundaries.
+6. Add stable checked diagnostics for every audited unsupported or malformed
+   string, file, container, and memory path; no accepted syntax may disappear.
+7. Prove deterministic copy/alias/ownership, suspension, debugger, callbacks,
+   normalized VCD, and interpreter/LLVM O0/O2 behavior across the supported
+   audit slice.
+8. Prove cold/warm reuse and edits to types, bounds, contents, file inputs, and
+   operations invalidate exactly the affected native objects.
+9. Advance the versioned native/container/file identities as required, update
+   the matrix/support/plan/handoff documents, and run exact full Debug/Release
+   and source/diagnostic gates.
+10. Commit and push Batch 110, inspect its non-documentation GitHub Actions
+    jobs, repair every actionable failure locally with at least eight build
+    workers, push repairs, and confirm replacement checks. GitHub builds remain
+    at parallelism two; documentation-only runs do not require monitoring.
 
 The authoritative Batch 99 through 130 language-closure sequence is recorded
 under **Forward language-closure feature batches** in the implementation plan;
@@ -1412,9 +1437,10 @@ function/task lifetime, association, reference, static-local, and generated-
 callable handoff, followed by the Batch 104 always/procedural-control handoff,
 the Batch 105 fork/process/NBA-ordering handoff, the Batch 106
 delay/primitive/continuous-assignment handoff, the Batch 107 interface/modport
-handoff, and the Batch 108 preprocessing/generate handoff. Treat the newest pushed commit
-on the same branch as the authoritative continuation and read this file from
-that checkout before doing work.
+handoff, the Batch 108 preprocessing/generate handoff, and the Batch 109
+aggregate/multidimensional-array handoff. Treat the newest pushed commit on the
+same branch as the authoritative continuation and read this file from that
+checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -1445,7 +1471,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 109 below and return to focused tests until its tenth feature.
+resume Batch 110 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1462,16 +1488,17 @@ For a clean-context restart:
    release authority, and `docs/implementation-plan.md` only when historical
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
-   bounded SystemVerilog preprocessing/directive/generate implementation.
-3. Begin Batch 109 from the completed preprocessing/directive/generate
+   bounded SystemVerilog aggregate/multidimensional implementation.
+3. Begin Batch 110 from the completed aggregate/multidimensional
    baseline described above.
    Inspect the live tree first and rerun focused evidence if the host changed.
-4. Keep Batch 109 within SystemVerilog aggregate, multidimensional array,
-   assignment-pattern, cast, and nominal-legality rules.
+4. Keep Batch 110 within the SystemVerilog string, file, container, memory, and
+   complete-v1-row audit scope.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
-   after all ten features, update the four documents named above, commit, and
-   push. Batch 109 is not a CI-inspection boundary.
+   after all ten features, update the four documents named above, commit, push,
+   and inspect/fix all non-documentation GitHub Actions jobs. Batch 110 is a
+   mandatory CI-inspection boundary.
 
 The existing exact-LLVM build trees on the recorded development host are:
 
@@ -1480,17 +1507,17 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 109 is in progress, extending the
-frontend, aggregate/container elaboration, hierarchy/native cache, and
-application tests as aggregate behavior lands:
+Use a narrow test expression while Batch 110 is in progress, extending the
+frontend, string/file/container elaboration, hierarchy/native cache, and
+application tests as audit repairs land:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
-  -R 'fsim\.(frontend|elaboration|llvm|application$|application\.sv_containers|diagnostics-catalog|source-line-budget)'
+  -R 'fsim\.(frontend|elaboration|llvm|application$|application\.sv_containers|application\.sv_files|diagnostics-catalog|source-line-budget)'
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 63-test inventories are clean after the local feature-batch-108 gates.
+recorded 64-test inventories are clean after the local feature-batch-109 gates.
 
 Before declaring any row complete, consult:
 

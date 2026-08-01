@@ -47,6 +47,10 @@ package base_values;
     logic [WIDTH-1:0] payload;
     logic [WIDTH-1:0] mirror;
   } overlay_t;
+  typedef struct {
+    packet_t packet;
+    logic [1:0] count;
+  } record_t;
 endpackage : base_values
 
 import base_values::*;
@@ -109,7 +113,7 @@ endmodule
               == "BASE",
       "package parameters are immutable declaration-ordered constants");
   require(
-      parsed.design.units[0].type_aliases.size() == 5
+      parsed.design.units[0].type_aliases.size() == 6
           && parsed.design.units[0].type_aliases.front()
                  .name
               == "word_t"
@@ -157,6 +161,16 @@ endmodule
           && overlay_type.packed_members[0].lsb_offset == 0
           && overlay_type.packed_members[1].lsb_offset == 0,
       "packed union members retain a shared overlay layout");
+  const auto& record_type =
+      parsed.design.units[0].type_aliases[5].type;
+  require(
+      record_type.packed_aggregate
+              == PackedAggregateKind::UnpackedStruct
+          && record_type.packed_members.size() == 2
+          && record_type.packed_members[0].name == "packet"
+          && record_type.packed_members[0].nested_types.size() == 1
+          && record_type.packed_members[1].name == "count",
+      "unpacked structs retain ordered scalar and nested aggregate members");
   require(
       parsed.design.units[1].systemverilog_imports.size() == 1
           && parsed.design.units[1]
@@ -255,7 +269,7 @@ package invalid_values;
   typedef enum logic [1:0] {} empty_enum_t;
   typedef enum logic [1:0] A, B } missing_open_t;
   typedef enum logic [1:0] { C missing_close_t;
-  typedef struct invalid_unpacked_t;
+  typedef union invalid_unpacked_t;
   typedef struct packed {
     int unsupported;
   } unsupported_member_t;

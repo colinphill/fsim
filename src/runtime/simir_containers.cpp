@@ -10,6 +10,19 @@ namespace {
 
 [[nodiscard]] std::size_t fixed_element_count(
     const ContainerType& type) {
+  if (!type.dimensions.empty()) {
+    std::size_t count = 1;
+    for (const auto& dimension : type.dimensions) {
+      const auto distance =
+          dimension.first >= dimension.second
+              ? static_cast<std::int64_t>(dimension.first)
+                    - dimension.second
+              : static_cast<std::int64_t>(dimension.second)
+                    - dimension.first;
+      count *= static_cast<std::size_t>(distance + 1);
+    }
+    return count;
+  }
   const auto distance =
       type.index_left >= type.index_right
           ? static_cast<std::int64_t>(type.index_left)
@@ -1359,6 +1372,21 @@ void Interpreter::Impl::execute_container(
     return;
   }
   if (source.type.fixed) {
+    if (operation.linear_index) {
+      const auto index = known_index(
+          process.program.id, process.pc,
+          get_register(process, operation.index),
+          true, "multidimensional linear index");
+      if (index >= source.elements.size()) {
+        container_error(
+            process.program.id, process.pc,
+            "multidimensional linear index is out of range");
+      }
+      get_register(process, operation.destination) =
+          source.elements[index];
+      ++process.pc;
+      return;
+    }
     get_register(process, operation.destination) =
         source.elements[fixed_offset(
             process.program.id, process.pc, source.type,
@@ -1415,6 +1443,20 @@ void Interpreter::Impl::execute_container(
     return;
   }
   if (target.type.fixed) {
+    if (operation.linear_index) {
+      const auto index = known_index(
+          process.program.id, process.pc,
+          get_register(process, operation.index),
+          true, "multidimensional linear index");
+      if (index >= target.elements.size()) {
+        container_error(
+            process.program.id, process.pc,
+            "multidimensional linear index is out of range");
+      }
+      target.elements[index] = source;
+      ++process.pc;
+      return;
+    }
     target.elements[fixed_offset(
         process.program.id, process.pc, target.type,
         get_register(process, operation.index))] = source;

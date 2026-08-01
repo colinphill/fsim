@@ -1050,9 +1050,19 @@ endmodule
       "bad = bad; endfunction endmodule",
       Language::SystemVerilog2017);
   require(
-      !multidimensional_return.ok(),
-      "multidimensional function results are rejected at the bounded "
-      "frontend boundary");
+      multidimensional_return.ok()
+          && multidimensional_return.design.units.size() == 1
+          && multidimensional_return.design.units.front()
+                 .functions.size()
+              == 1
+          && multidimensional_return.design.units.front()
+                 .functions.front().return_type.systemverilog_container
+          && multidimensional_return.design.units.front()
+                 .functions.front().return_type.systemverilog_container
+                 ->static_range_expressions.size()
+              == 2,
+      "multidimensional static function results retain ordered ranges in "
+      "typed HIR");
 
   const auto slice_ordering = parse_text(
       "container-slice-ordering.sv",

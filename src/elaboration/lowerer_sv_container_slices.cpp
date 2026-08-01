@@ -91,6 +91,13 @@ Lowerer::static_container_slice(
         expression.span);
     return std::nullopt;
   }
+  if (base_type->dimensions.size() > 1) {
+    report(
+        "FSIM-ELAB-SVSLICE-001",
+        "unpacked slicing is limited to one-dimensional static arrays",
+        expression.span);
+    return std::nullopt;
+  }
 
   const auto converted_constant =
       [&](const Expression& value,
@@ -195,6 +202,10 @@ Lowerer::static_container_slice(
       static_cast<std::int32_t>(left);
   selected_type.index_right =
       static_cast<std::int32_t>(right);
+  selected_type.dimensions = {
+      ContainerDimension{
+          selected_type.index_left,
+          selected_type.index_right}};
   return StaticContainerSlice{
       *base_type, std::move(selected_type)};
 }
@@ -343,6 +354,22 @@ Lowerer::lower_static_container_assignment_value(
   const auto source = lower_static_container_value(expression);
   if (!source) {
     return std::nullopt;
+  }
+  if (source->type.dimensions.size() > 1
+      || destination_type.dimensions.size() > 1) {
+    if (source->type != destination_type) {
+      report(
+          "FSIM-ELAB-SVSLICE-006",
+          "multidimensional static-array assignment requires an exact "
+          "rank, range, direction, and element profile match",
+          expression.span);
+      return std::nullopt;
+    }
+    const auto destination =
+        allocate_container_register(destination_type);
+    process_.operations.emplace_back(
+        CopyContainerRegister{destination, source->value});
+    return destination;
   }
   if (static_element_count(source->type)
       != static_element_count(destination_type)) {

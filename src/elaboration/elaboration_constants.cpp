@@ -1785,6 +1785,21 @@ void substitute_parameters(
         std::optional<std::uint64_t> union_width;
         bool valid = true;
         for (auto& member : type.packed_members) {
+            if (!member.nested_types.empty()) {
+                substitute_parameters(
+                    member.nested_types.front(),
+                    environment,
+                    domains,
+                    diagnostics,
+                    language);
+                const auto& nested = member.nested_types.front();
+                member.domain = nested.domain;
+                member.spelling = nested.spelling;
+                member.packed_range = nested.packed_range;
+                member.packed_range_expression =
+                    nested.packed_range_expression;
+                member.is_signed = nested.is_signed;
+            }
             if (member.packed_range_expression) {
                 std::string error;
                 const auto left = evaluate_constant_expression(

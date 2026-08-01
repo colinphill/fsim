@@ -124,6 +124,12 @@ void substitute_type(
     substitute_range(type.integer_base_range_expression);
     substitute_range(type.discrete_range_expression);
     for (auto& member : type.packed_members) {
+        if (!member.nested_types.empty()) {
+            substitute_type(
+                member.nested_types.front(),
+                environment,
+                integer_environment);
+        }
         substitute_range(member.packed_range_expression);
     }
 }

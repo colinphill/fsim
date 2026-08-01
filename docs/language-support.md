@@ -52,6 +52,31 @@ preprocessor-v5 and native-schema-60 identity. Implementation-defined pragma
 payload semantics, dynamic generate selection, and aggregate or
 multidimensional generated types remain outside this bounded slice.
 
+Batch 109 aggregate/multidimensional status update: the Verilog/SV unit and
+expression rows' earlier exclusions for nested aggregates, nominal legality,
+and all multidimensional unpacked arrays are superseded. Named packed structs,
+unions, and enums retain recursive members, enum literals, declaration order,
+layout, state domain, source provenance, and nominal identity through aliases
+and type parameters. Bounded unpacked structs accept scalar, enum, and nested
+packed or unpacked-struct members. Recursive positional, member/integral-keyed,
+and default patterns initialize aggregates and ranked arrays atomically;
+packed-union patterns select exactly one member. Visible named or bounded
+builtin casts preserve the target type, and distinct nominal aggregate
+assignments or equality comparisons require a matching explicit cast where
+supported.
+
+Static unpacked arrays retain one through four locally constant dimensions and
+at most 4,096 dense elements. Full-rank constant or runtime signed-32 indices
+use direction-aware row-major flattening with per-dimension checks. Dimension,
+bound, size, increment, and bit queries, whole-value copies, generated
+declarations, same-language exact-rank ports, automatic function/task
+boundaries, debugger reads, callbacks, VCD, interpreter, and LLVM O0/O2 are
+covered. Native schema 61 and container semantic revision 25 preserve ordered
+dimensions and nominal identities. Unequal-width or tagged unions, unpacked
+unions, unpacked-array aggregate members, widths above 64 bits,
+multidimensional subarray slices, cross-language aggregate/container
+boundaries, and general aggregate streaming remain unsupported.
+
 SystemVerilog expression-sizing status update: the bounded 1–64-bit scalar
 path now retains source-spanned resolved width, signedness, self- versus
 context-determined sizing, and two-/four-state domain metadata. Sized,

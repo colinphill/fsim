@@ -1067,6 +1067,47 @@ using namespace elaboration_detail;
 
 
 
+    bool Lowerer::validate_sv_nominal_assignment(
+        const frontend::Type* target_type,
+        const Expression& value) {
+        if (language_ != frontend::Language::SystemVerilog2017
+            || target_type == nullptr
+            || target_type->packed_members.empty()
+            || target_type->nominal_type.empty()
+            || value.kind == ExpressionKind::Aggregate) {
+            return true;
+        }
+        const frontend::Type* source_type = nullptr;
+        if (value.kind == ExpressionKind::Identifier) {
+            source_type = object_type(value.text);
+        } else if (
+            value.kind == ExpressionKind::Call
+            && value.text.starts_with("@sv-cast:")) {
+            source_type = visible_type_mark(
+                std::string_view{value.text}.substr(
+                    std::string_view{"@sv-cast:"}.size()));
+        } else if (value.kind == ExpressionKind::Call) {
+            if (const auto* function = visible_function(value.text)) {
+                source_type = &function->return_type;
+            }
+        }
+        if (source_type != nullptr
+            && !source_type->packed_members.empty()
+            && source_type->nominal_type
+                == target_type->nominal_type) {
+            return true;
+        }
+        report(
+            "FSIM-ELAB-SVTYPE-004",
+            "assignment to aggregate '" + target_type->spelling
+                + "' requires the same nominal type, a matching explicit "
+                  "cast, or a contextual assignment pattern",
+            value.span);
+        return false;
+    }
+
+
+
     [[nodiscard]] RegisterId Lowerer::resize_register(
         const RegisterId source,
         const std::size_t width,

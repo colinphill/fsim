@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -1517,7 +1518,7 @@ endmodule
             == "XXXXZZZZ"
         && compiled.memory.elements[3].to_msb_string()
             == "10100101");
-    assert(
+    const auto binary_matches =
         compiled.binary.type.fixed
         && compiled.binary.type.index_left == -1
         && compiled.binary.type.index_right == 1
@@ -1526,7 +1527,14 @@ endmodule
         && compiled.binary.elements[1].to_msb_string()
             == "000010Z1"
         && compiled.binary.elements[2].to_msb_string()
-            == "00000011");
+            == "00000011";
+    if (!binary_matches) {
+      for (const auto& element : compiled.binary.elements) {
+        std::cerr << element.to_msb_string() << ' ';
+      }
+      std::cerr << '\n';
+    }
+    assert(binary_matches);
     assert(
         compiled.port_result.elements[0].low_word().aval
             == 0x32

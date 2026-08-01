@@ -74,6 +74,10 @@ std::string canonical_type_identity(const frontend::Type& type) {
                    << member.packed_range->right << ':'
                    << (member.packed_range->descending ? 1 : 0);
         }
+        for (const auto& nested : member.nested_types) {
+            output << ";nested={"
+                   << canonical_type_identity(nested) << '}';
+        }
     }
     if (type.vhdl_array) {
         output << ";array=" << type.vhdl_array->index_subtype << ':'

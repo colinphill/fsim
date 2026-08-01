@@ -644,7 +644,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       }
       const auto at =
           source.type.fixed
-              ? fixed_offset(source, input0_aval, input0_bval)
+              ? read->linear_index
+                    ? index(
+                          input0_aval, input0_bval, true,
+                          "multidimensional linear index")
+                    : fixed_offset(source, input0_aval, input0_bval)
               : index(
                     input0_aval, input0_bval, read->signed_index,
                     "container index");
@@ -684,7 +688,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       }
       const auto at =
           target.type.fixed
-              ? fixed_offset(target, input0_aval, input0_bval)
+              ? write->linear_index
+                    ? index(
+                          input0_aval, input0_bval, true,
+                          "multidimensional linear index")
+                    : fixed_offset(target, input0_aval, input0_bval)
               : index(
                     input0_aval, input0_bval, write->signed_index,
                     "container index");

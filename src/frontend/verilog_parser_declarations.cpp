@@ -490,22 +490,27 @@ void VerilogParser::parse_typedef(
     if (!is_union) {
       (void)match_keyword("struct");
     }
-    if (!match_keyword("packed")) {
+    const bool packed = match_keyword("packed");
+    if (!packed && is_union) {
       error(
           current(),
           "FSIM-SV-UNSUPPORTED-027",
-          "bounded struct/union typedefs require the packed qualifier");
+          "bounded unpacked union typedefs are not implemented");
       skip_to_semicolon();
       return;
     }
     type.spelling =
-        is_union ? "union packed" : "struct packed";
+        is_union ? "union packed"
+                 : packed ? "struct packed" : "struct";
     type.packed_aggregate =
         is_union
             ? PackedAggregateKind::Union
-            : PackedAggregateKind::Struct;
+            : packed ? PackedAggregateKind::Struct
+                     : PackedAggregateKind::UnpackedStruct;
     type.domain = ValueDomain::Bit2;
-    parse_optional_signedness(type);
+    if (packed) {
+      parse_optional_signedness(type);
+    }
     expect(
         TokenKind::LeftBrace,
         "'{' before packed aggregate members",
@@ -530,12 +535,14 @@ void VerilogParser::parse_typedef(
                 : ValueDomain::Logic4;
         parse_optional_signedness(member_type);
         parse_optional_range(member_type);
+      } else if (is_named_type_reference_start()) {
+        member_type = parse_named_type();
       } else {
         error(
             current(),
             "FSIM-SV-UNSUPPORTED-028",
-            "packed aggregate members require a non-aggregate bit, logic, "
-            "or reg type");
+            "bounded aggregate members require a packed integral or visible "
+            "aggregate/enum type");
         skip_to_semicolon();
         continue;
       }
@@ -565,7 +572,7 @@ void VerilogParser::parse_typedef(
               "duplicate packed aggregate member '"
                   + member.text + "'");
         } else {
-          type.packed_members.push_back(PackedMember{
+          auto packed_member = PackedMember{
               member.text,
               member_type.domain,
               member_type.spelling,
@@ -573,7 +580,12 @@ void VerilogParser::parse_typedef(
               member_type.is_signed,
               member_type.packed_range_expression,
               0,
-              cover(member_start.span, previous().span)});
+              cover(member_start.span, previous().span),
+              {}};
+          if (!member_type.named_type.empty()) {
+            packed_member.nested_types.push_back(member_type);
+          }
+          type.packed_members.push_back(std::move(packed_member));
           if (member_type.domain == ValueDomain::Logic4) {
             type.domain = ValueDomain::Logic4;
           }
@@ -745,6 +757,12 @@ void VerilogParser::parse_typedef(
     return;
   }
   const auto name = expect_identifier("typedef name");
+  if (!enum_literals.empty()) {
+    type.enumeration_literals.reserve(enum_literals.size());
+    for (const auto& literal : enum_literals) {
+      type.enumeration_literals.push_back(literal.name);
+    }
+  }
   if (at(TokenKind::LeftBracket)) {
     error(
         current(),
@@ -974,8 +992,6 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
       }
     }
   }
-  container.span = cover(start.span, previous().span);
-  type.systemverilog_container = std::move(container);
   if (language_ != Language::SystemVerilog2017) {
     error(
         start,
@@ -993,18 +1009,50 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
         "bounded containers require a packed integral variable element "
         "type");
   }
-  if (at(TokenKind::LeftBracket)) {
+  if (at(TokenKind::LeftBracket)
+      && container.kind
+          != SystemVerilogContainerKind::StaticArray) {
     error(
         current(),
         "FSIM-SV-SEM-080",
-        "multidimensional SystemVerilog containers are not supported");
+        "multidimensional dynamic, queue, and associative containers are "
+        "not supported");
     while (match(TokenKind::LeftBracket)) {
       while (!at_end() && !at(TokenKind::RightBracket)) {
         (void)advance();
       }
       (void)match(TokenKind::RightBracket);
     }
+  } else {
+    while (match(TokenKind::LeftBracket)) {
+      const auto dimension_start = previous();
+      auto left = parse_expression();
+      expect(
+          TokenKind::Colon,
+          "':' in a multidimensional static unpacked range",
+          "FSIM-SV-PARSE-221");
+      auto right = parse_expression();
+      expect(
+          TokenKind::RightBracket,
+          "']' after a multidimensional static unpacked range",
+          "FSIM-SV-PARSE-222");
+      container.static_range_expressions.push_back(
+          PackedRangeExpression{
+              std::move(left),
+              std::move(right),
+              cover(dimension_start.span, previous().span),
+              std::nullopt});
+      if (container.static_range_expressions.size() > 4) {
+        error(
+            dimension_start,
+            "FSIM-SV-SEM-126",
+            "bounded static unpacked arrays support at most four "
+            "dimensions");
+      }
+    }
   }
+  container.span = cover(start.span, previous().span);
+  type.systemverilog_container = std::move(container);
   return true;
 }
 

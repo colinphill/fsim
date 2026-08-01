@@ -765,6 +765,13 @@ void fold_type(
     fold_range(type.enumeration_range_expression);
     fold_range(type.enumeration_base_range_expression);
     for (auto& member : type.packed_members) {
+        if (!member.nested_types.empty()) {
+            fold_type(
+                member.nested_types.front(),
+                functions,
+                environment,
+                fallback);
+        }
         fold_range(member.packed_range_expression);
     }
 }

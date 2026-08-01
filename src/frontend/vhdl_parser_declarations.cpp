@@ -374,7 +374,8 @@ void VhdlParser::parse_type_declaration(
           member_type.is_signed,
           member_type.packed_range_expression,
           0,
-          cover(member_start.span, previous().span)});
+          cover(member_start.span, previous().span),
+          {}});
       if (member_type.domain == ValueDomain::Logic9) {
         type.domain = ValueDomain::Logic9;
       } else if (

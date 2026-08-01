@@ -344,14 +344,6 @@ using namespace elaboration_detail;
             container_objects_.find(target_name);
         if (container_local != container_locals_.end()
             || container_object != container_objects_.end()) {
-            if (packed_selections.size() > 1) {
-                report(
-                    "FSIM-ELAB-031",
-                    "nested or aggregate selected assignment targets are not "
-                    "executable for unpacked containers",
-                    statement.target.span);
-                return;
-            }
             if (read_only_container_objects_.contains(
                     target_name)) {
                 report(
@@ -389,6 +381,23 @@ using namespace elaboration_detail;
                 process_.operations.emplace_back(
                     ReadContainerObject{
                         target, container_object->second});
+            }
+            const auto object =
+                container_object != container_objects_.end()
+                    ? std::optional<ContainerObjectId>{
+                          container_object->second}
+                    : std::nullopt;
+            if (lower_multidimensional_container_assignment(
+                    statement, *source_type, target, object)) {
+                return;
+            }
+            if (packed_selections.size() > 1) {
+                report(
+                    "FSIM-ELAB-031",
+                    "nested selected assignment targets require a complete "
+                    "multidimensional static-array index",
+                    statement.target.span);
+                return;
             }
             if (statement.target.kind
                 == ExpressionKind::Identifier) {
@@ -689,7 +698,7 @@ using namespace elaboration_detail;
                 if (!width || *width == 0
                     || *width
                         > std::numeric_limits<std::uint32_t>::max()
-                    || selected->member->lsb_offset
+                    || selected->lsb_offset
                         > std::numeric_limits<std::uint32_t>::max()) {
                     report(
                         "FSIM-ELAB-SVSTRUCT-002",
@@ -700,7 +709,7 @@ using namespace elaboration_detail;
                 }
                 target_name = selected->base;
                 selected_offset = static_cast<std::uint32_t>(
-                    selected->member->lsb_offset);
+                    selected->lsb_offset);
                 has_selected_offset = true;
                 selected_width = static_cast<std::size_t>(*width);
                 selected_domain = selected->member->domain;
@@ -869,6 +878,10 @@ using namespace elaboration_detail;
                     || dynamic_part_selection
                 ? nullptr
                 : object_type(target_name);
+        if (!validate_sv_nominal_assignment(
+                contextual_target_type, statement.value)) {
+            return;
+        }
         const auto assignment_control =
             statement.procedural_assignment_control;
         const bool procedural_delay =

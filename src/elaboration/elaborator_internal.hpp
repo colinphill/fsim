@@ -782,6 +782,10 @@ private:
     enumeration_expression_type(
         const Expression& expression) const;
 
+    [[nodiscard]] bool validate_sv_nominal_assignment(
+        const frontend::Type* target_type,
+        const Expression& value);
+
     [[nodiscard]] static std::pair<std::int32_t, std::int32_t>
     integer_bounds(
         const std::optional<frontend::IntegerRange>& range);
@@ -933,6 +937,7 @@ private:
     struct PackedMemberReference {
         std::string base;
         const frontend::PackedMember* member{};
+        std::uint64_t lsb_offset{};
     };
 
     std::optional<PackedMemberReference> packed_member_reference(
@@ -968,6 +973,10 @@ private:
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type = nullptr);
+    std::optional<RegisterId> lower_sv_packed_pattern(
+        const Expression& expression,
+        std::size_t expected_width,
+        const frontend::Type& expected_type);
     ExpressionAttempt lower_membership_expression(
         const Expression& expression);
 
@@ -1026,6 +1035,11 @@ private:
         const Expression& expression,
         const frontend::Type& source_type,
         const ContainerType& runtime_type);
+    std::optional<ContainerRegisterId>
+    lower_multidimensional_container_pattern(
+        const Expression& expression,
+        const frontend::Type& source_type,
+        const ContainerType& runtime_type);
     bool lower_container_locator(
         const Expression& expression,
         ContainerRegisterId destination,
@@ -1056,6 +1070,17 @@ private:
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
+    ExpressionAttempt lower_multidimensional_container_read(
+        const Expression& expression);
+    bool lower_multidimensional_container_assignment(
+        const Statement& statement,
+        const frontend::Type& type,
+        ContainerRegisterId target,
+        std::optional<ContainerObjectId> object);
+    std::optional<RegisterId>
+    lower_multidimensional_index(
+        const Expression& expression,
+        const frontend::Type& type);
     ExpressionAttempt lower_unary_attribute_expression(
         const Expression& expression,
         std::size_t expected_width,

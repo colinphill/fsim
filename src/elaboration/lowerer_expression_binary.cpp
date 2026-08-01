@@ -344,6 +344,29 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             const frontend::Type* rhs_object_type =
                 expression_object_type(
                     expression.operands[1]);
+            if (language_ == frontend::Language::SystemVerilog2017
+                && (expression.text == "=="
+                    || expression.text == "!="
+                    || expression.text == "==="
+                    || expression.text == "!==")
+                && ((lhs_object_type != nullptr
+                     && !lhs_object_type->packed_members.empty())
+                    || (rhs_object_type != nullptr
+                        && !rhs_object_type->packed_members.empty()))
+                && (lhs_object_type == nullptr
+                    || rhs_object_type == nullptr
+                    || lhs_object_type->packed_members.empty()
+                    || rhs_object_type->packed_members.empty()
+                    || lhs_object_type->nominal_type.empty()
+                    || lhs_object_type->nominal_type
+                        != rhs_object_type->nominal_type)) {
+                report(
+                    "FSIM-ELAB-SVTYPE-005",
+                    "aggregate equality requires two values of the same "
+                    "nominal SystemVerilog type",
+                    expression.span);
+                return std::nullopt;
+            }
             const auto* lhs_enumeration_type =
                 enumeration_expression_type(
                     expression.operands[0]);
