@@ -5962,9 +5962,27 @@ the monolithic application in 40.66 seconds. Release passed all 64 tests in
 mutable strings in 0.41 seconds, files in 0.68 seconds, containers in 99.00
 seconds, and the monolithic application in 14.10 seconds, on 2026-08-01. The
 diagnostic catalog covers 1,407 production codes, and the source gate covers
-332 authored files with an empty allowlist and a 2,000-line maximum. The
-mandatory Batch 110 non-documentation CI inspection remains pending at the
-user-requested stop boundary after the feature commit and push.
+332 authored files with an empty allowlist and a 2,000-line maximum.
+
+The mandatory Batch 110 inspection first ran as Actions run `30709270776`.
+Windows MSVC Debug proved `fsim.application.scoped_locals` remained quick at
+0.28 seconds, but the operation/test-host refactor exposed insufficient stack
+reservation across other MSVC-compatible test executables: MSVC jobs reported
+early access violations or stopped making progress in later monolithic tests.
+The run was cancelled once every remaining Windows job was nonproductive.
+Repair commit `a5d69e0` moves the 8 MiB Windows stack reserve into the common
+test-target configuration for Debug and Release, including split and merged
+hosts, and adds bounded API and Windows application timeouts. Focused local
+frontend, source-gate, elaboration, container-elaboration, application, and API
+tests passed after an eight-worker rebuild.
+
+Replacement Actions run `30710421676` passed all 12 jobs. Windows MSVC Debug
+passed 63/63 in 359.78 seconds, including container elaboration in 0.32
+seconds, scoped locals in 0.25 seconds, and the API in 0.29 seconds. Windows
+MSVC LLVM Debug passed 64/64 in 1,092.19 seconds, including scoped locals in
+1.44 seconds, containers in 887.18 seconds, and the API in 0.54 seconds.
+ASan/UBSan passed 63/63 in 516.76 seconds. Batch 110 and its CI boundary are
+closed.
 
 #### Post-Batch-110 Debug-footprint and test-link repair
 

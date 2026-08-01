@@ -44,9 +44,20 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   the monolithic application in 40.66/14.10 seconds. Debug aggregate/
   multidimensional execution completed in 2.03 seconds.
 - The diagnostic catalog covers all 1,407 production codes.
-- Batch 110 is the mandatory non-documentation CI-inspection boundary. Its
-  local feature commit is pushed by this handoff, but CI inspection is
-  deliberately pending because the user requested a stop before monitoring.
+- Batch 110 and its mandatory non-documentation CI boundary are closed.
+  Initial run `30709270776` showed Windows' default 1 MiB test-executable
+  stack was no longer sufficient after the operation/test-host refactor:
+  MSVC configurations reported early access violations or stopped making
+  progress in later monolithic tests. `scoped_locals` itself remained healthy
+  at 0.28 seconds. Repair commit `a5d69e0` centralizes an 8 MiB stack reserve
+  for every MSVC-compatible Windows test host and bounds the API and Windows
+  application tests. Replacement run `30710421676` passed all 12 jobs.
+  Windows MSVC Debug passed 63/63 in 359.78 seconds, including container
+  elaboration in 0.32 seconds, scoped locals in 0.25 seconds, and the API in
+  0.29 seconds. MSVC LLVM Debug passed 64/64 in 1,092.19 seconds, and
+  ASan/UBSan passed 63/63 in 516.76 seconds.
+- Resume with Batch 111: complete VHDL library analysis order, packages and
+  bodies, contexts, and configuration binding.
 - The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
   `30640792808` and replacements `30647570353`/`30651503050` passed every
   ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
@@ -1354,13 +1365,13 @@ memories release audit**:
 
 #### Latest continuation state (supersedes the older stopping point below)
 
-Batch 110 is complete locally. The exact LLVM 22.1.8 warnings-as-errors Debug
+Batch 110 is complete. The exact LLVM 22.1.8 warnings-as-errors Debug
 regression passed all 64 tests in 485.70 seconds, and Release passed all 64 in
 159.27 seconds. Scoped locals remained quick at 0.92/0.79 seconds. The
 diagnostic catalog covers 1,407 production codes, and all 332 authored files
-pass the empty-allowlist 2,000-line source gate. The feature commit is pushed
-by this handoff; do not start another feature batch before performing the
-pending Batch 110 non-documentation CI inspection. The older checkpoint
+pass the empty-allowlist 2,000-line source gate. Feature and footprint-repair
+commits are pushed, and replacement GitHub Actions run `30710421676` passed
+all 12 jobs after the Windows test-stack repair. Resume with Batch 111. The older checkpoint
 narrative below is retained as implementation history, but its uncommitted and
 unvalidated claims are obsolete.
 
@@ -1476,10 +1487,10 @@ multidimensional execution in 2.03 seconds, containers in 375.83 seconds, and
 the monolithic application in 40.66 seconds. Release passed all 64 tests in
 159.27 seconds, including scoped locals in 0.79 seconds, LLVM in 2.71 seconds,
 mutable strings in 0.41 seconds, files in 0.68 seconds, containers in 99.00
-seconds, and the monolithic application in 14.10 seconds. The exact current
-stopping point is immediately before the mandatory Batch 110
-non-documentation CI inspection, as requested by the user. GitHub CI uses
-parallelism four and documentation-only runs are not monitored.
+seconds, and the monolithic application in 14.10 seconds. The mandatory Batch
+110 non-documentation boundary is closed by repair commit `a5d69e0` and
+12-job replacement run `30710421676`. GitHub CI uses parallelism four and
+documentation-only runs are not monitored. Resume with Batch 111.
 
 #### Earlier checkpoint history
 
