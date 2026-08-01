@@ -279,6 +279,19 @@ function(fsim_configure_test target)
   else()
     target_compile_options(${target} PRIVATE -UNDEBUG)
   endif()
+  if(
+    WIN32
+    AND (
+      MSVC
+      OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+    )
+  )
+    # Accumulated feature-matrix and API fixtures can exceed Windows' 1 MiB
+    # default stack in both optimized and unoptimized MSVC-compatible builds.
+    # Reserve address space uniformly so newly split or merged test hosts do
+    # not silently lose the protection carried by an older executable.
+    target_link_options(${target} PRIVATE /STACK:8388608)
+  endif()
 endfunction()
 
 add_library(fsim_diagnostic STATIC src/diagnostic/diagnostic.cpp)

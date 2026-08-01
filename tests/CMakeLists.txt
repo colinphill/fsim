@@ -24,20 +24,6 @@ add_executable(
 )
 fsim_configure_test(fsim_frontend_tests)
 target_link_libraries(fsim_frontend_tests PRIVATE fsim_frontend)
-if(
-  WIN32
-  AND (
-    MSVC
-    OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
-  )
-)
-  # The accumulated frontend feature matrix now exceeds Windows' 1 MiB
-  # default stack in unoptimized MSVC-compatible builds.
-  target_link_options(
-    fsim_frontend_tests
-    PRIVATE "$<$<CONFIG:Debug>:/STACK:8388608>"
-  )
-endif()
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
 
 add_executable(fsim_project_tests project/project_config_test.cpp)
@@ -128,21 +114,6 @@ add_executable(
 )
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
-if(
-  WIN32
-  AND (
-    MSVC
-    OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
-  )
-)
-  # This accumulated feature-matrix test intentionally retains hundreds of
-  # independent fixtures in one translation unit. Unoptimized MSVC-compatible
-  # builds otherwise exhaust Windows' 1 MiB default stack on entry.
-  target_link_options(
-    fsim_elaboration_tests
-    PRIVATE "$<$<CONFIG:Debug>:/STACK:8388608>"
-  )
-endif()
 add_test(NAME fsim.elaboration COMMAND fsim_elaboration_tests)
 
 add_executable(
@@ -294,18 +265,6 @@ if(TARGET fsim_application)
           fsim_application
           fsim_cli
       )
-      if(
-        WIN32
-        AND (
-          MSVC
-          OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
-        )
-      )
-        target_link_options(
-          ${test_host}
-          PRIVATE "$<$<CONFIG:Debug>:/STACK:8388608>"
-        )
-      endif()
     endforeach()
 
     function(
@@ -517,7 +476,13 @@ if(TARGET fsim_application)
       fsim.application.sv_containers
       PROPERTIES TIMEOUT 1200
     )
-    if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    if(
+      WIN32
+      AND (
+        MSVC
+        OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+      )
+    )
       set_tests_properties(
         fsim.application
         PROPERTIES TIMEOUT 600
@@ -1492,6 +1457,7 @@ set_tests_properties(
   fsim_configure_test(fsim_api_tests)
   target_link_libraries(fsim_api_tests PRIVATE fsim_api)
   add_test(NAME fsim.api COMMAND fsim_api_tests)
+  set_tests_properties(fsim.api PROPERTIES TIMEOUT 120)
   if(WIN32)
     add_custom_command(
       TARGET fsim_api_tests
