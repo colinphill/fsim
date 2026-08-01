@@ -767,12 +767,14 @@ begin
       output_value => dynamic_expression_output);
   slice_expression_child: entity work.component_runtime_vector(rtl)
     port map (
-      input_value => vector_expression_input(5 downto 2),
+      input_value => std_logic_vector'(
+        vector_expression_input(5 downto 2)),
       output_value => slice_expression_output);
   concat_expression_child: entity work.component_runtime_vector(rtl)
     port map (
-      input_value => vector_expression_input(1 downto 0)
-        & vector_expression_input(7 downto 6),
+      input_value => std_logic_vector(
+        vector_expression_input(1 downto 0)
+          & vector_expression_input(7 downto 6)),
       output_value => concat_expression_output);
   direct_default_omitted: entity work.component_runtime_defaulted(rtl)
     port map (entity_default_output => open);

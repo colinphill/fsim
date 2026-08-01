@@ -6216,7 +6216,7 @@ expressions require writable signal names. The partitioned port-boundary
 implementation keeps `hierarchy_types.cpp` at 2,000 lines. The focused frontend,
 elaboration, component interpreter/LLVM O0/O2 cache differential, diagnostic
 catalog, and 343-source line-budget evidence passes in the LLVM Debug tree.
-Tasks 6 and 7 remain in progress; these bounded slices are not yet the
+Task 7 remains in progress; these bounded slices are not yet the
 complete task claims.
 
 Task 1 now has focused implementation evidence. Implicit and explicit VHDL
@@ -6264,6 +6264,18 @@ defaultless `open` formals, and non-static expressions with stable
 execution covers positional, named, mixed positional-then-named, default/open,
 integer-subtype conversion, and declaration-dependent maps. Task 2 is
 focused-complete; Batch 113 remains **in progress**.
+
+Task 6 now has complete focused evidence. In addition to literals, aggregates,
+arithmetic, slices, and concatenations, the frontend retains VHDL
+`type_mark'(expression)` qualification distinctly from a conversion call.
+Same-language input boundaries validate the qualification mark against the
+formal type, materialize qualified static literals/aggregates, and synthesize
+drivers for qualified dynamic slices and converted concatenations. A
+mismatched qualification has a deterministic `FSIM-ELAB-VHPORT-001`
+diagnostic, while every output/buffer/inout expression still requires a
+writable signal through `FSIM-ELAB-VHPORT-002`. The component interpreter and
+LLVM O0/O2 cold/warm differential proves the qualified and converted dynamic
+paths. Task 6 is focused-complete; Batch 113 remains **in progress**.
 
 ## Forward language-closure feature batches
 

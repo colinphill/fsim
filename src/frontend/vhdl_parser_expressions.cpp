@@ -119,6 +119,14 @@ Expression VhdlParser::parse_primary() {
       canonical += vhdl_name(expect_identifier("selected name").text);
     }
     if (match(TokenKind::Apostrophe)) {
+      if (at(TokenKind::LeftParen)) {
+        auto value = parse_primary();
+        return Expression{
+            ExpressionKind::Call,
+            "@vhdl-qualified:" + canonical,
+            {std::move(value)},
+            cover(name.span, previous().span)};
+      }
       const auto attribute =
           expect_identifier("attribute designator");
       const auto designator = vhdl_name(attribute.text);

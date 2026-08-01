@@ -71,9 +71,37 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
             connection.value.span);
         return true;
     }
+    auto expression = connection.value;
+    constexpr std::string_view qualification_prefix{
+        "@vhdl-qualified:"};
+    if (expression.kind == frontend::ExpressionKind::Call
+        && expression.text.starts_with(qualification_prefix)) {
+        const auto mark = std::string_view{expression.text}.substr(
+            qualification_prefix.size());
+        const auto simple_name = [](const std::string_view name) {
+          const auto separator = name.find_last_of('.');
+          return name.substr(
+              separator == std::string_view::npos ? 0 : separator + 1);
+        };
+        const auto declared = port.type.named_type.empty()
+            ? std::string_view{port.type.spelling}
+            : std::string_view{port.type.named_type};
+        if (expression.operands.size() != 1
+            || simple_name(mark) != simple_name(declared)) {
+            report(
+                "FSIM-ELAB-VHPORT-001",
+                "VHDL qualified input actual for '" + path + "."
+                    + port.name + "' does not match formal type '"
+                    + std::string{declared} + "'",
+                connection.value.span);
+            return true;
+        }
+        auto qualified_value = std::move(expression.operands.front());
+        expression = std::move(qualified_value);
+    }
     std::string error;
     auto value = static_vhdl_value(
-        connection.value, port.type, error);
+        expression, port.type, error);
     const auto signal = add_owned_signal(
         port, path, result.signals);
     if (!signal) {
@@ -84,7 +112,6 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
         return true;
     }
 
-    auto expression = connection.value;
     std::size_t alias_index = 0;
     bool mapped_signal = false;
     const auto bind_parent_name = [&](std::string& name) {

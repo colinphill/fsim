@@ -1499,10 +1499,11 @@ architecture rtl of expression_port_top is
   end component;
 begin
   literal_child: expression_port_leaf
-    port map ("1010", open);
+    port map (bit_vector'("1010"), open);
   aggregate_child: entity work.expression_port_leaf(rtl)
     port map (
-      entity_input => (0 => '1', others => '0'),
+      entity_input => bit_vector'(
+        0 => '1', others => '0'),
       entity_output => open);
 end architecture;
 )",
@@ -1553,6 +1554,28 @@ end architecture;
 )",
         "vhdl:work.dynamic_expression_top(rtl)");
     assert(dynamic_expression_port.ok());
+
+    const auto mismatched_qualification = elaborate_text(
+        "mismatched_port_qualification.vhd",
+        R"(
+entity qualified_leaf is
+  port (input_value : in bit_vector(3 downto 0));
+end entity;
+architecture rtl of qualified_leaf is
+begin
+end architecture;
+entity qualified_top is
+end entity;
+architecture rtl of qualified_top is
+begin
+  child: entity work.qualified_leaf(rtl)
+    port map (input_value => bit'("1010"));
+end architecture;
+)",
+        "vhdl:work.qualified_top(rtl)");
+    assert(!mismatched_qualification.ok());
+    assert(has_diagnostic(
+        mismatched_qualification, "FSIM-ELAB-VHPORT-001"));
 
     const auto invalid_output_expression = elaborate_text(
         "invalid_output_expression.vhd",

@@ -1557,7 +1557,7 @@ output/buffer/inout expressions require writable names. `hierarchy_ports.cpp`
 holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
 2,000 lines. The focused frontend, elaboration, component interpreter/LLVM
 O0/O2/cache, catalog, and 343-source line-budget evidence passes in the LLVM
-Debug tree. Batch 113 and Tasks 6 and 7 remain in progress.
+Debug tree. Batch 113 and Task 7 remain in progress.
 
 Task 1 now has focused implementation evidence: implicit/explicit value
 generics retain normalized constant class and input mode, invalid classes/modes
@@ -1597,6 +1597,16 @@ associations. The elaboration matrix directly checks
 `FSIM-ELAB-GENERIC-001` through `004`; the existing component application
 retains interpreter and LLVM O0/O2 execution evidence for the supported forms.
 Batch 113 remains **in progress**.
+
+Task 6 is now focused-complete. The parser retains
+`type_mark'(expression)` qualification as explicit HIR. Input-port elaboration
+checks the mark against the formal, materializes qualified static
+literals/aggregates, and drives qualified dynamic slices and converted
+concatenations through the existing per-instance boundary path. A mismatched
+mark reports `FSIM-ELAB-VHPORT-001`, and non-input expressions retain
+`FSIM-ELAB-VHPORT-002`. The component interpreter and LLVM O0/O2 cold/warm
+differential covers both qualified and converted runtime expressions. Batch
+113 remains **in progress**.
 
 Batch 110 has advanced through these validated features:
 

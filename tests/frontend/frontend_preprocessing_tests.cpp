@@ -777,6 +777,10 @@ begin
     port map (clk);
   indexed_actual: child
     port map (input => data(0), output => open);
+  qualified_actual: child
+    port map (
+      input => std_logic_vector'(data),
+      output => open);
 end architecture;
 )";
 
@@ -785,7 +789,7 @@ end architecture;
   require(result.ok(), "VHDL indexed and open port actuals must parse");
   const auto* architecture =
       result.design.find(UnitKind::VhdlArchitecture, "rtl");
-  require(architecture != nullptr && architecture->instances.size() == 2,
+  require(architecture != nullptr && architecture->instances.size() == 3,
           "port associations must retain both instances");
   require(
       architecture->instances[0].parameter_overrides.size() == 1
@@ -801,6 +805,17 @@ end architecture;
               architecture->instances[1].connections[1].kind ==
                   PortActualKind::Open,
           "indexed actual and explicit open state retained");
+  require(
+      architecture->instances[2].connections.size() == 2
+          && architecture->instances[2].connections[0].value.kind
+              == ExpressionKind::Call
+          && architecture->instances[2].connections[0].value.text
+              == "@vhdl-qualified:std_logic_vector"
+          && architecture->instances[2].connections[0]
+                 .value.operands.size() == 1
+          && architecture->instances[2].connections[0]
+                 .value.operands.front().text == "data",
+      "qualified input actual retains its explicit type mark");
 }
 
 void test_vhdl_generics() {
