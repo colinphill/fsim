@@ -878,22 +878,7 @@ using namespace elaboration_detail;
                     == frontend::ParameterKind::Package) {
                 continue;
             }
-            if ((generic.type.packed_range
-                 && generic.type.enumeration_literals.empty())
-                || !generic.type.packed_members.empty()
-                || (generic.type.named_type.empty()
-                    && generic.type.domain
-                    != frontend::ValueDomain::Integer
-                && generic.type.domain
-                    != frontend::ValueDomain::Boolean
-                && generic.type.domain
-                    != frontend::ValueDomain::Bit2)) {
-                report(
-                    "FSIM-ELAB-GENERIC-010",
-                    "a bounded VHDL generic subtype must resolve to scalar "
-                    "integer, Boolean, or bit",
-                    generic.span);
-            }
+            validate_vhdl_generic_type(generic);
         }
         result.ports = std::move(effective_interface.ports);
         auto effective_entity_declarations = *entity;

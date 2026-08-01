@@ -36,6 +36,8 @@ struct Capture {
   std::array<std::string, 2> expression_inputs;
   std::array<std::string, 2> direct_default_inputs;
   std::array<std::string, 3> dependent_generic_outputs;
+  std::array<std::string, 2> aggregate_generic_outputs;
+  std::array<std::string, 2> static_generic_outputs;
   std::array<std::string, 2> composite_expression_outputs;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
@@ -116,7 +118,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 16);
+  assert(project->design.specializations().size() == 20);
   for (const auto path : {
            "component_runtime_top.positional_child",
            "component_runtime_top.default_child"}) {
@@ -258,6 +260,16 @@ Capture run_once(
       "component_runtime_top.component_dependent_default_output"};
   std::array<fsim::runtime::simir::SignalId, 3>
       dependent_output_ids{};
+  constexpr std::array<std::string_view, 2> aggregate_outputs{
+      "component_runtime_top.aggregate_generic_default_output",
+      "component_runtime_top.aggregate_generic_explicit_output"};
+  std::array<fsim::runtime::simir::SignalId, 2>
+      aggregate_output_ids{};
+  constexpr std::array<std::string_view, 2> static_outputs{
+      "component_runtime_top.static_generic_default_output",
+      "component_runtime_top.static_generic_override_output"};
+  std::array<fsim::runtime::simir::SignalId, 2>
+      static_output_ids{};
   const auto nonvalue_input = simulation.find_signal(
       "component_runtime_top.nonvalue_input");
   const auto nonvalue_output = simulation.find_signal(
@@ -324,6 +336,18 @@ Capture run_once(
     assert(output);
     dependent_output_ids[index] = *output;
   }
+  for (std::size_t index = 0;
+       index < aggregate_outputs.size(); ++index) {
+    const auto output = simulation.find_signal(aggregate_outputs[index]);
+    assert(output);
+    aggregate_output_ids[index] = *output;
+  }
+  for (std::size_t index = 0;
+       index < static_outputs.size(); ++index) {
+    const auto output = simulation.find_signal(static_outputs[index]);
+    assert(output);
+    static_output_ids[index] = *output;
+  }
 
   capture.result = simulation.run();
   for (std::size_t index = 0; index < output_ids.size(); ++index) {
@@ -341,6 +365,17 @@ Capture run_once(
     capture.dependent_generic_outputs[index] =
         simulation.read_signal(dependent_output_ids[index])
             .to_msb_string();
+  }
+  for (std::size_t index = 0;
+       index < aggregate_output_ids.size(); ++index) {
+    capture.aggregate_generic_outputs[index] =
+        simulation.read_signal(aggregate_output_ids[index])
+            .to_msb_string();
+  }
+  for (std::size_t index = 0;
+       index < static_output_ids.size(); ++index) {
+    capture.static_generic_outputs[index] =
+        simulation.read_signal(static_output_ids[index]).to_msb_string();
   }
   capture.nonvalue =
       simulation.read_signal(*nonvalue_output).to_msb_string();
@@ -405,6 +440,10 @@ void verify(
           == std::array<std::string, 2>{bits(13), bits(13)}));
   assert((capture.dependent_generic_outputs
           == std::array<std::string, 3>{bits(8), bits(6), bits(6)}));
+  assert((capture.aggregate_generic_outputs
+          == std::array<std::string, 2>{"0001", "0010"}));
+  assert((capture.static_generic_outputs
+          == std::array<std::string, 2>{bits(11), bits(8)}));
   assert(std::ranges::count_if(
              capture.points,
              [](const auto& point) {
@@ -520,6 +559,30 @@ architecture rtl of component_runtime_generic_defaults is
 begin
   output_value <= derived_value;
 end architecture;
+
+use work.component_runtime_profiles.all;
+entity component_runtime_aggregate_generic is
+  generic (mask_value : mask_t := (0 => '1', others => '0'));
+  port (output_value : out mask_t);
+end entity;
+architecture rtl of component_runtime_aggregate_generic is
+begin
+  output_value <= mask_value;
+end architecture;
+
+use work.component_runtime_profiles.all;
+entity component_runtime_static_defaults is
+  generic (
+    package_value : integer := package_base;
+    length_value : integer := mask_t'length;
+    converted_value : positive := positive(package_value + length_value);
+    function_value : integer := scale(converted_value));
+  port (output_value : out integer);
+end entity;
+architecture rtl of component_runtime_static_defaults is
+begin
+  output_value <= function_value;
+end architecture;
 )";
     assert(output.good());
   }
@@ -542,6 +605,9 @@ package component_runtime_helper_template is
 end package;
 
 package component_runtime_profiles is
+  subtype mask_t is bit_vector(3 downto 0);
+  constant package_base : integer := 6;
+  function scale(value : integer) return integer;
   type packet_t is record
     )"
            << member_name
@@ -574,6 +640,13 @@ package component_runtime_profiles is
       component_output : out component_t);
   end component;
 end package;
+
+package body component_runtime_profiles is
+  function scale(value : integer) return integer is
+  begin
+    return value + 1;
+  end function;
+end package body;
 )";
     assert(output.good());
   };
@@ -645,6 +718,10 @@ architecture rtl of component_runtime_top is
   signal direct_dependent_default_output : integer;
   signal direct_dependent_open_output : integer;
   signal component_dependent_default_output : integer;
+  signal aggregate_generic_default_output : mask_t;
+  signal aggregate_generic_explicit_output : mask_t;
+  signal static_generic_default_output : integer;
+  signal static_generic_override_output : integer;
 begin
   positional_child: component_runtime_leaf
     generic map (5)
@@ -712,6 +789,20 @@ begin
     port map (output_value => direct_dependent_open_output);
   component_dependent_default: component_runtime_generic_defaults
     port map (component_output => component_dependent_default_output);
+  aggregate_generic_default: entity work.component_runtime_aggregate_generic(rtl)
+    port map (output_value => aggregate_generic_default_output);
+  aggregate_generic_explicit: entity work.component_runtime_aggregate_generic(rtl)
+    generic map (mask_value => (1 => '1', others => '0'))
+    port map (output_value => aggregate_generic_explicit_output);
+  static_generic_default: entity work.component_runtime_static_defaults(rtl)
+    port map (output_value => static_generic_default_output);
+  static_generic_override: entity work.component_runtime_static_defaults(rtl)
+    generic map (
+      package_value => 3,
+      length_value => open,
+      converted_value => open,
+      function_value => open)
+    port map (output_value => static_generic_override_output);
 end architecture;
 )";
     assert(output.good());
@@ -754,6 +845,14 @@ end architecture;
            == cold.dependent_generic_outputs);
     assert(cold.dependent_generic_outputs
            == warm.dependent_generic_outputs);
+    assert(reference.aggregate_generic_outputs
+           == cold.aggregate_generic_outputs);
+    assert(cold.aggregate_generic_outputs
+           == warm.aggregate_generic_outputs);
+    assert(reference.static_generic_outputs
+           == cold.static_generic_outputs);
+    assert(cold.static_generic_outputs
+           == warm.static_generic_outputs);
     assert(reference.dynamic_expression == cold.dynamic_expression);
     assert(cold.dynamic_expression == warm.dynamic_expression);
     assert(reference.composite_expression_outputs

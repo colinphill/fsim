@@ -1696,6 +1696,9 @@ private:
         const frontend::SourceSpan& source,
         const bool cross_language);
 
+    void validate_vhdl_generic_type(
+        const frontend::ParameterDeclaration& generic);
+
     bool connect_vhdl_expression_port(
         const frontend::SignalDeclaration& port,
         const frontend::PortConnection& connection,

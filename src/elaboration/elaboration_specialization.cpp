@@ -79,6 +79,34 @@ bool parameter_name_matches(
 
 namespace {
 
+std::optional<std::int64_t> packed_vhdl_static_value(
+    const frontend::Expression& expression,
+    const frontend::Type& type,
+    std::string& error) {
+    if (!type.packed_range
+        || (expression.kind != frontend::ExpressionKind::Aggregate
+            && expression.kind
+                != frontend::ExpressionKind::StringLiteral
+            && expression.kind
+                != frontend::ExpressionKind::LogicLiteral)) {
+        return std::nullopt;
+    }
+    const auto packed = static_vhdl_value(expression, type, error);
+    if (!packed || packed->width() > 64) {
+        if (packed && error.empty()) {
+            error = "the packed aggregate exceeds 64 bits";
+        }
+        return std::nullopt;
+    }
+    const auto word = packed->low_word();
+    if (word.bval != 0) {
+        error = "the packed aggregate contains an unknown or high-impedance "
+                "element";
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(word.aval);
+}
+
 std::array<std::uint64_t, 3> transition_delays(
     const frontend::Delay& delay) {
     const auto rise = delay.magnitude;
@@ -452,12 +480,17 @@ SpecializedUnit specialize_unit(
                     override.span});
                 continue;
             }
-            auto value =
-                is_vhdl
-                    ? vhdl_enumeration_ordinal(
-                          actual_expression,
-                          overridable[*actual_index]->type)
-                    : std::optional<std::int64_t>{};
+            auto value = is_vhdl
+                ? packed_vhdl_static_value(
+                      actual_expression,
+                      overridable[*actual_index]->type,
+                      error)
+                : std::optional<std::int64_t>{};
+            if (!value && is_vhdl) {
+                value = vhdl_enumeration_ordinal(
+                    actual_expression,
+                    overridable[*actual_index]->type);
+            }
             if (!value) {
                 value = evaluate_constant_expression(
                     actual_expression, parent_environment, error);
@@ -687,12 +720,16 @@ SpecializedUnit specialize_unit(
                     value = 0;
                 }
                 if (!value) {
-                    value =
-                        is_vhdl
-                            ? vhdl_enumeration_ordinal(
-                                  default_expression,
-                                  parameter_type)
-                            : std::optional<std::int64_t>{};
+                    value = is_vhdl
+                        ? packed_vhdl_static_value(
+                              default_expression,
+                              parameter_type,
+                              error)
+                        : std::optional<std::int64_t>{};
+                    if (!value && is_vhdl) {
+                        value = vhdl_enumeration_ordinal(
+                            default_expression, parameter_type);
+                    }
                     if (!value) {
                         value = evaluate_constant_expression(
                             default_expression,
@@ -792,11 +829,21 @@ SpecializedUnit specialize_unit(
             const auto spelling = parameter_type.spelling;
             const bool enumeration =
                 !parameter_type.enumeration_literals.empty();
+            const bool supported_packed =
+                parameter_type.packed_range
+                && parameter_type.packed_members.empty()
+                && parameter_type.width().value_or(0) <= 64
+                && (parameter_type.domain
+                        == frontend::ValueDomain::Bit2
+                    || parameter_type.domain
+                        == frontend::ValueDomain::Logic4
+                    || parameter_type.domain
+                        == frontend::ValueDomain::Logic9);
             const bool violates_supported_type =
-                (!enumeration
-                 && parameter_type.packed_range.has_value())
+                (parameter_type.packed_range && !supported_packed)
                 || !parameter_type.packed_members.empty()
-                || (parameter_type.domain
+                || (!parameter_type.packed_range
+                    && parameter_type.domain
                         != frontend::ValueDomain::Integer
                     && parameter_type.domain
                         != frontend::ValueDomain::Boolean
@@ -813,7 +860,16 @@ SpecializedUnit specialize_unit(
             const bool violates_bit =
                 parameter_type.domain == frontend::ValueDomain::Bit2
                 && !enumeration
+                && !parameter_type.packed_range
                 && *value != 0 && *value != 1;
+            const auto packed_width =
+                parameter_type.width().value_or(0);
+            const bool violates_packed =
+                supported_packed
+                && (*value < 0
+                    || (packed_width < 64
+                        && static_cast<std::uint64_t>(*value)
+                            >= (std::uint64_t{1} << packed_width)));
             const bool violates_enumeration =
                 enumeration
                 && (*value < 0
@@ -844,12 +900,13 @@ SpecializedUnit specialize_unit(
                             subtype_constraint),
                     std::string{object_kind} + " '"
                         + parameter.name
-                        + "' resolves outside the bounded scalar integer, "
-                          "Boolean, or bit subtype set",
+                        + "' resolves outside the bounded scalar or "
+                          "up-to-64-bit packed subtype set",
                     parameter.span});
             }
             if (violates_natural || violates_positive
                 || violates_boolean || violates_bit
+                || violates_packed
                 || violates_integer_range
                 || violates_enumeration
                 || violates_enumeration_range) {
@@ -866,7 +923,9 @@ SpecializedUnit specialize_unit(
         }
         result.environment[parameter.name] = *value;
         domains[parameter.name] = ConstantTypeInfo{
-            parameter_type.domain,
+            parameter_type.packed_range
+                ? frontend::ValueDomain::Integer
+                : parameter_type.domain,
             is_vhdl
                 && !parameter_type.enumeration_literals.empty(),
             parameter_type.nominal_type};

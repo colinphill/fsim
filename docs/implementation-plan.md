@@ -6227,7 +6227,16 @@ the existing ordered type/function/procedure/package generic families remain
 unchanged. The Task 3 slice now proves declaration-ordered dependent defaults
 for direct and component instances, including an earlier overridden generic
 followed by `open`, across interpreter and LLVM O0/O2 cold/warm execution.
-Task 3 remains in progress pending its complete static-expression matrix.
+Task 3 now also has focused implementation evidence and is complete. Bounded
+up-to-64-bit packed value generics accept contextual string/literal/aggregate
+defaults and actuals with width/state/range checks. A second direct-instance
+matrix folds a visible package constant, array `'length`, a built-in `positive`
+conversion, earlier generic references, and a visible pure package function;
+an earlier override followed by three `open` associations recomputes the
+dependent chain. Both matrices agree across interpreter and LLVM O0/O2
+cold/warm cache execution. The packed generic validation is partitioned into
+`hierarchy_generic_interfaces.cpp` so the protected hierarchy source remains
+under budget.
 
 ## Forward language-closure feature batches
 

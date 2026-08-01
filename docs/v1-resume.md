@@ -1566,7 +1566,14 @@ without changing type/function/procedure/package generic behavior. Task 3 now
 proves declaration-ordered dependent arithmetic defaults for direct and
 component instances, including an overridden earlier generic followed by
 `open`, in the component interpreter/LLVM O0/O2 cold/warm differential. Task 3
-remains in progress pending the full static-expression matrix.
+is now focused-complete. Bounded up-to-64-bit packed value generics accept
+contextual string/literal/aggregate defaults and actuals with state/width/range
+checks. The application additionally folds a visible package constant, array
+`'length`, built-in `positive` conversion, earlier generic references, and a
+visible pure package function; overriding the first generic and selecting
+`open` for the rest recomputes the chain across interpreter/LLVM O0/O2
+cold/warm runs. Type validation moved to
+`hierarchy_generic_interfaces.cpp` to preserve the source budget.
 
 Batch 110 has advanced through these validated features:
 

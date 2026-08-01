@@ -1393,7 +1393,7 @@ therefore excluded.
 | `FSIM-ELAB-GENERIC-007` | error | A generic-dependent packed range width overflows the supported range. |
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
-| `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves to something other than scalar integer, Boolean, or bit. |
+| `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar or up-to-64-bit packed value set. |
 | `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated subtype indication. |
 | `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a subtype indication. |
 | `FSIM-ELAB-GENTYPE-003` | error | A VHDL interface type generic actual names a type that is not visible at the association. |

@@ -10,9 +10,33 @@ const frontend::Type* type_mark(
     const auto alias = std::ranges::find(
         unit.type_aliases, name,
         &frontend::TypeAliasDeclaration::name);
-    return alias == unit.type_aliases.end()
-        ? nullptr
-        : &alias->type;
+    if (alias != unit.type_aliases.end()) {
+        return &alias->type;
+    }
+    const auto builtin_integer = [](const std::int64_t left,
+                                    const std::int64_t right,
+                                    const std::string_view spelling) {
+      frontend::Type type;
+      type.domain = frontend::ValueDomain::Integer;
+      type.spelling = spelling;
+      type.integer_range = frontend::IntegerRange{left, right, false};
+      return type;
+    };
+    static const auto integer = builtin_integer(
+        std::numeric_limits<std::int32_t>::min(),
+        std::numeric_limits<std::int32_t>::max(),
+        "integer");
+    static const auto natural = builtin_integer(
+        0, std::numeric_limits<std::int32_t>::max(), "natural");
+    static const auto positive = builtin_integer(
+        1, std::numeric_limits<std::int32_t>::max(), "positive");
+    if (name == "integer") {
+        return &integer;
+    }
+    if (name == "natural") {
+        return &natural;
+    }
+    return name == "positive" ? &positive : nullptr;
 }
 
 std::optional<std::pair<std::int64_t, std::int64_t>>

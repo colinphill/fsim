@@ -158,6 +158,38 @@ end architecture;
     assert(has_diagnostic(
         required_open, "FSIM-ELAB-GENERIC-001"));
 
+    const auto invalid_packed_generics = elaborate_text(
+        "invalid_packed_generics.vhd",
+        R"(
+package packed_generic_types is
+  subtype mask_t is bit_vector(3 downto 0);
+end package;
+use work.packed_generic_types.all;
+entity packed_generic_leaf is
+  generic (mask_value : mask_t);
+end entity;
+architecture rtl of packed_generic_leaf is
+begin
+end architecture;
+entity invalid_packed_generic_top is
+end entity;
+architecture rtl of invalid_packed_generic_top is
+begin
+  unknown_child: entity work.packed_generic_leaf(rtl)
+    generic map (mask_value => (others => 'X'))
+    port map ();
+  wide_child: entity work.packed_generic_leaf(rtl)
+    generic map (mask_value => 16)
+    port map ();
+end architecture;
+)",
+        "vhdl:work.invalid_packed_generic_top(rtl)");
+    assert(!invalid_packed_generics.ok());
+    assert(has_diagnostic(
+        invalid_packed_generics, "FSIM-ELAB-GENERIC-004"));
+    assert(has_diagnostic(
+        invalid_packed_generics, "FSIM-ELAB-GENERIC-008"));
+
     auto visible_profiles = fsim::frontend::parse_text(
         "visible_component_profiles.vhd",
         R"(

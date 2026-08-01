@@ -643,9 +643,6 @@ end architecture;
             "FSIM-ELAB-GENERIC-008")
         && has_diagnostic(
             rejected_vhdl_subtypes,
-            "FSIM-ELAB-GENERIC-010")
-        && has_diagnostic(
-            rejected_vhdl_subtypes,
             "FSIM-ELAB-VHTYPE-001")
         && has_diagnostic(
             rejected_vhdl_subtypes,
@@ -1540,4 +1537,3 @@ end architecture;
 }
 
 } // namespace fsim::tests::elaboration
-
